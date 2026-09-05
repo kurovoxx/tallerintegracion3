@@ -1,4 +1,5 @@
 masterprompt.md
 .env
 .gitignore
+.agentApiContract
 sql.md
