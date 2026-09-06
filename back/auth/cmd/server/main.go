@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/config"
 	httpHandler "github.com/kurovoxx/tallerintegracion3/back/auth/internal/handler/http"
+	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/middleware"
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/repository"
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/service"
 )
@@ -35,15 +36,49 @@ func main() {
 	}
 	log.Printf("DB check: identity.users count=%d", cnt)
 
-	// Wire Handler → Service → Repository (masterprompt 2)
+	// Wire Handler → Service → Repository (masterprompt 2) + JWT standalone integrado (3.1)
 	userRepo := repository.NewUserRepository(pool)
-	authSvc := service.NewAuthService(userRepo)
+	refreshRepo := repository.NewRefreshTokenRepository(pool)
+	jwtSvc, err := service.NuevoJWTService(service.ConfiguracionJWT{
+		ClaveSecreta: []byte(cfg.JWTSecret),
+		Issuer:       "apuntes-auth",
+		Audience:     "apuntes-client",
+		Duracion:     time.Duration(cfg.AccessExpiresIn) * time.Second,
+	})
+	if err != nil {
+		log.Fatalf("config JWT: %v", err)
+	}
+	authSvc := service.NewAuthService(userRepo, refreshRepo, jwtSvc, cfg.AccessExpiresIn, cfg.RefreshExpiresIn)
 	authH := httpHandler.NewAuthHandler(authSvc)
+	authMw := middleware.NewAuthMiddleware(jwtSvc)
 
 	r := gin.Default()
 
 	// Público (sin auth) según agentApiContract.md
 	r.POST("/auth/register", authH.Register)
+	r.POST("/auth/login", authH.Login)
+
+	// Protegido: middleware valida firma+expiración, inyecta user_id/role (masterprompt 3.1)
+	// 401 token inválido/expirado, 403 rol insuficiente
+	protected := r.Group("")
+	protected.Use(authMw.RequireAuth())
+	{
+		protected.GET("/auth/me", func(c *gin.Context) {
+			uid, _ := middleware.GetUserID(c)
+			role, _ := middleware.GetRole(c)
+			c.JSON(http.StatusOK, gin.H{"user_id": uid, "role": role})
+		})
+		protected.GET("/teacher-only", authMw.RequireRole(service.RolTeacher), func(c *gin.Context) {
+			uid, _ := middleware.GetUserID(c)
+			c.JSON(http.StatusOK, gin.H{"user_id": uid, "message": "solo teacher"})
+		})
+		// Ejemplo perfil protegido (placeholder Sprint 1)
+		protected.GET("/profile/me", func(c *gin.Context) {
+			uid, _ := middleware.GetUserID(c)
+			role, _ := middleware.GetRole(c)
+			c.JSON(http.StatusOK, gin.H{"user_id": uid, "role": role, "note": "profile placeholder"})
+		})
+	}
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{

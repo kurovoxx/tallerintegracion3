@@ -20,7 +20,7 @@ var (
 	ErrAudienceVacia     = errors.New("la audience JWT no puede estar vacía")
 	ErrDuracionInvalida  = errors.New("la duración del access token debe ser mayor que cero")
 
-	ErrUsuarioIDInvalido = errors.New("el user_id debe ser mayor que cero")
+	ErrUsuarioIDInvalido = errors.New("el user_id no puede estar vacío")
 	ErrRolVacio          = errors.New("el role del usuario no puede estar vacío")
 	ErrRolInvalido       = errors.New("el role debe ser student o teacher")
 
@@ -30,7 +30,7 @@ var (
 )
 
 type ClaimsPersonalizadas struct {
-	UserID int64  `json:"user_id"`
+	UserID string `json:"user_id"`
 	Role   string `json:"role"`
 	jwt.RegisteredClaims
 }
@@ -48,7 +48,7 @@ type ResultadoToken struct {
 }
 
 type UsuarioAutenticado struct {
-	ID   int64
+	ID   string
 	Role string
 }
 
@@ -81,7 +81,7 @@ func NuevoJWTService(config ConfiguracionJWT) (*JWTService, error) {
 }
 
 func (s *JWTService) GenerarAccessToken(usuario UsuarioAutenticado) (ResultadoToken, error) {
-	if usuario.ID <= 0 {
+	if strings.TrimSpace(usuario.ID) == "" {
 		return ResultadoToken{}, ErrUsuarioIDInvalido
 	}
 
@@ -150,7 +150,7 @@ func (s *JWTService) ValidarAccessToken(tokenString string) (UsuarioAutenticado,
 		return UsuarioAutenticado{}, ErrTokenInvalido
 	}
 
-	if claims.UserID <= 0 {
+	if strings.TrimSpace(claims.UserID) == "" {
 		return UsuarioAutenticado{}, ErrUsuarioIDInvalido
 	}
 
