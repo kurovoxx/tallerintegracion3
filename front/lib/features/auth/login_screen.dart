@@ -34,6 +34,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _regCareerController = TextEditingController();
   final TextEditingController _regPasswordController = TextEditingController();
   bool _obscureRegPassword = true;
+  bool _isSubmittingRegister = false;
 
   @override
   void dispose() {
@@ -99,22 +100,41 @@ Future<void> _submitLogin() async {
     }
   }
 }
-  void _submitRegister() {
-    if (_regFormKey.currentState!.validate()) {
-      final payload = {
-        "name": _regNameController.text.trim(),
-        "email": _regEmailController.text.trim(),
-        "career": _regCareerController.text.trim(),
-        "password": _regPasswordController.text,
-      };
-      debugPrint("Payload Registro: $payload");
+  Future<void> _submitRegister() async {
+    if (!_regFormKey.currentState!.validate()) return;
+    if (_isSubmittingRegister) return;
+    setState(() => _isSubmittingRegister = true);
+    try {
+      final result = await _authService.register(
+        email: _regEmailController.text.trim(),
+        password: _regPasswordController.text,
+        displayName: _regNameController.text.trim(),
+        institution: _regCareerController.text.trim(),
+        role: 'student',
+      );
+      if (!mounted) return;
+      if (result.success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('CUENTA CREADA - YA PUEDES INICIAR SESIÓN',
+                style: TextStyle(fontWeight: FontWeight.w800, color: Colors.white)),
+            backgroundColor: AppColors.border,
+          ),
+        );
+        // Cambia a tab login y limpia campos
+        setState(() => isLoginTab = true);
+        _regPasswordController.clear();
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("CREANDO CUENTA...",
-              style: TextStyle(fontWeight: FontWeight.w800, color: Colors.white)),
-          backgroundColor: AppColors.border,
+        SnackBar(
+          content: Text(result.message ?? 'Error al crear cuenta',
+              style: const TextStyle(fontWeight: FontWeight.w700, color: Colors.white)),
+          backgroundColor: AppColors.error,
         ),
       );
+    } finally {
+      if (mounted) setState(() => _isSubmittingRegister = false);
     }
   }
 

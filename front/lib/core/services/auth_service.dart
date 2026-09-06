@@ -1,37 +1,32 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+
 class AuthService {
   AuthService({http.Client? client}) : _client = client ?? http.Client();
 
   final http.Client _client;
 
-  // Para Flutter Windows y backend Gin en ESTE mismo computador.
-  // Cuando Martín confirme URL/ruta, modifica solo estas constantes.
-  static const String baseUrl = 'http://localhost:8080';
-  static const String loginPath = '/api/auth/login';
+  // Backend Gin - auth-service
+  // Ajustar puerto según dónde corre el backend:
+  // - Si usas PORT=8082 (recomendado, 8080 ocupado por WordPress/nginx): 8082
+  // - Si 8080 libre: cambia a 8080
+  // Rutas reales: POST /auth/register y POST /auth/login (sin /api)
+  // Ver back/auth/cmd/server/main.go:56 y agentApiContract.md
+  static const String baseUrl = 'http://localhost:8082';
+  static const String loginPath = '/auth/login';
+  static const String registerPath = '/auth/register';
 
   Future<LoginResult> login({
     required String email,
     required String password,
   }) async {
-    // ===== PAYLOAD DE LA TAREA 1_2_13 =====
-    //
-    // jsonEncode lo transforma exactamente en:
-    // {
-    //   "email": "alguien@alu.uct.cl",
-    //   "password": "claveDelUsuario"
-    // }
     final payload = <String, String>{
       'email': email.trim(),
       'password': password,
     };
 
-    // Esto permite demostrar y verificar qué JSON se está preparando.
-    // OJO: cuando el proyecto sea real, NO imprimas la contraseña.
-    debugPrint(
-    'Payload login preparado para email: ${email.trim()}',
-    );
+    debugPrint('Payload login preparado para email: ${email.trim()}');
 
     try {
       final response = await _client
@@ -46,7 +41,6 @@ class AuthService {
           .timeout(const Duration(seconds: 10));
 
       final Map<String, dynamic> responseBody;
-
       if (response.body.isEmpty) {
         responseBody = <String, dynamic>{};
       } else {
@@ -57,19 +51,111 @@ class AuthService {
         return LoginResult.success(responseBody);
       }
 
-      return LoginResult.failure(
-        responseBody['error']?.toString() ??
-            'No fue posible iniciar sesión. Código HTTP: ${response.statusCode}',
-      );
+      return LoginResult.failure(_extractErrorMessage(responseBody, response.statusCode));
     } on FormatException {
-      return LoginResult.failure(
-        'La API respondió con un JSON inválido.',
-      );
+      return LoginResult.failure('La API respondió con un JSON inválido.');
     } on Exception {
       return LoginResult.failure(
-        'No se pudo conectar con el servidor. Revisa la URL, el puerto y que Gin esté ejecutándose.',
+        'No se pudo conectar con el servidor. Revisa la URL ($baseUrl), el puerto y que Gin esté ejecutándose.',
       );
     }
+  }
+
+  Future<RegisterResult> register({
+    required String email,
+    required String password,
+    required String displayName,
+    String role = 'student',
+    String? institution,
+    String? photoUrl,
+    String? phone,
+    String? description,
+    String? visibility,
+  }) async {
+    final payload = <String, dynamic>{
+      'email': email.trim().toLowerCase(),
+      'password': password,
+      'role': role,
+      'display_name': displayName.trim(),
+      if (institution != null && institution.trim().isNotEmpty) 'institution': institution.trim(),
+      if (photoUrl != null && photoUrl.trim().isNotEmpty) 'photo_url': photoUrl.trim(),
+      if (phone != null && phone.trim().isNotEmpty) 'phone': phone.trim(),
+      if (description != null && description.trim().isNotEmpty) 'description': description.trim(),
+      if (visibility != null) 'visibility': visibility,
+    };
+
+    debugPrint('Payload register: email=${email.trim()}, display_name=${displayName.trim()}, role=$role');
+
+    try {
+      final response = await _client
+          .post(
+            Uri.parse('$baseUrl$registerPath'),
+            headers: const {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: jsonEncode(payload),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      final Map<String, dynamic> responseBody;
+      if (response.body.isEmpty) {
+        responseBody = <String, dynamic>{};
+      } else {
+        responseBody = jsonDecode(response.body) as Map<String, dynamic>;
+      }
+
+      if (response.statusCode == 201) {
+        return RegisterResult.success(responseBody);
+      }
+
+      return RegisterResult.failure(_extractErrorMessage(responseBody, response.statusCode));
+    } on FormatException {
+      return RegisterResult.failure('La API respondió con un JSON inválido.');
+    } on Exception {
+      return RegisterResult.failure(
+        'No se pudo conectar con el servidor. Revisa la URL ($baseUrl), el puerto y que Gin esté ejecutándose.',
+      );
+    }
+  }
+
+  String _extractErrorMessage(Map<String, dynamic> body, int statusCode) {
+    // Contrato: { "error": { "code": "string", "message": "string" } }
+    if (body.containsKey('error')) {
+      final err = body['error'];
+      if (err is Map) {
+        final msg = err['message'];
+        final code = err['code'];
+        if (msg is String && msg.isNotEmpty) {
+          // Mapear códigos a mensajes más amigables si hace falta
+          switch (code) {
+            case 'email_taken':
+              return 'Ese correo ya está registrado.';
+            case 'invalid_email':
+              return 'Formato de correo inválido.';
+            case 'weak_password':
+              return 'Contraseña débil: mínimo 8 caracteres, al menos una letra y un dígito, sin espacios.';
+            case 'invalid_role':
+              return 'Rol inválido (debe ser student o teacher).';
+            case 'invalid_display_name':
+              return 'Nombre inválido (1-255 caracteres).';
+            case 'invalid_visibility':
+              return 'Visibilidad inválida.';
+            case 'invalid_credentials':
+              return 'Credenciales inválidas.';
+            default:
+              return msg;
+          }
+        }
+        if (code is String && code.isNotEmpty) return code;
+      }
+      if (err is String && err.isNotEmpty) return err;
+    }
+    // Fallback genérico por status
+    if (statusCode == 409) return 'Conflicto: recurso ya existe.';
+    if (statusCode == 401) return 'No autorizado.';
+    if (statusCode == 400) return 'Datos inválidos.';
+    return 'No fue posible completar la solicitud. Código HTTP: $statusCode';
   }
 
   void dispose() {
@@ -77,8 +163,7 @@ class AuthService {
   }
 }
 
-/// Resultado que recibe LoginScreen sin tener que manejar directamente
-/// códigos HTTP ni parseo de JSON.
+/// Resultado login
 class LoginResult {
   const LoginResult._({
     required this.success,
@@ -96,5 +181,26 @@ class LoginResult {
 
   factory LoginResult.failure(String message) {
     return LoginResult._(success: false, message: message);
+  }
+}
+
+/// Resultado registro
+class RegisterResult {
+  const RegisterResult._({
+    required this.success,
+    this.data,
+    this.message,
+  });
+
+  final bool success;
+  final Map<String, dynamic>? data;
+  final String? message;
+
+  factory RegisterResult.success(Map<String, dynamic> data) {
+    return RegisterResult._(success: true, data: data);
+  }
+
+  factory RegisterResult.failure(String message) {
+    return RegisterResult._(success: false, message: message);
   }
 }
