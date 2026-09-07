@@ -25,7 +25,7 @@ func RespondSuccess(c *gin.Context, status int, payload interface{}) {
 	c.JSON(status, payload)
 }
 
-// Códigos de error según agentApiContract.md + extensión para display_name
+// Códigos de error según agentApiContract.md + middleware auth (masterprompt 3.1)
 const (
 	ErrInvalidEmail       = "invalid_email"
 	ErrWeakPassword       = "weak_password"
@@ -33,6 +33,11 @@ const (
 	ErrEmailTaken         = "email_taken"
 	ErrInvalidDisplayName = "invalid_display_name"
 	ErrInvalidVisibility  = "invalid_visibility"
+	ErrInvalidCredentials = "invalid_credentials"
+	ErrUnauthorized       = "unauthorized" // 401 token ausente/inválido/expirado (agentApiContract 3.1, masterprompt 3.1)
+	ErrForbidden          = "forbidden"    // 403 rol insuficiente (masterprompt 3.1)
+	ErrInvalidToken       = "invalid_token"
+	ErrTokenExpired       = "token_expired"
 )
 
 func MessageForCode(code string) string {
@@ -49,6 +54,16 @@ func MessageForCode(code string) string {
 		return "display_name requerido (1-255 caracteres, no vacío)"
 	case ErrInvalidVisibility:
 		return "visibility debe ser public o private"
+	case ErrInvalidCredentials:
+		return "Credenciales inválidas"
+	case ErrUnauthorized:
+		return "No autorizado: token ausente, inválido o expirado"
+	case ErrForbidden:
+		return "Acceso denegado: rol insuficiente"
+	case ErrInvalidToken:
+		return "Token inválido"
+	case ErrTokenExpired:
+		return "Token expirado"
 	default:
 		return "Error"
 	}
@@ -61,6 +76,10 @@ func StatusForCode(code string) int {
 		return http.StatusBadRequest
 	case ErrEmailTaken:
 		return http.StatusConflict
+	case ErrInvalidCredentials, ErrUnauthorized, ErrInvalidToken, ErrTokenExpired:
+		return http.StatusUnauthorized
+	case ErrForbidden:
+		return http.StatusForbidden
 	default:
 		return http.StatusInternalServerError
 	}

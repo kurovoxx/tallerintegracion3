@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -35,10 +36,25 @@ func normalizeOptional(s *string) *string {
 }
 
 type AuthService struct {
-	users *repository.UserRepository
+	users         *repository.UserRepository
+	refreshTokens *repository.RefreshTokenRepository
+	jwt           *JWTService
+	cfgAccessExp  int // segundos
+	cfgRefreshExp int // segundos
 }
 
-func NewAuthService(users *repository.UserRepository) *AuthService {
+func NewAuthService(users *repository.UserRepository, refreshTokens *repository.RefreshTokenRepository, jwtService *JWTService, accessExp, refreshExp int) *AuthService {
+	return &AuthService{
+		users:         users,
+		refreshTokens: refreshTokens,
+		jwt:           jwtService,
+		cfgAccessExp:  accessExp,
+		cfgRefreshExp: refreshExp,
+	}
+}
+
+// Constructor legacy para compatibilidad con tests que solo usan register sin JWT
+func NewAuthServiceLegacy(users *repository.UserRepository) *AuthService {
 	return &AuthService{users: users}
 }
 
@@ -94,4 +110,57 @@ func (s *AuthService) Register(ctx context.Context, email, password, role, displ
 		return nil, err
 	}
 	return user, nil
+}
+
+type LoginResult struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"`
+}
+
+// Login verifica credenciales con bcrypt, genera access JWT (vida corta) y refresh token hasheado.
+// Respeta contrato: 401 invalid_credentials mismo mensaje para email inexistente o password incorrecta.
+func (s *AuthService) Login(ctx context.Context, email, password string) (*LoginResult, error) {
+	email = strings.TrimSpace(email)
+	// Buscar usuario (normalizado)
+	user, err := s.users.GetByEmail(ctx, email)
+	if err != nil {
+		return nil, err
+	}
+	if user == nil {
+		return nil, NewServiceError(utils.ErrInvalidCredentials)
+	}
+	// Comparar bcrypt (constant time)
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+		return nil, NewServiceError(utils.ErrInvalidCredentials)
+	}
+	if s.jwt == nil {
+		return nil, &ServiceError{Code: "internal_error", Message: "jwt service no configurado"}
+	}
+	// Generar access token (JWT) usando lógica existente standalone integrada
+	// masterprompt 3.1: integrar función existente, no reescribir
+	jwtRes, err := s.jwt.GenerarAccessToken(UsuarioAutenticado{ID: user.ID, Role: user.Role})
+	if err != nil {
+		return nil, err
+	}
+	// Generar refresh token aleatorio + hash bcrypt + persistir con expires_at
+	raw, hash, err := repository.GenerateRawToken()
+	if err != nil {
+		return nil, err
+	}
+	expiresAt := jwtRes.ExpiraEn.Add(time.Duration(s.cfgRefreshExp - s.cfgAccessExp) * time.Second)
+	// Si jwt duración es 900s y refresh 7d, refresh expira 7d desde ahora = now + refreshExp
+	// jwtRes.ExpiraEn = now + 900, entonces refresh = now + 604800
+	// Ajuste: si jwt no está ligado, usar now directamente
+	if s.cfgRefreshExp > 0 {
+		expiresAt = time.Now().Add(time.Duration(s.cfgRefreshExp) * time.Second)
+	}
+	if _, err := s.refreshTokens.Create(ctx, user.ID, hash, expiresAt); err != nil {
+		return nil, err
+	}
+	return &LoginResult{
+		AccessToken:  jwtRes.AccessToken,
+		RefreshToken: raw,
+		ExpiresIn:    s.cfgAccessExp,
+	}, nil
 }

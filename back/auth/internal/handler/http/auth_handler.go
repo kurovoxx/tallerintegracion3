@@ -37,6 +37,42 @@ type registerResponse struct {
 	CreatedAt string `json:"created_at"`
 }
 
+type loginRequest struct {
+	Email    string `json:"email" binding:"required"`
+	Password string `json:"password" binding:"required"`
+}
+
+type loginResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"`
+}
+
+// Login maneja POST /auth/login (sin auth) según agentApiContract.md:54.
+// Verifica bcrypt, genera JWT corto + refresh hasheado.
+func (h *AuthHandler) Login(c *gin.Context) {
+	var req loginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.RespondError(c, http.StatusBadRequest, "bad_request", "Request inválido")
+		return
+	}
+	res, err := h.svc.Login(c.Request.Context(), req.Email, req.Password)
+	if err != nil {
+		if se, ok := err.(*service.ServiceError); ok {
+			status := utils.StatusForCode(se.Code)
+			utils.RespondError(c, status, se.Code, se.Message)
+			return
+		}
+		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
+		return
+	}
+	c.JSON(http.StatusOK, loginResponse{
+		AccessToken:  res.AccessToken,
+		RefreshToken: res.RefreshToken,
+		ExpiresIn:    res.ExpiresIn,
+	})
+}
+
 // Register maneja POST /auth/register (sin auth).
 // Contrato: 201 {id,email,role,created_at} o error {error:{code,message}}.
 func (h *AuthHandler) Register(c *gin.Context) {

@@ -10,6 +10,9 @@ import (
 
 const clavePrueba = "clave-solo-para-pruebas-no-usar-en-produccion"
 
+const uuidStudent = "550e8400-e29b-41d4-a716-446655440001"
+const uuidTeacher = "550e8400-e29b-41d4-a716-446655440002"
+
 func nuevoServicioPrueba(t *testing.T) *JWTService {
 	t.Helper()
 
@@ -31,7 +34,7 @@ func generarTokenPrueba(
 	clave []byte,
 	issuer string,
 	audience string,
-	userID int64,
+	userID string,
 	role string,
 	expiraEn time.Time,
 ) string {
@@ -62,7 +65,7 @@ func TestJWTServiceGenerarYValidarAccessToken(t *testing.T) {
 	servicio := nuevoServicioPrueba(t)
 
 	resultado, err := servicio.GenerarAccessToken(UsuarioAutenticado{
-		ID:   42,
+		ID:   uuidStudent,
 		Role: RolStudent,
 	})
 	if err != nil {
@@ -82,8 +85,8 @@ func TestJWTServiceGenerarYValidarAccessToken(t *testing.T) {
 		t.Fatalf("se esperaba token válido, se recibió error: %v", err)
 	}
 
-	if usuario.ID != 42 {
-		t.Fatalf("user_id esperado: 42; recibido: %d", usuario.ID)
+	if usuario.ID != uuidStudent {
+		t.Fatalf("user_id esperado: %s; recibido: %s", uuidStudent, usuario.ID)
 	}
 
 	if usuario.Role != RolStudent {
@@ -95,7 +98,7 @@ func TestJWTServiceGeneraTokenParaTeacher(t *testing.T) {
 	servicio := nuevoServicioPrueba(t)
 
 	resultado, err := servicio.GenerarAccessToken(UsuarioAutenticado{
-		ID:   7,
+		ID:   uuidTeacher,
 		Role: RolTeacher,
 	})
 	if err != nil {
@@ -107,9 +110,10 @@ func TestJWTServiceGeneraTokenParaTeacher(t *testing.T) {
 		t.Fatalf("se esperaba token válido, se recibió error: %v", err)
 	}
 
-	if usuario.ID != 7 || usuario.Role != RolTeacher {
+	if usuario.ID != uuidTeacher || usuario.Role != RolTeacher {
 		t.Fatalf(
-			"usuario esperado: ID=7, role=%s; recibido: ID=%d, role=%s",
+			"usuario esperado: ID=%s, role=%s; recibido: ID=%s, role=%s",
+			uuidTeacher,
 			RolTeacher,
 			usuario.ID,
 			usuario.Role,
@@ -121,7 +125,7 @@ func TestJWTServiceRechazaUsuarioConIDInvalido(t *testing.T) {
 	servicio := nuevoServicioPrueba(t)
 
 	_, err := servicio.GenerarAccessToken(UsuarioAutenticado{
-		ID:   0,
+		ID:   "",
 		Role: RolStudent,
 	})
 
@@ -134,7 +138,7 @@ func TestJWTServiceRechazaRolVacio(t *testing.T) {
 	servicio := nuevoServicioPrueba(t)
 
 	_, err := servicio.GenerarAccessToken(UsuarioAutenticado{
-		ID:   42,
+		ID:   uuidStudent,
 		Role: "   ",
 	})
 
@@ -147,7 +151,7 @@ func TestJWTServiceRechazaRolGlobalInvalido(t *testing.T) {
 	servicio := nuevoServicioPrueba(t)
 
 	_, err := servicio.GenerarAccessToken(UsuarioAutenticado{
-		ID:   42,
+		ID:   uuidStudent,
 		Role: "admin",
 	})
 
@@ -174,7 +178,7 @@ func TestJWTServiceRechazaFirmaConClaveIncorrecta(t *testing.T) {
 		[]byte("otra-clave-distinta"),
 		"apuntes-auth",
 		"apuntes-client",
-		42,
+		uuidStudent,
 		RolStudent,
 		time.Now().Add(15*time.Minute),
 	)
@@ -193,7 +197,7 @@ func TestJWTServiceRechazaTokenExpirado(t *testing.T) {
 		[]byte(clavePrueba),
 		"apuntes-auth",
 		"apuntes-client",
-		42,
+		uuidStudent,
 		RolStudent,
 		time.Now().Add(-15*time.Minute),
 	)
@@ -212,7 +216,7 @@ func TestJWTServiceRechazaIssuerIncorrecto(t *testing.T) {
 		[]byte(clavePrueba),
 		"otro-auth",
 		"apuntes-client",
-		42,
+		uuidStudent,
 		RolStudent,
 		time.Now().Add(15*time.Minute),
 	)
@@ -231,7 +235,7 @@ func TestJWTServiceRechazaAudienceIncorrecta(t *testing.T) {
 		[]byte(clavePrueba),
 		"apuntes-auth",
 		"otra-aplicacion",
-		42,
+		uuidStudent,
 		RolStudent,
 		time.Now().Add(15*time.Minute),
 	)
@@ -250,7 +254,7 @@ func TestJWTServiceRechazaUserIDInvalidoEnToken(t *testing.T) {
 		[]byte(clavePrueba),
 		"apuntes-auth",
 		"apuntes-client",
-		0,
+		"",
 		RolStudent,
 		time.Now().Add(15*time.Minute),
 	)
@@ -270,7 +274,7 @@ func TestJWTServiceRechazaRolVacioEnToken(t *testing.T) {
 		[]byte(clavePrueba),
 		"apuntes-auth",
 		"apuntes-client",
-		42,
+		uuidStudent,
 		"   ",
 		time.Now().Add(15*time.Minute),
 	)
@@ -290,7 +294,7 @@ func TestJWTServiceRechazaRolInvalidoEnToken(t *testing.T) {
 		[]byte(clavePrueba),
 		"apuntes-auth",
 		"apuntes-client",
-		42,
+		uuidStudent,
 		"admin",
 		time.Now().Add(15*time.Minute),
 	)
