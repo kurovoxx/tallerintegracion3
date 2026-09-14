@@ -35,15 +35,26 @@ func normalizeOptional(s *string) *string {
 	return &v
 }
 
+type UserRepository interface {
+	CreateUser(ctx context.Context, email, passwordHash, displayName string, photoURL, phone, institution, description, visibility *string) (*model.User, error)
+	GetByEmail(ctx context.Context, email string) (*model.User, error)
+	ExistsByEmail(ctx context.Context, email string) (bool, error)
+}
+
+type RefreshTokenRepository interface {
+	Create(ctx context.Context, userID string, tokenHash string, expiresAt time.Time) (string, error)
+	CountByUser(ctx context.Context, userID string) (int, error)
+}
+
 type AuthService struct {
-	users         *repository.UserRepository
-	refreshTokens *repository.RefreshTokenRepository
+	users         UserRepository
+	refreshTokens RefreshTokenRepository
 	jwt           *JWTService
 	cfgAccessExp  int // segundos
 	cfgRefreshExp int // segundos
 }
 
-func NewAuthService(users *repository.UserRepository, refreshTokens *repository.RefreshTokenRepository, jwtService *JWTService, accessExp, refreshExp int) *AuthService {
+func NewAuthService(users UserRepository, refreshTokens RefreshTokenRepository, jwtService *JWTService, accessExp, refreshExp int) *AuthService {
 	return &AuthService{
 		users:         users,
 		refreshTokens: refreshTokens,
@@ -54,32 +65,52 @@ func NewAuthService(users *repository.UserRepository, refreshTokens *repository.
 }
 
 // Constructor legacy para compatibilidad con tests que solo usan register sin JWT
-func NewAuthServiceLegacy(users *repository.UserRepository) *AuthService {
+func NewAuthServiceLegacy(users UserRepository) *AuthService {
 	return &AuthService{users: users}
 }
 
-// Register implementa POST /auth/register según contrato + extensión display_name y campos opcionales nulables:
-// - Valida email, password, role, display_name en Service para dar 400 legible
-// - Hashea con bcrypt antes de persistir
-// - Inserta en identity.users + identity.profiles (visibility private por defecto, opcionales null)
-func (s *AuthService) Register(ctx context.Context, email, password, role, displayName string, photoURL, phone, institution, description, visibility *string) (*model.User, error) {
+// Register implementa POST /auth/register según contrato vigente {email,password} (agentApiContract.md:13).
+// - Valida email y password.
+// - display_name es NOT NULL en identity.profiles (agentSql.md:40) pero el contrato ya no lo recibe.
+//   Para mantener la creación transaccional sin inventar un flujo nuevo, se deriva del email si no viene:
+//   local-part del email, trim, fallback "Usuario", truncado a 100. Si el cliente lo envía (compatibilidad), se valida 1..100.
+// - Hashea con bcrypt antes de persistir.
+// - Inserta en identity.users + identity.profiles (visibility private por defecto, opcionales null).
+func (s *AuthService) Register(ctx context.Context, email, password string, displayName *string, photoURL, phone, institution, description, visibility *string) (*model.User, error) {
 	email = strings.TrimSpace(email)
-	displayName = strings.TrimSpace(displayName)
 	// Validar email
 	if !utils.ValidateEmail(email) {
 		return nil, NewServiceError(utils.ErrInvalidEmail)
-	}
-	// Validar role
-	if !model.IsValidRole(role) {
-		return nil, NewServiceError(utils.ErrInvalidRole)
 	}
 	// Validar password
 	if !utils.ValidatePassword(password) {
 		return nil, NewServiceError(utils.ErrWeakPassword)
 	}
-	// Validar display_name (requerido, no derivado del email)
-	if displayName == "" || len(displayName) > 255 {
-		return nil, NewServiceError(utils.ErrInvalidDisplayName)
+	// Resolver display_name: si no viene o vacío, derivar del email (coherente con NOT NULL y sin agregar campo obligatorio)
+	var displayNameVal string
+	if displayName != nil {
+		v := strings.TrimSpace(*displayName)
+		if v != "" {
+			if len(v) > 100 {
+				return nil, NewServiceError(utils.ErrInvalidDisplayName)
+			}
+			displayNameVal = v
+		}
+	}
+	if displayNameVal == "" {
+		// Derivar del email: local-part antes de @
+		local := email
+		if idx := strings.Index(email, "@"); idx > 0 {
+			local = email[:idx]
+		}
+		local = strings.TrimSpace(local)
+		if local == "" {
+			local = "Usuario"
+		}
+		if len(local) > 100 {
+			local = local[:100]
+		}
+		displayNameVal = local
 	}
 	// Validar visibility si viene (puede ser null/omitido → private)
 	if visibility != nil {
@@ -102,7 +133,7 @@ func (s *AuthService) Register(ctx context.Context, email, password, role, displ
 	}
 
 	// Persistir (Repository es única capa que toca SQL, tx atómica user+profile)
-	user, err := s.users.CreateUser(ctx, email, string(hash), role, displayName, photoURL, phone, institution, description, visibility)
+	user, err := s.users.CreateUser(ctx, email, string(hash), displayNameVal, photoURL, phone, institution, description, visibility)
 	if err != nil {
 		if strings.Contains(err.Error(), "email_taken") {
 			return nil, NewServiceError(utils.ErrEmailTaken)
