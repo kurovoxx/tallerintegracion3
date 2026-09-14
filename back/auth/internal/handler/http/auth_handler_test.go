@@ -565,6 +565,254 @@ func TestAuthHandler_Refresh_Revocado_401(t *testing.T) {
 	}
 }
 
+// Tests para POST /auth/logout (idempotente 204)
+func TestAuthHandler_Logout_Activo_204(t *testing.T) {
+	repo := newMockUserRepoH()
+	refreshRepo := &mockRefreshH{tokens: make(map[string]*repository.RefreshToken)}
+	jwtSvc, _ := service.NuevoJWTService(service.ConfiguracionJWT{
+		ClaveSecreta: []byte("handler-test-secret-32-chars-long"),
+		Issuer:       "apuntes-auth",
+		Audience:     "apuntes-client",
+		Duracion:     15 * time.Minute,
+	})
+	svc := service.NewAuthService(repo, refreshRepo, jwtSvc, 900, 604800)
+	h := NewAuthHandler(svc)
+	// Register + Login
+	bodyReg, _ := json.Marshal(map[string]string{"email": "logout1@test.invalid", "password": "Pass1234"})
+	wReg := httptest.NewRecorder()
+	cReg, _ := gin.CreateTestContext(wReg)
+	cReg.Request = httptest.NewRequest("POST", "/auth/register", bytes.NewReader(bodyReg))
+	cReg.Request.Header.Set("Content-Type", "application/json")
+	h.Register(cReg)
+	bodyLogin, _ := json.Marshal(map[string]string{"email": "logout1@test.invalid", "password": "Pass1234"})
+	wLogin := httptest.NewRecorder()
+	cLogin, _ := gin.CreateTestContext(wLogin)
+	cLogin.Request = httptest.NewRequest("POST", "/auth/login", bytes.NewReader(bodyLogin))
+	cLogin.Request.Header.Set("Content-Type", "application/json")
+	h.Login(cLogin)
+	var lr map[string]interface{}
+	json.Unmarshal(wLogin.Body.Bytes(), &lr)
+	refreshToken := lr["refresh_token"].(string)
+	// Logout
+	body, _ := json.Marshal(map[string]string{"refresh_token": refreshToken})
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/auth/logout", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	h.Logout(c)
+	if w.Code != 204 {
+		t.Fatalf("logout activo esperado 204, got %d %s", w.Code, w.Body.String())
+	}
+	if w.Body.Len() != 0 {
+		t.Fatalf("logout no debe devolver body, got %s", w.Body.String())
+	}
+	// Verificar revoked
+	rt, _ := refreshRepo.FindByRawToken(context.Background(), refreshToken)
+	if rt == nil || !rt.Revoked {
+		t.Fatal("fila debe quedar revoked=true")
+	}
+	// Verificar que no emite tokens
+	if w.Header().Get("Content-Type") != "" && w.Body.Len() != 0 {
+		t.Fatal("no debe emitir tokens")
+	}
+}
+
+func TestAuthHandler_Logout_YaRevocado_204(t *testing.T) {
+	repo := newMockUserRepoH()
+	refreshRepo := &mockRefreshH{tokens: make(map[string]*repository.RefreshToken)}
+	jwtSvc, _ := service.NuevoJWTService(service.ConfiguracionJWT{
+		ClaveSecreta: []byte("handler-test-secret-32-chars-long"),
+		Issuer:       "apuntes-auth",
+		Audience:     "apuntes-client",
+		Duracion:     15 * time.Minute,
+	})
+	svc := service.NewAuthService(repo, refreshRepo, jwtSvc, 900, 604800)
+	h := NewAuthHandler(svc)
+	bodyReg, _ := json.Marshal(map[string]string{"email": "logout2@test.invalid", "password": "Pass1234"})
+	wReg := httptest.NewRecorder()
+	cReg, _ := gin.CreateTestContext(wReg)
+	cReg.Request = httptest.NewRequest("POST", "/auth/register", bytes.NewReader(bodyReg))
+	cReg.Request.Header.Set("Content-Type", "application/json")
+	h.Register(cReg)
+	bodyLogin, _ := json.Marshal(map[string]string{"email": "logout2@test.invalid", "password": "Pass1234"})
+	wLogin := httptest.NewRecorder()
+	cLogin, _ := gin.CreateTestContext(wLogin)
+	cLogin.Request = httptest.NewRequest("POST", "/auth/login", bytes.NewReader(bodyLogin))
+	cLogin.Request.Header.Set("Content-Type", "application/json")
+	h.Login(cLogin)
+	var lr map[string]interface{}
+	json.Unmarshal(wLogin.Body.Bytes(), &lr)
+	refreshToken := lr["refresh_token"].(string)
+	body, _ := json.Marshal(map[string]string{"refresh_token": refreshToken})
+	// Primer logout
+	w1 := httptest.NewRecorder()
+	c1, _ := gin.CreateTestContext(w1)
+	c1.Request = httptest.NewRequest("POST", "/auth/logout", bytes.NewReader(body))
+	c1.Request.Header.Set("Content-Type", "application/json")
+	h.Logout(c1)
+	// Segundo logout con mismo token ya revocado
+	w2 := httptest.NewRecorder()
+	c2, _ := gin.CreateTestContext(w2)
+	c2.Request = httptest.NewRequest("POST", "/auth/logout", bytes.NewReader(body))
+	c2.Request.Header.Set("Content-Type", "application/json")
+	h.Logout(c2)
+	if w2.Code != 204 {
+		t.Fatalf("segundo logout ya revocado debe ser 204, got %d %s", w2.Code, w2.Body.String())
+	}
+}
+
+func TestAuthHandler_Logout_Inexistente_204(t *testing.T) {
+	repo := newMockUserRepoH()
+	jwtSvc, _ := service.NuevoJWTService(service.ConfiguracionJWT{
+		ClaveSecreta: []byte("handler-test-secret-32-chars-long"),
+		Issuer:       "apuntes-auth",
+		Audience:     "apuntes-client",
+		Duracion:     15 * time.Minute,
+	})
+	svc := service.NewAuthService(repo, &mockRefreshH{tokens: make(map[string]*repository.RefreshToken)}, jwtSvc, 900, 604800)
+	h := NewAuthHandler(svc)
+	body, _ := json.Marshal(map[string]string{"refresh_token": "inexistente1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab"})
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/auth/logout", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	h.Logout(c)
+	if w.Code != 204 {
+		t.Fatalf("inexistente debe ser 204, got %d %s", w.Code, w.Body.String())
+	}
+	if w.Body.Len() != 0 {
+		t.Fatal("no debe crear ni devolver body")
+	}
+}
+
+func TestAuthHandler_Logout_Expirado_204(t *testing.T) {
+	repo := newMockUserRepoH()
+	refreshRepo := &mockRefreshH{tokens: make(map[string]*repository.RefreshToken)}
+	jwtSvc, _ := service.NuevoJWTService(service.ConfiguracionJWT{
+		ClaveSecreta: []byte("handler-test-secret-32-chars-long"),
+		Issuer:       "apuntes-auth",
+		Audience:     "apuntes-client",
+		Duracion:     15 * time.Minute,
+	})
+	svc := service.NewAuthService(repo, refreshRepo, jwtSvc, 900, 604800)
+	h := NewAuthHandler(svc)
+	// Crear token expirado manualmente
+	raw, hash, _ := repository.GenerateRawToken()
+	// Necesitamos userID, creamos usuario
+	bodyReg, _ := json.Marshal(map[string]string{"email": "logoutexp@test.invalid", "password": "Pass1234"})
+	wReg := httptest.NewRecorder()
+	cReg, _ := gin.CreateTestContext(wReg)
+	cReg.Request = httptest.NewRequest("POST", "/auth/register", bytes.NewReader(bodyReg))
+	cReg.Request.Header.Set("Content-Type", "application/json")
+	h.Register(cReg)
+	// Obtener userID
+	var regResp map[string]interface{}
+	json.Unmarshal(wReg.Body.Bytes(), &regResp)
+	// Para simplificar, insertamos token expirado directamente en mock
+	// Necesitamos userID del repo
+	user, _ := repo.GetByEmail(context.Background(), "logoutexp@test.invalid")
+	refreshRepo.Create(context.Background(), user.ID, hash, time.Now().Add(-1*time.Hour))
+	body, _ := json.Marshal(map[string]string{"refresh_token": raw})
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/auth/logout", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	h.Logout(c)
+	if w.Code != 204 {
+		t.Fatalf("expirado debe ser 204, got %d %s", w.Code, w.Body.String())
+	}
+	rt, _ := refreshRepo.FindByRawToken(context.Background(), raw)
+	if rt == nil || !rt.Revoked {
+		t.Fatal("expirado debe quedar revoked=true si se encontró")
+	}
+}
+
+func TestAuthHandler_Logout_BodyVacio_400(t *testing.T) {
+	repo := newMockUserRepoH()
+	jwtSvc, _ := service.NuevoJWTService(service.ConfiguracionJWT{
+		ClaveSecreta: []byte("handler-test-secret-32-chars-long"),
+		Issuer:       "apuntes-auth",
+		Audience:     "apuntes-client",
+		Duracion:     15 * time.Minute,
+	})
+	svc := service.NewAuthService(repo, &mockRefreshH{}, jwtSvc, 900, 604800)
+	h := NewAuthHandler(svc)
+	for _, body := range [][]byte{[]byte(`{}`), []byte(`{"refresh_token":""}`), []byte(`{"refresh_token":"   "}`)} {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest("POST", "/auth/logout", bytes.NewReader(body))
+		c.Request.Header.Set("Content-Type", "application/json")
+		h.Logout(c)
+		if w.Code != 400 {
+			t.Fatalf("body vacío debe ser 400, got %d %s", w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestAuthHandler_Logout_JSONMalformado_400(t *testing.T) {
+	repo := newMockUserRepoH()
+	jwtSvc, _ := service.NuevoJWTService(service.ConfiguracionJWT{
+		ClaveSecreta: []byte("handler-test-secret-32-chars-long"),
+		Issuer:       "apuntes-auth",
+		Audience:     "apuntes-client",
+		Duracion:     15 * time.Minute,
+	})
+	svc := service.NewAuthService(repo, &mockRefreshH{}, jwtSvc, 900, 604800)
+	h := NewAuthHandler(svc)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/auth/logout", bytes.NewReader([]byte(`{invalid json`)))
+	c.Request.Header.Set("Content-Type", "application/json")
+	h.Logout(c)
+	if w.Code != 400 {
+		t.Fatalf("json malformado debe ser 400, got %d", w.Code)
+	}
+}
+
+func TestAuthHandler_Logout_NoEmiteTokens(t *testing.T) {
+	repo := newMockUserRepoH()
+	refreshRepo := &mockRefreshH{tokens: make(map[string]*repository.RefreshToken)}
+	jwtSvc, _ := service.NuevoJWTService(service.ConfiguracionJWT{
+		ClaveSecreta: []byte("handler-test-secret-32-chars-long"),
+		Issuer:       "apuntes-auth",
+		Audience:     "apuntes-client",
+		Duracion:     15 * time.Minute,
+	})
+	svc := service.NewAuthService(repo, refreshRepo, jwtSvc, 900, 604800)
+	h := NewAuthHandler(svc)
+	bodyReg, _ := json.Marshal(map[string]string{"email": "noemitlogout@test.invalid", "password": "Pass1234"})
+	wReg := httptest.NewRecorder()
+	cReg, _ := gin.CreateTestContext(wReg)
+	cReg.Request = httptest.NewRequest("POST", "/auth/register", bytes.NewReader(bodyReg))
+	cReg.Request.Header.Set("Content-Type", "application/json")
+	h.Register(cReg)
+	bodyLogin, _ := json.Marshal(map[string]string{"email": "noemitlogout@test.invalid", "password": "Pass1234"})
+	wLogin := httptest.NewRecorder()
+	cLogin, _ := gin.CreateTestContext(wLogin)
+	cLogin.Request = httptest.NewRequest("POST", "/auth/login", bytes.NewReader(bodyLogin))
+	cLogin.Request.Header.Set("Content-Type", "application/json")
+	h.Login(cLogin)
+	var lr map[string]interface{}
+	json.Unmarshal(wLogin.Body.Bytes(), &lr)
+	refreshToken := lr["refresh_token"].(string)
+	body, _ := json.Marshal(map[string]string{"refresh_token": refreshToken})
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/auth/logout", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	h.Logout(c)
+	if w.Code != 204 {
+		t.Fatalf("logout 204, got %d", w.Code)
+	}
+	if w.Body.Len() != 0 {
+		t.Fatal("logout no debe emitir tokens ni body")
+	}
+	var respBody map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &respBody); err == nil && len(respBody) != 0 {
+		t.Fatal("logout no debe emitir JSON con tokens")
+	}
+}
+
 // Evitar imports no usados
 var _ = repository.GenerateRawToken
 var _ = bcrypt.CompareHashAndPassword

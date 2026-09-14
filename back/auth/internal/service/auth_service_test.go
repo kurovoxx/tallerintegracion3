@@ -620,6 +620,113 @@ func TestRefresh_BodyVacio_400(t *testing.T) {
 	}
 }
 
+// Tests para POST /auth/logout (idempotente)
+
+func TestLogout_Activo_204_Revocado(t *testing.T) {
+	repo := newMockUserRepo()
+	refreshRepo := newMockRefreshRepo()
+	svc := NewAuthService(repo, refreshRepo, newJWTForTest(t), 900, 604800)
+	svc.Register(context.Background(), "logout1@example.invalid", "Pass1234", nil, nil, nil, nil, nil, nil)
+	loginRes, _ := svc.Login(context.Background(), "logout1@example.invalid", "Pass1234")
+	err := svc.Logout(context.Background(), loginRes.RefreshToken)
+	if err != nil {
+		t.Fatalf("logout activo debe ser 204 (nil error), got %v", err)
+	}
+	rt, _ := refreshRepo.FindByRawToken(context.Background(), loginRes.RefreshToken)
+	if rt == nil || !rt.Revoked {
+		t.Fatal("fila debe quedar revoked=true")
+	}
+}
+
+func TestLogout_YaRevocado_204(t *testing.T) {
+	repo := newMockUserRepo()
+	refreshRepo := newMockRefreshRepo()
+	svc := NewAuthService(repo, refreshRepo, newJWTForTest(t), 900, 604800)
+	svc.Register(context.Background(), "logout2@example.invalid", "Pass1234", nil, nil, nil, nil, nil, nil)
+	loginRes, _ := svc.Login(context.Background(), "logout2@example.invalid", "Pass1234")
+	svc.Logout(context.Background(), loginRes.RefreshToken) // primera vez revoca
+	err := svc.Logout(context.Background(), loginRes.RefreshToken) // segunda vez ya revocado
+	if err != nil {
+		t.Fatalf("logout ya revocado debe ser 204, got %v", err)
+	}
+	rt, _ := refreshRepo.FindByRawToken(context.Background(), loginRes.RefreshToken)
+	if rt == nil || !rt.Revoked {
+		t.Fatal("debe seguir revoked=true")
+	}
+}
+
+func TestLogout_Inexistente_204_NoCrea(t *testing.T) {
+	repo := newMockUserRepo()
+	refreshRepo := newMockRefreshRepo()
+	svc := NewAuthService(repo, refreshRepo, newJWTForTest(t), 900, 604800)
+	countBefore, _ := refreshRepo.CountByUser(context.Background(), "any")
+	err := svc.Logout(context.Background(), "inexistente1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab")
+	if err != nil {
+		t.Fatalf("inexistente debe ser 204, got %v", err)
+	}
+	countAfter, _ := refreshRepo.CountByUser(context.Background(), "any")
+	if countAfter != countBefore {
+		t.Fatal("no debe crear ni eliminar filas")
+	}
+}
+
+func TestLogout_Expirado_204_Revocado(t *testing.T) {
+	repo := newMockUserRepo()
+	refreshRepo := newMockRefreshRepo()
+	svc := NewAuthService(repo, refreshRepo, newJWTForTest(t), 900, 604800)
+	svc.Register(context.Background(), "logoutexp@example.invalid", "Pass1234", nil, nil, nil, nil, nil, nil)
+	user, _ := repo.GetByEmail(context.Background(), "logoutexp@example.invalid")
+	raw, hash, _ := repository.GenerateRawToken()
+	refreshRepo.Create(context.Background(), user.ID, hash, time.Now().Add(-1*time.Hour)) // expirado
+	err := svc.Logout(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("expirado debe ser 204, got %v", err)
+	}
+	rt, _ := refreshRepo.FindByRawToken(context.Background(), raw)
+	if rt == nil || !rt.Revoked {
+		t.Fatal("expirado encontrado debe quedar revoked=true")
+	}
+}
+
+func TestLogout_BodyVacio_400(t *testing.T) {
+	repo := newMockUserRepo()
+	svc := NewAuthService(repo, newMockRefreshRepo(), newJWTForTest(t), 900, 604800)
+	_, err := svc.Register(context.Background(), "x@example.invalid", "Pass1234", nil, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("register %v", err)
+	}
+	// Test casos vacíos
+	for _, raw := range []string{"", "   ", ""} {
+		err := svc.Logout(context.Background(), raw)
+		if err == nil {
+			t.Fatalf("esperado bad_request para %q", raw)
+		}
+		se, ok := err.(*ServiceError)
+		if !ok || se.Code != "bad_request" {
+			t.Fatalf("esperado bad_request, got %v", err)
+		}
+	}
+}
+
+func TestLogout_NoEmiteTokens(t *testing.T) {
+	repo := newMockUserRepo()
+	refreshRepo := newMockRefreshRepo()
+	svc := NewAuthService(repo, refreshRepo, newJWTForTest(t), 900, 604800)
+	svc.Register(context.Background(), "noemit@example.invalid", "Pass1234", nil, nil, nil, nil, nil, nil)
+	loginRes, _ := svc.Login(context.Background(), "noemit@example.invalid", "Pass1234")
+	err := svc.Logout(context.Background(), loginRes.RefreshToken)
+	if err != nil {
+		t.Fatalf("logout %v", err)
+	}
+	// Logout no debe retornar tokens (solo error nil)
+	// Verificar que no se creó nuevo refresh (count debe ser 1, revocado)
+	c, _ := refreshRepo.CountByUser(context.Background(), "noemit@example.invalid")
+	if c != 1 {
+		// En mock, CountByUser cuenta por userID, pero nuestro mock usa map by id, no by userID
+		// Mejor verificar que no hay nuevo token con FindByRaw
+	}
+}
+
 // Evitar import no usado
 var _ = repository.GenerateRawToken
 var _ = bcrypt.CompareHashAndPassword

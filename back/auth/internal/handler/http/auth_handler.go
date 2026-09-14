@@ -56,6 +56,10 @@ type refreshResponse struct {
 	ExpiresIn    int    `json:"expires_in"`
 }
 
+type logoutRequest struct {
+	RefreshToken string `json:"refresh_token" binding:"required"`
+}
+
 // Login maneja POST /auth/login (sin auth) según agentApiContract.md:54.
 // Verifica bcrypt, genera JWT corto + refresh hasheado.
 func (h *AuthHandler) Login(c *gin.Context) {
@@ -109,6 +113,28 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 		RefreshToken: res.RefreshToken,
 		ExpiresIn:    res.ExpiresIn,
 	})
+}
+
+// Logout maneja POST /auth/logout (sin auth) — idempotente 204.
+// Body {refresh_token}. Si token no existe, ya revocado o expirado, sigue 204 (no revela existencia).
+// Solo 400 si JSON malformado o refresh_token vacío.
+func (h *AuthHandler) Logout(c *gin.Context) {
+	var req logoutRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.RespondError(c, http.StatusBadRequest, "bad_request", "Request inválido: refresh_token requerido")
+		return
+	}
+	if err := h.svc.Logout(c.Request.Context(), req.RefreshToken); err != nil {
+		if se, ok := err.(*service.ServiceError); ok {
+			if se.Code == "bad_request" {
+				utils.RespondError(c, http.StatusBadRequest, se.Code, se.Message)
+				return
+			}
+		}
+		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
+		return
+	}
+	c.AbortWithStatus(http.StatusNoContent)
 }
 
 // Register maneja POST /auth/register (sin auth).
