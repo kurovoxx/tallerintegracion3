@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -54,6 +55,8 @@ type LikeStore interface {
 	Create(ctx context.Context, noteID, userID string) (*model.NoteLike, error)
 	Delete(ctx context.Context, noteID, userID string) (bool, error)
 	Exists(ctx context.Context, noteID, userID string) (bool, error)
+	LikeAtomic(ctx context.Context, noteID, userID string) error
+	UnlikeAtomic(ctx context.Context, noteID, userID string) error
 }
 
 type SharedStore interface {
@@ -196,7 +199,7 @@ func (s *NoteService) Get(ctx context.Context, requesterID string, noteID string
 	if note == nil {
 		return nil, newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
 	}
-	// control acceso: si privado y no es autor, verificar shared_notes
+	// control acceso: si privado y no es autor, verificar shared_notes diferenciando access_mode
 	if note.Visibility == "private" && note.UserID != requesterID {
 		has, err := s.shared.HasAnyShare(ctx, noteID)
 		if err != nil {
@@ -205,21 +208,25 @@ func (s *NoteService) Get(ctx context.Context, requesterID string, noteID string
 		if !has {
 			return nil, newServiceError(utils.ErrForbidden)
 		}
-		// opcional: verificar que el solicitante tenga acceso vía grupo; simplificado: si tiene algún share, permite.
-		// Para mayor precisión, se podría verificar membresía en alguno de los grupos compartidos.
-		// Aquí hacemos listado y verificación de membresía si tenemos resolver.
 		sharedList, err := s.shared.ListByNote(ctx, noteID)
-		if err == nil {
-			allowed := false
-			for _, sh := range sharedList {
+		if err != nil {
+			return nil, &ServiceError{Code: utils.ErrInternal, Message: err.Error()}
+		}
+		allowed := false
+		for _, sh := range sharedList {
+			if sh.AccessMode == "link" {
+				// link: cualquier autenticado con el enlace puede leer
+				allowed = true
+				break
+			} else if sh.AccessMode == "restricted" {
 				if ok, _ := s.social.IsMember(ctx, requesterID, sh.GroupID); ok {
 					allowed = true
 					break
 				}
 			}
-			if !allowed {
-				return nil, newServiceError(utils.ErrForbidden)
-			}
+		}
+		if !allowed {
+			return nil, newServiceError(utils.ErrForbidden)
 		}
 	}
 	// descargar contenido de Drive usando external_file_id
@@ -505,19 +512,23 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string) (*
 	if orig == nil {
 		return nil, newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
 	}
-	// verificar acceso si privada
+	// verificar acceso si privada diferenciando link vs restricted
 	if orig.Visibility == "private" && orig.UserID != userID {
 		has, _ := s.shared.HasAnyShare(ctx, noteID)
 		if !has {
 			return nil, newServiceError(utils.ErrForbidden)
 		}
-		// verificar membresía en grupo compartido
 		sharedList, _ := s.shared.ListByNote(ctx, noteID)
 		allowed := false
 		for _, sh := range sharedList {
-			if ok, _ := s.social.IsMember(ctx, userID, sh.GroupID); ok {
+			if sh.AccessMode == "link" {
 				allowed = true
 				break
+			} else if sh.AccessMode == "restricted" {
+				if ok, _ := s.social.IsMember(ctx, userID, sh.GroupID); ok {
+					allowed = true
+					break
+				}
 			}
 		}
 		if !allowed {
@@ -542,7 +553,7 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string) (*
 	return newNote, nil
 }
 
-// Like / Unlike con contador transaccional
+// Like / Unlike con contador transaccional real (Tx en PG, mutex en memoria)
 func (s *NoteService) Like(ctx context.Context, userID string, noteID string) error {
 	if !utils.ValidateUUID(noteID) {
 		return newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
@@ -554,17 +565,11 @@ func (s *NoteService) Like(ctx context.Context, userID string, noteID string) er
 	if note == nil {
 		return newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
 	}
-	_, err = s.likes.Create(ctx, noteID, userID)
+	err = s.likes.LikeAtomic(ctx, noteID, userID)
 	if err != nil {
 		if strings.Contains(err.Error(), "already_liked") || strings.Contains(err.Error(), "23505") || strings.Contains(err.Error(), "duplicate") {
 			return newServiceError(utils.ErrAlreadyLiked)
 		}
-		return &ServiceError{Code: utils.ErrInternal, Message: err.Error()}
-	}
-	// increment transaccional (en PG real sería misma transacción)
-	if err := s.notes.IncrementLikes(ctx, noteID, 1); err != nil {
-		// rollback like si increment falla
-		_, _ = s.likes.Delete(ctx, noteID, userID)
 		return &ServiceError{Code: utils.ErrInternal, Message: err.Error()}
 	}
 	return nil
@@ -574,12 +579,8 @@ func (s *NoteService) Unlike(ctx context.Context, userID string, noteID string) 
 	if !utils.ValidateUUID(noteID) {
 		return newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
 	}
-	deleted, err := s.likes.Delete(ctx, noteID, userID)
-	if err != nil {
+	if err := s.likes.UnlikeAtomic(ctx, noteID, userID); err != nil {
 		return &ServiceError{Code: utils.ErrInternal, Message: err.Error()}
-	}
-	if deleted {
-		_ = s.notes.IncrementLikes(ctx, noteID, -1)
 	}
 	return nil
 }
@@ -696,13 +697,19 @@ func (s *NoteService) GetAccess(ctx context.Context, requesterID string, noteID 
 		canRead = true
 		accessMode = "public"
 	} else {
-		// private: verificar shares
+		// private: verificar shares diferenciando link vs restricted
 		list, _ := s.shared.ListByNote(ctx, noteID)
 		for _, sh := range list {
-			if ok, _ := s.social.IsMember(ctx, requesterID, sh.GroupID); ok {
+			if sh.AccessMode == "link" {
 				canRead = true
 				accessMode = sh.AccessMode
 				break
+			} else if sh.AccessMode == "restricted" {
+				if ok, _ := s.social.IsMember(ctx, requesterID, sh.GroupID); ok {
+					canRead = true
+					accessMode = sh.AccessMode
+					break
+				}
 			}
 		}
 	}
@@ -737,20 +744,32 @@ func (s *NoteService) ListGroupNotes(ctx context.Context, requesterID string, gr
 	if err != nil {
 		return nil, "", &ServiceError{Code: utils.ErrInternal, Message: err.Error()}
 	}
-	// para cada shared, traer nota y ordenar por is_admin_note desc ya viene ordenado, pero falta likes/s seguidores/fecha en memoria
-	// Necesitamos enriquecer con notes
-	var notes []*model.Note
+	// Asociar cada shared con su nota para ordenar por criterios formales
+	type pair struct {
+		note   *model.Note
+		shared *model.SharedNote
+	}
+	var pairs []pair
 	for _, sh := range sharedList {
 		n, _ := s.notes.GetByID(ctx, sh.NoteID)
 		if n != nil {
-			notes = append(notes, n)
+			pairs = append(pairs, pair{note: n, shared: sh})
 		}
 	}
-	// sort en memoria: admin primero ya ordenado, luego likes desc, luego seguidores snapshot desc, luego fecha desc
-	// Implementación simple: ya viene ordenado por is_admin_note DESC, shared_at DESC; para likes necesitamos reordenar estable?
-	// Hacemos sort manual agrupando admin vs non-admin
-	// Para simplificar test, mantendremos orden retornado.
-	_ = sharedList
+	// Orden formal: 1) is_admin_note == true primero, 2) likes_count DESC, 3) shared_at DESC
+	sort.SliceStable(pairs, func(i, j int) bool {
+		if pairs[i].shared.IsAdminNote != pairs[j].shared.IsAdminNote {
+			return pairs[i].shared.IsAdminNote && !pairs[j].shared.IsAdminNote
+		}
+		if pairs[i].note.LikesCount != pairs[j].note.LikesCount {
+			return pairs[i].note.LikesCount > pairs[j].note.LikesCount
+		}
+		return pairs[i].shared.SharedAt.After(pairs[j].shared.SharedAt)
+	})
+	var notes []*model.Note
+	for _, p := range pairs {
+		notes = append(notes, p.note)
+	}
 	return notes, next, nil
 }
 

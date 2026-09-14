@@ -2,9 +2,12 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/model"
 )
@@ -59,6 +62,61 @@ func (r *LikeRepository) CountByNote(ctx context.Context, db DBTX, noteID string
 	var cnt int
 	err := db.QueryRow(ctx, `SELECT count(*) FROM notes.note_likes WHERE note_id=$1`, noteID).Scan(&cnt)
 	return cnt, err
+}
+
+// LikeAtomic inserta like y incrementa likes_count en una única transacción PG.
+// Maneja 23505 como already_liked.
+func (r *LikeRepository) LikeAtomic(ctx context.Context, noteID, userID string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	_, err = tx.Exec(ctx, `INSERT INTO notes.note_likes (note_id, user_id) VALUES ($1,$2)`, noteID, userID)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return fmt.Errorf("already_liked: %w", err)
+		}
+		if strings.Contains(err.Error(), "23505") || strings.Contains(err.Error(), "duplicate key") {
+			return fmt.Errorf("already_liked: %w", err)
+		}
+		return fmt.Errorf("insert like: %w", err)
+	}
+	_, err = tx.Exec(ctx, `UPDATE notes.notes SET likes_count = likes_count + 1, updated_at = now() WHERE id = $1`, noteID)
+	if err != nil {
+		return fmt.Errorf("inc likes: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit like: %w", err)
+	}
+	return nil
+}
+
+// UnlikeAtomic elimina like y decrementa likes_count de forma atómica.
+// Si no se borró ninguna fila, no decrementa (idempotente).
+func (r *LikeRepository) UnlikeAtomic(ctx context.Context, noteID, userID string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tag, err := tx.Exec(ctx, `DELETE FROM notes.note_likes WHERE note_id=$1 AND user_id=$2`, noteID, userID)
+	if err != nil {
+		return fmt.Errorf("delete like: %w", err)
+	}
+	if tag.RowsAffected() > 0 {
+		_, err = tx.Exec(ctx, `UPDATE notes.notes SET likes_count = GREATEST(likes_count - 1, 0), updated_at = now() WHERE id = $1`, noteID)
+		if err != nil {
+			return fmt.Errorf("dec likes: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit unlike: %w", err)
+	}
+	return nil
 }
 
 var _ = pgx.ErrNoRows

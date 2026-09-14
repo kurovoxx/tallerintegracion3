@@ -62,6 +62,7 @@ func runServerMemory(driveClient drive.Client, cfg *config.Config) {
 	attStore := service.NewMemoryAttachmentStore()
 	savedStore := service.NewMemorySavedStore()
 	likeStore := service.NewMemoryLikeStore()
+	likeStore.SetNoteStore(noteStore)
 	sharedStore := service.NewMemorySharedStore()
 	social := service.NewMemorySocialResolver()
 

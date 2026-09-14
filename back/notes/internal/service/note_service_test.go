@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/drive"
@@ -18,6 +20,7 @@ func newTestService() (*NoteService, *drive.MockClient, *MemoryNoteStore, *Memor
 	attStore := NewMemoryAttachmentStore()
 	savedStore := NewMemorySavedStore()
 	likeStore := NewMemoryLikeStore()
+	likeStore.SetNoteStore(noteStore)
 	sharedStore := NewMemorySharedStore()
 	social := NewMemorySocialResolver()
 	svc := NewNoteService(noteStore, attStore, savedStore, likeStore, sharedStore, driveMock, social)
@@ -468,10 +471,13 @@ func TestShareAndAccessControl(t *testing.T) {
 	if got.Content == nil || *got.Content != "secreto" {
 		t.Fatalf("contenido no coincide tras share")
 	}
-	// other fuera del grupo no puede leer
-	_, err = svc.Get(ctx, other, note.ID)
-	if err == nil {
-		t.Fatal("other fuera grupo debe 403")
+	// other fuera del grupo con link SÍ puede leer (link = cualquiera con enlace)
+	gotOther, err := svc.Get(ctx, other, note.ID)
+	if err != nil {
+		t.Fatalf("other fuera grupo con link debería poder leer: %v", err)
+	}
+	if gotOther.Content == nil || *gotOther.Content != "secreto" {
+		t.Fatalf("contenido other link no coincide")
 	}
 	// author puede revocar
 	if err := svc.Unshare(ctx, author, shared.ID); err != nil {
@@ -660,6 +666,255 @@ func TestListGroupNotes(t *testing.T) {
 	if se.Code != "forbidden" {
 		t.Fatalf("esperaba forbidden got %q", se.Code)
 	}
+}
+
+func TestConcurrentLikes(t *testing.T) {
+	svc, _, noteStore, _, _, _, _, _ := newTestService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	note, _ := svc.Create(ctx, author, "Concurrent likes", nil, "public", nil, nil)
+	const workers = 10
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	errs := make([]error, workers)
+	for i := 0; i < workers; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			uid := uuid.NewString()
+			errs[idx] = svc.Like(ctx, uid, note.ID)
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("worker %d like failed: %v", i, err)
+		}
+	}
+	n, _ := noteStore.GetByID(ctx, note.ID)
+	if n.LikesCount != workers {
+		t.Fatalf("likes_count esperado %d, got %d", workers, n.LikesCount)
+	}
+	// verificar que segundo intento concurrente con mismo usuario da 409 sin desfasar contador
+	dupUser := uuid.NewString()
+	_ = svc.Like(ctx, dupUser, note.ID)
+	var wg2 sync.WaitGroup
+	wg2.Add(5)
+	dupErrs := make([]error, 5)
+	for i := 0; i < 5; i++ {
+		go func(idx int) {
+			defer wg2.Done()
+			dupErrs[idx] = svc.Like(ctx, dupUser, note.ID)
+		}(i)
+	}
+	wg2.Wait()
+	bad := 0
+	for _, e := range dupErrs {
+		if e != nil {
+			if se, ok := e.(*ServiceError); ok && se.Code == "already_liked" {
+				bad++
+			}
+		}
+	}
+	if bad != 5 {
+		t.Fatalf("esperaba 5 already_liked, got %d", bad)
+	}
+	n2, _ := noteStore.GetByID(ctx, note.ID)
+	if n2.LikesCount != workers+1 {
+		t.Fatalf("likes_count tras duplicados debe ser %d, got %d", workers+1, n2.LikesCount)
+	}
+}
+
+func TestAccessModeLinkVsRestricted(t *testing.T) {
+	svc, _, _, _, _, _, _, social := newTestService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	nonMember := uuid.NewString()
+	member := uuid.NewString()
+	groupID := uuid.NewString()
+	social.AddAdmin(author, groupID)
+	social.AddMember(member, groupID)
+	// nota private compartida con link -> nonMember debe leer
+	noteLink, _ := svc.Create(ctx, author, "Link note", nil, "private", stringPtr("link content"), nil)
+	_, err := svc.Share(ctx, author, noteLink.ID, groupID, "link")
+	if err != nil {
+		t.Fatalf("share link failed: %v", err)
+	}
+	got, err := svc.Get(ctx, nonMember, noteLink.ID)
+	if err != nil {
+		t.Fatalf("nonMember con link debería leer: %v", err)
+	}
+	if got.Content == nil || *got.Content != "link content" {
+		t.Fatalf("contenido link no coincide")
+	}
+	// copy también debe permitir link sin membresía
+	_, err = svc.Copy(ctx, nonMember, noteLink.ID)
+	if err != nil {
+		t.Fatalf("nonMember copy con link debería permitir: %v", err)
+	}
+	// nota private compartida con restricted -> nonMember 403, member 200
+	noteRestr, _ := svc.Create(ctx, author, "Restricted note", nil, "private", stringPtr("restricted content"), nil)
+	_, err = svc.Share(ctx, author, noteRestr.ID, groupID, "restricted")
+	if err != nil {
+		t.Fatalf("share restricted failed: %v", err)
+	}
+	_, err = svc.Get(ctx, nonMember, noteRestr.ID)
+	if err == nil {
+		t.Fatal("nonMember con restricted debe recibir 403")
+	}
+	if se, ok := err.(*ServiceError); !ok || se.Code != "forbidden" {
+		t.Fatalf("esperaba forbidden, got %v", err)
+	}
+	_, err = svc.Copy(ctx, nonMember, noteRestr.ID)
+	if err == nil {
+		t.Fatal("nonMember copy con restricted debe 403")
+	}
+	got2, err := svc.Get(ctx, member, noteRestr.ID)
+	if err != nil {
+		t.Fatalf("member con restricted debería leer: %v", err)
+	}
+	if got2.Content == nil || *got2.Content != "restricted content" {
+		t.Fatalf("contenido restricted member no coincide")
+	}
+}
+
+func TestListGroupNotesOrdering(t *testing.T) {
+	svc, _, noteStore, _, _, _, sharedStore, social := newTestService()
+	ctx := context.Background()
+	authorAdmin := uuid.NewString()
+	authorMember := uuid.NewString()
+	member := uuid.NewString()
+	groupID := uuid.NewString()
+	social.AddAdmin(authorAdmin, groupID)
+	social.AddMember(authorMember, groupID)
+	social.AddMember(member, groupID)
+	// crear 4 notas
+	nAdminHigh, _ := svc.Create(ctx, authorAdmin, "Admin high", nil, "private", nil, nil)
+	nAdminLow, _ := svc.Create(ctx, authorAdmin, "Admin low", nil, "private", nil, nil)
+	nMemberHigh, _ := svc.Create(ctx, authorMember, "Member high", nil, "private", nil, nil)
+	nMemberLow, _ := svc.Create(ctx, authorMember, "Member low", nil, "private", nil, nil)
+	// compartir todas en el mismo grupo
+	_, _ = svc.Share(ctx, authorAdmin, nAdminHigh.ID, groupID, "link")
+	_, _ = svc.Share(ctx, authorAdmin, nAdminLow.ID, groupID, "link")
+	_, _ = svc.Share(ctx, authorMember, nMemberHigh.ID, groupID, "link")
+	_, _ = svc.Share(ctx, authorMember, nMemberLow.ID, groupID, "link")
+	// dar likes: AdminHigh 5, MemberHigh 10, AdminLow 1, MemberLow 2
+	// Para controlar shared_at, ajustamos shared_at manualmente via store (memoria)
+	// Primero asignamos likes via LikeAtomic con usuarios ficticios
+	for i := 0; i < 5; i++ {
+		_ = svc.Like(ctx, uuid.NewString(), nAdminHigh.ID)
+	}
+	for i := 0; i < 1; i++ {
+		_ = svc.Like(ctx, uuid.NewString(), nAdminLow.ID)
+	}
+	for i := 0; i < 10; i++ {
+		_ = svc.Like(ctx, uuid.NewString(), nMemberHigh.ID)
+	}
+	for i := 0; i < 2; i++ {
+		_ = svc.Like(ctx, uuid.NewString(), nMemberLow.ID)
+	}
+	// Ajustar SharedAt para desempate: asegurar orden determinístico haciendo que shared de MemberHigh sea más reciente que AdminHigh? Pero orden debe priorizar likes dentro de cada bucket admin/non-admin.
+	// Fuerza shared_at: manipular directamente el store memory
+	// Obtener shareds y setear tiempos
+	sharedStore.mu.Lock()
+	for _, sh := range sharedStore.shared {
+		switch sh.NoteID {
+		case nAdminHigh.ID:
+			sh.SharedAt = parseTime("2026-01-10T10:00:00Z")
+			sh.IsAdminNote = true
+		case nAdminLow.ID:
+			sh.SharedAt = parseTime("2026-01-10T11:00:00Z")
+			sh.IsAdminNote = true
+		case nMemberHigh.ID:
+			sh.SharedAt = parseTime("2026-01-10T12:00:00Z")
+			sh.IsAdminNote = false
+		case nMemberLow.ID:
+			sh.SharedAt = parseTime("2026-01-10T09:00:00Z")
+			sh.IsAdminNote = false
+		}
+	}
+	sharedStore.mu.Unlock()
+	// también asegurar likes_count reflecte realidad (ya lo hace)
+	// listar
+	notes, _, err := svc.ListGroupNotes(ctx, member, groupID, "", 10)
+	if err != nil {
+		t.Fatalf("list group notes failed: %v", err)
+	}
+	if len(notes) != 4 {
+		t.Fatalf("esperaba 4 notas, got %d", len(notes))
+	}
+	// Orden esperado: Admin bucket primero ordenado por likes desc: AdminHigh (5) antes que AdminLow (1)
+	// Luego non-admin bucket ordenado por likes desc: MemberHigh (10) antes que MemberLow (2)
+	expected := []string{nAdminHigh.ID, nAdminLow.ID, nMemberHigh.ID, nMemberLow.ID}
+	for i, expID := range expected {
+		if notes[i].ID != expID {
+			t.Fatalf("orden incorrecto en pos %d: esperado %s (%s) got %s (%s)", i, expID, idToTitle(noteStore, expID), notes[i].ID, notes[i].Title)
+		}
+	}
+	// --- Desempate por fecha: mismo likes (3) y mismo is_admin_note, debe ordenar por shared_at DESC ---
+	nTieRecent, _ := svc.Create(ctx, authorMember, "Tie recent", nil, "private", nil, nil)
+	nTieOld, _ := svc.Create(ctx, authorMember, "Tie old", nil, "private", nil, nil)
+	_, _ = svc.Share(ctx, authorMember, nTieRecent.ID, groupID, "link")
+	_, _ = svc.Share(ctx, authorMember, nTieOld.ID, groupID, "link")
+	for i := 0; i < 3; i++ {
+		_ = svc.Like(ctx, uuid.NewString(), nTieRecent.ID)
+		_ = svc.Like(ctx, uuid.NewString(), nTieOld.ID)
+	}
+	// Ajustar shared_at para los 2 nuevos: TieRecent más reciente que TieOld, ambos con mismo is_admin_note=false
+	sharedStore.mu.Lock()
+	for _, sh := range sharedStore.shared {
+		switch sh.NoteID {
+		case nTieRecent.ID:
+			sh.SharedAt = parseTime("2026-01-10T13:00:00Z")
+			sh.IsAdminNote = false
+		case nTieOld.ID:
+			sh.SharedAt = parseTime("2026-01-10T10:30:00Z")
+			sh.IsAdminNote = false
+		}
+	}
+	sharedStore.mu.Unlock()
+	notesTie, _, err := svc.ListGroupNotes(ctx, member, groupID, "", 10)
+	if err != nil {
+		t.Fatalf("list group notes tie failed: %v", err)
+	}
+	if len(notesTie) != 6 {
+		t.Fatalf("esperaba 6 notas tras tie, got %d", len(notesTie))
+	}
+	// Orden esperado completo: admin bucket (5,1) luego non-admin bucket (10,3tieRecent,3tieOld,2)
+	expectedTie := []string{nAdminHigh.ID, nAdminLow.ID, nMemberHigh.ID, nTieRecent.ID, nTieOld.ID, nMemberLow.ID}
+	for i, expID := range expectedTie {
+		if notesTie[i].ID != expID {
+			t.Fatalf("orden tie incorrecto en pos %d: esperado %s (%s) got %s (%s)", i, expID, idToTitle(noteStore, expID), notesTie[i].ID, notesTie[i].Title)
+		}
+	}
+	// Verificación adicional: entre los dos empatados, el más reciente primero
+	var idxRecent, idxOld int = -1, -1
+	for i, n := range notesTie {
+		if n.ID == nTieRecent.ID {
+			idxRecent = i
+		}
+		if n.ID == nTieOld.ID {
+			idxOld = i
+		}
+	}
+	if idxRecent == -1 || idxOld == -1 {
+		t.Fatalf("no se encontraron notas tie en listado")
+	}
+	if idxRecent > idxOld {
+		t.Fatalf("desempate por shared_at falló: TieRecent (13:00) debe aparecer antes que TieOld (10:30), idxRecent=%d idxOld=%d", idxRecent, idxOld)
+	}
+	_ = noteStore
+}
+
+func parseTime(s string) time.Time {
+	t, _ := time.Parse(time.RFC3339, s)
+	return t
+}
+func idToTitle(store *MemoryNoteStore, id string) string {
+	n, _ := store.GetByID(context.Background(), id)
+	if n == nil {
+		return "?"
+	}
+	return n.Title
 }
 
 func stringPtr(s string) *string { return &s }

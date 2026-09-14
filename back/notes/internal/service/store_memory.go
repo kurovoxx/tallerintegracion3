@@ -235,13 +235,27 @@ func (m *MemorySavedStore) Delete(ctx context.Context, userID, noteID string) er
 
 // Like memory
 type MemoryLikeStore struct {
-	mu    sync.RWMutex
+	mu    sync.Mutex
 	likes map[string]*model.NoteLike // key noteID:userID
+	notes *MemoryNoteStore            // referencia para LikeAtomic (incremento atómico)
 }
 
 func NewMemoryLikeStore() *MemoryLikeStore {
 	return &MemoryLikeStore{likes: make(map[string]*model.NoteLike)}
 }
+
+// NewMemoryLikeStoreWithNotes crea like store ligado a notes para operaciones atómicas.
+func NewMemoryLikeStoreWithNotes(notes *MemoryNoteStore) *MemoryLikeStore {
+	return &MemoryLikeStore{likes: make(map[string]*model.NoteLike), notes: notes}
+}
+
+// SetNoteStore inyecta referencia a notes para LikeAtomic/UnlikeAtomic.
+func (m *MemoryLikeStore) SetNoteStore(notes *MemoryNoteStore) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.notes = notes
+}
+
 func keyLike(n, u string) string { return n + ":" + u }
 func (m *MemoryLikeStore) Create(ctx context.Context, noteID, userID string) (*model.NoteLike, error) {
 	m.mu.Lock()
@@ -266,10 +280,53 @@ func (m *MemoryLikeStore) Delete(ctx context.Context, noteID, userID string) (bo
 	return true, nil
 }
 func (m *MemoryLikeStore) Exists(ctx context.Context, noteID, userID string) (bool, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	_, ok := m.likes[keyLike(noteID, userID)]
 	return ok, nil
+}
+
+// LikeAtomic inserta like y incrementa likes_count de forma atómica en memoria (mutex exclusivo).
+func (m *MemoryLikeStore) LikeAtomic(ctx context.Context, noteID, userID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := keyLike(noteID, userID)
+	if _, ok := m.likes[k]; ok {
+		return fmt.Errorf("already_liked: duplicate")
+	}
+	l := &model.NoteLike{ID: uuid.NewString(), NoteID: noteID, UserID: userID, CreatedAt: time.Now().UTC()}
+	m.likes[k] = l
+	if m.notes != nil {
+		m.notes.mu.Lock()
+		if n, ok := m.notes.notes[noteID]; ok {
+			n.LikesCount++
+			n.UpdatedAt = time.Now().UTC()
+		}
+		m.notes.mu.Unlock()
+	}
+	return nil
+}
+
+// UnlikeAtomic elimina like y decrementa likes_count de forma atómica (GREATEST 0).
+func (m *MemoryLikeStore) UnlikeAtomic(ctx context.Context, noteID, userID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := keyLike(noteID, userID)
+	if _, ok := m.likes[k]; !ok {
+		return nil // idempotente
+	}
+	delete(m.likes, k)
+	if m.notes != nil {
+		m.notes.mu.Lock()
+		if n, ok := m.notes.notes[noteID]; ok {
+			if n.LikesCount > 0 {
+				n.LikesCount--
+			}
+			n.UpdatedAt = time.Now().UTC()
+		}
+		m.notes.mu.Unlock()
+	}
+	return nil
 }
 
 // Shared memory
@@ -409,6 +466,28 @@ func (m *MemorySharedStore) HasAnyShare(ctx context.Context, noteID string) (boo
 		}
 	}
 	return false, nil
+}
+
+// SetSharedAt asigna shared_at para el noteID dado (helper para tests de ordenamiento).
+func (m *MemorySharedStore) SetSharedAt(noteID string, t time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, sh := range m.shared {
+		if sh.NoteID == noteID {
+			sh.SharedAt = t
+		}
+	}
+}
+
+// SetIsAdminNote asigna is_admin_note para el noteID dado (helper para tests).
+func (m *MemorySharedStore) SetIsAdminNote(noteID string, isAdmin bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, sh := range m.shared {
+		if sh.NoteID == noteID {
+			sh.IsAdminNote = isAdmin
+		}
+	}
 }
 
 var _ = strings.Contains

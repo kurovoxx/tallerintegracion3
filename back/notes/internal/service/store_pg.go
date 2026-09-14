@@ -93,6 +93,12 @@ func (p *PGLikeStore) Delete(ctx context.Context, noteID, userID string) (bool, 
 func (p *PGLikeStore) Exists(ctx context.Context, noteID, userID string) (bool, error) {
 	return p.repo.Exists(ctx, nil, noteID, userID)
 }
+func (p *PGLikeStore) LikeAtomic(ctx context.Context, noteID, userID string) error {
+	return p.repo.LikeAtomic(ctx, noteID, userID)
+}
+func (p *PGLikeStore) UnlikeAtomic(ctx context.Context, noteID, userID string) error {
+	return p.repo.UnlikeAtomic(ctx, noteID, userID)
+}
 
 type PGSharedStore struct {
 	repo *repository.SharedRepository
