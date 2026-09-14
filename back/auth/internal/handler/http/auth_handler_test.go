@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/repository"
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/service"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func init() { gin.SetMode(gin.TestMode) }
@@ -68,12 +70,74 @@ type mockErrH struct{ msg string }
 
 func (e *mockErrH) Error() string { return e.msg }
 
-type mockRefreshH struct{}
+type mockRefreshH struct {
+	tokens map[string]*repository.RefreshToken
+}
+
+func newMockRefreshHWithStore() *mockRefreshH {
+	return &mockRefreshH{tokens: make(map[string]*repository.RefreshToken)}
+}
 
 func (m *mockRefreshH) Create(ctx context.Context, userID, tokenHash string, expiresAt time.Time) (string, error) {
-	return "mock-id", nil
+	if m.tokens == nil {
+		m.tokens = make(map[string]*repository.RefreshToken)
+	}
+	id := fmt.Sprintf("mock-id-%d", len(m.tokens)+1)
+	m.tokens[id] = &repository.RefreshToken{
+		ID:        id,
+		UserID:    userID,
+		TokenHash: tokenHash,
+		ExpiresAt: expiresAt,
+		Revoked:   false,
+		CreatedAt: time.Now(),
+	}
+	return id, nil
 }
-func (m *mockRefreshH) CountByUser(ctx context.Context, userID string) (int, error) { return 0, nil }
+func (m *mockRefreshH) CountByUser(ctx context.Context, userID string) (int, error) {
+	c := 0
+	for _, t := range m.tokens {
+		if t.UserID == userID {
+			c++
+		}
+	}
+	return c, nil
+}
+func (m *mockRefreshH) FindByRawToken(ctx context.Context, raw string) (*repository.RefreshToken, error) {
+	for _, t := range m.tokens {
+		if err := bcrypt.CompareHashAndPassword([]byte(t.TokenHash), []byte(raw)); err == nil {
+			cp := *t
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+func (m *mockRefreshH) Revoke(ctx context.Context, id string) error {
+	if t, ok := m.tokens[id]; ok {
+		t.Revoked = true
+	}
+	return nil
+}
+func (m *mockRefreshH) Rotate(ctx context.Context, oldID, userID, newHash string, newExpires time.Time) (string, error) {
+	if old, ok := m.tokens[oldID]; ok {
+		if old.Revoked {
+			return "", fmt.Errorf("revoked")
+		}
+		if time.Now().After(old.ExpiresAt) {
+			return "", fmt.Errorf("expired")
+		}
+		old.Revoked = true
+	}
+	newID := fmt.Sprintf("mock-id-%d", len(m.tokens)+1)
+	m.tokens[newID] = &repository.RefreshToken{
+		ID:        newID,
+		UserID:    userID,
+		TokenHash: newHash,
+		ExpiresAt: newExpires,
+		Revoked:   false,
+		CreatedAt: time.Now(),
+	}
+	return newID, nil
+}
 
 func newJWTForHandler(t *testing.T) *service.JWTService {
 	t.Helper()
@@ -365,5 +429,142 @@ func TestAuthHandler_Register_RoleIgnorado_No400(t *testing.T) {
 	}
 }
 
+// Tests para POST /auth/refresh
+func TestAuthHandler_Refresh_Valido_200(t *testing.T) {
+	repo := newMockUserRepoH()
+	refreshRepo := &mockRefreshH{tokens: make(map[string]*repository.RefreshToken)}
+	jwtSvc, _ := service.NuevoJWTService(service.ConfiguracionJWT{
+		ClaveSecreta: []byte("handler-test-secret-32-chars-long"),
+		Issuer:       "apuntes-auth",
+		Audience:     "apuntes-client",
+		Duracion:     15 * time.Minute,
+	})
+	svc := service.NewAuthService(repo, refreshRepo, jwtSvc, 900, 604800)
+	h := NewAuthHandler(svc)
+	// Register + Login para obtener refresh_token
+	bodyReg, _ := json.Marshal(map[string]string{"email": "refresh@test.invalid", "password": "Pass1234"})
+	wReg := httptest.NewRecorder()
+	cReg, _ := gin.CreateTestContext(wReg)
+	cReg.Request = httptest.NewRequest("POST", "/auth/register", bytes.NewReader(bodyReg))
+	cReg.Request.Header.Set("Content-Type", "application/json")
+	h.Register(cReg)
+	bodyLogin, _ := json.Marshal(map[string]string{"email": "refresh@test.invalid", "password": "Pass1234"})
+	wLogin := httptest.NewRecorder()
+	cLogin, _ := gin.CreateTestContext(wLogin)
+	cLogin.Request = httptest.NewRequest("POST", "/auth/login", bytes.NewReader(bodyLogin))
+	cLogin.Request.Header.Set("Content-Type", "application/json")
+	h.Login(cLogin)
+	var loginResp map[string]interface{}
+	json.Unmarshal(wLogin.Body.Bytes(), &loginResp)
+	refreshToken := loginResp["refresh_token"].(string)
+	// Refresh
+	body, _ := json.Marshal(map[string]string{"refresh_token": refreshToken})
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/auth/refresh", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	h.Refresh(c)
+	if w.Code != 200 {
+		t.Fatalf("refresh válido esperado 200, got %d %s", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["access_token"] == "" || resp["refresh_token"] == "" || resp["expires_in"] == nil {
+		t.Fatalf("respuesta refresh incompleta %v", resp)
+	}
+	// Verificar JWT sin role
+	tok, _, _ := jwt.NewParser().ParseUnverified(resp["access_token"].(string), jwt.MapClaims{})
+	if _, ok := tok.Claims.(jwt.MapClaims)["role"]; ok {
+		t.Fatal("JWT no debe contener role")
+	}
+}
+
+func TestAuthHandler_Refresh_Inexistente_401(t *testing.T) {
+	repo := newMockUserRepoH()
+	jwtSvc, _ := service.NuevoJWTService(service.ConfiguracionJWT{
+		ClaveSecreta: []byte("handler-test-secret-32-chars-long"),
+		Issuer:       "apuntes-auth",
+		Audience:     "apuntes-client",
+		Duracion:     15 * time.Minute,
+	})
+	svc := service.NewAuthService(repo, &mockRefreshH{tokens: make(map[string]*repository.RefreshToken)}, jwtSvc, 900, 604800)
+	h := NewAuthHandler(svc)
+	body, _ := json.Marshal(map[string]string{"refresh_token": "noexiste1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab"})
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/auth/refresh", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	h.Refresh(c)
+	if w.Code != 401 {
+		t.Fatalf("esperado 401, got %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAuthHandler_Refresh_BodyVacio_400(t *testing.T) {
+	repo := newMockUserRepoH()
+	jwtSvc, _ := service.NuevoJWTService(service.ConfiguracionJWT{
+		ClaveSecreta: []byte("handler-test-secret-32-chars-long"),
+		Issuer:       "apuntes-auth",
+		Audience:     "apuntes-client",
+		Duracion:     15 * time.Minute,
+	})
+	svc := service.NewAuthService(repo, &mockRefreshH{}, jwtSvc, 900, 604800)
+	h := NewAuthHandler(svc)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/auth/refresh", bytes.NewReader([]byte(`{}`)))
+	c.Request.Header.Set("Content-Type", "application/json")
+	h.Refresh(c)
+	if w.Code != 400 {
+		t.Fatalf("esperado 400 body vacío, got %d", w.Code)
+	}
+}
+
+func TestAuthHandler_Refresh_Revocado_401(t *testing.T) {
+	repo := newMockUserRepoH()
+	refreshRepo := &mockRefreshH{tokens: make(map[string]*repository.RefreshToken)}
+	jwtSvc, _ := service.NuevoJWTService(service.ConfiguracionJWT{
+		ClaveSecreta: []byte("handler-test-secret-32-chars-long"),
+		Issuer:       "apuntes-auth",
+		Audience:     "apuntes-client",
+		Duracion:     15 * time.Minute,
+	})
+	svc := service.NewAuthService(repo, refreshRepo, jwtSvc, 900, 604800)
+	h := NewAuthHandler(svc)
+	// Register + Login
+	bodyReg, _ := json.Marshal(map[string]string{"email": "revokedh@test.invalid", "password": "Pass1234"})
+	wReg := httptest.NewRecorder()
+	cReg, _ := gin.CreateTestContext(wReg)
+	cReg.Request = httptest.NewRequest("POST", "/auth/register", bytes.NewReader(bodyReg))
+	cReg.Request.Header.Set("Content-Type", "application/json")
+	h.Register(cReg)
+	bodyLogin, _ := json.Marshal(map[string]string{"email": "revokedh@test.invalid", "password": "Pass1234"})
+	wLogin := httptest.NewRecorder()
+	cLogin, _ := gin.CreateTestContext(wLogin)
+	cLogin.Request = httptest.NewRequest("POST", "/auth/login", bytes.NewReader(bodyLogin))
+	cLogin.Request.Header.Set("Content-Type", "application/json")
+	h.Login(cLogin)
+	var lr map[string]interface{}
+	json.Unmarshal(wLogin.Body.Bytes(), &lr)
+	refreshToken := lr["refresh_token"].(string)
+	// Primer refresh ok (rota y revoca viejo)
+	body, _ := json.Marshal(map[string]string{"refresh_token": refreshToken})
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/auth/refresh", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	h.Refresh(c)
+	// Segundo intento con mismo viejo debe ser 401
+	w2 := httptest.NewRecorder()
+	c2, _ := gin.CreateTestContext(w2)
+	c2.Request = httptest.NewRequest("POST", "/auth/refresh", bytes.NewReader(body))
+	c2.Request.Header.Set("Content-Type", "application/json")
+	h.Refresh(c2)
+	if w2.Code != 401 {
+		t.Fatalf("esperado 401 por revocado, got %d %s", w2.Code, w2.Body.String())
+	}
+}
+
 // Evitar imports no usados
 var _ = repository.GenerateRawToken
+var _ = bcrypt.CompareHashAndPassword

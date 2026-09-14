@@ -44,6 +44,9 @@ type UserRepository interface {
 type RefreshTokenRepository interface {
 	Create(ctx context.Context, userID string, tokenHash string, expiresAt time.Time) (string, error)
 	CountByUser(ctx context.Context, userID string) (int, error)
+	FindByRawToken(ctx context.Context, raw string) (*repository.RefreshToken, error)
+	Revoke(ctx context.Context, id string) error
+	Rotate(ctx context.Context, oldID, userID, newHash string, newExpires time.Time) (string, error)
 }
 
 type AuthService struct {
@@ -191,6 +194,68 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*Login
 	return &LoginResult{
 		AccessToken:  jwtRes.AccessToken,
 		RefreshToken: raw,
+		ExpiresIn:    s.cfgAccessExp,
+	}, nil
+}
+
+type RefreshResult struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"`
+}
+
+// Refresh valida el refresh_token (hash bcrypt, no revocado, no expirado), lo rota y emite nuevo access_token.
+// Contrato: POST /auth/refresh {refresh_token} -> 200 {access_token, expires_in} + nuevo refresh_token por rotación, 401 si revocado/expirado/inexistente.
+func (s *AuthService) Refresh(ctx context.Context, rawToken string) (*RefreshResult, error) {
+	rawToken = strings.TrimSpace(rawToken)
+	if rawToken == "" {
+		return nil, NewServiceError(utils.ErrInvalidToken)
+	}
+	if s.jwt == nil {
+		return nil, &ServiceError{Code: "internal_error", Message: "jwt service no configurado"}
+	}
+	// Localizar fila por bcrypt (sin índice SHA256)
+	rt, err := s.refreshTokens.FindByRawToken(ctx, rawToken)
+	if err != nil {
+		return nil, err
+	}
+	if rt == nil {
+		return nil, NewServiceError(utils.ErrInvalidToken)
+	}
+	if rt.Revoked {
+		return nil, NewServiceError(utils.ErrInvalidToken)
+	}
+	if time.Now().After(rt.ExpiresAt) {
+		return nil, NewServiceError(utils.ErrTokenExpired)
+	}
+	// Emitir nuevo access_token para el user_id del refresh_token
+	jwtRes, err := s.jwt.GenerarAccessToken(UsuarioAutenticado{ID: rt.UserID})
+	if err != nil {
+		return nil, err
+	}
+	// Generar nuevo refresh_token y rotar (revocar viejo + crear nuevo en tx)
+	newRaw, newHash, err := repository.GenerateRawToken()
+	if err != nil {
+		return nil, err
+	}
+	newExpires := time.Now().Add(time.Duration(s.cfgRefreshExp) * time.Second)
+	if _, err := s.refreshTokens.Rotate(ctx, rt.ID, rt.UserID, newHash, newExpires); err != nil {
+		// Mapear errores de Rotate a códigos de dominio
+		msg := err.Error()
+		if strings.Contains(msg, "revoked") {
+			return nil, NewServiceError(utils.ErrInvalidToken)
+		}
+		if strings.Contains(msg, "expired") {
+			return nil, NewServiceError(utils.ErrTokenExpired)
+		}
+		if strings.Contains(msg, "not_found") {
+			return nil, NewServiceError(utils.ErrInvalidToken)
+		}
+		return nil, err
+	}
+	return &RefreshResult{
+		AccessToken:  jwtRes.AccessToken,
+		RefreshToken: newRaw,
 		ExpiresIn:    s.cfgAccessExp,
 	}, nil
 }
