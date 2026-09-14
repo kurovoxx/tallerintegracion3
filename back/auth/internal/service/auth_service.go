@@ -259,3 +259,29 @@ func (s *AuthService) Refresh(ctx context.Context, rawToken string) (*RefreshRes
 		ExpiresIn:    s.cfgAccessExp,
 	}, nil
 }
+
+// Logout marca revoked=true para el refresh_token dado. Idempotente: activo, ya revocado, expirado o inexistente → 204.
+// No genera tokens. Usa FindByRawToken + Revoke; nunca revela existencia.
+func (s *AuthService) Logout(ctx context.Context, rawToken string) error {
+	rawToken = strings.TrimSpace(rawToken)
+	if rawToken == "" {
+		return NewServiceError("bad_request")
+	}
+	// Buscar por bcrypt; si no se encuentra, es idempotente (204)
+	rt, err := s.refreshTokens.FindByRawToken(ctx, rawToken)
+	if err != nil {
+		return err
+	}
+	if rt == nil {
+		return nil
+	}
+	// Si ya está revocado, sigue siendo 204
+	if rt.Revoked {
+		return nil
+	}
+	// Marcar revocado (incluso si expirado, se revoca igual)
+	if err := s.refreshTokens.Revoke(ctx, rt.ID); err != nil {
+		return err
+	}
+	return nil
+}

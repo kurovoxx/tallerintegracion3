@@ -63,6 +63,7 @@ func main() {
 	r.POST("/auth/register", authH.Register)
 	r.POST("/auth/login", authH.Login)
 	r.POST("/auth/refresh", authH.Refresh)
+	r.POST("/auth/logout", authH.Logout)
 
 	// Protegido: middleware valida firma+expiración, inyecta solo user_id (sin role global)
 	// 401 token inválido/expirado
