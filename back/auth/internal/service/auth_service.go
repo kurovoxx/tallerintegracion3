@@ -137,9 +137,8 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*Login
 	if s.jwt == nil {
 		return nil, &ServiceError{Code: "internal_error", Message: "jwt service no configurado"}
 	}
-	// Generar access token (JWT) usando lógica existente standalone integrada
-	// masterprompt 3.1: integrar función existente, no reescribir
-	jwtRes, err := s.jwt.GenerarAccessToken(UsuarioAutenticado{ID: user.ID, Role: user.Role})
+	// Generar access token (JWT) sin role global — solo user_id + iss/aud/iat/exp
+	jwtRes, err := s.jwt.GenerarAccessToken(UsuarioAutenticado{ID: user.ID})
 	if err != nil {
 		return nil, err
 	}

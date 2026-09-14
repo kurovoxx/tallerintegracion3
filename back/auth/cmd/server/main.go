@@ -58,25 +58,19 @@ func main() {
 	r.POST("/auth/register", authH.Register)
 	r.POST("/auth/login", authH.Login)
 
-	// Protegido: middleware valida firma+expiración, inyecta user_id/role (masterprompt 3.1)
-	// 401 token inválido/expirado, 403 rol insuficiente
+	// Protegido: middleware valida firma+expiración, inyecta solo user_id (sin role global)
+	// 401 token inválido/expirado
 	protected := r.Group("")
 	protected.Use(authMw.RequireAuth())
 	{
 		protected.GET("/auth/me", func(c *gin.Context) {
 			uid, _ := middleware.GetUserID(c)
-			role, _ := middleware.GetRole(c)
-			c.JSON(http.StatusOK, gin.H{"user_id": uid, "role": role})
+			c.JSON(http.StatusOK, gin.H{"user_id": uid})
 		})
-		protected.GET("/teacher-only", authMw.RequireRole(service.RolTeacher), func(c *gin.Context) {
-			uid, _ := middleware.GetUserID(c)
-			c.JSON(http.StatusOK, gin.H{"user_id": uid, "message": "solo teacher"})
-		})
-		// Ejemplo perfil protegido (placeholder Sprint 1)
+		// Ejemplo perfil protegido (placeholder Sprint 1) — sin role
 		protected.GET("/profile/me", func(c *gin.Context) {
 			uid, _ := middleware.GetUserID(c)
-			role, _ := middleware.GetRole(c)
-			c.JSON(http.StatusOK, gin.H{"user_id": uid, "role": role, "note": "profile placeholder"})
+			c.JSON(http.StatusOK, gin.H{"user_id": uid, "note": "profile placeholder"})
 		})
 	}
 
