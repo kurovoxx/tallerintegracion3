@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -52,7 +53,15 @@ func runServer(pool *pgxpool.Pool, driveClient drive.Client, cfg *config.Config)
 	savedStore := service.NewPGSavedStore(pool)
 	likeStore := service.NewPGLikeStore(pool)
 	sharedStore := service.NewPGSharedStore(pool)
-	social := service.NewMemorySocialResolver() // TODO: reemplazar por gRPC a Social
+	social := service.NewMemorySocialResolver()
+	if os.Getenv("APP_ENV") == "development" || os.Getenv("DEV_SEED_SOCIAL") == "true" {
+		testUserA := "11111111-1111-1111-1111-111111111111"
+		testUserB := "22222222-2222-2222-2222-222222222222"
+		testGroupID := "33333333-3333-3333-3333-333333333333"
+		social.AddAdmin(testUserA, testGroupID)
+		social.AddMember(testUserB, testGroupID)
+		log.Println("notes: semilla de desarrollo cargada para SocialResolver")
+	}
 	svc := service.NewNoteService(noteStore, attStore, savedStore, likeStore, sharedStore, driveClient, social)
 	startGin(svc, cfg)
 }
