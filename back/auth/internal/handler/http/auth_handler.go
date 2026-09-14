@@ -46,6 +46,16 @@ type loginResponse struct {
 	ExpiresIn    int    `json:"expires_in"`
 }
 
+type refreshRequest struct {
+	RefreshToken string `json:"refresh_token" binding:"required"`
+}
+
+type refreshResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"`
+}
+
 // Login maneja POST /auth/login (sin auth) según agentApiContract.md:54.
 // Verifica bcrypt, genera JWT corto + refresh hasheado.
 func (h *AuthHandler) Login(c *gin.Context) {
@@ -65,6 +75,36 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, loginResponse{
+		AccessToken:  res.AccessToken,
+		RefreshToken: res.RefreshToken,
+		ExpiresIn:    res.ExpiresIn,
+	})
+}
+
+// Refresh maneja POST /auth/refresh (sin auth) según agentApiContract.md:24.
+// Valida refresh_token (hash bcrypt, no revocado, no expirado), lo rota y emite nuevo access_token.
+// Contrato actual: 200 {access_token, expires_in} + nuevo refresh_token por rotación, 401 si revocado/expirado/inexistente.
+func (h *AuthHandler) Refresh(c *gin.Context) {
+	var req refreshRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.RespondError(c, http.StatusBadRequest, "bad_request", "Request inválido: refresh_token requerido")
+		return
+	}
+	res, err := h.svc.Refresh(c.Request.Context(), req.RefreshToken)
+	if err != nil {
+		if se, ok := err.(*service.ServiceError); ok {
+			status := utils.StatusForCode(se.Code)
+			// Refresh siempre es 401 para token inválido/expirado, nunca 403
+			if se.Code == utils.ErrInvalidToken || se.Code == utils.ErrTokenExpired || se.Code == utils.ErrUnauthorized {
+				status = http.StatusUnauthorized
+			}
+			utils.RespondError(c, status, se.Code, se.Message)
+			return
+		}
+		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
+		return
+	}
+	c.JSON(http.StatusOK, refreshResponse{
 		AccessToken:  res.AccessToken,
 		RefreshToken: res.RefreshToken,
 		ExpiresIn:    res.ExpiresIn,

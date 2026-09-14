@@ -62,6 +62,7 @@ func main() {
 	// Público (sin auth) según agentApiContract.md
 	r.POST("/auth/register", authH.Register)
 	r.POST("/auth/login", authH.Login)
+	r.POST("/auth/refresh", authH.Refresh)
 
 	// Protegido: middleware valida firma+expiración, inyecta solo user_id (sin role global)
 	// 401 token inválido/expirado

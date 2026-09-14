@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/repository"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // --- Mocks en memoria ---
@@ -79,23 +81,73 @@ type mockErr struct{ msg string }
 func (e *mockErr) Error() string { return e.msg }
 
 type mockRefreshRepo struct {
-	tokens map[string]string // userID -> hash (no usado en detalle para estos tests)
+	tokens map[string]*repository.RefreshToken // id -> token
 }
 
 func newMockRefreshRepo() *mockRefreshRepo {
-	return &mockRefreshRepo{tokens: make(map[string]string)}
+	return &mockRefreshRepo{tokens: make(map[string]*repository.RefreshToken)}
 }
 
 func (m *mockRefreshRepo) Create(ctx context.Context, userID string, tokenHash string, expiresAt time.Time) (string, error) {
-	m.tokens[userID] = tokenHash
-	return "mock-id", nil
+	id := fmt.Sprintf("mock-id-%d", len(m.tokens)+1)
+	m.tokens[id] = &repository.RefreshToken{
+		ID:        id,
+		UserID:    userID,
+		TokenHash: tokenHash,
+		ExpiresAt: expiresAt,
+		Revoked:   false,
+		CreatedAt: time.Now(),
+	}
+	return id, nil
 }
 
 func (m *mockRefreshRepo) CountByUser(ctx context.Context, userID string) (int, error) {
-	if _, ok := m.tokens[userID]; ok {
-		return 1, nil
+	c := 0
+	for _, t := range m.tokens {
+		if t.UserID == userID {
+			c++
+		}
 	}
-	return 0, nil
+	return c, nil
+}
+
+func (m *mockRefreshRepo) FindByRawToken(ctx context.Context, raw string) (*repository.RefreshToken, error) {
+	for _, t := range m.tokens {
+		if err := bcrypt.CompareHashAndPassword([]byte(t.TokenHash), []byte(raw)); err == nil {
+			cp := *t
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *mockRefreshRepo) Revoke(ctx context.Context, id string) error {
+	if t, ok := m.tokens[id]; ok {
+		t.Revoked = true
+	}
+	return nil
+}
+
+func (m *mockRefreshRepo) Rotate(ctx context.Context, oldID, userID, newHash string, newExpires time.Time) (string, error) {
+	if old, ok := m.tokens[oldID]; ok {
+		if old.Revoked {
+			return "", fmt.Errorf("revoked")
+		}
+		if time.Now().After(old.ExpiresAt) {
+			return "", fmt.Errorf("expired")
+		}
+		old.Revoked = true
+	}
+	newID := fmt.Sprintf("mock-id-%d", len(m.tokens)+1)
+	m.tokens[newID] = &repository.RefreshToken{
+		ID:        newID,
+		UserID:    userID,
+		TokenHash: newHash,
+		ExpiresAt: newExpires,
+		Revoked:   false,
+		CreatedAt: time.Now(),
+	}
+	return newID, nil
 }
 
 // Helper para JWT de prueba sin role
@@ -415,5 +467,159 @@ func TestRegister_EmailLocalPartVacio_FallbackUsuario(t *testing.T) {
 	}
 }
 
+// Tests para POST /auth/refresh (rotación)
+
+func TestRefresh_Valido_Rota(t *testing.T) {
+	repo := newMockUserRepo()
+	refreshRepo := newMockRefreshRepo()
+	jwtSvc := newJWTForTest(t)
+	svc := NewAuthService(repo, refreshRepo, jwtSvc, 900, 604800)
+	// Registrar y login para obtener refresh_token
+	_, err := svc.Register(context.Background(), "refresh1@example.invalid", "Pass1234", nil, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("register %v", err)
+	}
+	loginRes, err := svc.Login(context.Background(), "refresh1@example.invalid", "Pass1234")
+	if err != nil {
+		t.Fatalf("login %v", err)
+	}
+	oldRefresh := loginRes.RefreshToken
+	// Pequeña espera para asegurar iat diferente si se genera en el mismo segundo
+	time.Sleep(1100 * time.Millisecond)
+	// Refresh válido debe rotar
+	res, err := svc.Refresh(context.Background(), oldRefresh)
+	if err != nil {
+		t.Fatalf("refresh válido debe pasar, got %v", err)
+	}
+	if res.AccessToken == "" || res.RefreshToken == "" {
+		t.Fatal("tokens vacíos en refresh")
+	}
+	if res.RefreshToken == oldRefresh {
+		t.Fatal("refresh_token debe ser nuevo por rotación")
+	}
+	// Verificar que el viejo está revocado (FindByRawToken debe encontrarlo pero con Revoked=true)
+	rt, _ := refreshRepo.FindByRawToken(context.Background(), oldRefresh)
+	if rt == nil || !rt.Revoked {
+		t.Fatal("viejo refresh_token debe quedar revocado")
+	}
+	// Verificar que el nuevo es válido y no revocado
+	rtNew, _ := refreshRepo.FindByRawToken(context.Background(), res.RefreshToken)
+	if rtNew == nil || rtNew.Revoked {
+		t.Fatal("nuevo refresh_token debe existir y no revocado")
+	}
+	// Verificar JWT sin role
+	parser := jwt.NewParser()
+	tok, _, _ := parser.ParseUnverified(res.AccessToken, jwt.MapClaims{})
+	claims := tok.Claims.(jwt.MapClaims)
+	if _, ok := claims["role"]; ok {
+		t.Fatal("JWT no debe contener role")
+	}
+}
+
+func TestRefresh_TokenInexistente_401(t *testing.T) {
+	repo := newMockUserRepo()
+	svc := NewAuthService(repo, newMockRefreshRepo(), newJWTForTest(t), 900, 604800)
+	_, err := svc.Refresh(context.Background(), "noexiste1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab")
+	if err == nil {
+		t.Fatal("esperado invalid_token")
+	}
+	se, ok := err.(*ServiceError)
+	if !ok || se.Code != "invalid_token" {
+		t.Fatalf("esperado invalid_token, got %v", err)
+	}
+}
+
+func TestRefresh_TokenRevocado_401(t *testing.T) {
+	repo := newMockUserRepo()
+	refreshRepo := newMockRefreshRepo()
+	svc := NewAuthService(repo, refreshRepo, newJWTForTest(t), 900, 604800)
+	svc.Register(context.Background(), "revoked@example.invalid", "Pass1234", nil, nil, nil, nil, nil, nil)
+	loginRes, _ := svc.Login(context.Background(), "revoked@example.invalid", "Pass1234")
+	oldRefresh := loginRes.RefreshToken
+	// Primera rotación revoca el viejo
+	svc.Refresh(context.Background(), oldRefresh)
+	// Segundo intento con el mismo viejo debe fallar (revocado)
+	_, err := svc.Refresh(context.Background(), oldRefresh)
+	if err == nil {
+		t.Fatal("esperado invalid_token por revocado")
+	}
+	se, ok := err.(*ServiceError)
+	if !ok || se.Code != "invalid_token" {
+		t.Fatalf("esperado invalid_token revocado, got %v", err)
+	}
+}
+
+func TestRefresh_TokenExpirado_401(t *testing.T) {
+	repo := newMockUserRepo()
+	refreshRepo := newMockRefreshRepo()
+	jwtSvc := newJWTForTest(t)
+	svc := NewAuthService(repo, refreshRepo, jwtSvc, 900, 604800)
+	svc.Register(context.Background(), "expired@example.invalid", "Pass1234", nil, nil, nil, nil, nil, nil)
+	// Crear manualmente un refresh_token expirado
+	raw, hash, _ := repository.GenerateRawToken()
+	// Guardar con expires_at en pasado
+	refreshRepo.Create(context.Background(), "550e8400-e29b-41d4-a716-446655440001", hash, time.Now().Add(-1*time.Hour))
+	// Como no conocemos el userID real del mock, usamos el raw que acabamos de crear
+	// El FindByRawToken lo encontrará, pero debe estar expirado
+	// Necesitamos asegurar que el token pertenece a un usuario que existe, pero para este test usamos el raw directamente
+	// Creamos un token para el usuario que registramos, pero con expiración pasada
+	// Para simplificar, insertamos directamente en el mock con expiración pasada para el usuario correcto
+	// Primero login para obtener userID
+	loginRes, _ := svc.Login(context.Background(), "expired@example.invalid", "Pass1234")
+	_ = loginRes
+	// Crear token expirado manualmente con bcrypt del raw
+	rawExp, hashExp, _ := repository.GenerateRawToken()
+	// Buscar userID del usuario registrado
+	user, _ := repo.GetByEmail(context.Background(), "expired@example.invalid")
+	refreshRepo.Create(context.Background(), user.ID, hashExp, time.Now().Add(-1*time.Hour))
+	_, err := svc.Refresh(context.Background(), rawExp)
+	if err == nil {
+		t.Fatal("esperado token_expired")
+	}
+	se, ok := err.(*ServiceError)
+	if !ok || se.Code != "token_expired" {
+		t.Fatalf("esperado token_expired, got %v", err)
+	}
+	_ = raw
+}
+
+func TestRefresh_ReutilizacionTokenViejo_Falla(t *testing.T) {
+	repo := newMockUserRepo()
+	refreshRepo := newMockRefreshRepo()
+	svc := NewAuthService(repo, refreshRepo, newJWTForTest(t), 900, 604800)
+	svc.Register(context.Background(), "reuse@example.invalid", "Pass1234", nil, nil, nil, nil, nil, nil)
+	loginRes, _ := svc.Login(context.Background(), "reuse@example.invalid", "Pass1234")
+	oldRefresh := loginRes.RefreshToken
+	// Primer refresh ok
+	res1, err := svc.Refresh(context.Background(), oldRefresh)
+	if err != nil {
+		t.Fatalf("primer refresh %v", err)
+	}
+	// Segundo refresh con el mismo viejo debe fallar
+	_, err = svc.Refresh(context.Background(), oldRefresh)
+	if err == nil {
+		t.Fatal("reuso de viejo refresh debe fallar")
+	}
+	// Tercer refresh con el nuevo debe funcionar
+	_, err = svc.Refresh(context.Background(), res1.RefreshToken)
+	if err != nil {
+		t.Fatalf("refresh con nuevo token debe pasar, got %v", err)
+	}
+}
+
+func TestRefresh_BodyVacio_400(t *testing.T) {
+	repo := newMockUserRepo()
+	svc := NewAuthService(repo, newMockRefreshRepo(), newJWTForTest(t), 900, 604800)
+	_, err := svc.Refresh(context.Background(), "   ")
+	if err == nil {
+		t.Fatal("esperado invalid_token por body vacío")
+	}
+	se, ok := err.(*ServiceError)
+	if !ok || se.Code != "invalid_token" {
+		t.Fatalf("esperado invalid_token, got %v", err)
+	}
+}
+
 // Evitar import no usado
 var _ = repository.GenerateRawToken
+var _ = bcrypt.CompareHashAndPassword
