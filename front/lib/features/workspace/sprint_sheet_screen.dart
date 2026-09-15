@@ -240,122 +240,82 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
   Widget _buildMetricsHeader() {
     final now = DateTime.now();
     final end = now.add(const Duration(days: 7));
-    String fmt(DateTime d) =>
-        '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year.toString().substring(2)}';
+    String fmt(DateTime d) => '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year.toString().substring(2)}';
 
-    return Container(
-      height: 75,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: Colors.black, width: 2),
-        boxShadow: const [BoxShadow(color: Colors.black, offset: Offset(4, 4))],
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Container(
+        height: 100,
+        constraints: const BoxConstraints(minWidth: 520),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: Colors.black, width: 2),
+          boxShadow: const [BoxShadow(color: Colors.black, offset: Offset(4, 4))],
+        ),
+        child: Row(
+          children: [
+            SizedBox(width: 170, child: _buildDateCell(fmt(now), fmt(end))),
+            const VerticalDivider(width: 2, thickness: 2, color: Colors.black),
+            _buildMetricCell('TOTAL HORAS', '${totalEst.toStringAsFixed(1)}h', const Color(0xFFE6F4EA), width: 90),
+            const VerticalDivider(width: 2, thickness: 2, color: Colors.black),
+            _buildMetricCell('DÍAS TOTALES', '$totalDays', const Color(0xFFE6F4EA), width: 85),
+            const VerticalDivider(width: 2, thickness: 2, color: Colors.black),
+            _buildMetricCell('HORAS USADAS', '${totalUsed.toStringAsFixed(1)}h', const Color(0xFFE6F4EA), width: 90),
+            const VerticalDivider(width: 2, thickness: 2, color: Colors.black),
+            _buildMetricCell('HORAS RESTANTES', '${totalRemaining.toStringAsFixed(1)}h', const Color(0xFFFFD700), width: 95),
+          ],
+        ),
       ),
-      child: Row(
+    );
+  }
+
+  Widget _buildDateCell(String actual, String fin) {
+    Widget chip(String label, String date) => Column(
+          children: [
+            Text(label, style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: AppColors.muted)),
+            const SizedBox(height: 2),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(color: AppColors.bg, border: Border.all(color: Colors.black, width: 1)),
+              child: Text(date, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: AppColors.text)),
+            ),
+          ],
+        );
+    return Container(
+      width: 170,
+      color: const Color(0xFFF3F3F4),
+      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            flex: 2,
-            child: Container(
-              color: const Color(0xFFF3F3F4),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'FECHAS DEL SPRINT',
-                    style: TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.muted,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _DateCell(label: 'Actual', date: fmt(now)),
-                      ),
-                      const SizedBox(width: 6),
-                      const Icon(
-                        Icons.arrow_right_alt_rounded,
-                        size: 14,
-                        color: AppColors.text,
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: _DateCell(label: 'Fin', date: fmt(end)),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const VerticalDivider(width: 2, thickness: 2, color: Colors.black),
-          Expanded(
-            child: _buildMetricCell(
-              'TOTAL HORAS',
-              totalEst.toStringAsFixed(1),
-              const Color(0xFFE6F4EA),
-            ),
-          ),
-          const VerticalDivider(width: 2, thickness: 2, color: Colors.black),
-          Expanded(
-            child: _buildMetricCell(
-              'DÍAS TOTALES',
-              '$totalDays',
-              const Color(0xFFE6F4EA),
-            ),
-          ),
-          const VerticalDivider(width: 2, thickness: 2, color: Colors.black),
-          Expanded(
-            child: _buildMetricCell(
-              'HORAS USADAS',
-              totalUsed.toStringAsFixed(1),
-              const Color(0xFFE6F4EA),
-            ),
-          ),
-          const VerticalDivider(width: 2, thickness: 2, color: Colors.black),
-          Expanded(
-            child: _buildMetricCell(
-              'HORAS RESTANTES',
-              totalRemaining.toStringAsFixed(1),
-              const Color(0xFFFFD700),
-            ),
+          const Text('FECHAS DEL SPRINT', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: AppColors.muted, letterSpacing: 0.5)),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Expanded(child: chip('Actual', actual)),
+              const SizedBox(width: 6),
+              const Icon(Icons.arrow_right_alt_rounded, size: 14, color: AppColors.text),
+              const SizedBox(width: 6),
+              Expanded(child: chip('Fin', fin)),
+            ],
           ),
         ],
       ),
     );
   }
 
-  Widget _buildMetricCell(String label, String value, Color bg) {
+  Widget _buildMetricCell(String label, String value, Color bg, {double width = 90}) {
     return Container(
+      width: width,
       color: bg,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Text(
-            label,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              fontSize: 9,
-              fontWeight: FontWeight.w800,
-              color: AppColors.muted,
-              letterSpacing: 0.4,
-            ),
-          ),
+          Text(label, textAlign: TextAlign.center, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: AppColors.muted, letterSpacing: 0.4)),
           const SizedBox(height: 4),
-          Text(
-            value,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w900,
-              color: AppColors.text,
-            ),
-          ),
+          Text(value, textAlign: TextAlign.center, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: AppColors.text)),
         ],
       ),
     );
@@ -593,6 +553,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
   }
 }
 
+// ignore: unused_element
 class _DateCell extends StatelessWidget {
   final String label;
   final String date;
@@ -601,18 +562,20 @@ class _DateCell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      mainAxisSize: MainAxisSize.min,
       children: [
         Text(
           label,
           style: const TextStyle(
-            fontSize: 9,
+            fontSize: 10,
             fontWeight: FontWeight.w800,
             color: AppColors.muted,
           ),
         ),
         const SizedBox(height: 2),
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
           decoration: BoxDecoration(
             color: AppColors.bg,
             border: Border.all(color: Colors.black, width: 1),
@@ -620,7 +583,7 @@ class _DateCell extends StatelessWidget {
           child: Text(
             date,
             style: const TextStyle(
-              fontSize: 10,
+              fontSize: 11,
               fontWeight: FontWeight.w900,
               color: AppColors.text,
             ),

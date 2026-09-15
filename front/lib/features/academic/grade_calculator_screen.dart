@@ -247,8 +247,10 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       _isRedistributing = true;
       try {
         final finalWeight = _readWeight(finalItem);
-        finalItem.weightController.text = _formatWeight(finalWeight);
-        examItem.weightController.text = _formatWeight(100 - finalWeight);
+        final textF = _formatWeight(finalWeight);
+        final textE = _formatWeight(100 - finalWeight);
+        finalItem.weightController.value = TextEditingValue(text: textF, selection: TextSelection.collapsed(offset: textF.length));
+        examItem.weightController.value = TextEditingValue(text: textE, selection: TextSelection.collapsed(offset: textE.length));
       } finally {
         _isRedistributing = false;
       }
@@ -265,8 +267,10 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       _isRedistributing = true;
       try {
         final examWeight = _readWeight(examItem);
-        examItem.weightController.text = _formatWeight(examWeight);
-        finalItem.weightController.text = _formatWeight(100 - examWeight);
+        final textE = _formatWeight(examWeight);
+        final textF = _formatWeight(100 - examWeight);
+        examItem.weightController.value = TextEditingValue(text: textE, selection: TextSelection.collapsed(offset: textE.length));
+        finalItem.weightController.value = TextEditingValue(text: textF, selection: TextSelection.collapsed(offset: textF.length));
       } finally {
         _isRedistributing = false;
       }
@@ -291,7 +295,8 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     _isRedistributing = true;
     try {
       final changedWeight = _readWeight(changed);
-      changed.weightController.text = _formatWeight(changedWeight);
+      final tChanged = _formatWeight(changedWeight);
+      changed.weightController.value = TextEditingValue(text: tChanged, selection: TextSelection.collapsed(offset: tChanged.length));
 
       final otherGrades = _normalGrades
           .where((item) => item != changed)
@@ -307,12 +312,14 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       if (previousTotal == 0) {
         final equalWeight = remaining / otherGrades.length;
         for (final item in otherGrades) {
-          item.weightController.text = _formatWeight(equalWeight);
+          final t = _formatWeight(equalWeight);
+          item.weightController.value = TextEditingValue(text: t, selection: TextSelection.collapsed(offset: t.length));
         }
       } else {
         for (final item in otherGrades) {
           final proportionalWeight = remaining * _readWeight(item) / previousTotal;
-          item.weightController.text = _formatWeight(proportionalWeight);
+          final t = _formatWeight(proportionalWeight);
+          item.weightController.value = TextEditingValue(text: t, selection: TextSelection.collapsed(offset: t.length));
         }
       }
     } finally {
@@ -328,7 +335,8 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       _isRedistributing = true;
       try {
         final changedWeight = _readWeight(changed);
-        changed.weightController.text = _formatWeight(changedWeight);
+        final tChanged = _formatWeight(changedWeight);
+        changed.weightController.value = TextEditingValue(text: tChanged, selection: TextSelection.collapsed(offset: tChanged.length));
 
         final others = parent.children
             .where((item) => item != changed)
@@ -344,13 +352,13 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         if (previousTotal == 0) {
           final equalWeight = remaining / others.length;
           for (final item in others) {
-            item.weightController.text = _formatWeight(equalWeight);
+            final t = _formatWeight(equalWeight);
+            item.weightController.value = TextEditingValue(text: t, selection: TextSelection.collapsed(offset: t.length));
           }
         } else {
           for (final item in others) {
-            item.weightController.text = _formatWeight(
-              remaining * _readWeight(item) / previousTotal,
-            );
+            final t = _formatWeight(remaining * _readWeight(item) / previousTotal);
+            item.weightController.value = TextEditingValue(text: t, selection: TextSelection.collapsed(offset: t.length));
           }
         }
       } finally {

@@ -25,6 +25,7 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   late int _selectedIndex;
   bool _isCollapsed = false;
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   @override
   void initState() {
@@ -55,30 +56,56 @@ class _MainShellState extends State<MainShell> {
         _NavItem(icon: Icons.person_rounded, label: 'Perfil de Usuario', section: 'ESPACIO DE TRABAJO GENERAL'),
       ];
 
-  void _onSelect(int index) {
-    setState(() => _selectedIndex = index);
-    // En móvil, cerrar drawer si está abierto
-    final scaffold = Scaffold.maybeOf(context);
-    if (scaffold != null && scaffold.hasDrawer && scaffold.isDrawerOpen) {
-      Navigator.of(context).pop();
+  void _onSelectPage(int index) {
+    // 1. Si es pantalla móvil / drawer abierto, cerrarlo automáticamente
+    // Usa GlobalKey para encontrar Scaffold correctamente incluso desde el State context
+    final isDrawerOpen = _scaffoldKey.currentState?.isDrawerOpen ?? false;
+    final isMobile = MediaQuery.of(context).size.width < 768;
+    if (isDrawerOpen || isMobile) {
+      // Intentar cerrar drawer si está abierto (pop seguro)
+      try {
+        if (isDrawerOpen) {
+          Navigator.of(context).pop();
+        } else if (isMobile) {
+          // Fallback: si no podemos detectar isDrawerOpen pero es móvil, intentar pop
+          Navigator.of(context).maybePop();
+        }
+      } catch (_) {}
     }
+
+    // 2. Cambiar la vista activa
+    setState(() {
+      _selectedIndex = index;
+    });
   }
+
+  void _onSelect(int index) => _onSelectPage(index);
 
   @override
   Widget build(BuildContext context) {
     final isDesktop = MediaQuery.of(context).size.width > AppDimens.breakpointDesktop;
 
     return Scaffold(
+      key: _scaffoldKey,
       backgroundColor: AppColors.bg,
       appBar: AppBar(
         backgroundColor: AppColors.surface,
         elevation: 0,
         scrolledUnderElevation: 0,
         shape: const Border(bottom: BorderSide(color: AppColors.border, width: AppDimens.borderWidth)),
-        leading: IconButton(
-          icon: Icon(_isCollapsed ? Icons.menu_rounded : Icons.menu_open_rounded, color: AppColors.text),
-          tooltip: _isCollapsed ? 'Expandir menú' : 'Colapsar menú',
-          onPressed: () => setState(() => _isCollapsed = !_isCollapsed),
+        leading: Builder(
+          builder: (context) => IconButton(
+            icon: Icon(_isCollapsed ? Icons.menu_rounded : Icons.menu_open_rounded, color: AppColors.text),
+            tooltip: _isCollapsed ? 'Expandir menú' : 'Colapsar menú',
+            onPressed: () {
+              final isDesktop = MediaQuery.of(context).size.width >= 768;
+              if (isDesktop) {
+                setState(() => _isCollapsed = !_isCollapsed);
+              } else {
+                Scaffold.of(context).openDrawer();
+              }
+            },
+          ),
         ),
         title: Row(
           children: [

@@ -79,7 +79,12 @@ class _LoginScreenState extends State<LoginScreen> {
         );
 
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => MainShell(userData: result.data)),
+          MaterialPageRoute(
+            builder: (_) => MainShell(
+              userData: result.data,
+              initialIndex: 7, // Perfil de Usuario
+            ),
+          ),
         );
         return;
       }
