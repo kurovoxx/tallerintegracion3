@@ -5,8 +5,9 @@ import 'package:flutter/services.dart';
 
 import '../../core/common_widgets.dart';
 import '../../core/services/auth_service.dart';
+import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
-import '../academic/profile_screen.dart';
+import '../../core/widgets/main_shell.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -65,6 +66,11 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
 
       if (result.success) {
+        // Guardar sesión para carga híbrida de notas (backend + local)
+        final token = (result.data?['access_token'] as String?) ?? (result.data?['token'] as String?) ?? '';
+        if (token.isNotEmpty) {
+          SessionManager.saveSession(token, result.data);
+        }
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('INGRESO CORRECTO', style: TextStyle(fontWeight: FontWeight.w800, color: Colors.white)),
@@ -73,7 +79,7 @@ class _LoginScreenState extends State<LoginScreen> {
         );
 
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => ProfileScreen(userData: result.data)),
+          MaterialPageRoute(builder: (_) => MainShell(userData: result.data)),
         );
         return;
       }

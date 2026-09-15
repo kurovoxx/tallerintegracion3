@@ -1,13 +1,9 @@
 ﻿
 import 'package:flutter/material.dart';
 import '../../core/common_widgets.dart';
+import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
 import '../auth/login_screen.dart';
-import 'attendance_screen.dart';
-import 'courses_screen.dart';
-import 'curriculum_screen.dart';
-import 'grade_calculator_screen.dart';
-import 'schedule_screen.dart';
 
 const String kSubjectApproved = 'approved';
 const String kSubjectInProgress = 'in_progress';
@@ -129,6 +125,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   void _handleLogout() {
+    SessionManager.clear();
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginScreen()),
       (route) => false,
@@ -177,7 +174,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         const SizedBox(height: 18),
                         _isLoading ? _buildLoadingCard() : _buildIdentityCard(isDesktop),
                         const SizedBox(height: 16),
-                        if (!_isLoading) _buildQuickAccessSection(isDesktop),
+                        if (!_isLoading) _buildPersonalSummary(isDesktop),
                       ],
                     ),
                   ),
@@ -249,60 +246,49 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // ACCESOS DIRECTOS — banner neo-brutalista (pmn.html)
   // 5 tarjetas con borde 4px, sombra dura Offset(4,4) y chevron
   // ---------------------------------------------------------------------
-  Widget _buildQuickAccessSection(bool isDesktop) {
-    final items = [
-      (
-        Icons.account_tree_rounded,
-        'MI MALLA CURRICULAR',
-        'Visualizar ramos aprobados y prerrequisitos',
-        () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CurriculumScreen()))
+  Widget _buildPersonalSummary(bool isDesktop) {
+    final institution = _profile['institution'] as String;
+    final email = _profile['email'] as String;
+    final roleLabel = formatRole(_profile['role'] as String);
+    return Container(
+      padding: EdgeInsets.all(isDesktop ? 20 : 16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+        boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(3, 3), blurRadius: 0)],
       ),
-      (
-        Icons.calendar_month_rounded,
-        'HORARIO SEMANAL',
-        'Consultar bloques de clases y salas',
-        () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ScheduleScreen()))
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('FICHA PERSONAL', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.muted, letterSpacing: 0.6)),
+          const SizedBox(height: 12),
+          _SummaryRow(icon: Icons.school_rounded, label: 'CARRERA', value: roleLabel),
+          const SizedBox(height: 10),
+          _SummaryRow(icon: Icons.apartment_rounded, label: 'INSTITUCIÓN', value: institution),
+          const SizedBox(height: 10),
+          _SummaryRow(icon: Icons.email_rounded, label: 'CORREO INSTITUCIONAL', value: email),
+          const SizedBox(height: 14),
+          const Divider(color: AppColors.border, thickness: 2, height: 1),
+          const SizedBox(height: 14),
+          const Text('RESUMEN DE ACTIVIDAD', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: AppColors.muted, letterSpacing: 0.5)),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(child: _MiniStat(icon: Icons.description_rounded, label: 'Notas', value: '12')),
+              const SizedBox(width: 10),
+              Expanded(child: _MiniStat(icon: Icons.groups_rounded, label: 'Grupos', value: '3')),
+              const SizedBox(width: 10),
+              Expanded(child: _MiniStat(icon: Icons.task_alt_rounded, label: 'Tareas', value: '8/12')),
+            ],
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: SubmitButton(text: 'CERRAR SESIÓN', onPressed: _handleLogout),
+          ),
+        ],
       ),
-      (
-        Icons.calculate_rounded,
-        'CALCULAR Y SIMULAR NOTAS',
-        'Predecir nota necesaria para aprobar ramos',
-        () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const GradeCalculatorScreen()))
-      ),
-      (
-        Icons.fact_check_rounded,
-        'CONTROL DE ASISTENCIA',
-        'Revisar inasistencias y límite permitido',
-        () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AttendanceScreen()))
-      ),
-      (
-        Icons.menu_book_rounded,
-        'MIS CURSOS Y PROGRAMAS',
-        'Contenidos, evaluaciones y avance por materia',
-        () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CoursesScreen()))
-      ),
-    ];
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text('ACCESOS DIRECTOS', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.muted, letterSpacing: 0.4)),
-        const SizedBox(height: 10),
-        LayoutBuilder(builder: (context, constraints) {
-          final cols = isDesktop ? 2 : 1;
-          final cardWidth = cols == 1 ? constraints.maxWidth : (constraints.maxWidth - 14) / 2;
-          return Wrap(
-            spacing: 14,
-            runSpacing: 14,
-            children: items
-                .map((item) => SizedBox(
-                      width: cardWidth,
-                      child: _QuickAccessCard(icon: item.$1, title: item.$2, subtitle: item.$3, onTap: item.$4),
-                    ))
-                .toList(),
-          );
-        }),
-      ],
     );
   }
 
@@ -698,6 +684,7 @@ class _VisibilityOption extends StatelessWidget {
 // WIDGETS AUXILIARES PRIVADOS
 // ---------------------------------------------------------------------
 
+// ignore: unused_element - mantenido para referencia visual, navegación ahora en MainShell
 class _QuickAccessCard extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -872,6 +859,71 @@ class _SquareIconButton extends StatelessWidget {
       ),
     );
     return tooltip != null ? Tooltip(message: tooltip!, child: button) : button;
+  }
+}
+
+class _SummaryRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  const _SummaryRow({required this.icon, required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 30,
+          height: 30,
+          decoration: BoxDecoration(
+            color: AppColors.bg,
+            border: Border.all(color: AppColors.border, width: 1.5),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Icon(icon, size: 16, color: AppColors.text),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: AppColors.muted, letterSpacing: 0.5)),
+              const SizedBox(height: 2),
+              Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.text)),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MiniStat extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  const _MiniStat({required this.icon, required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+      decoration: BoxDecoration(
+        color: AppColors.bg,
+        border: Border.all(color: AppColors.border, width: 1.5),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, size: 18, color: AppColors.text),
+          const SizedBox(height: 6),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: AppColors.text)),
+          const SizedBox(height: 2),
+          Text(label, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 10, color: AppColors.muted, letterSpacing: 0.4)),
+        ],
+      ),
+    );
   }
 }
 

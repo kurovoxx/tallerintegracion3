@@ -13,7 +13,7 @@ class AuthService {
   // - Si 8080 libre: cambia a 8080
   // Rutas reales: POST /auth/register y POST /auth/login (sin /api)
   // Ver back/auth/cmd/server/main.go:56 y agentApiContract.md
-  static const String baseUrl = 'http://localhost:8082';
+  static const String baseUrl = 'http://localhost:8081';
   static const String loginPath = '/auth/login';
   static const String registerPath = '/auth/register';
 
