@@ -8,6 +8,8 @@ class LocalNotesRepository {
   final AppDatabase db;
 
   /// Inserta o reemplaza una nota local (upsert por id).
+  /// Opera exclusivamente sobre `local_notes`; los triggers FTS5 se encargan
+  /// de sincronizar `local_notes_fts` automáticamente.
   Future<void> upsertNote(LocalNote note) async {
     await db.into(db.localNotes).insertOnConflictUpdate(
           LocalNotesCompanion(
@@ -20,10 +22,11 @@ class LocalNotesRepository {
         );
   }
 
-  /// Búsqueda offline FTS5 instantánea.
+  /// Búsqueda offline FTS5 instantánea con ranking por relevancia.
   /// Soporta palabras clave y prefijos (`query*`).
   /// Si query está vacío, retorna todas.
-  /// En Windows, si FTS5 falla al cargar (sqlite3.dll), hace fallback a LIKE %query%.
+  /// Si `db.ftsAvailable` es falso (FTS5 no disponible), hace fallback directo
+  /// a LIKE %query% sin intentar consultar FTS.
   Future<List<LocalNote>> searchNotesFts(String query) async {
     final q = query.trim();
     if (q.isEmpty) {
@@ -39,14 +42,25 @@ class LocalNotesRepository {
 
     if (tokens.isEmpty) return getAllNotes();
 
+    // Determinismo: si FTS5 no está disponible, fallback estructurado LIKE
+    if (!db.ftsAvailable) {
+      final likeQuery = '%$q%';
+      final fallback = await (db.select(db.localNotes)
+            ..where((t) => t.title.like(likeQuery) | t.content.like(likeQuery))
+            ..orderBy([(t) => OrderingTerm.desc(t.updatedAt)]))
+          .get();
+      return fallback;
+    }
+
     try {
       final rows = await db.customSelect(
         '''
-        SELECT n.id, n.title, n.content, n.visibility, n.updated_at
-        FROM local_notes_fts fts
-        JOIN local_notes n ON n.rowid = fts.rowid
+        SELECT n.id, n.title, n.content, n.visibility, n.updated_at,
+               bm25(local_notes_fts, 2.0, 1.0) AS score
+        FROM local_notes n
+        JOIN local_notes_fts fts ON n.rowid = fts.rowid
         WHERE local_notes_fts MATCH ?
-        ORDER BY rank
+        ORDER BY score ASC
         ''',
         variables: [Variable.withString(tokens)],
         readsFrom: {db.localNotes, db.localNotesFts},
@@ -62,7 +76,7 @@ class LocalNotesRepository {
         );
       }).toList();
     } catch (e) {
-      // Fallback en caliente si FTS5 no está disponible (Windows sin sqlite3 adequado)
+      // Fallback en caliente si FTS5 falla en runtime (Windows sin sqlite3 adecuado)
       // Búsqueda básica LIKE %query% en título y contenido para no congelar UI
       final likeQuery = '%$q%';
       final fallback = await (db.select(db.localNotes)
@@ -81,11 +95,13 @@ class LocalNotesRepository {
   }
 
   /// Elimina una nota por id (útil para sincronización).
+  /// Opera sobre `local_notes`; el trigger AFTER DELETE limpia el índice FTS.
   Future<void> deleteNote(String id) async {
     await (db.delete(db.localNotes)..where((t) => t.id.equals(id))).go();
   }
 
   /// Limpia todo (para tests o logout).
+  /// Opera sobre `local_notes`; los triggers mantienen el índice consistente.
   Future<void> clearAll() async {
     await db.delete(db.localNotes).go();
   }
