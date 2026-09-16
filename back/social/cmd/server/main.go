@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -14,6 +16,23 @@ import (
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/service"
 )
+
+func corsMiddleware() gin.HandlerFunc {
+	origin := strings.TrimSpace(os.Getenv("FRONT_ORIGIN"))
+	if origin == "" {
+		origin = "*"
+	}
+	return func(c *gin.Context) {
+		c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		if c.Request.Method == http.MethodOptions {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+		c.Next()
+	}
+}
 
 func main() {
 	cfg := config.Load()
@@ -46,10 +65,18 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	// service.GroupCreatedNotifier.
 	groupSvc := service.NewGroupService(groupRepo, nil)
 
-	startGin(groupSvc, cfg)
+	todoRepo := repository.NewTodoRepository(pool)
+	todoSvc := service.NewTodoService(todoRepo)
+	todoH := httpHandler.NewTodoHandler(todoSvc)
+
+	sprintRepo := repository.NewSprintRepository(pool)
+	sprintSvc := service.NewSprintService(sprintRepo)
+	sprintH := httpHandler.NewSprintHandler(sprintSvc)
+
+	startGin(groupSvc, todoH, sprintH, pool, cfg)
 }
 
-func startGin(groupSvc *service.GroupService, cfg *config.Config) {
+func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, pool *pgxpool.Pool, cfg *config.Config) {
 	validator := &middleware.SimpleHS256Validator{
 		Secret:   []byte(cfg.JWTSecret),
 		Issuer:   "apuntes-auth",
@@ -59,9 +86,34 @@ func startGin(groupSvc *service.GroupService, cfg *config.Config) {
 	groupHandler := httpHandler.NewGroupHandler(groupSvc)
 
 	r := gin.Default()
+	r.Use(corsMiddleware())
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "UP", "service": "social-service"})
+	})
+
+	r.GET("/health/db", func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+		defer cancel()
+		if err := pool.Ping(ctx); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"status": "DOWN",
+				"error": gin.H{"code": "db_unreachable", "message": err.Error()},
+			})
+			return
+		}
+		var now time.Time
+		var db, user string
+		_ = pool.QueryRow(ctx, "select now(), current_database(), current_user").Scan(&now, &db, &user)
+		var cnt int
+		_ = pool.QueryRow(ctx, "select count(*) from social.groups").Scan(&cnt)
+		c.JSON(http.StatusOK, gin.H{
+			"status":   "UP",
+			"database": db,
+			"user":     user,
+			"now":      now.UTC().Format(time.RFC3339),
+			"checks":   gin.H{"social_groups": cnt},
+		})
 	})
 
 	protected := r.Group("")
@@ -81,6 +133,15 @@ func startGin(groupSvc *service.GroupService, cfg *config.Config) {
 		// protected.PATCH("/groups/:id/members/:userId/role", groupHandler.SetRole)
 		// protected.POST("/groups/:id/transfer-admin", groupHandler.TransferAdmin)
 		// protected.POST("/groups/:id/leave", groupHandler.Leave)
+
+		protected.POST("/groups/:id/todo", todoH.CreateTodo)
+		protected.GET("/groups/:id/todo", todoH.ListTodos)
+		protected.PATCH("/groups/:id/todo", todoH.UpdateTodo)
+		protected.DELETE("/groups/:id/todo", todoH.DeleteTodo)
+		protected.POST("/groups/:id/sprint-sheet", sprintH.CreateSprintTask)
+		protected.GET("/groups/:id/sprint-sheet", sprintH.ListSprintTasks)
+		protected.PATCH("/groups/:id/sprint-sheet", sprintH.UpdateSprintTask)
+		protected.DELETE("/groups/:id/sprint-sheet", sprintH.DeleteSprintTask)
 	}
 
 	addr := ":" + cfg.Port
