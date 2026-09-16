@@ -8,12 +8,11 @@ class AuthService {
   final http.Client _client;
 
   // Backend Gin - auth-service
-  // Ajustar puerto según dónde corre el backend:
-  // - Si usas PORT=8082 (recomendado, 8080 ocupado por WordPress/nginx): 8082
-  // - Si 8080 libre: cambia a 8080
+  // Docker: auth en 8081:8080 (host 8080 ocupado por WordPress) -> http://localhost:8081
+  // Host directo (go run): PORT=8082 -> http://localhost:8082
   // Rutas reales: POST /auth/register y POST /auth/login (sin /api)
-  // Ver back/auth/cmd/server/main.go:56 y agentApiContract.md
-  static const String baseUrl = 'http://localhost:8082';
+  // Ver back/auth/cmd/server/main.go:73 y agentApiContract.md:22 y docker-compose.yml:28
+  static const String baseUrl = 'http://localhost:8081';
   static const String loginPath = '/auth/login';
   static const String registerPath = '/auth/register';
 

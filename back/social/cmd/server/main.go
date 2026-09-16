@@ -1,0 +1,152 @@
+package main
+
+import (
+	"context"
+	"log"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/config"
+	httpHandler "github.com/kurovoxx/tallerintegracion3/back/social/internal/handler/http"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/middleware"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/service"
+)
+
+func corsMiddleware() gin.HandlerFunc {
+	origin := strings.TrimSpace(os.Getenv("FRONT_ORIGIN"))
+	if origin == "" {
+		origin = "*"
+	}
+	return func(c *gin.Context) {
+		c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		if c.Request.Method == http.MethodOptions {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+		c.Next()
+	}
+}
+
+func main() {
+	cfg := config.Load()
+	log.Printf("config social: DATABASE_URL set=%v PORT=%s", cfg.DatabaseURL != "", cfg.Port)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	pool, err := repository.NewPool(ctx, cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("No se pudo conectar a Postgres: %v", err)
+	}
+	defer pool.Close()
+	log.Println("Postgres conectado OK (social)")
+
+	var cnt int
+	if err := pool.QueryRow(ctx, "select count(*) from social.groups").Scan(&cnt); err != nil {
+		log.Printf("check social.groups: %v (schema puede no existir aún — corre agentSql.md)", err)
+	} else {
+		log.Printf("DB check: social.groups count=%d", cnt)
+	}
+
+	runServer(pool, cfg)
+}
+
+func runServer(pool *pgxpool.Pool, cfg *config.Config) {
+	groupRepo := repository.NewGroupRepository(pool)
+	// TODO(martín, 2_5_14): reemplazar por un notifier real que cree el canal
+	// de Stream al crear el grupo. Mientras tanto no-op — ver comentario en
+	// service.GroupCreatedNotifier.
+	groupSvc := service.NewGroupService(groupRepo, nil)
+
+	todoRepo := repository.NewTodoRepository(pool)
+	todoSvc := service.NewTodoService(todoRepo)
+	todoH := httpHandler.NewTodoHandler(todoSvc)
+
+	sprintRepo := repository.NewSprintRepository(pool)
+	sprintSvc := service.NewSprintService(sprintRepo)
+	sprintH := httpHandler.NewSprintHandler(sprintSvc)
+
+	startGin(groupSvc, todoH, sprintH, pool, cfg)
+}
+
+func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, pool *pgxpool.Pool, cfg *config.Config) {
+	validator := &middleware.SimpleHS256Validator{
+		Secret:   []byte(cfg.JWTSecret),
+		Issuer:   "apuntes-auth",
+		Audience: "apuntes-client",
+	}
+	authMw := middleware.NewAuthMiddleware(validator)
+	groupHandler := httpHandler.NewGroupHandler(groupSvc)
+
+	r := gin.Default()
+	r.Use(corsMiddleware())
+
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "UP", "service": "social-service"})
+	})
+
+	r.GET("/health/db", func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+		defer cancel()
+		if err := pool.Ping(ctx); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"status": "DOWN",
+				"error": gin.H{"code": "db_unreachable", "message": err.Error()},
+			})
+			return
+		}
+		var now time.Time
+		var db, user string
+		_ = pool.QueryRow(ctx, "select now(), current_database(), current_user").Scan(&now, &db, &user)
+		var cnt int
+		_ = pool.QueryRow(ctx, "select count(*) from social.groups").Scan(&cnt)
+		c.JSON(http.StatusOK, gin.H{
+			"status":   "UP",
+			"database": db,
+			"user":     user,
+			"now":      now.UTC().Format(time.RFC3339),
+			"checks":   gin.H{"social_groups": cnt},
+		})
+	})
+
+	protected := r.Group("")
+	protected.Use(authMw.RequireAuth())
+	{
+		protected.POST("/groups", groupHandler.Create)
+		// Próximas tareas del backlog de Benjamín (2_3_2 en adelante) se
+		// registran acá a medida que se implementan:
+		protected.GET("/groups/me", groupHandler.ListMy)
+		protected.GET("/groups/:id", groupHandler.Get)
+		protected.POST("/groups/:id/join", groupHandler.Join)
+		protected.POST("/groups/:id/invite/regenerate", groupHandler.RegenerateInvite)
+		protected.GET("/groups/:id/members", groupHandler.ListMembers)
+
+		protected.POST("/groups/:id/members/:user_id/kick", groupHandler.KickMember)
+		protected.POST("/groups/:id/members/:user_id/ban", groupHandler.BanMember)
+		protected.PATCH("/groups/:id/members/:userId/role", groupHandler.ChangeRole)
+		protected.POST("/groups/:id/transfer-admin", groupHandler.TransferAdmin)
+		protected.POST("/groups/:id/leave", groupHandler.LeaveGroup)
+
+		protected.POST("/groups/:id/todo", todoH.CreateTodo)
+		protected.GET("/groups/:id/todo", todoH.ListTodos)
+		protected.PATCH("/groups/:id/todo", todoH.UpdateTodo)
+		protected.DELETE("/groups/:id/todo", todoH.DeleteTodo)
+		protected.POST("/groups/:id/sprint-sheet", sprintH.CreateSprintTask)
+		protected.GET("/groups/:id/sprint-sheet", sprintH.ListSprintTasks)
+		protected.PATCH("/groups/:id/sprint-sheet", sprintH.UpdateSprintTask)
+		protected.DELETE("/groups/:id/sprint-sheet", sprintH.DeleteSprintTask)
+	}
+
+	addr := ":" + cfg.Port
+	log.Printf("Social service corriendo en http://localhost%s", addr)
+	if err := r.Run(addr); err != nil {
+		log.Fatalf("Error iniciando social service: %v", err)
+	}
+}

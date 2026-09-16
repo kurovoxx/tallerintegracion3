@@ -1,10 +1,13 @@
+﻿
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/common_widgets.dart';
 import '../../core/services/auth_service.dart';
+import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
-
+import '../../core/widgets/main_shell.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -18,23 +21,23 @@ class _LoginScreenState extends State<LoginScreen> {
   final _authService = AuthService();
   bool _isSubmittingLogin = false;
 
-  // Controllers Login
   final _loginFormKey = GlobalKey<FormState>();
-  final TextEditingController _loginEmailController =
-      TextEditingController();
-  final TextEditingController _loginPasswordController =
-      TextEditingController();
+  final TextEditingController _loginEmailController = TextEditingController();
+  final TextEditingController _loginPasswordController = TextEditingController();
   bool _obscureLoginPassword = true;
   bool _rememberMe = true;
 
-  // Controllers Register
   final _regFormKey = GlobalKey<FormState>();
   final TextEditingController _regNameController = TextEditingController();
   final TextEditingController _regEmailController = TextEditingController();
-  final TextEditingController _regCareerController = TextEditingController();
+  // Mapea directo a identity.profiles.institution (no existe columna "career").
+  final TextEditingController _regInstitutionController = TextEditingController();
   final TextEditingController _regPasswordController = TextEditingController();
   bool _obscureRegPassword = true;
   bool _isSubmittingRegister = false;
+
+  // RF-01 / RN-1.3: rol elegido en el registro, inmutable luego.
+  String _selectedRole = 'student'; // 'student' | 'teacher'
 
   @override
   void dispose() {
@@ -42,77 +45,81 @@ class _LoginScreenState extends State<LoginScreen> {
     _loginPasswordController.dispose();
     _regNameController.dispose();
     _regEmailController.dispose();
-    _regCareerController.dispose();
+    _regInstitutionController.dispose();
     _regPasswordController.dispose();
     _authService.dispose();
     super.dispose();
   }
 
-Future<void> _submitLogin() async {
-  if (!_loginFormKey.currentState!.validate()) return;
-  if (_isSubmittingLogin) return;
+  Future<void> _submitLogin() async {
+    if (!_loginFormKey.currentState!.validate()) return;
+    if (_isSubmittingLogin) return;
 
-  setState(() => _isSubmittingLogin = true);
+    setState(() => _isSubmittingLogin = true);
 
-  try {
-    final result = await _authService.login(
-      email: _loginEmailController.text.trim(),
-      password: _loginPasswordController.text,
-    );
-
-    if (!mounted) return;
-
-    if (result.success) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'INGRESO CORRECTO',
-            style: TextStyle(
-              fontWeight: FontWeight.w800,
-              color: Colors.white,
-            ),
-          ),
-          backgroundColor: AppColors.border,
-        ),
+    try {
+      final result = await _authService.login(
+        email: _loginEmailController.text.trim(),
+        password: _loginPasswordController.text,
       );
 
-      // Próxima tarea:
-      // final token = result.data?['access_token'];
-      // Guardar JWT de forma segura y navegar a la pantalla principal.
-      return;
-    }
+      if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          result.message ?? 'Ocurrió un error al iniciar sesión.',
-          style: const TextStyle(
-            fontWeight: FontWeight.w700,
-            color: Colors.white,
+      if (result.success) {
+        // Guardar sesión para carga híbrida de notas (backend + local)
+        final token = (result.data?['access_token'] as String?) ?? (result.data?['token'] as String?) ?? '';
+        if (token.isNotEmpty) {
+          SessionManager.saveSession(token, result.data);
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('INGRESO CORRECTO', style: TextStyle(fontWeight: FontWeight.w800, color: Colors.white)),
+            backgroundColor: AppColors.border,
           ),
+        );
+
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => MainShell(
+              userData: result.data,
+              initialIndex: 7, // Perfil de Usuario
+            ),
+          ),
+        );
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.message ?? 'Ocurrió un error al iniciar sesión.',
+            style: const TextStyle(fontWeight: FontWeight.w700, color: Colors.white),
+          ),
+          backgroundColor: AppColors.error,
         ),
-        backgroundColor: AppColors.error,
-      ),
-    );
-  } finally {
-    if (mounted) {
-      setState(() => _isSubmittingLogin = false);
+      );
+    } finally {
+      if (mounted) setState(() => _isSubmittingLogin = false);
     }
   }
-}
+
   Future<void> _submitRegister() async {
     if (!_regFormKey.currentState!.validate()) return;
     if (_isSubmittingRegister) return;
+
     setState(() => _isSubmittingRegister = true);
+
     try {
       final result = await _authService.register(
         email: _regEmailController.text.trim(),
         password: _regPasswordController.text,
         displayName: _regNameController.text.trim(),
-        institution: _regCareerController.text.trim(),
-        role: 'student',
+        institution: _regInstitutionController.text.trim(),
+        role: _selectedRole, // RF-01: 'student' o 'teacher' según selección del usuario
       );
+
       if (!mounted) return;
+
       if (result.success) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -121,15 +128,19 @@ Future<void> _submitLogin() async {
             backgroundColor: AppColors.border,
           ),
         );
-        // Cambia a tab login y limpia campos
-        setState(() => isLoginTab = true);
-        _regPasswordController.clear();
+        setState(() {
+          isLoginTab = true;
+          _regPasswordController.clear();
+        });
         return;
       }
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(result.message ?? 'Error al crear cuenta',
-              style: const TextStyle(fontWeight: FontWeight.w700, color: Colors.white)),
+          content: Text(
+            result.message ?? 'Error al crear cuenta',
+            style: const TextStyle(fontWeight: FontWeight.w700, color: Colors.white),
+          ),
           backgroundColor: AppColors.error,
         ),
       );
@@ -156,12 +167,8 @@ Future<void> _submitLogin() async {
                       child: Container(
                         decoration: const BoxDecoration(
                           color: AppColors.surface,
-                          border: Border(
-                            right: BorderSide(color: AppColors.border, width: AppDimens.borderWidth),
-                          ),
-                          boxShadow: [
-                            BoxShadow(color: AppColors.border, offset: Offset(4, 0), blurRadius: 0),
-                          ],
+                          border: Border(right: BorderSide(color: AppColors.border, width: AppDimens.borderWidth)),
+                          boxShadow: [BoxShadow(color: AppColors.border, offset: Offset(4, 0), blurRadius: 0)],
                         ),
                         child: _buildLeftPanelContent(isDesktop: true),
                       ),
@@ -183,30 +190,22 @@ Future<void> _submitLogin() async {
     );
   }
 
-  // ================= PANEL IZQUIERDO (FORMULARIOS) =================
   Widget _buildLeftPanelContent({required bool isDesktop}) {
     return SingleChildScrollView(
-      padding: EdgeInsets.symmetric(
-        horizontal: isDesktop ? 40 : 24,
-        vertical: isDesktop ? 48 : 28,
-      ),
+      padding: EdgeInsets.symmetric(horizontal: isDesktop ? 40 : 24, vertical: isDesktop ? 48 : 28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           _buildBrandHeader(),
-
           if (!isDesktop) ...[
             const SizedBox(height: 20),
             _buildMobileHeroBanner(),
           ],
-
           const SizedBox(height: 28),
           _buildAuthTabs(),
           const SizedBox(height: 28),
-
           isLoginTab ? _buildLoginForm() : _buildRegisterForm(),
-
           if (!isDesktop) ...[
             const SizedBox(height: 32),
             _buildMobileFeatureStrip(),
@@ -226,32 +225,23 @@ Future<void> _submitLogin() async {
             color: AppColors.accentYellow,
             border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
             borderRadius: BorderRadius.circular(AppDimens.radius),
-            boxShadow: const [
-              BoxShadow(color: AppColors.border, offset: Offset(3, 3), blurRadius: 0),
-            ],
+            boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(3, 3), blurRadius: 0)],
           ),
           child: const Center(
-            child: Text("O", style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: AppColors.text)),
+            child: Text('S', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: AppColors.text)),
           ),
         ),
         const SizedBox(width: 16),
         const Expanded(
           child: Text(
-            "PAGINA DE GESTION DE RAMOS",
-            style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w900,
-              letterSpacing: -0.5,
-              color: AppColors.text,
-              height: 1.1,
-            ),
+            'SIGMA ACADEMY',
+            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, letterSpacing: -0.5, color: AppColors.text, height: 1.1),
           ),
         ),
       ],
     );
   }
 
-  // ================= MINI HERO Y FEATURE STRIP (SOLO MOBILE) =================
   Widget _buildMobileHeroBanner() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
@@ -259,9 +249,7 @@ Future<void> _submitLogin() async {
         color: AppColors.accentYellow,
         border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
         borderRadius: BorderRadius.circular(AppDimens.radius),
-        boxShadow: const [
-          BoxShadow(color: AppColors.border, offset: Offset(3, 3), blurRadius: 0),
-        ],
+        boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(3, 3), blurRadius: 0)],
       ),
       child: Row(
         children: [
@@ -272,9 +260,7 @@ Future<void> _submitLogin() async {
               color: AppColors.surface,
               border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
               borderRadius: BorderRadius.circular(AppDimens.radius),
-              boxShadow: const [
-                BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0),
-              ],
+              boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0)],
             ),
             child: const Icon(Icons.rocket_launch_rounded, color: AppColors.text, size: 20),
           ),
@@ -283,11 +269,10 @@ Future<void> _submitLogin() async {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text("ORGANIZA TU SEMESTRE",
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: AppColors.text)),
+                Text('ORGANIZA TU SEMESTRE', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: AppColors.text)),
                 SizedBox(height: 3),
                 Text(
-                  "Malla, contenidos y grupos en un solo lugar.",
+                  'Malla, contenidos y grupos en un solo lugar.',
                   style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.text, height: 1.25),
                 ),
               ],
@@ -300,9 +285,9 @@ Future<void> _submitLogin() async {
 
   Widget _buildMobileFeatureStrip() {
     final items = [
-      (Icons.grid_view_rounded, "MALLA"),
-      (Icons.groups_rounded, "GRUPOS"),
-      (Icons.description_rounded, "CONTENIDOS"),
+      (Icons.grid_view_rounded, 'MALLA'),
+      (Icons.groups_rounded, 'GRUPOS'),
+      (Icons.description_rounded, 'CONTENIDOS'),
     ];
     return Row(
       children: [
@@ -315,19 +300,13 @@ Future<void> _submitLogin() async {
                 color: AppColors.bg,
                 border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
                 borderRadius: BorderRadius.circular(AppDimens.radius),
-                boxShadow: const [
-                  BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0),
-                ],
+                boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0)],
               ),
               child: Column(
                 children: [
                   Icon(items[i].$1, color: AppColors.text, size: 20),
                   const SizedBox(height: 6),
-                  Text(
-                    items[i].$2,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: AppColors.text),
-                  ),
+                  Text(items[i].$2, textAlign: TextAlign.center, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: AppColors.text)),
                 ],
               ),
             ),
@@ -337,7 +316,6 @@ Future<void> _submitLogin() async {
     );
   }
 
-  // ================= TABS SWITCHER =================
   Widget _buildAuthTabs() {
     return Container(
       decoration: const BoxDecoration(
@@ -345,17 +323,14 @@ Future<void> _submitLogin() async {
       ),
       child: Row(
         children: [
-          Expanded(child: _tabButton("INICIAR SESIÓN", isLoginTab, () => setState(() => isLoginTab = true))),
+          Expanded(child: _tabButton('INICIAR SESIÓN', isLoginTab, () => setState(() => isLoginTab = true))),
           const SizedBox(width: 6),
-          Expanded(child: _tabButton("CREAR CUENTA", !isLoginTab, () => setState(() => isLoginTab = false))),
+          Expanded(child: _tabButton('CREAR CUENTA', !isLoginTab, () => setState(() => isLoginTab = false))),
         ],
       ),
     );
   }
 
-  // FIX: se quitó el "const" de BorderRadius.only(...) porque Radius.circular()
-  // no es una constante de compilación en Flutter, y al combinarlo con
-  // "const BorderRadius.only(...)" el compilador lo rechaza.
   Widget _tabButton(String label, bool active, VoidCallback onTap) {
     return GestureDetector(
       onTap: onTap,
@@ -364,13 +339,11 @@ Future<void> _submitLogin() async {
         decoration: BoxDecoration(
           color: active ? AppColors.accentYellow : AppColors.bg,
           border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
-          borderRadius: BorderRadius.only(
+          borderRadius: const BorderRadius.only(
             topLeft: Radius.circular(AppDimens.radius),
             topRight: Radius.circular(AppDimens.radius),
           ),
-          boxShadow: active
-              ? const [BoxShadow(color: AppColors.border, offset: Offset(2, -2), blurRadius: 0)]
-              : null,
+          boxShadow: active ? const [BoxShadow(color: AppColors.border, offset: Offset(2, -2), blurRadius: 0)] : null,
         ),
         child: Text(
           label,
@@ -381,14 +354,13 @@ Future<void> _submitLogin() async {
     );
   }
 
-  // ================= FORMULARIO LOGIN =================
   Widget _buildLoginForm() {
     return Form(
       key: _loginFormKey,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const AppFieldLabel("CORREO INSTITUCIONAL"),
+          const AppFieldLabel('CORREO INSTITUCIONAL'),
           const SizedBox(height: 6),
           TextFormField(
             controller: _loginEmailController,
@@ -399,69 +371,46 @@ Future<void> _submitLogin() async {
               FilteringTextInputFormatter.deny(RegExp(r'\s')),
               LengthLimitingTextInputFormatter(120),
             ],
-            style: const TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 14,
-              color: AppColors.text,
-            ),
-            decoration: appInputDecoration("ejemplo@alu.uct.cl"),
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: AppColors.text),
+            decoration: appInputDecoration('ejemplo@alu.uct.cl'),
             validator: (v) {
               final email = v?.trim() ?? '';
-
-              if (email.isEmpty) {
-                return "El correo es requerido";
-              }
-
-              if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
-                return "Ingresa un correo válido";
-              }
-
+              if (email.isEmpty) return 'El correo es requerido';
+              if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) return 'Ingresa un correo válido';
               return null;
             },
           ),
           const SizedBox(height: 18),
-          const AppFieldLabel("CONTRASEÑA"),
+          const AppFieldLabel('CONTRASEÑA'),
           const SizedBox(height: 6),
           TextFormField(
             controller: _loginPasswordController,
             obscureText: _obscureLoginPassword,
             textInputAction: TextInputAction.done,
             autofillHints: const [AutofillHints.password],
-            inputFormatters: [
-              FilteringTextInputFormatter.deny(RegExp(r'\s')),
-              LengthLimitingTextInputFormatter(72),
-            ],
-            style: const TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 14,
-              color: AppColors.text,
-            ),
-            decoration: appInputDecoration("••••••••").copyWith(
+            // FIX: ya no se bloquean espacios. bcrypt soporta passphrases
+            // con espacios hasta 72 bytes; solo se limita el largo máximo.
+            inputFormatters: [LengthLimitingTextInputFormatter(72)],
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: AppColors.text),
+            decoration: appInputDecoration('••••••••').copyWith(
               suffixIcon: IconButton(
                 icon: Icon(
-                  _obscureLoginPassword
-                      ? Icons.visibility_outlined
-                      : Icons.visibility_off_outlined,
+                  _obscureLoginPassword ? Icons.visibility_outlined : Icons.visibility_off_outlined,
                   color: AppColors.muted,
                   size: 20,
                 ),
-                onPressed: () {
-                  setState(() {
-                    _obscureLoginPassword = !_obscureLoginPassword;
-                  });
-                },
+                onPressed: () => setState(() => _obscureLoginPassword = !_obscureLoginPassword),
               ),
             ),
             validator: (v) {
-              if (v == null || v.isEmpty) {
-                return "La contraseña es requerida";
-              }
-
-              if (v.length < 6) {
-                return "Mínimo 6 caracteres";
-              }
-
+              if (v == null || v.isEmpty) return 'La contraseña es requerida';
+              if (v.length < 6) return 'Mínimo 6 caracteres';
               return null;
+            },
+            onFieldSubmitted: (_) {
+              if (!_isSubmittingLogin) {
+                _submitLogin();
+              }
             },
           ),
           const SizedBox(height: 16),
@@ -482,65 +431,61 @@ Future<void> _submitLogin() async {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  const Text("RECORDARME", style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppColors.text)),
+                  const Text('RECORDARME', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppColors.text)),
                 ],
               ),
               InkWell(
                 onTap: () {},
                 child: const Text(
-                  "¿Olvidaste tu clave?",
+                  '¿Olvidaste tu clave?',
                   style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppColors.accentBlue, decoration: TextDecoration.underline),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 28),
-          SubmitButton(text: "INGRESAR A LA PAGINA", onPressed: _submitLogin),
+          SubmitButton(text: _isSubmittingLogin ? 'INGRESANDO...' : 'INGRESAR A LA PAGINA', onPressed: _isSubmittingLogin ? () {} : _submitLogin),
         ],
       ),
     );
   }
 
-  // ================= FORMULARIO REGISTRO =================
   Widget _buildRegisterForm() {
     return Form(
       key: _regFormKey,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const AppFieldLabel("NOMBRE COMPLETO"),
+          const AppFieldLabel('NOMBRE COMPLETO'),
           const SizedBox(height: 6),
           TextFormField(
             controller: _regNameController,
             keyboardType: TextInputType.name,
             textInputAction: TextInputAction.next,
             autofillHints: const [AutofillHints.name],
-            inputFormatters: [
-              LengthLimitingTextInputFormatter(100),
-            ],
-            style: const TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 14,
-              color: AppColors.text,
-            ),
-            decoration: appInputDecoration("Miguel Fernández"),
+            inputFormatters: [LengthLimitingTextInputFormatter(100)],
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: AppColors.text),
+            decoration: appInputDecoration('Miguel Fernandez'),
             validator: (v) {
               final name = v?.trim() ?? '';
-
-              if (name.isEmpty) {
-                return "El nombre es requerido";
-              }
-
-              if (name.length < 3) {
-                return "Ingresa al menos 3 caracteres";
-              }
-
+              if (name.isEmpty) return 'El nombre es requerido';
+              if (name.length < 3) return 'Ingresa al menos 3 caracteres';
               return null;
             },
           ),
           const SizedBox(height: 16),
 
-          const AppFieldLabel("CORREO INSTITUCIONAL"),
+          // RF-01 / RN-1.3: el rol se define aquí y ya no será editable
+          // desde ProfileScreen. identity.users.role acepta 'student' | 'teacher'.
+          const AppFieldLabel('TIPO DE CUENTA'),
+          const SizedBox(height: 6),
+          _RoleSelector(
+            selectedRole: _selectedRole,
+            onChanged: (role) => setState(() => _selectedRole = role),
+          ),
+          const SizedBox(height: 16),
+
+          const AppFieldLabel('CORREO INSTITUCIONAL'),
           const SizedBox(height: 6),
           TextFormField(
             controller: _regEmailController,
@@ -551,116 +496,78 @@ Future<void> _submitLogin() async {
               FilteringTextInputFormatter.deny(RegExp(r'\s')),
               LengthLimitingTextInputFormatter(120),
             ],
-            style: const TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 14,
-              color: AppColors.text,
-            ),
-            decoration: appInputDecoration("ejemplo@alu.uct.cl"),
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: AppColors.text),
+            decoration: appInputDecoration('ejemplo@alu.uct.cl'),
             validator: (v) {
               final email = v?.trim() ?? '';
-
-              if (email.isEmpty) {
-                return "El correo es requerido";
-              }
-
-              if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
-                return "Correo inválido";
-              }
-
+              if (email.isEmpty) return 'El correo es requerido';
+              if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) return 'Correo inválido';
               return null;
             },
           ),
           const SizedBox(height: 16),
 
-          const AppFieldLabel("CARRERA / PROGRAMA"),
+          // Mapea a identity.profiles.institution (no existe columna "career"
+          // en el MER). Se deja el hint explícito para no confundir al usuario.
+          const AppFieldLabel('INSTITUCIÓN / CASA DE ESTUDIOS'),
           const SizedBox(height: 6),
           TextFormField(
-            controller: _regCareerController,
+            controller: _regInstitutionController,
             textInputAction: TextInputAction.next,
-            inputFormatters: [
-              LengthLimitingTextInputFormatter(120),
-            ],
-            style: const TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 14,
-              color: AppColors.text,
-            ),
-            decoration: appInputDecoration("Ingeniería Civil en Informática"),
+            inputFormatters: [LengthLimitingTextInputFormatter(200)],
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: AppColors.text),
+            decoration: appInputDecoration('Ej. Universidad Católica de Temuco'),
             validator: (v) {
-              final career = v?.trim() ?? '';
-
-              if (career.isEmpty) {
-                return "La carrera es requerida";
-              }
-
-              if (career.length < 3) {
-                return "Ingresa una carrera válida";
-              }
-
+              final institution = v?.trim() ?? '';
+              if (institution.isEmpty) return 'La institución es requerida';
+              if (institution.length < 3) return 'Ingresa una institución válida';
               return null;
             },
           ),
           const SizedBox(height: 16),
 
-          const AppFieldLabel("CONTRASEÑA"),
+          const AppFieldLabel('CONTRASEÑA'),
           const SizedBox(height: 6),
           TextFormField(
             controller: _regPasswordController,
             obscureText: _obscureRegPassword,
             textInputAction: TextInputAction.done,
             autofillHints: const [AutofillHints.newPassword],
-            inputFormatters: [
-              FilteringTextInputFormatter.deny(RegExp(r'\s')),
-              LengthLimitingTextInputFormatter(72),
-            ],
-            style: const TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 14,
-              color: AppColors.text,
-            ),
-            decoration: appInputDecoration("••••••••").copyWith(
+            // FIX: ya no se bloquean espacios (passphrases seguras válidas).
+            inputFormatters: [LengthLimitingTextInputFormatter(72)],
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: AppColors.text),
+            decoration: appInputDecoration('••••••••').copyWith(
               suffixIcon: IconButton(
-                tooltip: _obscureRegPassword
-                    ? 'Mostrar contraseña'
-                    : 'Ocultar contraseña',
+                tooltip: _obscureRegPassword ? 'Mostrar contraseña' : 'Ocultar contraseña',
                 icon: Icon(
-                  _obscureRegPassword
-                      ? Icons.visibility_outlined
-                      : Icons.visibility_off_outlined,
+                  _obscureRegPassword ? Icons.visibility_outlined : Icons.visibility_off_outlined,
                   color: AppColors.muted,
                   size: 20,
                 ),
-                onPressed: () {
-                  setState(() {
-                    _obscureRegPassword = !_obscureRegPassword;
-                  });
-                },
+                onPressed: () => setState(() => _obscureRegPassword = !_obscureRegPassword),
               ),
             ),
             validator: (v) {
-              if (v == null || v.isEmpty) {
-                return "La contraseña es requerida";
-              }
-
-              if (v.length < 6) {
-                return "Mínimo 6 caracteres";
-              }
-
+              if (v == null || v.isEmpty) return 'La contraseña es requerida';
+              if (v.length < 6) return 'Mínimo 6 caracteres';
               return null;
+            },
+            onFieldSubmitted: (_) {
+              if (!_isSubmittingRegister) {
+                _submitRegister();
+              }
             },
           ),
           const SizedBox(height: 28),
           SubmitButton(
-            text: "CREAR MI CUENTA",
-            onPressed: _submitRegister,
+            text: _isSubmittingRegister ? 'CREANDO...' : 'CREAR MI CUENTA',
+            onPressed: _isSubmittingRegister ? () {} : _submitRegister,
           ),
         ],
       ),
     );
   }
 
-  // ================= PANEL DERECHO (HERO SHOWCASE, SOLO DESKTOP) =================
   Widget _buildRightPanelContent() {
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 56, vertical: 48),
@@ -669,20 +576,15 @@ Future<void> _submitLogin() async {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           const Text(
-            "ORGANIZA",
+            'ORGANIZA',
             style: TextStyle(fontSize: 36, fontWeight: FontWeight.w900, letterSpacing: -0.8, color: AppColors.text),
           ),
           const SizedBox(height: 12),
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 580),
             child: const Text(
-              "Lorem ipsum dolor sit amet. Et sint galisum est obcaecati quibusdam 33 numquam dolores ut assumenda qua",
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-                color: AppColors.text,
-                height: 1.4,
-              ),
+              'Gestiona tus asignaturas, controla asistencias y calcula notas para asegurar tu semestre universitario.',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.text, height: 1.4),
             ),
           ),
           const SizedBox(height: 36),
@@ -700,24 +602,24 @@ Future<void> _submitLogin() async {
                       width: cardWidth,
                       child: const FeatureCard(
                         icon: Icons.grid_view_rounded,
-                        title: "MI MALLA CURRICULAR",
-                        desc: "Lorem ipsum dolor sit amet. Et sint galisum est obcaecati quibusdam 33 numquam dolores ut assumenda qua",
+                        title: 'MI MALLA CURRICULAR',
+                        desc: 'Planifica los ramos y desbloquea asignaturas semestrales.',
                       ),
                     ),
                     SizedBox(
                       width: cardWidth,
                       child: const FeatureCard(
                         icon: Icons.groups_rounded,
-                        title: "LOREM IPSUM",
-                        desc: "Lorem ipsum dolor sit amet. Et sint galisum est obcaecati quibusdam 33 numquam dolores ut assumenda qua",
+                        title: 'GRUPOS DE ESTUDIO',
+                        desc: 'Conéctate y comparte material con compañeros.',
                       ),
                     ),
                     SizedBox(
                       width: cardWidth,
                       child: const FeatureCard(
-                        icon: Icons.description_rounded,
-                        title: "CONTENIDOS",
-                        desc: "Lorem ipsum dolor sit amet. Et sint galisum est obcaecati quibusdam 33 numquam dolores ut assumenda qua",
+                        icon: Icons.calculate_rounded,
+                        title: 'SIMULADOR DE NOTAS',
+                        desc: 'Calcula exactamente la calificación requerida para aprobar.',
                       ),
                     ),
                   ],
@@ -726,6 +628,74 @@ Future<void> _submitLogin() async {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Selector neo-brutalista de rol (Estudiante / Docente) para el registro.
+/// RN-1.3: una vez creada la cuenta, el rol no vuelve a mostrarse editable
+/// en ninguna otra pantalla (ver profile_screen.dart).
+class _RoleSelector extends StatelessWidget {
+  final String selectedRole;
+  final ValueChanged<String> onChanged;
+
+  const _RoleSelector({required this.selectedRole, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: _RoleOption(
+            label: 'ESTUDIANTE',
+            icon: Icons.school_rounded,
+            active: selectedRole == 'student',
+            onTap: () => onChanged('student'),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _RoleOption(
+            label: 'DOCENTE',
+            icon: Icons.person_pin_rounded,
+            active: selectedRole == 'teacher',
+            onTap: () => onChanged('teacher'),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _RoleOption extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool active;
+  final VoidCallback onTap;
+
+  const _RoleOption({required this.label, required this.icon, required this.active, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: active ? AppColors.accentYellow : AppColors.bg,
+          border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+          borderRadius: BorderRadius.circular(AppDimens.radius),
+          boxShadow: active ? const [BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0)] : null,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 16, color: AppColors.text),
+            const SizedBox(width: 6),
+            Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: AppColors.text)),
+          ],
+        ),
       ),
     );
   }
