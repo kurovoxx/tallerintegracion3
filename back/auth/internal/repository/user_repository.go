@@ -24,18 +24,16 @@ func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
 }
 
 // CreateUser inserta en identity.users con hash bcrypt ya calculado y crea profile en la misma transacción.
-// display_name es obligatorio para identity.profiles (NOT NULL) — si Register no lo recibe, se deriva del email en Service.
-// visibility default private. Campos opcionales nulables se persisten NULL si nil.
+// display_name es obligatorio (no derivado) y visibility default private. Campos opcionales nulables se persisten NULL si nil.
 // Rollback atómico si falla alguna.
-func (r *UserRepository) CreateUser(ctx context.Context, email, passwordHash, displayName string, photoURL, phone, institution, description, visibility *string) (*model.User, error) {
+func (r *UserRepository) CreateUser(ctx context.Context, email, passwordHash, role, displayName string, photoURL, phone, institution, description, visibility *string) (*model.User, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	displayName = strings.TrimSpace(displayName)
 	if displayName == "" {
 		return nil, fmt.Errorf("invalid_display_name: display_name vacío")
 	}
-	if len(displayName) > 100 {
-		// agentSql.md:40 profiles.display_name varchar(100), no 255
-		displayName = displayName[:100]
+	if len(displayName) > 255 {
+		displayName = displayName[:255]
 	}
 	// Normalizar opcionales
 	if photoURL != nil {
@@ -85,16 +83,17 @@ func (r *UserRepository) CreateUser(ctx context.Context, email, passwordHash, di
 		return nil, fmt.Errorf("begin tx: %w", err)
 	}
 	defer func() {
+		// Rollback si no se hizo commit (no error si ya commiteado)
 		_ = tx.Rollback(ctx)
 	}()
 
 	var u model.User
 	queryUser := `
-		INSERT INTO identity.users (email, password_hash)
-		VALUES ($1, $2)
-		RETURNING id, email, created_at
+		INSERT INTO identity.users (email, password_hash, role)
+		VALUES ($1, $2, $3)
+		RETURNING id, email, role, created_at
 	`
-	err = tx.QueryRow(ctx, queryUser, email, passwordHash).Scan(&u.ID, &u.Email, &u.CreatedAt)
+	err = tx.QueryRow(ctx, queryUser, email, passwordHash, role).Scan(&u.ID, &u.Email, &u.Role, &u.CreatedAt)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -107,6 +106,7 @@ func (r *UserRepository) CreateUser(ctx context.Context, email, passwordHash, di
 		return nil, fmt.Errorf("create user: %w", err)
 	}
 
+	// Insert profile atómico — si falla, rollback user también. Campos nulables soportan NULL.
 	_, err = tx.Exec(ctx, `
 		INSERT INTO identity.profiles (user_id, display_name, photo_url, phone, institution, description, visibility)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -123,12 +123,13 @@ func (r *UserRepository) CreateUser(ctx context.Context, email, passwordHash, di
 	return &u, nil
 }
 
-// GetByEmail busca usuario por email.
+// GetByEmail busca usuario por email (referencia lógica, no FK cruzada).
+// Usado para validación previa opcional y para login futuro.
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*model.User, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	var u model.User
-	query := `SELECT id, email, password_hash, created_at FROM identity.users WHERE email = $1`
-	err := r.pool.QueryRow(ctx, query, email).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
+	query := `SELECT id, email, password_hash, role, created_at FROM identity.users WHERE email = $1`
+	err := r.pool.QueryRow(ctx, query, email).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil

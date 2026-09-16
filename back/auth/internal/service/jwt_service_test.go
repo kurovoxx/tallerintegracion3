@@ -1,9 +1,7 @@
 package service
 
 import (
-	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +11,7 @@ import (
 const clavePrueba = "clave-solo-para-pruebas-no-usar-en-produccion"
 
 const uuidStudent = "550e8400-e29b-41d4-a716-446655440001"
+const uuidTeacher = "550e8400-e29b-41d4-a716-446655440002"
 
 func nuevoServicioPrueba(t *testing.T) *JWTService {
 	t.Helper()
@@ -36,12 +35,14 @@ func generarTokenPrueba(
 	issuer string,
 	audience string,
 	userID string,
+	role string,
 	expiraEn time.Time,
 ) string {
 	t.Helper()
 
 	claims := ClaimsPersonalizadas{
 		UserID: userID,
+		Role:   role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    issuer,
 			Audience:  jwt.ClaimStrings{audience},
@@ -64,7 +65,8 @@ func TestJWTServiceGenerarYValidarAccessToken(t *testing.T) {
 	servicio := nuevoServicioPrueba(t)
 
 	resultado, err := servicio.GenerarAccessToken(UsuarioAutenticado{
-		ID: uuidStudent,
+		ID:   uuidStudent,
+		Role: RolStudent,
 	})
 	if err != nil {
 		t.Fatalf("no se pudo generar el access token: %v", err)
@@ -86,17 +88,75 @@ func TestJWTServiceGenerarYValidarAccessToken(t *testing.T) {
 	if usuario.ID != uuidStudent {
 		t.Fatalf("user_id esperado: %s; recibido: %s", uuidStudent, usuario.ID)
 	}
+
+	if usuario.Role != RolStudent {
+		t.Fatalf("role esperado: %s; recibido: %q", RolStudent, usuario.Role)
+	}
+}
+
+func TestJWTServiceGeneraTokenParaTeacher(t *testing.T) {
+	servicio := nuevoServicioPrueba(t)
+
+	resultado, err := servicio.GenerarAccessToken(UsuarioAutenticado{
+		ID:   uuidTeacher,
+		Role: RolTeacher,
+	})
+	if err != nil {
+		t.Fatalf("no se pudo generar el access token: %v", err)
+	}
+
+	usuario, err := servicio.ValidarAccessToken(resultado.AccessToken)
+	if err != nil {
+		t.Fatalf("se esperaba token válido, se recibió error: %v", err)
+	}
+
+	if usuario.ID != uuidTeacher || usuario.Role != RolTeacher {
+		t.Fatalf(
+			"usuario esperado: ID=%s, role=%s; recibido: ID=%s, role=%s",
+			uuidTeacher,
+			RolTeacher,
+			usuario.ID,
+			usuario.Role,
+		)
+	}
 }
 
 func TestJWTServiceRechazaUsuarioConIDInvalido(t *testing.T) {
 	servicio := nuevoServicioPrueba(t)
 
 	_, err := servicio.GenerarAccessToken(UsuarioAutenticado{
-		ID: "",
+		ID:   "",
+		Role: RolStudent,
 	})
 
 	if !errors.Is(err, ErrUsuarioIDInvalido) {
 		t.Fatalf("se esperaba ErrUsuarioIDInvalido; recibido: %v", err)
+	}
+}
+
+func TestJWTServiceRechazaRolVacio(t *testing.T) {
+	servicio := nuevoServicioPrueba(t)
+
+	_, err := servicio.GenerarAccessToken(UsuarioAutenticado{
+		ID:   uuidStudent,
+		Role: "   ",
+	})
+
+	if !errors.Is(err, ErrRolVacio) {
+		t.Fatalf("se esperaba ErrRolVacio; recibido: %v", err)
+	}
+}
+
+func TestJWTServiceRechazaRolGlobalInvalido(t *testing.T) {
+	servicio := nuevoServicioPrueba(t)
+
+	_, err := servicio.GenerarAccessToken(UsuarioAutenticado{
+		ID:   uuidStudent,
+		Role: "admin",
+	})
+
+	if !errors.Is(err, ErrRolInvalido) {
+		t.Fatalf("se esperaba ErrRolInvalido; recibido: %v", err)
 	}
 }
 
@@ -119,6 +179,7 @@ func TestJWTServiceRechazaFirmaConClaveIncorrecta(t *testing.T) {
 		"apuntes-auth",
 		"apuntes-client",
 		uuidStudent,
+		RolStudent,
 		time.Now().Add(15*time.Minute),
 	)
 
@@ -137,6 +198,7 @@ func TestJWTServiceRechazaTokenExpirado(t *testing.T) {
 		"apuntes-auth",
 		"apuntes-client",
 		uuidStudent,
+		RolStudent,
 		time.Now().Add(-15*time.Minute),
 	)
 
@@ -155,6 +217,7 @@ func TestJWTServiceRechazaIssuerIncorrecto(t *testing.T) {
 		"otro-auth",
 		"apuntes-client",
 		uuidStudent,
+		RolStudent,
 		time.Now().Add(15*time.Minute),
 	)
 
@@ -173,6 +236,7 @@ func TestJWTServiceRechazaAudienceIncorrecta(t *testing.T) {
 		"apuntes-auth",
 		"otra-aplicacion",
 		uuidStudent,
+		RolStudent,
 		time.Now().Add(15*time.Minute),
 	)
 
@@ -191,6 +255,7 @@ func TestJWTServiceRechazaUserIDInvalidoEnToken(t *testing.T) {
 		"apuntes-auth",
 		"apuntes-client",
 		"",
+		RolStudent,
 		time.Now().Add(15*time.Minute),
 	)
 
@@ -201,62 +266,44 @@ func TestJWTServiceRechazaUserIDInvalidoEnToken(t *testing.T) {
 	}
 }
 
-func TestJWTServiceClaimsSinRole(t *testing.T) {
+func TestJWTServiceRechazaRolVacioEnToken(t *testing.T) {
 	servicio := nuevoServicioPrueba(t)
 
-	resultado, err := servicio.GenerarAccessToken(UsuarioAutenticado{ID: uuidStudent})
-	if err != nil {
-		t.Fatalf("generar token: %v", err)
-	}
+	token := generarTokenPrueba(
+		t,
+		[]byte(clavePrueba),
+		"apuntes-auth",
+		"apuntes-client",
+		uuidStudent,
+		"   ",
+		time.Now().Add(15*time.Minute),
+	)
 
-	// Parsear sin validar para inspeccionar payload
-	parts := strings.Split(resultado.AccessToken, ".")
-	if len(parts) != 3 {
-		t.Fatalf("token no tiene 3 partes")
-	}
+	_, err := servicio.ValidarAccessToken(token)
 
-	// Decodificar payload
-	claims := make(map[string]interface{})
-	parser := jwt.NewParser()
-	_, _, err = parser.ParseUnverified(resultado.AccessToken, jwt.MapClaims{})
-	if err != nil {
-		t.Fatalf("parse unverified: %v", err)
+	if !errors.Is(err, ErrRolVacio) {
+		t.Fatalf("se esperaba ErrRolVacio; recibido: %v", err)
 	}
-	// Usar MapClaims para verificar campos
-	token, _, err := parser.ParseUnverified(resultado.AccessToken, jwt.MapClaims{})
-	if err != nil {
-		t.Fatalf("parse: %v", err)
+}
+
+func TestJWTServiceRechazaRolInvalidoEnToken(t *testing.T) {
+	servicio := nuevoServicioPrueba(t)
+
+	token := generarTokenPrueba(
+		t,
+		[]byte(clavePrueba),
+		"apuntes-auth",
+		"apuntes-client",
+		uuidStudent,
+		"admin",
+		time.Now().Add(15*time.Minute),
+	)
+
+	_, err := servicio.ValidarAccessToken(token)
+
+	if !errors.Is(err, ErrRolInvalido) {
+		t.Fatalf("se esperaba ErrRolInvalido; recibido: %v", err)
 	}
-	mapClaims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		t.Fatal("claims no son MapClaims")
-	}
-	// Verificar user_id, iss, aud, iat, exp existen
-	if mapClaims["user_id"] != uuidStudent {
-		t.Fatalf("user_id esperado %s, got %v", uuidStudent, mapClaims["user_id"])
-	}
-	if mapClaims["iss"] != "apuntes-auth" {
-		t.Fatalf("iss esperado apuntes-auth, got %v", mapClaims["iss"])
-	}
-	if aud, ok := mapClaims["aud"]; !ok || aud == nil {
-		t.Fatal("aud ausente")
-	}
-	if _, ok := mapClaims["iat"]; !ok {
-		t.Fatal("iat ausente")
-	}
-	if _, ok := mapClaims["exp"]; !ok {
-		t.Fatal("exp ausente")
-	}
-	// Verificar que role NO existe
-	if _, exists := mapClaims["role"]; exists {
-		t.Fatalf("role no debe existir en JWT, pero se encontró %v", mapClaims["role"])
-	}
-	// También verificar que el JSON crudo no contiene "role"
-	rawClaims, _ := json.Marshal(mapClaims)
-	if strings.Contains(string(rawClaims), "\"role\"") {
-		t.Fatal("payload JSON no debe contener clave role")
-	}
-	_ = claims // evitar unused
 }
 
 func TestNuevoJWTServiceRechazaConfiguracionInvalida(t *testing.T) {
