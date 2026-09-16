@@ -251,6 +251,7 @@ type OAuthRepository interface {
 	UpsertGoogleDriveConnection(ctx context.Context, userID, accessToken string, refreshToken *string, expiresAt *time.Time, externalEmail *string) error
 	GetByUserIDAndProvider(ctx context.Context, userID, provider string) (*model.OAuthConnection, error)
 	UpdateGoogleDriveAccessToken(ctx context.Context, userID, accessToken string, refreshToken *string, expiresAt time.Time) error
+	MarkGoogleDriveConnectionRevoked(ctx context.Context, userID string) error
 }
 
 func NewDriveOAuthService(repo OAuthRepository, provider DriveOAuthProvider) *DriveOAuthService {
@@ -322,6 +323,10 @@ func (s *DriveOAuthService) GetValidAccessToken(ctx context.Context, userID stri
 		result, err := refresher.Refresh(ctx, strings.TrimSpace(*conn.RefreshToken))
 		if err != nil {
 			if errors.Is(err, ErrDriveConnectionInvalid) {
+				// Marcar revocada para banner, si falla el mark, internal_error
+				if markErr := s.oauthRepo.MarkGoogleDriveConnectionRevoked(ctx, userID); markErr != nil {
+					return "", NewServiceError("internal_error")
+				}
 				return "", NewServiceError("drive_connection_invalid")
 			}
 			if errors.Is(err, ErrGoogleUnavailable) {
@@ -344,4 +349,44 @@ func (s *DriveOAuthService) GetValidAccessToken(ctx context.Context, userID stri
 	}
 	// Si el provider no implementa Refresh, intentar con Exchange no es correcto; retornar google_unavailable
 	return "", NewServiceError("google_unavailable")
+}
+
+// DriveConnectionStatus es el estado interno para banner "reconecta Drive".
+type DriveConnectionStatus struct {
+	Connected         bool
+	ReconnectRequired bool
+}
+
+// GetGoogleDriveConnectionStatus devuelve el estado de la conexión sin hacer HTTP ni actualizar BD.
+// No retorna tokens, email, expiración, secret ni detalles OAuth.
+func (s *DriveOAuthService) GetGoogleDriveConnectionStatus(ctx context.Context, userID string) (DriveConnectionStatus, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return DriveConnectionStatus{}, NewServiceError("bad_request")
+	}
+	conn, err := s.oauthRepo.GetByUserIDAndProvider(ctx, userID, model.ProviderGoogleDrive)
+	if err != nil {
+		return DriveConnectionStatus{}, NewServiceError("internal_error")
+	}
+	if conn == nil {
+		return DriveConnectionStatus{Connected: false, ReconnectRequired: false}, nil
+	}
+	if conn.RevokedAt != nil {
+		return DriveConnectionStatus{Connected: false, ReconnectRequired: true}, nil
+	}
+	return DriveConnectionStatus{Connected: true, ReconnectRequired: false}, nil
+}
+
+// ReportGoogleDrivePermissionDenied marca revoked_at para que el banner se muestre.
+// Será llamado por Notes cuando reciba 401/403 de Drive. No requiere tokens, no llama Google, idempotente.
+func (s *DriveOAuthService) ReportGoogleDrivePermissionDenied(ctx context.Context, userID string) error {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return NewServiceError("bad_request")
+	}
+	if err := s.oauthRepo.MarkGoogleDriveConnectionRevoked(ctx, userID); err != nil {
+		// Si no existe fila, considerarlo internal_error (no debe ocurrir si Notes llama con user válido)
+		return NewServiceError("internal_error")
+	}
+	return nil
 }

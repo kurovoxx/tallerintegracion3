@@ -44,6 +44,10 @@ func (m *mockOAuthRepo) UpdateGoogleDriveAccessToken(ctx context.Context, userID
 	return nil
 }
 
+func (m *mockOAuthRepo) MarkGoogleDriveConnectionRevoked(ctx context.Context, userID string) error {
+	return nil
+}
+
 type mockProvider struct {
 	result *DriveOAuthResult
 	err    error
@@ -696,10 +700,12 @@ func TestGetValidAccessToken_RefreshSinNuevoRefresh_Conserva(t *testing.T) {
 type mockOAuthRepoWithGet struct {
 	conn        *model.OAuthConnection
 	updateCalled bool
+	markCalled   bool
 	lastAccess  string
 	lastRefresh *string
 	lastExpires time.Time
 	updateErr   error
+	markErr     error
 	lastRevokedAt *time.Time
 }
 
@@ -719,17 +725,192 @@ func (m *mockOAuthRepoWithGet) UpdateGoogleDriveAccessToken(ctx context.Context,
 	m.lastExpires = expiresAt
 	return m.updateErr
 }
+func (m *mockOAuthRepoWithGet) MarkGoogleDriveConnectionRevoked(ctx context.Context, userID string) error {
+	m.markCalled = true
+	return m.markErr
+}
 
 type mockRefreshProvider struct {
-	result *DriveOAuthResult
-	err    error
+	result           *DriveOAuthResult
+	err              error
+	called           bool
+	lastRefreshToken string
 }
 
 func (m *mockRefreshProvider) Exchange(ctx context.Context, code string) (*DriveOAuthResult, error) {
+	m.called = true
 	return m.result, m.err
 }
 func (m *mockRefreshProvider) Refresh(ctx context.Context, refreshToken string) (*DriveOAuthResult, error) {
+	m.called = true
+	m.lastRefreshToken = refreshToken
 	return m.result, m.err
+}
+
+func TestGetValidAccessToken_InvalidGrant_MarkRevoked(t *testing.T) {
+	exp := time.Now().Add(-1 * time.Hour)
+	repo := &mockOAuthRepoWithGet{
+		conn: &model.OAuthConnection{UserID: "user-1", Provider: model.ProviderGoogleDrive, AccessToken: "old", RefreshToken: stringPtr("refresh123"), ExpiresAt: &exp},
+	}
+	provider := &mockRefreshProvider{err: ErrDriveConnectionInvalid}
+	svc := NewDriveOAuthServiceWithRefresher(repo, provider)
+	_, err := svc.GetValidAccessToken(context.Background(), "user-1")
+	if err == nil {
+		t.Fatal("esperado drive_connection_invalid")
+	}
+	if !repo.markCalled {
+		t.Fatal("MarkGoogleDriveConnectionRevoked debe llamarse exactamente una vez para invalid_grant")
+	}
+	if repo.updateCalled {
+		t.Fatal("Update no debe llamarse si invalid_grant")
+	}
+	se, _ := err.(*ServiceError)
+	if se.Code != "drive_connection_invalid" {
+		t.Fatalf("code %s", se.Code)
+	}
+}
+
+func TestGetValidAccessToken_InvalidGrant_MarkError_InternalError(t *testing.T) {
+	exp := time.Now().Add(-1 * time.Hour)
+	repo := &mockOAuthRepoWithGet{
+		conn: &model.OAuthConnection{UserID: "user-1", Provider: model.ProviderGoogleDrive, AccessToken: "old", RefreshToken: stringPtr("refresh123"), ExpiresAt: &exp},
+		markErr: errors.New("db error"),
+	}
+	provider := &mockRefreshProvider{err: ErrDriveConnectionInvalid}
+	svc := NewDriveOAuthServiceWithRefresher(repo, provider)
+	_, err := svc.GetValidAccessToken(context.Background(), "user-1")
+	if err == nil {
+		t.Fatal("esperado internal_error")
+	}
+	se, _ := err.(*ServiceError)
+	if se.Code != "internal_error" {
+		t.Fatalf("esperado internal_error, got %v", err)
+	}
+}
+
+func TestGetValidAccessToken_429_NoMark(t *testing.T) {
+	exp := time.Now().Add(-1 * time.Hour)
+	repo := &mockOAuthRepoWithGet{
+		conn: &model.OAuthConnection{UserID: "user-1", Provider: model.ProviderGoogleDrive, AccessToken: "old", RefreshToken: stringPtr("refresh123"), ExpiresAt: &exp},
+	}
+	provider := &mockRefreshProvider{err: ErrGoogleUnavailable}
+	svc := NewDriveOAuthServiceWithRefresher(repo, provider)
+	_, err := svc.GetValidAccessToken(context.Background(), "user-1")
+	if err == nil {
+		t.Fatal("esperado google_unavailable")
+	}
+	if repo.markCalled {
+		t.Fatal("Mark no debe llamarse para 429/500")
+	}
+	if repo.updateCalled {
+		t.Fatal("Update no debe llamarse para 429")
+	}
+}
+
+func TestGetValidAccessToken_RevokedAt_NoHTTP(t *testing.T) {
+	now := time.Now()
+	repo := &mockOAuthRepoWithGet{
+		conn: &model.OAuthConnection{UserID: "user-1", Provider: model.ProviderGoogleDrive, AccessToken: "old", ExpiresAt: &now, RevokedAt: &now},
+	}
+	provider := &mockRefreshProvider{}
+	svc := NewDriveOAuthServiceWithRefresher(repo, provider)
+	_, err := svc.GetValidAccessToken(context.Background(), "user-1")
+	if err == nil {
+		t.Fatal("esperado drive_connection_invalid por revoked_at")
+	}
+	if provider.called {
+		t.Fatal("no debe llamar HTTP si revoked_at ya está definido")
+	}
+	if repo.markCalled || repo.updateCalled {
+		t.Fatal("no debe llamar Mark ni Update si revoked_at")
+	}
+}
+
+func TestGetValidAccessToken_RefreshTokenNulo_NoMark(t *testing.T) {
+	exp := time.Now().Add(-1 * time.Hour)
+	repo := &mockOAuthRepoWithGet{
+		conn: &model.OAuthConnection{UserID: "user-1", Provider: model.ProviderGoogleDrive, AccessToken: "old", ExpiresAt: &exp, RefreshToken: nil},
+	}
+	provider := &mockRefreshProvider{}
+	svc := NewDriveOAuthServiceWithRefresher(repo, provider)
+	_, err := svc.GetValidAccessToken(context.Background(), "user-1")
+	if err == nil {
+		t.Fatal("esperado drive_connection_invalid por refresh nil")
+	}
+	if provider.called {
+		t.Fatal("no debe llamar HTTP si refresh nil")
+	}
+	if repo.markCalled {
+		t.Fatal("no debe marcar revoked_at todavía si falta refresh_token")
+	}
+}
+
+func TestGetGoogleDriveConnectionStatus_SinConexion(t *testing.T) {
+	repo := &mockOAuthRepoWithGet{conn: nil}
+	svc := NewDriveOAuthService(repo, &mockProvider{})
+	status, err := svc.GetGoogleDriveConnectionStatus(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+	if status.Connected || status.ReconnectRequired {
+		t.Fatalf("sin conexión debe ser false,false got %+v", status)
+	}
+}
+
+func TestGetGoogleDriveConnectionStatus_Conectada(t *testing.T) {
+	now := time.Now()
+	repo := &mockOAuthRepoWithGet{conn: &model.OAuthConnection{UserID: "user-1", Provider: model.ProviderGoogleDrive, AccessToken: "access", RevokedAt: nil, ExpiresAt: &now}}
+	svc := NewDriveOAuthService(repo, &mockProvider{})
+	status, _ := svc.GetGoogleDriveConnectionStatus(context.Background(), "user-1")
+	if !status.Connected || status.ReconnectRequired {
+		t.Fatalf("conectada debe ser true,false got %+v", status)
+	}
+}
+
+func TestGetGoogleDriveConnectionStatus_Revocada(t *testing.T) {
+	now := time.Now()
+	repo := &mockOAuthRepoWithGet{conn: &model.OAuthConnection{UserID: "user-1", Provider: model.ProviderGoogleDrive, AccessToken: "access", RevokedAt: &now}}
+	svc := NewDriveOAuthService(repo, &mockProvider{})
+	status, _ := svc.GetGoogleDriveConnectionStatus(context.Background(), "user-1")
+	if status.Connected || !status.ReconnectRequired {
+		t.Fatalf("revocada debe ser false,true got %+v", status)
+	}
+}
+
+func TestGetGoogleDriveConnectionStatus_NoHTTP(t *testing.T) {
+	repo := &mockOAuthRepoWithGet{conn: nil}
+	provider := &mockProvider{}
+	svc := NewDriveOAuthService(repo, provider)
+	svc.GetGoogleDriveConnectionStatus(context.Background(), "user-1")
+	if provider.called {
+		t.Fatal("GetStatus no debe llamar Google")
+	}
+	if repo.updateCalled || repo.markCalled {
+		t.Fatal("no debe llamar update ni mark")
+	}
+}
+
+func TestReportGoogleDrivePermissionDenied_Mark(t *testing.T) {
+	repo := &mockOAuthRepoWithGet{}
+	svc := NewDriveOAuthService(repo, &mockProvider{})
+	err := svc.ReportGoogleDrivePermissionDenied(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+	if !repo.markCalled {
+		t.Fatal("debe llamar Mark")
+	}
+}
+
+func TestReportGoogleDrivePermissionDenied_Idempotente(t *testing.T) {
+	repo := &mockOAuthRepoWithGet{}
+	svc := NewDriveOAuthService(repo, &mockProvider{})
+	svc.ReportGoogleDrivePermissionDenied(context.Background(), "user-1")
+	svc.ReportGoogleDrivePermissionDenied(context.Background(), "user-1")
+	if !repo.markCalled {
+		t.Fatal("mark debe llamarse")
+	}
+	// No debe requerir tokens ni llamar Google
 }
 
 func stringPtr(s string) *string { return &s }
