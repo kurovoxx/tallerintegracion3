@@ -96,3 +96,25 @@ func (r *OAuthRepository) UpdateGoogleDriveAccessToken(ctx context.Context, user
 	}
 	return nil
 }
+
+// MarkGoogleDriveConnectionRevoked marca revoked_at si aún es NULL, de forma idempotente.
+// No borra filas, no modifica tokens.
+func (r *OAuthRepository) MarkGoogleDriveConnectionRevoked(ctx context.Context, userID string) error {
+	query := `
+		UPDATE identity.oauth_connections
+		SET
+			revoked_at = COALESCE(revoked_at, now()),
+			updated_at = now()
+		WHERE
+			user_id = $1
+			AND provider = 'google_drive'
+	`
+	tag, err := r.pool.Exec(ctx, query, userID)
+	if err != nil {
+		return fmt.Errorf("mark revoked: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("not_found")
+	}
+	return nil
+}

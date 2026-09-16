@@ -32,6 +32,9 @@ func (m *mockDriveRepo) GetByUserIDAndProvider(ctx context.Context, userID, prov
 func (m *mockDriveRepo) UpdateGoogleDriveAccessToken(ctx context.Context, userID, accessToken string, refreshToken *string, expiresAt time.Time) error {
 	return nil
 }
+func (m *mockDriveRepo) MarkGoogleDriveConnectionRevoked(ctx context.Context, userID string) error {
+	return nil
+}
 
 type mockDriveProvider struct {
 	result *service.DriveOAuthResult
