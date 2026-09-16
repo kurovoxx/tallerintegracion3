@@ -21,8 +21,7 @@ func NewAuthHandler(svc *service.AuthService) *AuthHandler {
 type registerRequest struct {
 	Email       string  `json:"email" binding:"required"`
 	Password    string  `json:"password" binding:"required"`
-	Role        string  `json:"role" binding:"required"`
-	DisplayName string  `json:"display_name" binding:"required"`
+	DisplayName *string `json:"display_name"`
 	PhotoURL    *string `json:"photo_url"`
 	Phone       *string `json:"phone"`
 	Institution *string `json:"institution"`
@@ -33,7 +32,6 @@ type registerRequest struct {
 type registerResponse struct {
 	ID        string `json:"id"`
 	Email     string `json:"email"`
-	Role      string `json:"role"`
 	CreatedAt string `json:"created_at"`
 }
 
@@ -46,6 +44,20 @@ type loginResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 	ExpiresIn    int    `json:"expires_in"`
+}
+
+type refreshRequest struct {
+	RefreshToken string `json:"refresh_token" binding:"required"`
+}
+
+type refreshResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"`
+}
+
+type logoutRequest struct {
+	RefreshToken string `json:"refresh_token" binding:"required"`
 }
 
 // Login maneja POST /auth/login (sin auth) según agentApiContract.md:54.
@@ -73,32 +85,70 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	})
 }
 
+// Refresh maneja POST /auth/refresh (sin auth) según agentApiContract.md:24.
+// Valida refresh_token (hash bcrypt, no revocado, no expirado), lo rota y emite nuevo access_token.
+// Contrato actual: 200 {access_token, expires_in} + nuevo refresh_token por rotación, 401 si revocado/expirado/inexistente.
+func (h *AuthHandler) Refresh(c *gin.Context) {
+	var req refreshRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.RespondError(c, http.StatusBadRequest, "bad_request", "Request inválido: refresh_token requerido")
+		return
+	}
+	res, err := h.svc.Refresh(c.Request.Context(), req.RefreshToken)
+	if err != nil {
+		if se, ok := err.(*service.ServiceError); ok {
+			status := utils.StatusForCode(se.Code)
+			// Refresh siempre es 401 para token inválido/expirado, nunca 403
+			if se.Code == utils.ErrInvalidToken || se.Code == utils.ErrTokenExpired || se.Code == utils.ErrUnauthorized {
+				status = http.StatusUnauthorized
+			}
+			utils.RespondError(c, status, se.Code, se.Message)
+			return
+		}
+		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
+		return
+	}
+	c.JSON(http.StatusOK, refreshResponse{
+		AccessToken:  res.AccessToken,
+		RefreshToken: res.RefreshToken,
+		ExpiresIn:    res.ExpiresIn,
+	})
+}
+
+// Logout maneja POST /auth/logout (sin auth) — idempotente 204.
+// Body {refresh_token}. Si token no existe, ya revocado o expirado, sigue 204 (no revela existencia).
+// Solo 400 si JSON malformado o refresh_token vacío.
+func (h *AuthHandler) Logout(c *gin.Context) {
+	var req logoutRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.RespondError(c, http.StatusBadRequest, "bad_request", "Request inválido: refresh_token requerido")
+		return
+	}
+	if err := h.svc.Logout(c.Request.Context(), req.RefreshToken); err != nil {
+		if se, ok := err.(*service.ServiceError); ok {
+			if se.Code == "bad_request" {
+				utils.RespondError(c, http.StatusBadRequest, se.Code, se.Message)
+				return
+			}
+		}
+		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
+		return
+	}
+	c.AbortWithStatus(http.StatusNoContent)
+}
+
 // Register maneja POST /auth/register (sin auth).
-// Contrato: 201 {id,email,role,created_at} o error {error:{code,message}}.
+// Contrato vigente (agentApiContract.md:13): 201 {id,email,created_at} con body {email,password} (display_name derivado del email).
 func (h *AuthHandler) Register(c *gin.Context) {
 	var req registerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		// Distinguir campo faltante para dar código específico si es posible
-		// Fallback genérico a 400 con código más cercano
-		// Si falta role -> invalid_role, si email malform -> invalid_email, etc.
-		// Para simplicidad, inspeccionamos el JSON error string
 		msg := err.Error()
-		// Si falta email o formato, el Service volverá a validar; aquí retornamos 400 genérico
-		// Pero intentamos mapear rápido para UX
 		if contains(msg, "Email") && contains(msg, "required") {
 			utils.RespondError(c, http.StatusBadRequest, utils.ErrInvalidEmail, utils.MessageForCode(utils.ErrInvalidEmail))
 			return
 		}
-		if contains(msg, "Role") {
-			utils.RespondError(c, http.StatusBadRequest, utils.ErrInvalidRole, utils.MessageForCode(utils.ErrInvalidRole))
-			return
-		}
 		if contains(msg, "Password") {
 			utils.RespondError(c, http.StatusBadRequest, utils.ErrWeakPassword, utils.MessageForCode(utils.ErrWeakPassword))
-			return
-		}
-		if contains(msg, "DisplayName") || contains(msg, "display_name") {
-			utils.RespondError(c, http.StatusBadRequest, utils.ErrInvalidDisplayName, utils.MessageForCode(utils.ErrInvalidDisplayName))
 			return
 		}
 		if contains(msg, "Visibility") || contains(msg, "visibility") {
@@ -109,14 +159,13 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	user, err := h.svc.Register(c.Request.Context(), req.Email, req.Password, req.Role, req.DisplayName, req.PhotoURL, req.Phone, req.Institution, req.Description, req.Visibility)
+	user, err := h.svc.Register(c.Request.Context(), req.Email, req.Password, req.DisplayName, req.PhotoURL, req.Phone, req.Institution, req.Description, req.Visibility)
 	if err != nil {
 		if se, ok := err.(*service.ServiceError); ok {
 			status := utils.StatusForCode(se.Code)
 			utils.RespondError(c, status, se.Code, se.Message)
 			return
 		}
-		// Error no mapeado -> 500 pero con formato contrato
 		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
 		return
 	}
@@ -124,8 +173,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	resp := registerResponse{
 		ID:        user.ID,
 		Email:     user.Email,
-		Role:      user.Role,
-		CreatedAt: user.CreatedAt.UTC().Format("2006-01-02T15:04:05.000000Z07:00"), // timestamptz ISO8601
+		CreatedAt: user.CreatedAt.UTC().Format("2006-01-02T15:04:05.000000Z07:00"),
 	}
 	// Gin por defecto no escapa; usar ISO8601 con offset
 	utils.RespondSuccess(c, http.StatusCreated, resp)

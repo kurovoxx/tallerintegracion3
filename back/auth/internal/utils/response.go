@@ -25,17 +25,16 @@ func RespondSuccess(c *gin.Context, status int, payload interface{}) {
 	c.JSON(status, payload)
 }
 
-// Códigos de error según agentApiContract.md + middleware auth (masterprompt 3.1)
+// Códigos de error según agentApiContract.md (vigente sin rol global)
 const (
 	ErrInvalidEmail       = "invalid_email"
 	ErrWeakPassword       = "weak_password"
-	ErrInvalidRole        = "invalid_role"
 	ErrEmailTaken         = "email_taken"
 	ErrInvalidDisplayName = "invalid_display_name"
 	ErrInvalidVisibility  = "invalid_visibility"
 	ErrInvalidCredentials = "invalid_credentials"
-	ErrUnauthorized       = "unauthorized" // 401 token ausente/inválido/expirado (agentApiContract 3.1, masterprompt 3.1)
-	ErrForbidden          = "forbidden"    // 403 rol insuficiente (masterprompt 3.1)
+	ErrUnauthorized       = "unauthorized"
+	ErrForbidden          = "forbidden"
 	ErrInvalidToken       = "invalid_token"
 	ErrTokenExpired       = "token_expired"
 )
@@ -46,12 +45,10 @@ func MessageForCode(code string) string {
 		return "Formato de email inválido"
 	case ErrWeakPassword:
 		return "La contraseña no cumple la política mínima (mín 8 caracteres, al menos una letra y un dígito)"
-	case ErrInvalidRole:
-		return "Rol debe ser student o teacher"
 	case ErrEmailTaken:
 		return "Email ya registrado"
 	case ErrInvalidDisplayName:
-		return "display_name requerido (1-255 caracteres, no vacío)"
+		return "display_name requerido (1-100 caracteres, no vacío)"
 	case ErrInvalidVisibility:
 		return "visibility debe ser public o private"
 	case ErrInvalidCredentials:
@@ -72,7 +69,7 @@ func MessageForCode(code string) string {
 // Helper para mapear errores de Service a HTTP status
 func StatusForCode(code string) int {
 	switch code {
-	case ErrInvalidEmail, ErrWeakPassword, ErrInvalidRole, ErrInvalidDisplayName, ErrInvalidVisibility:
+	case ErrInvalidEmail, ErrWeakPassword, ErrInvalidDisplayName, ErrInvalidVisibility:
 		return http.StatusBadRequest
 	case ErrEmailTaken:
 		return http.StatusConflict

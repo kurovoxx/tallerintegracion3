@@ -9,42 +9,13 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/joho/godotenv"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/config"
 	httpHandler "github.com/kurovoxx/tallerintegracion3/back/social/internal/handler/http"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/middleware"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/service"
 )
-
-func AuthMiddleware() gin.HandlerFunc {
-	allowAnon := strings.EqualFold(strings.TrimSpace(os.Getenv("ALLOW_ANON_MOCK")), "true")
-	return func(c *gin.Context) {
-		userID := strings.TrimSpace(c.GetHeader("X-User-Id"))
-		if userID == "" {
-			if auth := strings.TrimSpace(c.GetHeader("Authorization")); strings.HasPrefix(auth, "Bearer ") {
-				userID = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
-			}
-		}
-		if userID == "" {
-			if allowAnon {
-				userID = "00000000-0000-0000-0000-000000000000"
-			} else {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized: missing X-User-Id or Authorization header", "code": "unauthorized"})
-				c.Abort()
-				return
-			}
-		}
-		if _, err := uuid.Parse(userID); err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid user ID format in header", "code": "unauthorized"})
-			c.Abort()
-			return
-		}
-		c.Set("user_id", userID)
-		c.Next()
-	}
-}
 
 func corsMiddleware() gin.HandlerFunc {
 	origin := strings.TrimSpace(os.Getenv("FRONT_ORIGIN"))
@@ -63,53 +34,36 @@ func corsMiddleware() gin.HandlerFunc {
 	}
 }
 
-func loadEnv() {
-	candidates := []string{".env", "../.env", "../../.env", "../../../.env"}
-	for _, p := range candidates {
-		if _, err := os.Stat(p); err == nil {
-			_ = godotenv.Load(p)
-			break
-		}
-	}
-	_ = godotenv.Load()
-}
-
 func main() {
-	loadEnv()
-
-	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
-	if databaseURL == "" {
-		log.Println("WARN: DATABASE_URL no seteado — usando Postgres local (para Supabase setea DATABASE_URL con el pooler :6543 y sslmode=require)")
-		databaseURL = "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
-	}
+	cfg := config.Load()
+	log.Printf("config social: DATABASE_URL set=%v PORT=%s", cfg.DatabaseURL != "", cfg.Port)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	poolCfg, err := pgxpool.ParseConfig(databaseURL)
+	pool, err := repository.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("DATABASE_URL inválida: %v", err)
-	}
-	poolCfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
-	poolCfg.MaxConns = 5
-	poolCfg.MinConns = 1
-
-	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
-	if err != nil {
-		log.Fatalf("No se pudo crear el pool de Postgres: %v", err)
+		log.Fatalf("No se pudo conectar a Postgres: %v", err)
 	}
 	defer pool.Close()
+	log.Println("Postgres conectado OK (social)")
 
-	if err := pool.Ping(ctx); err != nil {
-		log.Fatalf("No se pudo conectar a Postgres (DATABASE_URL): %v", err)
+	var cnt int
+	if err := pool.QueryRow(ctx, "select count(*) from social.groups").Scan(&cnt); err != nil {
+		log.Printf("check social.groups: %v (schema puede no existir aún — corre agentSql.md)", err)
+	} else {
+		log.Printf("DB check: social.groups count=%d", cnt)
 	}
-	log.Println("Postgres conectado (social service)")
 
-	var groupsCount int
-	if err := pool.QueryRow(ctx, "select count(*) from social.groups").Scan(&groupsCount); err != nil {
-		log.Fatalf("DB check social.groups falló — ¿corriste db/schema.sql en Supabase? %v", err)
-	}
-	log.Printf("DB check: social.groups count=%d", groupsCount)
+	runServer(pool, cfg)
+}
+
+func runServer(pool *pgxpool.Pool, cfg *config.Config) {
+	groupRepo := repository.NewGroupRepository(pool)
+	// TODO(martín, 2_5_14): reemplazar por un notifier real que cree el canal
+	// de Stream al crear el grupo. Mientras tanto no-op — ver comentario en
+	// service.GroupCreatedNotifier.
+	groupSvc := service.NewGroupService(groupRepo, nil)
 
 	todoRepo := repository.NewTodoRepository(pool)
 	todoSvc := service.NewTodoService(todoRepo)
@@ -119,12 +73,67 @@ func main() {
 	sprintSvc := service.NewSprintService(sprintRepo)
 	sprintH := httpHandler.NewSprintHandler(sprintSvc)
 
+	startGin(groupSvc, todoH, sprintH, pool, cfg)
+}
+
+func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, pool *pgxpool.Pool, cfg *config.Config) {
+	validator := &middleware.SimpleHS256Validator{
+		Secret:   []byte(cfg.JWTSecret),
+		Issuer:   "apuntes-auth",
+		Audience: "apuntes-client",
+	}
+	authMw := middleware.NewAuthMiddleware(validator)
+	groupHandler := httpHandler.NewGroupHandler(groupSvc)
+
 	r := gin.Default()
 	r.Use(corsMiddleware())
 
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "UP", "service": "social-service"})
+	})
+
+	r.GET("/health/db", func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+		defer cancel()
+		if err := pool.Ping(ctx); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"status": "DOWN",
+				"error": gin.H{"code": "db_unreachable", "message": err.Error()},
+			})
+			return
+		}
+		var now time.Time
+		var db, user string
+		_ = pool.QueryRow(ctx, "select now(), current_database(), current_user").Scan(&now, &db, &user)
+		var cnt int
+		_ = pool.QueryRow(ctx, "select count(*) from social.groups").Scan(&cnt)
+		c.JSON(http.StatusOK, gin.H{
+			"status":   "UP",
+			"database": db,
+			"user":     user,
+			"now":      now.UTC().Format(time.RFC3339),
+			"checks":   gin.H{"social_groups": cnt},
+		})
+	})
+
 	protected := r.Group("")
-	protected.Use(AuthMiddleware())
+	protected.Use(authMw.RequireAuth())
 	{
+		protected.POST("/groups", groupHandler.Create)
+		// Próximas tareas del backlog de Benjamín (2_3_2 en adelante) se
+		// registran acá a medida que se implementan:
+		protected.GET("/groups/me", groupHandler.ListMy)
+		protected.GET("/groups/:id", groupHandler.Get)
+		protected.POST("/groups/:id/join", groupHandler.Join)
+		protected.POST("/groups/:id/invite/regenerate", groupHandler.RegenerateInvite)
+		protected.GET("/groups/:id/members", groupHandler.ListMembers)
+
+		protected.POST("/groups/:id/members/:user_id/kick", groupHandler.KickMember)
+		protected.POST("/groups/:id/members/:user_id/ban", groupHandler.BanMember)
+		// protected.PATCH("/groups/:id/members/:userId/role", groupHandler.SetRole)
+		// protected.POST("/groups/:id/transfer-admin", groupHandler.TransferAdmin)
+		// protected.POST("/groups/:id/leave", groupHandler.Leave)
+
 		protected.POST("/groups/:id/todo", todoH.CreateTodo)
 		protected.GET("/groups/:id/todo", todoH.ListTodos)
 		protected.PATCH("/groups/:id/todo", todoH.UpdateTodo)
@@ -135,47 +144,9 @@ func main() {
 		protected.DELETE("/groups/:id/sprint-sheet", sprintH.DeleteSprintTask)
 	}
 
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status":  "UP",
-			"service": "social-service",
-		})
-	})
-
-	r.GET("/health/db", func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
-		defer cancel()
-		if err := pool.Ping(ctx); err != nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{
-				"status": "DOWN",
-				"error": gin.H{
-					"code":    "db_unreachable",
-					"message": err.Error(),
-				},
-			})
-			return
-		}
-		var now time.Time
-		var db, user string
-		_ = pool.QueryRow(ctx, "select now(), current_database(), current_user").Scan(&now, &db, &user)
-		c.JSON(http.StatusOK, gin.H{
-			"status":   "UP",
-			"database": db,
-			"user":     user,
-			"now":      now.UTC().Format(time.RFC3339),
-			"checks": gin.H{
-				"social_groups": groupsCount,
-			},
-		})
-	})
-
-	port := strings.TrimSpace(os.Getenv("PORT"))
-	if port == "" {
-		port = "8081"
-	}
-
-	log.Printf("Servidor de Social corriendo en http://localhost:%s", port)
-	if err := r.Run(":" + port); err != nil {
-		log.Fatalf("Error al iniciar el servidor: %v", err)
+	addr := ":" + cfg.Port
+	log.Printf("Social service corriendo en http://localhost%s", addr)
+	if err := r.Run(addr); err != nil {
+		log.Fatalf("Error iniciando social service: %v", err)
 	}
 }

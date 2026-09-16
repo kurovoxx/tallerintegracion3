@@ -1,4 +1,4 @@
-module github.com/kurovoxx/tallerintegracion3/back/social
+module github.com/kurovoxx/tallerintegracion3/back/notes
 
 go 1.26.0
 

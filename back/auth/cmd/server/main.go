@@ -52,32 +52,30 @@ func main() {
 	authH := httpHandler.NewAuthHandler(authSvc)
 	authMw := middleware.NewAuthMiddleware(jwtSvc)
 
+	// Profile: Handler → Service → Repository (Sprint 1)
+	profileRepo := repository.NewProfileRepository(pool)
+	profileSvc := service.NewProfileService(profileRepo)
+	profileH := httpHandler.NewProfileHandler(profileSvc)
+
 	r := gin.Default()
 
 	// Público (sin auth) según agentApiContract.md
 	r.POST("/auth/register", authH.Register)
 	r.POST("/auth/login", authH.Login)
+	r.POST("/auth/refresh", authH.Refresh)
+	r.POST("/auth/logout", authH.Logout)
 
-	// Protegido: middleware valida firma+expiración, inyecta user_id/role (masterprompt 3.1)
-	// 401 token inválido/expirado, 403 rol insuficiente
+	// Protegido: middleware valida firma+expiración, inyecta solo user_id (sin role global)
+	// 401 token inválido/expirado
 	protected := r.Group("")
 	protected.Use(authMw.RequireAuth())
 	{
 		protected.GET("/auth/me", func(c *gin.Context) {
 			uid, _ := middleware.GetUserID(c)
-			role, _ := middleware.GetRole(c)
-			c.JSON(http.StatusOK, gin.H{"user_id": uid, "role": role})
+			c.JSON(http.StatusOK, gin.H{"user_id": uid})
 		})
-		protected.GET("/teacher-only", authMw.RequireRole(service.RolTeacher), func(c *gin.Context) {
-			uid, _ := middleware.GetUserID(c)
-			c.JSON(http.StatusOK, gin.H{"user_id": uid, "message": "solo teacher"})
-		})
-		// Ejemplo perfil protegido (placeholder Sprint 1)
-		protected.GET("/profile/me", func(c *gin.Context) {
-			uid, _ := middleware.GetUserID(c)
-			role, _ := middleware.GetRole(c)
-			c.JSON(http.StatusOK, gin.H{"user_id": uid, "role": role, "note": "profile placeholder"})
-		})
+		protected.GET("/profile/me", profileH.GetProfile)
+		protected.PATCH("/profile/me", profileH.PatchProfile)
 	}
 
 	r.GET("/health", func(c *gin.Context) {
