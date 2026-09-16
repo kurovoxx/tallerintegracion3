@@ -63,3 +63,36 @@ func (r *OAuthRepository) GetByUserIDAndProvider(ctx context.Context, userID, pr
 	}
 	return &oc, nil
 }
+
+// UpdateGoogleDriveAccessToken actualiza solo access_token, refresh_token (con COALESCE), expires_at y updated_at.
+// No modifica revoked_at, no inserta fila. Si no se actualiza ninguna fila, retorna error.
+func (r *OAuthRepository) UpdateGoogleDriveAccessToken(ctx context.Context, userID, accessToken string, refreshToken *string, expiresAt time.Time) error {
+	if accessToken == "" {
+		return fmt.Errorf("access_token vacío")
+	}
+	query := `
+		UPDATE identity.oauth_connections
+		SET
+			access_token = $1,
+			refresh_token = COALESCE($2, refresh_token),
+			expires_at = $3,
+			updated_at = now()
+		WHERE
+			user_id = $4
+			AND provider = 'google_drive'
+	`
+	var rtArg interface{}
+	if refreshToken != nil && *refreshToken != "" {
+		rtArg = *refreshToken
+	} else {
+		rtArg = nil
+	}
+	tag, err := r.pool.Exec(ctx, query, accessToken, rtArg, expiresAt, userID)
+	if err != nil {
+		return fmt.Errorf("update oauth access_token: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("not_found")
+	}
+	return nil
+}

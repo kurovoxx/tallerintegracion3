@@ -29,6 +29,9 @@ func (m *mockDriveRepo) UpsertGoogleDriveConnection(ctx context.Context, userID,
 func (m *mockDriveRepo) GetByUserIDAndProvider(ctx context.Context, userID, provider string) (*model.OAuthConnection, error) {
 	return nil, nil
 }
+func (m *mockDriveRepo) UpdateGoogleDriveAccessToken(ctx context.Context, userID, accessToken string, refreshToken *string, expiresAt time.Time) error {
+	return nil
+}
 
 type mockDriveProvider struct {
 	result *service.DriveOAuthResult
