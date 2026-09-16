@@ -9,9 +9,13 @@ require (
 	golang.org/x/crypto v0.56.0
 )
 
-require github.com/golang-jwt/jwt/v5 v5.3.1
+require (
+	github.com/golang-jwt/jwt/v5 v5.3.1
+	golang.org/x/oauth2 v0.37.0
+)
 
 require (
+	cloud.google.com/go/compute/metadata v0.3.0 // indirect
 	github.com/bytedance/gopkg v0.1.4 // indirect
 	github.com/bytedance/sonic v1.15.3 // indirect
 	github.com/bytedance/sonic/loader v0.5.2 // indirect
