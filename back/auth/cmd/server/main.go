@@ -57,6 +57,16 @@ func main() {
 	profileSvc := service.NewProfileService(profileRepo)
 	profileH := httpHandler.NewProfileHandler(profileSvc)
 
+	// Drive OAuth: Handler → Service → Repository (google-drive/connect)
+	oauthRepo := repository.NewOAuthRepository(pool)
+	driveProvider := &service.ConfigDriveOAuthProvider{
+		ClientID:     cfg.GoogleClientID,
+		ClientSecret: cfg.GoogleClientSecret,
+		RedirectURI:  cfg.GoogleRedirectURI,
+	}
+	driveSvc := service.NewDriveOAuthService(oauthRepo, driveProvider)
+	driveH := httpHandler.NewDriveHandler(driveSvc)
+
 	r := gin.Default()
 
 	// Público (sin auth) según agentApiContract.md
@@ -64,6 +74,7 @@ func main() {
 	r.POST("/auth/login", authH.Login)
 	r.POST("/auth/refresh", authH.Refresh)
 	r.POST("/auth/logout", authH.Logout)
+	r.POST("/auth/google-drive/connect", authMw.RequireAuth(), driveH.Connect)
 
 	// Protegido: middleware valida firma+expiración, inyecta solo user_id (sin role global)
 	// 401 token inválido/expirado
