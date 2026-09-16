@@ -40,6 +40,10 @@ func (m *mockOAuthRepo) GetByUserIDAndProvider(ctx context.Context, userID, prov
 	return nil, nil
 }
 
+func (m *mockOAuthRepo) UpdateGoogleDriveAccessToken(ctx context.Context, userID, accessToken string, refreshToken *string, expiresAt time.Time) error {
+	return nil
+}
+
 type mockProvider struct {
 	result *DriveOAuthResult
 	err    error
@@ -436,7 +440,6 @@ func TestConfigProvider_Userinfo_EmailVacio_Error(t *testing.T) {
 // Helpers para httptest
 func newTestTokenServer(t *testing.T, handler func(w http.ResponseWriter, r *http.Request)) *httptest.Server {
 	t.Helper()
-	// Usamos httptest.NewServer que ya maneja http
 	return httptest.NewServer(http.HandlerFunc(handler))
 }
 func newTestUserinfoServer(t *testing.T, handler func(w http.ResponseWriter, r *http.Request)) *httptest.Server {
@@ -446,6 +449,309 @@ func newTestUserinfoServer(t *testing.T, handler func(w http.ResponseWriter, r *
 
 // Necesario para httptest
 func init() {
-	// Asegurar que time se use
 	_ = time.Now
+}
+
+// --- Tests para GetValidAccessToken ---
+
+func TestGetValidAccessToken_Vigente(t *testing.T) {
+	repo := &mockOAuthRepoWithGet{
+		conn: &model.OAuthConnection{
+			UserID:      "user-1",
+			Provider:    model.ProviderGoogleDrive,
+			AccessToken: "access-valid",
+			ExpiresAt:   func() *time.Time { exp := time.Now().Add(10 * time.Minute); return &exp }(),
+			RevokedAt:   nil,
+		},
+	}
+	provider := &mockProvider{}
+	svc := NewDriveOAuthService(repo, provider)
+	token, err := svc.GetValidAccessToken(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("esperado vigente, got %v", err)
+	}
+	if token != "access-valid" {
+		t.Fatalf("token %s", token)
+	}
+	if provider.called {
+		t.Fatal("no debe llamar a Google si está vigente")
+	}
+	if repo.updateCalled {
+		t.Fatal("no debe hacer Update si está vigente")
+	}
+}
+
+func TestGetValidAccessToken_ExpiresAtNulo_Vigente(t *testing.T) {
+	repo := &mockOAuthRepoWithGet{
+		conn: &model.OAuthConnection{
+			UserID:      "user-1",
+			Provider:    model.ProviderGoogleDrive,
+			AccessToken: "access-valid",
+			ExpiresAt:   nil,
+			RevokedAt:   nil,
+		},
+	}
+	svc := NewDriveOAuthService(repo, &mockProvider{})
+	token, err := svc.GetValidAccessToken(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("nil expires_at debe ser vigente, got %v", err)
+	}
+	if token != "access-valid" {
+		t.Fatalf("token %s", token)
+	}
+}
+
+func TestGetValidAccessToken_DentroMargen_Refresca(t *testing.T) {
+	exp := time.Now().Add(2 * time.Minute)
+	repo := &mockOAuthRepoWithGet{
+		conn: &model.OAuthConnection{
+			UserID:      "user-1",
+			Provider:    model.ProviderGoogleDrive,
+			AccessToken: "old-access",
+			RefreshToken: func() *string { s := "refresh123"; return &s }(),
+			ExpiresAt:   &exp,
+			RevokedAt:   nil,
+		},
+	}
+	newExp := time.Now().Add(1 * time.Hour)
+	provider := &mockRefreshProvider{
+		result: &DriveOAuthResult{AccessToken: "new-access", RefreshToken: stringPtr("new-refresh"), ExpiresAt: &newExp},
+	}
+	svc := NewDriveOAuthServiceWithRefresher(repo, provider)
+	token, err := svc.GetValidAccessToken(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("esperado refresco, got %v", err)
+	}
+	if token != "new-access" {
+		t.Fatalf("token %s", token)
+	}
+	if !repo.updateCalled {
+		t.Fatal("debe hacer Update")
+	}
+	if repo.lastAccess != "new-access" {
+		t.Fatalf("Update access %s", repo.lastAccess)
+	}
+	if repo.lastRevokedAt != nil {
+		t.Fatal("no debe tocar revoked_at")
+	}
+}
+
+func TestGetValidAccessToken_Expirado_Refresca(t *testing.T) {
+	exp := time.Now().Add(-1 * time.Hour)
+	repo := &mockOAuthRepoWithGet{
+		conn: &model.OAuthConnection{
+			UserID: "user-1", Provider: model.ProviderGoogleDrive, AccessToken: "old", RefreshToken: stringPtr("refresh123"), ExpiresAt: &exp,
+		},
+	}
+	newExp := time.Now().Add(1 * time.Hour)
+	provider := &mockRefreshProvider{result: &DriveOAuthResult{AccessToken: "new-access", ExpiresAt: &newExp}}
+	svc := NewDriveOAuthServiceWithRefresher(repo, provider)
+	token, err := svc.GetValidAccessToken(context.Background(), "user-1")
+	if err != nil || token != "new-access" {
+		t.Fatalf("expirado debe refrescar, got %v %s", err, token)
+	}
+}
+
+func TestGetValidAccessToken_NoExiste_NotConnected(t *testing.T) {
+	repo := &mockOAuthRepoWithGet{conn: nil}
+	svc := NewDriveOAuthService(repo, &mockProvider{})
+	_, err := svc.GetValidAccessToken(context.Background(), "user-1")
+	if err == nil {
+		t.Fatal("esperado not_connected")
+	}
+	se, _ := err.(*ServiceError)
+	if se.Code != "not_connected" {
+		t.Fatalf("esperado not_connected, got %v", err)
+	}
+}
+
+func TestGetValidAccessToken_RevokedAt_Invalid(t *testing.T) {
+	now := time.Now()
+	repo := &mockOAuthRepoWithGet{
+		conn: &model.OAuthConnection{
+			UserID: "user-1", Provider: model.ProviderGoogleDrive, AccessToken: "access", ExpiresAt: &now, RevokedAt: &now,
+		},
+	}
+	svc := NewDriveOAuthService(repo, &mockProvider{})
+	_, err := svc.GetValidAccessToken(context.Background(), "user-1")
+	if err == nil {
+		t.Fatal("esperado drive_connection_invalid por revoked_at")
+	}
+	se, _ := err.(*ServiceError)
+	if se.Code != "drive_connection_invalid" {
+		t.Fatalf("esperado drive_connection_invalid, got %v", err)
+	}
+}
+
+func TestGetValidAccessToken_RefreshTokenNulo_Invalid(t *testing.T) {
+	exp := time.Now().Add(-1 * time.Hour)
+	repo := &mockOAuthRepoWithGet{
+		conn: &model.OAuthConnection{
+			UserID: "user-1", Provider: model.ProviderGoogleDrive, AccessToken: "old", ExpiresAt: &exp, RefreshToken: nil,
+		},
+	}
+	svc := NewDriveOAuthService(repo, &mockProvider{})
+	_, err := svc.GetValidAccessToken(context.Background(), "user-1")
+	if err == nil {
+		t.Fatal("esperado drive_connection_invalid por refresh nil")
+	}
+}
+
+func TestGetValidAccessToken_ConfigIncompleta_GoogleUnavailable(t *testing.T) {
+	exp := time.Now().Add(-1 * time.Hour)
+	repo := &mockOAuthRepoWithGet{
+		conn: &model.OAuthConnection{
+			UserID: "user-1", Provider: model.ProviderGoogleDrive, AccessToken: "old", RefreshToken: stringPtr("refresh123"), ExpiresAt: &exp,
+		},
+	}
+	mockRefresh := &mockRefreshProvider{err: ErrGoogleUnavailable}
+	svc2 := NewDriveOAuthServiceWithRefresher(repo, mockRefresh)
+	_, err := svc2.GetValidAccessToken(context.Background(), "user-1")
+	if err == nil {
+		t.Fatal("esperado google_unavailable")
+	}
+	se, _ := err.(*ServiceError)
+	if se.Code != "google_unavailable" {
+		t.Fatalf("esperado google_unavailable, got %v", err)
+	}
+}
+
+func TestGetValidAccessToken_InvalidGrant_Invalid(t *testing.T) {
+	exp := time.Now().Add(-1 * time.Hour)
+	repo := &mockOAuthRepoWithGet{
+		conn: &model.OAuthConnection{UserID: "user-1", Provider: model.ProviderGoogleDrive, AccessToken: "old", RefreshToken: stringPtr("bad-refresh"), ExpiresAt: &exp},
+	}
+	provider := &mockRefreshProvider{err: ErrDriveConnectionInvalid}
+	svc := NewDriveOAuthServiceWithRefresher(repo, provider)
+	_, err := svc.GetValidAccessToken(context.Background(), "user-1")
+	if err == nil {
+		t.Fatal("esperado drive_connection_invalid")
+	}
+	se, _ := err.(*ServiceError)
+	if se.Code != "drive_connection_invalid" {
+		t.Fatalf("esperado drive_connection_invalid, got %v", err)
+	}
+}
+
+func TestGetValidAccessToken_429_GoogleUnavailable(t *testing.T) {
+	exp := time.Now().Add(-1 * time.Hour)
+	repo := &mockOAuthRepoWithGet{
+		conn: &model.OAuthConnection{UserID: "user-1", Provider: model.ProviderGoogleDrive, AccessToken: "old", RefreshToken: stringPtr("refresh123"), ExpiresAt: &exp},
+	}
+	provider := &mockRefreshProvider{err: ErrGoogleUnavailable}
+	svc := NewDriveOAuthServiceWithRefresher(repo, provider)
+	_, err := svc.GetValidAccessToken(context.Background(), "user-1")
+	if err == nil {
+		t.Fatal("esperado google_unavailable")
+	}
+}
+
+func TestGetValidAccessToken_SinAccessToken_InternalError(t *testing.T) {
+	exp := time.Now().Add(-1 * time.Hour)
+	repo := &mockOAuthRepoWithGet{
+		conn: &model.OAuthConnection{UserID: "user-1", Provider: model.ProviderGoogleDrive, AccessToken: "old", RefreshToken: stringPtr("refresh123"), ExpiresAt: &exp},
+	}
+	provider := &mockRefreshProvider{result: &DriveOAuthResult{AccessToken: ""}}
+	svc := NewDriveOAuthServiceWithRefresher(repo, provider)
+	_, err := svc.GetValidAccessToken(context.Background(), "user-1")
+	if err == nil {
+		t.Fatal("esperado internal_error por access_token vacío")
+	}
+}
+
+func TestGetValidAccessToken_UpdateError_InternalError(t *testing.T) {
+	exp := time.Now().Add(-1 * time.Hour)
+	repo := &mockOAuthRepoWithGet{
+		conn: &model.OAuthConnection{UserID: "user-1", Provider: model.ProviderGoogleDrive, AccessToken: "old", RefreshToken: stringPtr("refresh123"), ExpiresAt: &exp},
+		updateErr: errors.New("db error"),
+	}
+	newExp := time.Now().Add(1 * time.Hour)
+	provider := &mockRefreshProvider{result: &DriveOAuthResult{AccessToken: "new-access", ExpiresAt: &newExp}}
+	svc := NewDriveOAuthServiceWithRefresher(repo, provider)
+	_, err := svc.GetValidAccessToken(context.Background(), "user-1")
+	if err == nil {
+		t.Fatal("esperado internal_error por repo")
+	}
+}
+
+func TestGetValidAccessToken_RefreshSinNuevoRefresh_Conserva(t *testing.T) {
+	exp := time.Now().Add(-1 * time.Hour)
+	repo := &mockOAuthRepoWithGet{
+		conn: &model.OAuthConnection{UserID: "user-1", Provider: model.ProviderGoogleDrive, AccessToken: "old", RefreshToken: stringPtr("old-refresh"), ExpiresAt: &exp},
+	}
+	newExp := time.Now().Add(1 * time.Hour)
+	// Provider devuelve sin refresh_token (Google no lo reenvía)
+	provider := &mockRefreshProvider{result: &DriveOAuthResult{AccessToken: "new-access", RefreshToken: nil, ExpiresAt: &newExp}}
+	svc := NewDriveOAuthServiceWithRefresher(repo, provider)
+	token, err := svc.GetValidAccessToken(context.Background(), "user-1")
+	if err != nil || token != "new-access" {
+		t.Fatalf("debe refrescar y conservar refresh, got %v %s", err, token)
+	}
+	if repo.lastRefresh != nil {
+		t.Fatal("debe pasar nil para conservar via COALESCE")
+	}
+}
+
+// Mocks para GetValidAccessToken
+type mockOAuthRepoWithGet struct {
+	conn        *model.OAuthConnection
+	updateCalled bool
+	lastAccess  string
+	lastRefresh *string
+	lastExpires time.Time
+	updateErr   error
+	lastRevokedAt *time.Time
+}
+
+func (m *mockOAuthRepoWithGet) UpsertGoogleDriveConnection(ctx context.Context, userID, accessToken string, refreshToken *string, expiresAt *time.Time, externalEmail *string) error {
+	return nil
+}
+func (m *mockOAuthRepoWithGet) GetByUserIDAndProvider(ctx context.Context, userID, provider string) (*model.OAuthConnection, error) {
+	if m.conn != nil && m.conn.UserID == userID && m.conn.Provider == provider {
+		return m.conn, nil
+	}
+	return nil, nil
+}
+func (m *mockOAuthRepoWithGet) UpdateGoogleDriveAccessToken(ctx context.Context, userID, accessToken string, refreshToken *string, expiresAt time.Time) error {
+	m.updateCalled = true
+	m.lastAccess = accessToken
+	m.lastRefresh = refreshToken
+	m.lastExpires = expiresAt
+	return m.updateErr
+}
+
+type mockRefreshProvider struct {
+	result *DriveOAuthResult
+	err    error
+}
+
+func (m *mockRefreshProvider) Exchange(ctx context.Context, code string) (*DriveOAuthResult, error) {
+	return m.result, m.err
+}
+func (m *mockRefreshProvider) Refresh(ctx context.Context, refreshToken string) (*DriveOAuthResult, error) {
+	return m.result, m.err
+}
+
+func stringPtr(s string) *string { return &s }
+
+// Helpers para que el servicio use el refresher correcto
+func NewDriveOAuthServiceWithRefresher(repo *mockOAuthRepoWithGet, provider *mockRefreshProvider) *DriveOAuthService {
+	// El DriveOAuthService espera OAuthRepository y DriveOAuthProvider (que ahora tiene Refresh)
+	// Hacemos un adaptador que implementa ambas interfaces
+	return &DriveOAuthService{
+		oauthRepo: repo,
+		provider: &combinedProvider{exchange: provider, refresh: provider},
+	}
+}
+
+type combinedProvider struct {
+	exchange *mockRefreshProvider
+	refresh  *mockRefreshProvider
+}
+
+func (c *combinedProvider) Exchange(ctx context.Context, code string) (*DriveOAuthResult, error) {
+	return c.exchange.Exchange(ctx, code)
+}
+func (c *combinedProvider) Refresh(ctx context.Context, refreshToken string) (*DriveOAuthResult, error) {
+	return c.refresh.Refresh(ctx, refreshToken)
 }

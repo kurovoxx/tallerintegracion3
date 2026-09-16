@@ -16,8 +16,10 @@ import (
 
 // Errores de dominio para Drive OAuth
 var (
-	ErrInvalidOAuthCode  = errors.New("invalid_oauth_code")
-	ErrGoogleUnavailable = errors.New("google_unavailable")
+	ErrInvalidOAuthCode     = errors.New("invalid_oauth_code")
+	ErrGoogleUnavailable    = errors.New("google_unavailable")
+	ErrDriveNotConnected    = errors.New("not_connected")
+	ErrDriveConnectionInvalid = errors.New("drive_connection_invalid")
 )
 
 // DriveOAuthResult es lo que devuelve el proveedor tras intercambiar oauth_code.
@@ -32,6 +34,12 @@ type DriveOAuthResult struct {
 // Permite mock en tests y aislar la integración real con Google.
 type DriveOAuthProvider interface {
 	Exchange(ctx context.Context, oauthCode string) (*DriveOAuthResult, error)
+}
+
+// DriveTokenRefresher es la interfaz para refrescar access_token vía refresh_token.
+// Separada de Exchange para no mezclar authorization_code con refresh_token grant.
+type DriveTokenRefresher interface {
+	Refresh(ctx context.Context, refreshToken string) (*DriveOAuthResult, error)
 }
 
 // ConfigDriveOAuthProvider usa GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI del config.
@@ -135,6 +143,72 @@ func (p *ConfigDriveOAuthProvider) Exchange(ctx context.Context, oauthCode strin
 	}, nil
 }
 
+func (p *ConfigDriveOAuthProvider) Refresh(ctx context.Context, refreshToken string) (*DriveOAuthResult, error) {
+	refreshToken = strings.TrimSpace(refreshToken)
+	if strings.TrimSpace(p.ClientID) == "" || strings.TrimSpace(p.ClientSecret) == "" {
+		return nil, ErrGoogleUnavailable
+	}
+	if refreshToken == "" {
+		return nil, ErrDriveConnectionInvalid
+	}
+	endpoint := p.Endpoint
+	if endpoint.AuthURL == "" && endpoint.TokenURL == "" {
+		endpoint = google.Endpoint
+	}
+	// Para refresh, no se necesita RedirectURI ni scopes, solo client_id, client_secret, refresh_token
+	cfg := &oauth2.Config{
+		ClientID:     p.ClientID,
+		ClientSecret: p.ClientSecret,
+		Endpoint:     endpoint,
+	}
+	if p.HTTPClient != nil {
+		ctx = context.WithValue(ctx, oauth2.HTTPClient, p.HTTPClient)
+	}
+	tokSource := cfg.TokenSource(ctx, &oauth2.Token{RefreshToken: refreshToken})
+	tok, err := tokSource.Token()
+	if err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "invalid_grant") {
+			return nil, ErrDriveConnectionInvalid
+		}
+		var retrieveErr *oauth2.RetrieveError
+		if errors.As(err, &retrieveErr) {
+			if retrieveErr.Response != nil {
+				code := retrieveErr.Response.StatusCode
+				if code == 400 {
+					return nil, ErrDriveConnectionInvalid
+				}
+				if code == 429 || code >= 500 {
+					return nil, ErrGoogleUnavailable
+				}
+			}
+		}
+		if strings.Contains(msg, "timeout") || strings.Contains(msg, "connection") || strings.Contains(msg, "429") || strings.Contains(msg, "500") {
+			return nil, ErrGoogleUnavailable
+		}
+		return nil, ErrDriveConnectionInvalid
+	}
+	if tok == nil || strings.TrimSpace(tok.AccessToken) == "" {
+		return nil, errors.New("access_token vacío")
+	}
+	var refreshPtr *string
+	if strings.TrimSpace(tok.RefreshToken) != "" {
+		rt := tok.RefreshToken
+		refreshPtr = &rt
+	}
+	var expPtr *time.Time
+	if !tok.Expiry.IsZero() {
+		exp := tok.Expiry
+		expPtr = &exp
+	}
+	// Para refresh, no necesitamos userinfo (ya tenemos email), pero lo mantenemos por si Google lo requiere
+	return &DriveOAuthResult{
+		AccessToken:  tok.AccessToken,
+		RefreshToken: refreshPtr,
+		ExpiresAt:    expPtr,
+	}, nil
+}
+
 func fetchUserEmail(ctx context.Context, client *http.Client, userinfoURL, accessToken string) (string, error) {
 	if client == nil {
 		client = http.DefaultClient
@@ -176,6 +250,7 @@ type DriveOAuthService struct {
 type OAuthRepository interface {
 	UpsertGoogleDriveConnection(ctx context.Context, userID, accessToken string, refreshToken *string, expiresAt *time.Time, externalEmail *string) error
 	GetByUserIDAndProvider(ctx context.Context, userID, provider string) (*model.OAuthConnection, error)
+	UpdateGoogleDriveAccessToken(ctx context.Context, userID, accessToken string, refreshToken *string, expiresAt time.Time) error
 }
 
 func NewDriveOAuthService(repo OAuthRepository, provider DriveOAuthProvider) *DriveOAuthService {
@@ -211,4 +286,62 @@ func (s *DriveOAuthService) Connect(ctx context.Context, userID, oauthCode strin
 		return NewServiceError("internal_error")
 	}
 	return nil
+}
+
+// GetValidAccessToken devuelve un access_token vigente para Google Drive por user_id.
+// Reutilizable por Notes via gRPC. No crea endpoint HTTP.
+func (s *DriveOAuthService) GetValidAccessToken(ctx context.Context, userID string) (string, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return "", NewServiceError("bad_request")
+	}
+	conn, err := s.oauthRepo.GetByUserIDAndProvider(ctx, userID, model.ProviderGoogleDrive)
+	if err != nil {
+		return "", NewServiceError("internal_error")
+	}
+	if conn == nil {
+		return "", NewServiceError("not_connected")
+	}
+	if conn.RevokedAt != nil {
+		return "", NewServiceError("drive_connection_invalid")
+	}
+	if strings.TrimSpace(conn.AccessToken) == "" {
+		return "", NewServiceError("drive_connection_invalid")
+	}
+	// Si expires_at es nil o tiene más de 5 minutos restantes, está vigente
+	if conn.ExpiresAt == nil || time.Now().Add(5*time.Minute).Before(*conn.ExpiresAt) {
+		return conn.AccessToken, nil
+	}
+	// Vencido o dentro del margen: necesita refresh
+	if conn.RefreshToken == nil || strings.TrimSpace(*conn.RefreshToken) == "" {
+		return "", NewServiceError("drive_connection_invalid")
+	}
+	// Verificar configuración
+	if refresher, ok := s.provider.(DriveTokenRefresher); ok {
+		// Usar refresher si implementa Refresh
+		result, err := refresher.Refresh(ctx, strings.TrimSpace(*conn.RefreshToken))
+		if err != nil {
+			if errors.Is(err, ErrDriveConnectionInvalid) {
+				return "", NewServiceError("drive_connection_invalid")
+			}
+			if errors.Is(err, ErrGoogleUnavailable) {
+				return "", NewServiceError("google_unavailable")
+			}
+			return "", NewServiceError("internal_error")
+		}
+		if result == nil || strings.TrimSpace(result.AccessToken) == "" {
+			return "", NewServiceError("internal_error")
+		}
+		// Actualizar solo access_token, refresh_token (COALESCE), expires_at, updated_at
+		expiresAt := time.Now().Add(1 * time.Hour)
+		if result.ExpiresAt != nil && !result.ExpiresAt.IsZero() {
+			expiresAt = *result.ExpiresAt
+		}
+		if err := s.oauthRepo.UpdateGoogleDriveAccessToken(ctx, userID, result.AccessToken, result.RefreshToken, expiresAt); err != nil {
+			return "", NewServiceError("internal_error")
+		}
+		return result.AccessToken, nil
+	}
+	// Si el provider no implementa Refresh, intentar con Exchange no es correcto; retornar google_unavailable
+	return "", NewServiceError("google_unavailable")
 }
