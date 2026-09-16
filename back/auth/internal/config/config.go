@@ -20,9 +20,6 @@ type Config struct {
 	Port               string
 	AccessExpiresIn    int // segundos, default 900
 	RefreshExpiresIn   int // segundos, default 604800 (7d)
-	GoogleClientID     string
-	GoogleClientSecret string
-	GoogleRedirectURI  string
 }
 
 func Load() *Config {
@@ -45,17 +42,14 @@ func Load() *Config {
 	_ = godotenv.Load()
 
 	cfg := &Config{
-		DatabaseURL:        os.Getenv("DATABASE_URL"),
-		DirectURL:          os.Getenv("DIRECT_URL"),
-		SupabaseURL:        os.Getenv("SUPABASE_URL"),
-		SupabaseKey:        os.Getenv("SQL_API_KEY"),
-		JWT:                os.Getenv("JWT"),
-		JWTSecret:          os.Getenv("JWT_SECRET"),
-		DiscoveryURL:       os.Getenv("DISCOVERY_URL"),
-		Port:               os.Getenv("PORT"),
-		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
-		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
-		GoogleRedirectURI:  os.Getenv("GOOGLE_REDIRECT_URI"),
+		DatabaseURL:  os.Getenv("DATABASE_URL"),
+		DirectURL:    os.Getenv("DIRECT_URL"),
+		SupabaseURL:  os.Getenv("SUPABASE_URL"),
+		SupabaseKey:  os.Getenv("SQL_API_KEY"),
+		JWT:          os.Getenv("JWT"),
+		JWTSecret:    os.Getenv("JWT_SECRET"),
+		DiscoveryURL: os.Getenv("DISCOVERY_URL"),
+		Port:         os.Getenv("PORT"),
 	}
 	if cfg.Port == "" {
 		cfg.Port = "8080"

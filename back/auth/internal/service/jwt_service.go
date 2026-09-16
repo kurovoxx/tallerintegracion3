@@ -9,6 +9,11 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+const (
+	RolStudent = "student"
+	RolTeacher = "teacher"
+)
+
 var (
 	ErrClaveSecretaVacia = errors.New("la clave secreta JWT no puede estar vacía")
 	ErrIssuerVacio       = errors.New("el issuer JWT no puede estar vacío")
@@ -16,6 +21,8 @@ var (
 	ErrDuracionInvalida  = errors.New("la duración del access token debe ser mayor que cero")
 
 	ErrUsuarioIDInvalido = errors.New("el user_id no puede estar vacío")
+	ErrRolVacio          = errors.New("el role del usuario no puede estar vacío")
+	ErrRolInvalido       = errors.New("el role debe ser student o teacher")
 
 	ErrTokenVacio        = errors.New("el access token no puede estar vacío")
 	ErrAlgoritmoInvalido = errors.New("el algoritmo de firma no está permitido")
@@ -24,6 +31,7 @@ var (
 
 type ClaimsPersonalizadas struct {
 	UserID string `json:"user_id"`
+	Role   string `json:"role"`
 	jwt.RegisteredClaims
 }
 
@@ -40,7 +48,8 @@ type ResultadoToken struct {
 }
 
 type UsuarioAutenticado struct {
-	ID string
+	ID   string
+	Role string
 }
 
 type JWTService struct {
@@ -76,11 +85,21 @@ func (s *JWTService) GenerarAccessToken(usuario UsuarioAutenticado) (ResultadoTo
 		return ResultadoToken{}, ErrUsuarioIDInvalido
 	}
 
+	roleLimpio := strings.TrimSpace(usuario.Role)
+	if roleLimpio == "" {
+		return ResultadoToken{}, ErrRolVacio
+	}
+
+	if !esRolValido(roleLimpio) {
+		return ResultadoToken{}, ErrRolInvalido
+	}
+
 	ahora := time.Now()
 	expiraEn := ahora.Add(s.config.Duracion)
 
 	claims := ClaimsPersonalizadas{
 		UserID: usuario.ID,
+		Role:   roleLimpio,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    s.config.Issuer,
 			Audience:  jwt.ClaimStrings{s.config.Audience},
@@ -135,7 +154,21 @@ func (s *JWTService) ValidarAccessToken(tokenString string) (UsuarioAutenticado,
 		return UsuarioAutenticado{}, ErrUsuarioIDInvalido
 	}
 
+	roleLimpio := strings.TrimSpace(claims.Role)
+	if roleLimpio == "" {
+		return UsuarioAutenticado{}, ErrRolVacio
+	}
+
+	if !esRolValido(roleLimpio) {
+		return UsuarioAutenticado{}, ErrRolInvalido
+	}
+
 	return UsuarioAutenticado{
-		ID: claims.UserID,
+		ID:   claims.UserID,
+		Role: roleLimpio,
 	}, nil
+}
+
+func esRolValido(role string) bool {
+	return role == RolStudent || role == RolTeacher
 }
