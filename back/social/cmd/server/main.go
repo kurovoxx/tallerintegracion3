@@ -130,9 +130,9 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 
 		protected.POST("/groups/:id/members/:user_id/kick", groupHandler.KickMember)
 		protected.POST("/groups/:id/members/:user_id/ban", groupHandler.BanMember)
-		// protected.PATCH("/groups/:id/members/:userId/role", groupHandler.SetRole)
-		// protected.POST("/groups/:id/transfer-admin", groupHandler.TransferAdmin)
-		// protected.POST("/groups/:id/leave", groupHandler.Leave)
+		protected.PATCH("/groups/:id/members/:userId/role", groupHandler.ChangeRole)
+		protected.POST("/groups/:id/transfer-admin", groupHandler.TransferAdmin)
+		protected.POST("/groups/:id/leave", groupHandler.LeaveGroup)
 
 		protected.POST("/groups/:id/todo", todoH.CreateTodo)
 		protected.GET("/groups/:id/todo", todoH.ListTodos)

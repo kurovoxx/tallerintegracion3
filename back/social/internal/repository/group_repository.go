@@ -323,3 +323,124 @@ func (r *GroupRepository) BanMember(ctx context.Context, groupID, adminID, targe
 
 	return tx.Commit(ctx)
 }
+
+// ChangeMemberRole actualiza el rol de un miembro (solo admin puede hacerlo)
+func (r *GroupRepository) ChangeMemberRole(ctx context.Context, groupID, adminID, targetUserID, newRole string) error {
+	if newRole != "admin" && newRole != "member" {
+		return errors.New("invalid_role")
+	}
+	if adminID == targetUserID {
+		return errors.New("cannot_modify_self")
+	}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Validar que quien pide el cambio sea admin
+	var role string
+	err = tx.QueryRow(ctx, `SELECT role FROM social.group_memberships WHERE group_id = $1 AND user_id = $2`, groupID, adminID).Scan(&role)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return errors.New("forbidden")
+		}
+		return err
+	}
+	if role != "admin" {
+		return errors.New("forbidden")
+	}
+
+	// Ejecutar el cambio
+	tag, err := tx.Exec(ctx, `UPDATE social.group_memberships SET role = $1 WHERE group_id = $2 AND user_id = $3`, newRole, groupID, targetUserID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errors.New("target_not_found")
+	}
+
+	return tx.Commit(ctx)
+}
+
+// TransferAdmin cede la administración a otro miembro y degrada al admin actual
+func (r *GroupRepository) TransferAdmin(ctx context.Context, groupID, currentAdminID, newAdminID string) error {
+	if currentAdminID == newAdminID {
+		return errors.New("cannot_modify_self")
+	}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Validar que quien transfiere sea admin
+	var role string
+	err = tx.QueryRow(ctx, `SELECT role FROM social.group_memberships WHERE group_id = $1 AND user_id = $2`, groupID, currentAdminID).Scan(&role)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return errors.New("forbidden")
+		}
+		return err
+	}
+	if role != "admin" {
+		return errors.New("forbidden")
+	}
+
+	// Validar que el destinatario realmente sea miembro del grupo
+	var newAdminExists bool
+	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM social.group_memberships WHERE group_id = $1 AND user_id = $2)`, groupID, newAdminID).Scan(&newAdminExists)
+	if err != nil {
+		return err
+	}
+	if !newAdminExists {
+		return errors.New("target_not_found")
+	}
+
+	// Ascender al nuevo usuario
+	_, err = tx.Exec(ctx, `UPDATE social.group_memberships SET role = 'admin' WHERE group_id = $1 AND user_id = $2`, groupID, newAdminID)
+	if err != nil {
+		return err
+	}
+
+	// Degradar al usuario original
+	_, err = tx.Exec(ctx, `UPDATE social.group_memberships SET role = 'member' WHERE group_id = $1 AND user_id = $2`, groupID, currentAdminID)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+func (r *GroupRepository) GetMemberRole(ctx context.Context, groupID, userID string) (string, error) {
+	var role string
+	err := r.pool.QueryRow(ctx, `SELECT role FROM social.group_memberships WHERE group_id = $1 AND user_id = $2`, groupID, userID).Scan(&role)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return "", errors.New("not_member")
+		}
+		return "", err
+	}
+	return role, nil
+}
+
+// CountAdmins cuenta cuántos administradores activos tiene el grupo
+func (r *GroupRepository) CountAdmins(ctx context.Context, groupID string) (int, error) {
+	var count int
+	err := r.pool.QueryRow(ctx, `SELECT count(*) FROM social.group_memberships WHERE group_id = $1 AND role = 'admin'`, groupID).Scan(&count)
+	return count, err
+}
+
+// RemoveMember elimina la membresía de un usuario
+func (r *GroupRepository) RemoveMember(ctx context.Context, groupID, userID string) error {
+	tag, err := r.pool.Exec(ctx, `DELETE FROM social.group_memberships WHERE group_id = $1 AND user_id = $2`, groupID, userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errors.New("target_not_found")
+	}
+	return nil
+}
