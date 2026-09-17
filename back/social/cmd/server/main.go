@@ -73,10 +73,14 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	sprintSvc := service.NewSprintService(sprintRepo)
 	sprintH := httpHandler.NewSprintHandler(sprintSvc)
 
-	startGin(groupSvc, todoH, sprintH, pool, cfg)
+	hoursRepo := repository.NewHoursRepository(pool)
+	hoursSvc := service.NewHoursService(hoursRepo)
+	hoursH := httpHandler.NewHoursHandler(hoursSvc)
+
+	startGin(groupSvc, todoH, sprintH, hoursH, pool, cfg)
 }
 
-func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, pool *pgxpool.Pool, cfg *config.Config) {
+func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, pool *pgxpool.Pool, cfg *config.Config) {
 	validator := &middleware.SimpleHS256Validator{
 		Secret:   []byte(cfg.JWTSecret),
 		Issuer:   "apuntes-auth",
@@ -142,6 +146,8 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 		protected.GET("/groups/:id/sprint-sheet", sprintH.ListSprintTasks)
 		protected.PATCH("/groups/:id/sprint-sheet", sprintH.UpdateSprintTask)
 		protected.DELETE("/groups/:id/sprint-sheet", sprintH.DeleteSprintTask)
+		protected.POST("/sprint-sheet/:taskId/hours", hoursH.LogHours)
+		protected.GET("/sprint-sheet/:taskId/hours", hoursH.ListHours)
 	}
 
 	addr := ":" + cfg.Port
