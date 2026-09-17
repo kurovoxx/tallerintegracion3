@@ -77,10 +77,14 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	hoursSvc := service.NewHoursService(hoursRepo)
 	hoursH := httpHandler.NewHoursHandler(hoursSvc)
 
-	startGin(groupSvc, todoH, sprintH, hoursH, pool, cfg)
+	meetingRepo := repository.NewMeetingRepository(pool)
+	meetingSvc := service.NewMeetingService(meetingRepo, nil)
+	meetingH := httpHandler.NewMeetingHandler(meetingSvc)
+
+	startGin(groupSvc, todoH, sprintH, hoursH, meetingH, pool, cfg)
 }
 
-func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, pool *pgxpool.Pool, cfg *config.Config) {
+func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, meetingH *httpHandler.MeetingHandler, pool *pgxpool.Pool, cfg *config.Config) {
 	validator := &middleware.SimpleHS256Validator{
 		Secret:   []byte(cfg.JWTSecret),
 		Issuer:   "apuntes-auth",
@@ -148,6 +152,7 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 		protected.DELETE("/groups/:id/sprint-sheet", sprintH.DeleteSprintTask)
 		protected.POST("/sprint-sheet/:taskId/hours", hoursH.LogHours)
 		protected.GET("/sprint-sheet/:taskId/hours", hoursH.ListHours)
+		protected.POST("/groups/:id/meetings", meetingH.CreateMeeting)
 	}
 
 	addr := ":" + cfg.Port
