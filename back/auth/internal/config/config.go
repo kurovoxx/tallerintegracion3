@@ -23,6 +23,7 @@ type Config struct {
 	GoogleClientID     string
 	GoogleClientSecret string
 	GoogleRedirectURI  string
+	InternalAPIKey     string // secreto compartido para endpoints servicio-a-servicio (X-Internal-Key)
 }
 
 func Load() *Config {
@@ -56,6 +57,7 @@ func Load() *Config {
 		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
 		GoogleRedirectURI:  os.Getenv("GOOGLE_REDIRECT_URI"),
+		InternalAPIKey:     os.Getenv("INTERNAL_API_KEY"),
 	}
 	if cfg.Port == "" {
 		cfg.Port = "8080"

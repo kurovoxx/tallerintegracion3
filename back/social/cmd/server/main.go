@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/calendar"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/config"
 	httpHandler "github.com/kurovoxx/tallerintegracion3/back/social/internal/handler/http"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/middleware"
@@ -78,10 +79,30 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	hoursH := httpHandler.NewHoursHandler(hoursSvc)
 
 	meetingRepo := repository.NewMeetingRepository(pool)
-	meetingSvc := service.NewMeetingService(meetingRepo, nil)
+	meetingSvc := service.NewMeetingService(meetingRepo, calendarNotifierFor(cfg, meetingRepo))
 	meetingH := httpHandler.NewMeetingHandler(meetingSvc)
 
 	startGin(groupSvc, todoH, sprintH, hoursH, meetingH, pool, cfg)
+}
+
+func calendarNotifierFor(cfg *config.Config, meetingRepo *repository.MeetingRepository) service.MeetingCreatedNotifier {
+	// CALENDAR_MODE=mock (default): sync simulado, sin llamar a Google ni a Auth.
+	// Persiste un google_calendar_event_id falso para verificar el cableado E2E.
+	if strings.ToLower(strings.TrimSpace(cfg.CalendarMode)) != "real" {
+		log.Printf("calendar sync: modo mock (CALENDAR_MODE=%s)", cfg.CalendarMode)
+		return service.NewCalendarMeetingNotifier(
+			&service.StubCalendarGateway{},
+			calendar.NewMockClient(),
+			meetingRepo,
+		)
+	}
+	// CALENDAR_MODE=real: token vía Auth interno + API REST de Google.
+	log.Printf("calendar sync: modo real contra Auth %s", cfg.AuthBaseURL)
+	return service.NewCalendarMeetingNotifier(
+		&service.AuthCalendarGateway{BaseURL: cfg.AuthBaseURL, InternalKey: cfg.InternalKey},
+		calendar.NewRESTClient(),
+		meetingRepo,
+	)
 }
 
 func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, meetingH *httpHandler.MeetingHandler, pool *pgxpool.Pool, cfg *config.Config) {
@@ -106,7 +127,7 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 		if err := pool.Ping(ctx); err != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"status": "DOWN",
-				"error": gin.H{"code": "db_unreachable", "message": err.Error()},
+				"error":  gin.H{"code": "db_unreachable", "message": err.Error()},
 			})
 			return
 		}

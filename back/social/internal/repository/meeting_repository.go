@@ -82,3 +82,16 @@ func (r *MeetingRepository) GetMeetingByID(ctx context.Context, id pgtype.UUID) 
 func (r *MeetingRepository) ListMeetingsByGroup(ctx context.Context, groupID pgtype.UUID) ([]sqlc.SocialMeeting, error) {
 	return r.queries.ListMeetingsByGroup(ctx, groupID)
 }
+
+// SetCalendarEventID guarda el google_calendar_event_id tras un sync exitoso.
+// Se llama desde el notifier en background; un fallo aquí solo se loguea.
+func (r *MeetingRepository) SetCalendarEventID(ctx context.Context, meetingID pgtype.UUID, eventID string) (sqlc.SocialMeeting, error) {
+	var event pgtype.Text
+	if err := event.Scan(eventID); err != nil {
+		return sqlc.SocialMeeting{}, err
+	}
+	return r.queries.UpdateMeetingCalendarEventID(ctx, sqlc.UpdateMeetingCalendarEventIDParams{
+		ID:                    meetingID,
+		GoogleCalendarEventID: event,
+	})
+}

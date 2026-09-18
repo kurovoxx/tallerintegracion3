@@ -28,3 +28,9 @@ SELECT EXISTS(
   SELECT 1 FROM social.group_memberships
   WHERE group_id = $1 AND user_id = $2
 );
+
+-- name: UpdateMeetingCalendarEventID :one
+UPDATE social.meetings SET
+  google_calendar_event_id = $2
+WHERE id = $1
+RETURNING *;
