@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -867,4 +868,174 @@ func TestListGroupNotesOrdering(t *testing.T) {
 func parseTimeHandler(s string) time.Time {
 	t, _ := time.Parse(time.RFC3339, s)
 	return t
+}
+
+// --- Etapa feat/notes-access-restricted-mode: endpoint access + share restricted ---
+
+func TestHandlerGetAccessAuthor200(t *testing.T) {
+	r, _, _, _ := setupRouter()
+	author := uuid.NewString()
+	at := genToken(author, "student")
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/notes", bytes.NewBufferString(`{"title":"AccessH","visibility":"private","content":"hola"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+at)
+	r.ServeHTTP(w, req)
+	if w.Code != 201 {
+		t.Fatalf("create %d %s", w.Code, w.Body.String())
+	}
+	var cre map[string]string
+	json.Unmarshal(w.Body.Bytes(), &cre)
+	nid := cre["note_id"]
+	w2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodGet, "/notes/"+nid+"/access", nil)
+	req2.Header.Set("Authorization", "Bearer "+at)
+	r.ServeHTTP(w2, req2)
+	if w2.Code != 200 {
+		t.Fatalf("access author esperaba 200 got %d %s", w2.Code, w2.Body.String())
+	}
+	var resp map[string]interface{}
+	json.Unmarshal(w2.Body.Bytes(), &resp)
+	if resp["can_read"] != true {
+		t.Fatalf("can_read debe ser true, got %v", resp)
+	}
+	if resp["access_mode"] != "private" {
+		t.Fatalf("access_mode debe ser private, got %v", resp)
+	}
+	du, _ := resp["drive_url"].(string)
+	if !strings.Contains(du, "drive.google.com") {
+		t.Fatalf("drive_url debe apuntar a Drive, got %q", du)
+	}
+}
+
+func TestHandlerGetAccessNotFound404(t *testing.T) {
+	r, _, _, _ := setupRouter()
+	tok := genToken(uuid.NewString(), "student")
+	for _, id := range []string{uuid.NewString(), "no-uuid"} {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/notes/"+id+"/access", nil)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		r.ServeHTTP(w, req)
+		if w.Code != 404 {
+			t.Fatalf("id %s esperaba 404 got %d %s", id, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestHandlerGetAccessForbidden403(t *testing.T) {
+	r, _, _, _ := setupRouter()
+	author := uuid.NewString()
+	other := uuid.NewString()
+	at := genToken(author, "student")
+	ot := genToken(other, "student")
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/notes", bytes.NewBufferString(`{"title":"PrivH","visibility":"private"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+at)
+	r.ServeHTTP(w, req)
+	var cre map[string]string
+	json.Unmarshal(w.Body.Bytes(), &cre)
+	nid := cre["note_id"]
+	// privada sin compartir para no autor -> 403
+	w2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodGet, "/notes/"+nid+"/access", nil)
+	req2.Header.Set("Authorization", "Bearer "+ot)
+	r.ServeHTTP(w2, req2)
+	if w2.Code != 403 {
+		t.Fatalf("esperaba 403 got %d %s", w2.Code, w2.Body.String())
+	}
+}
+
+func TestHandlerGetAccessRestrictedFlow(t *testing.T) {
+	r, _, _, social := setupRouter()
+	author := uuid.NewString()
+	member := uuid.NewString()
+	outsider := uuid.NewString()
+	groupID := uuid.NewString()
+	social.AddAdmin(author, groupID)
+	social.AddMember(member, groupID)
+	at := genToken(author, "student")
+	mt := genToken(member, "student")
+	ot := genToken(outsider, "student")
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/notes", bytes.NewBufferString(`{"title":"RestrFlowH","visibility":"private","content":"r"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+at)
+	r.ServeHTTP(w, req)
+	var cre map[string]string
+	json.Unmarshal(w.Body.Bytes(), &cre)
+	nid := cre["note_id"]
+	// miembro sin share -> 403
+	w0 := httptest.NewRecorder()
+	req0 := httptest.NewRequest(http.MethodGet, "/notes/"+nid+"/access", nil)
+	req0.Header.Set("Authorization", "Bearer "+mt)
+	r.ServeHTTP(w0, req0)
+	if w0.Code != 403 {
+		t.Fatalf("miembro sin share esperaba 403 got %d %s", w0.Code, w0.Body.String())
+	}
+	// compartir restricted
+	w2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodPost, "/notes/"+nid+"/share", bytes.NewBufferString(fmt.Sprintf(`{"group_id":"%s","access_mode":"restricted"}`, groupID)))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Authorization", "Bearer "+at)
+	r.ServeHTTP(w2, req2)
+	if w2.Code != 201 {
+		t.Fatalf("share restricted %d %s", w2.Code, w2.Body.String())
+	}
+	// miembro -> 200 restricted
+	w3 := httptest.NewRecorder()
+	req3 := httptest.NewRequest(http.MethodGet, "/notes/"+nid+"/access", nil)
+	req3.Header.Set("Authorization", "Bearer "+mt)
+	r.ServeHTTP(w3, req3)
+	if w3.Code != 200 {
+		t.Fatalf("miembro restricted esperaba 200 got %d %s", w3.Code, w3.Body.String())
+	}
+	var resp map[string]interface{}
+	json.Unmarshal(w3.Body.Bytes(), &resp)
+	if resp["access_mode"] != "restricted" || resp["can_read"] != true {
+		t.Fatalf("respuesta inesperada: %v", resp)
+	}
+	// outsider -> 403
+	w4 := httptest.NewRecorder()
+	req4 := httptest.NewRequest(http.MethodGet, "/notes/"+nid+"/access", nil)
+	req4.Header.Set("Authorization", "Bearer "+ot)
+	r.ServeHTTP(w4, req4)
+	if w4.Code != 403 {
+		t.Fatalf("outsider restricted esperaba 403 got %d %s", w4.Code, w4.Body.String())
+	}
+}
+
+func TestHandlerShareRestrictedGrantsDrive(t *testing.T) {
+	r, svc, driveMock, social := setupRouter()
+	md := service.NewMemoryMemberDirectory()
+	svc.SetMemberDirectory(md)
+	author := uuid.NewString()
+	groupID := uuid.NewString()
+	social.AddAdmin(author, groupID)
+	md.SetEmails(groupID, []string{"a@x.com", "b@x.com"})
+	at := genToken(author, "student")
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/notes", bytes.NewBufferString(`{"title":"RestrGrantsH","visibility":"private"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+at)
+	r.ServeHTTP(w, req)
+	var cre map[string]string
+	json.Unmarshal(w.Body.Bytes(), &cre)
+	nid := cre["note_id"]
+	w2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodPost, "/notes/"+nid+"/share", bytes.NewBufferString(fmt.Sprintf(`{"group_id":"%s","access_mode":"restricted"}`, groupID)))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Authorization", "Bearer "+at)
+	r.ServeHTTP(w2, req2)
+	if w2.Code != 201 {
+		t.Fatalf("share restricted %d %s", w2.Code, w2.Body.String())
+	}
+	if len(driveMock.GrantCalls) != 2 {
+		t.Fatalf("esperaba 2 grants, got %d (%v)", len(driveMock.GrantCalls), driveMock.GrantCalls)
+	}
+	for _, gc := range driveMock.GrantCalls {
+		if gc.Role != "reader" {
+			t.Fatalf("role debe ser reader, got %q", gc.Role)
+		}
+	}
 }
