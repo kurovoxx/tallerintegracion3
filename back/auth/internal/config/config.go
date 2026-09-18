@@ -58,7 +58,7 @@ func Load() *Config {
 		GoogleRedirectURI:  os.Getenv("GOOGLE_REDIRECT_URI"),
 	}
 	if cfg.Port == "" {
-		cfg.Port = "8082"
+		cfg.Port = "8081"
 	}
 	if cfg.JWTSecret == "" {
 		cfg.JWTSecret = cfg.JWT

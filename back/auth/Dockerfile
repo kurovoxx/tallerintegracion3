@@ -13,6 +13,6 @@ FROM alpine:3.19
 RUN apk --no-cache add ca-certificates tzdata
 WORKDIR /app
 COPY --from=builder /auth-server .
-EXPOSE 8082
-ENV PORT=8082
+EXPOSE 8081
+ENV PORT=8081
 CMD ["./auth-server"]
