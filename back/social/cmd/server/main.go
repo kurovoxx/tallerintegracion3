@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/config"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/discord"
 	httpHandler "github.com/kurovoxx/tallerintegracion3/back/social/internal/handler/http"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/middleware"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository"
@@ -78,13 +79,17 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	hoursH := httpHandler.NewHoursHandler(hoursSvc)
 
 	meetingRepo := repository.NewMeetingRepository(pool)
-	meetingSvc := service.NewMeetingService(meetingRepo, nil)
+	discordRepo := repository.NewDiscordRepository(pool)
+	discordSvc := service.NewDiscordService(discordRepo)
+	discordH := httpHandler.NewDiscordHandler(discordSvc)
+	meetingSvc := service.NewMeetingService(meetingRepo,
+		service.NewDiscordMeetingNotifier(discordRepo, discord.NewWebhookClient()))
 	meetingH := httpHandler.NewMeetingHandler(meetingSvc)
 
-	startGin(groupSvc, todoH, sprintH, hoursH, meetingH, pool, cfg)
+	startGin(groupSvc, todoH, sprintH, hoursH, meetingH, discordH, pool, cfg)
 }
 
-func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, meetingH *httpHandler.MeetingHandler, pool *pgxpool.Pool, cfg *config.Config) {
+func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, meetingH *httpHandler.MeetingHandler, discordH *httpHandler.DiscordHandler, pool *pgxpool.Pool, cfg *config.Config) {
 	validator := &middleware.SimpleHS256Validator{
 		Secret:   []byte(cfg.JWTSecret),
 		Issuer:   "apuntes-auth",
@@ -106,7 +111,7 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 		if err := pool.Ping(ctx); err != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"status": "DOWN",
-				"error": gin.H{"code": "db_unreachable", "message": err.Error()},
+				"error":  gin.H{"code": "db_unreachable", "message": err.Error()},
 			})
 			return
 		}
@@ -153,6 +158,7 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 		protected.POST("/sprint-sheet/:taskId/hours", hoursH.LogHours)
 		protected.GET("/sprint-sheet/:taskId/hours", hoursH.ListHours)
 		protected.POST("/groups/:id/meetings", meetingH.CreateMeeting)
+		protected.PUT("/groups/:id/discord-config", discordH.PutConfig)
 	}
 
 	addr := ":" + cfg.Port
