@@ -697,24 +697,42 @@ func (s *NoteService) GetAccess(ctx context.Context, requesterID string, noteID 
 		canRead = true
 		accessMode = "public"
 	} else {
-		// private: verificar shares diferenciando link vs restricted
-		list, _ := s.shared.ListByNote(ctx, noteID)
+		// Nota privada de otro autor: solo legible si hay vínculo en
+		// notes.shared_notes. Reglas multi-share:
+		// - si existe al menos un share link -> cualquiera puede leer;
+		// - si todos son restricted -> debe ser miembro de al menos uno;
+		// - sin shares o sin membresía -> 403 (la nota existe, no es 404).
+		// No se llama a Drive: la autorización se resuelve con PostgreSQL.
+		list, err := s.shared.ListByNote(ctx, noteID)
+		if err != nil {
+			return nil, &ServiceError{Code: utils.ErrInternal, Message: err.Error()}
+		}
 		for _, sh := range list {
 			if sh.AccessMode == "link" {
 				canRead = true
 				accessMode = sh.AccessMode
 				break
-			} else if sh.AccessMode == "restricted" {
-				if ok, _ := s.social.IsMember(ctx, requesterID, sh.GroupID); ok {
-					canRead = true
-					accessMode = sh.AccessMode
-					break
+			}
+		}
+		if !canRead {
+			for _, sh := range list {
+				if sh.AccessMode == "restricted" {
+					if ok, _ := s.social.IsMember(ctx, requesterID, sh.GroupID); ok {
+						canRead = true
+						accessMode = sh.AccessMode
+						break
+					}
 				}
 			}
 		}
 	}
 	if !canRead {
 		return nil, newServiceError(utils.ErrForbidden)
+	}
+	// Sin archivo externo no hay contenido que servir: nota no disponible
+	// (404 con código note_unavailable según el mapeo del handler).
+	if note.ExternalFileID == nil || strings.TrimSpace(*note.ExternalFileID) == "" {
+		return nil, newServiceErrorMsg(utils.ErrNoteUnavailable, "Nota no disponible en almacenamiento remoto")
 	}
 	driveURL := ""
 	if note.ExternalFileID != nil {
