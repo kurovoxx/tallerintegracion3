@@ -25,13 +25,13 @@ services:
       dockerfile: Dockerfile
     container_name: ti3-auth
     ports:
-      - "8081:8081"
+      - "8081:8080" # host 8080 ocupado por WordPress/nginx -> mapea 8081
     environment:
       DATABASE_URL: postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable
       DIRECT_URL: postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable
       JWT_SECRET: 5987f6ae236ec37e229aaf3bcbd488b0ca3aa8c1c980a3a699ac47e42402e41f
       JWT: 961e9b2e-0333-4ec9-aadb-72e95ca06e4d
-      PORT: 8081
+      PORT: 8080
       SUPABASE_URL: https://cdzzcawgcbfdkwqyatex.supabase.co
       DISCOVERY_URL: https://cdzzcawgcbfdkwqyatex.supabase.co/auth/v1/.well-known/jwks.json
     depends_on:
