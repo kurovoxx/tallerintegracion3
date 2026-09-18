@@ -2,6 +2,7 @@ package http
 
 import (
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -40,6 +41,7 @@ func (h *NoteHandler) Create(c *gin.Context) {
 		utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "Request inválido: "+err.Error())
 		return
 	}
+	log.Printf("[HTTP DEBUG] POST /notes recibido. Payload: %+v, RequesterID: %s", req, userID)
 	note, err := h.svc.Create(c.Request.Context(), userID, req.Title, req.SubjectID, req.Visibility, req.Content, req.Tags)
 	if err != nil {
 		handleServiceError(c, err)

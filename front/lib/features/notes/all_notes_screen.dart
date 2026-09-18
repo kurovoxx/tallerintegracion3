@@ -35,6 +35,10 @@ class _AllNotesScreenState extends State<AllNotesScreen> {
   bool _useMemoryFallback = false;
   bool _isSyncingBackend = false;
   String _currentQuery = '';
+  // Ids de notas del backend que pertenecen al usuario (GET /notes/me + POST 201).
+  // El modelo local no guarda autor: un id con formato UUID no listado aquí se
+  // trata como ajeno (solo lectura); los ids locales (dígitos) son del dispositivo.
+  final Set<String> _ownedNoteIds = {};
 
   // Estado interactivo por nota
   final Map<String, int> _likesCount = {};
@@ -65,6 +69,8 @@ class _AllNotesScreenState extends State<AllNotesScreen> {
   void initState() {
     super.initState();
     _notesFuture = _initAndLoad();
+    // Solo diagnóstico local: permite copiar el Bearer para probar el backend.
+    print('[AUTH DEBUG] Token completo: ${SessionManager.token}');
   }
 
   @override
@@ -166,6 +172,8 @@ class _AllNotesScreenState extends State<AllNotesScreen> {
         final List notes = data['notes'] ?? [];
         for (final n in notes) {
           try {
+            final remoteId = n['id'] as String?;
+            if (remoteId != null && remoteId.isNotEmpty) _ownedNoteIds.add(remoteId);
             await _repo!.upsertNote(LocalNote(
               id: n['id'] as String,
               title: n['title'] as String? ?? 'Sin título',
@@ -181,6 +189,270 @@ class _AllNotesScreenState extends State<AllNotesScreen> {
     } finally {
       if (mounted) setState(() => _isSyncingBackend = false);
     }
+  }
+
+  /// Intento de creación remota. Devuelve el UUID real del backend (201) o null.
+  /// No bloquea el guardado local: si el backend falla, solo se imprime el error (offline-first).
+  Future<String?> _createNoteOnBackend({required String title, required String content, required String visibility}) async {
+    final url = '$notesBaseUrl/notes';
+    final body = <String, String>{'title': title, 'content': content, 'visibility': visibility};
+    print('[FRONT DEBUG] Enviando POST /notes a $url con body: $body');
+    try {
+      final token = SessionManager.token;
+      final headers = <String, String>{'Content-Type': 'application/json'};
+      if (token != null && token.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $token';
+      }
+      final res = await http.post(Uri.parse(url), headers: headers, body: jsonEncode(body)).timeout(const Duration(seconds: 8));
+      print('[FRONT DEBUG] Respuesta POST /notes: status=${res.statusCode} body=${res.body}');
+      if (res.statusCode == 201) {
+        try {
+          final data = jsonDecode(res.body);
+          final newId = data['note_id'] as String?;
+          if (newId != null && newId.isNotEmpty) {
+            _ownedNoteIds.add(newId);
+            print('[FRONT DEBUG] UUID real del backend: $newId');
+            return newId;
+          }
+        } catch (_) {}
+      }
+    } catch (e) {
+      print('[FRONT DEBUG] Error POST /notes a $url: $e');
+    }
+    return null;
+  }
+
+  /// Reemplaza el id temporal (timestamp) por el UUID real del backend en
+  /// Drift/memoria y migra el estado interactivo (likes/saved/tags) para que
+  /// PATCH/DELETE usen el UUID válido de Postgres.
+  Future<void> _replaceLocalId(String tempId, String realId) async {
+    if (!mounted) return;
+    _ownedNoteIds.add(realId);
+    LocalNote? current;
+    if (_useMemoryFallback || _repo == null) {
+      final i = _memoryFallback.indexWhere((n) => n.id == tempId);
+      if (i < 0) return;
+      current = _memoryFallback[i];
+    } else {
+      try {
+        final all = await _repo!.getAllNotes();
+        for (final n in all) {
+          if (n.id == tempId) {
+            current = n;
+            break;
+          }
+        }
+      } catch (_) {}
+      if (current == null) return;
+    }
+    final renamed = LocalNote(id: realId, title: current.title, content: current.content, visibility: current.visibility, updatedAt: current.updatedAt);
+    if (!mounted) return;
+    setState(() {
+      if (_likesCount.containsKey(tempId)) _likesCount[realId] = _likesCount.remove(tempId)!;
+      if (_isLiked.containsKey(tempId)) _isLiked[realId] = _isLiked.remove(tempId)!;
+      if (_isSaved.containsKey(tempId)) _isSaved[realId] = _isSaved.remove(tempId)!;
+      if (_noteTags.containsKey(tempId)) _noteTags[realId] = _noteTags.remove(tempId)!;
+    });
+    if (_useMemoryFallback || _repo == null) {
+      if (!mounted) return;
+      setState(() {
+        final i = _memoryFallback.indexWhere((n) => n.id == tempId);
+        if (i >= 0) {
+          _memoryFallback[i] = renamed;
+        } else {
+          _memoryFallback.insert(0, renamed);
+        }
+      });
+    } else {
+      try {
+        await _repo!.deleteNote(tempId);
+        await _repo!.upsertNote(renamed);
+      } catch (_) {}
+    }
+    await _applySearch(_currentQuery);
+  }
+
+  Map<String, String> _authHeaders() {
+    final headers = <String, String>{'Content-Type': 'application/json'};
+    final token = SessionManager.token;
+    if (token != null && token.isNotEmpty) {
+      headers['Authorization'] = 'Bearer $token';
+    }
+    return headers;
+  }
+
+  /// Extrae {code, message} del envelope de error del backend: {"error": {...}}.
+  Map<String, String?> _parseBackendError(String body) {
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is Map) {
+        final err = decoded['error'];
+        if (err is Map) {
+          return {'code': err['code']?.toString(), 'message': err['message']?.toString()};
+        }
+      }
+    } catch (_) {}
+    return {'code': null, 'message': null};
+  }
+
+  /// Lectura híbrida: GET /notes/:id. 200 trae content/title del Drive del autor.
+  Future<_RemoteResult> _fetchHybridContent(LocalNote note) async {
+    final url = '$notesBaseUrl/notes/${note.id}';
+    try {
+      final res = await http.get(Uri.parse(url), headers: _authHeaders()).timeout(const Duration(seconds: 8));
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body) as Map<String, dynamic>;
+        return _RemoteResult(ok: true, status: 200, data: data);
+      }
+      final parsed = _parseBackendError(res.body);
+      return _RemoteResult(ok: false, status: res.statusCode, code: parsed['code'], message: parsed['message']);
+    } catch (e) {
+      return _RemoteResult(ok: false, status: -1, message: e.toString());
+    }
+  }
+
+  /// Edición sincronizada: PATCH /notes/:id con {title, content}.
+  Future<_RemoteResult> _patchNoteRemote(LocalNote note, String title, String content) async {
+    final url = '$notesBaseUrl/notes/${note.id}';
+    final body = {'title': title, 'content': content};
+    try {
+      final res = await http.patch(Uri.parse(url), headers: _authHeaders(), body: jsonEncode(body)).timeout(const Duration(seconds: 8));
+      if (res.statusCode == 200) {
+        return const _RemoteResult(ok: true, status: 200);
+      }
+      final parsed = _parseBackendError(res.body);
+      return _RemoteResult(ok: false, status: res.statusCode, code: parsed['code'], message: parsed['message']);
+    } catch (e) {
+      return _RemoteResult(ok: false, status: -1, message: e.toString());
+    }
+  }
+
+  /// Borrado en cascada: DELETE /notes/:id. Éxito con 200 o 204.
+  Future<_RemoteResult> _deleteNoteRemote(LocalNote note) async {
+    final url = '$notesBaseUrl/notes/${note.id}';
+    try {
+      final res = await http.delete(Uri.parse(url), headers: _authHeaders()).timeout(const Duration(seconds: 8));
+      if (res.statusCode == 200 || res.statusCode == 204) {
+        return _RemoteResult(ok: true, status: res.statusCode);
+      }
+      final parsed = _parseBackendError(res.body);
+      return _RemoteResult(ok: false, status: res.statusCode, code: parsed['code'], message: parsed['message']);
+    } catch (e) {
+      return _RemoteResult(ok: false, status: -1, message: e.toString());
+    }
+  }
+
+  /// ¿Puede el usuario actual editar/borrar esta nota? El backend es quien lo
+  /// impone (403 si no es autor); aquí se decide visibilidad de los botones.
+  bool _isMine(LocalNote note) {
+    if (_ownedNoteIds.contains(note.id)) return true;
+    return !note.id.contains('-');
+  }
+
+  /// true si el resultado indica nota no disponible en Drive (404/403 Drive,
+  /// code note_unavailable o mensaje "no disponible").
+  bool _isDriveUnavailable(_RemoteResult r) {
+    if (r.code == 'note_unavailable') return true;
+    if ((r.message ?? '').contains('no disponible')) return true;
+    return r.status == 404;
+  }
+
+  Future<void> _applyLocalUpsert(LocalNote note) async {
+    if (!mounted) return;
+    if (_useMemoryFallback || _repo == null) {
+      final i = _memoryFallback.indexWhere((n) => n.id == note.id);
+      setState(() {
+        if (i >= 0) {
+          _memoryFallback[i] = note;
+        } else {
+          _memoryFallback.insert(0, note);
+        }
+      });
+    } else {
+      try {
+        await _repo!.upsertNote(note);
+      } catch (_) {}
+    }
+    await _applySearch(_currentQuery);
+  }
+
+  Future<void> _applyLocalDelete(LocalNote note) async {
+    if (!mounted) return;
+    setState(() {
+      _likesCount.remove(note.id);
+      _isLiked.remove(note.id);
+      _isSaved.remove(note.id);
+      _memoryFallback.removeWhere((n) => n.id == note.id);
+    });
+    if (!_useMemoryFallback && _repo != null) {
+      try {
+        await _repo!.deleteNote(note.id);
+      } catch (_) {}
+    }
+    await _applySearch(_currentQuery);
+  }
+
+  /// Guarda edición: solo con 200 actualiza local y reporta sincronizado.
+  Future<_EditSaveOutcome> _saveEditFlow(LocalNote note, String title, String content) async {
+    final remote = await _patchNoteRemote(note, title, content);
+    if (remote.ok) {
+      await _applyLocalUpsert(LocalNote(id: note.id, title: title, content: content, visibility: note.visibility, updatedAt: DateTime.now()));
+      if (mounted) setState(() {});
+      return _EditSaveOutcome.synced;
+    }
+    if (remote.status == -1) return _EditSaveOutcome.offline;
+    if (remote.status == 403 && remote.code == 'forbidden') return _EditSaveOutcome.forbidden;
+    if (_isDriveUnavailable(remote)) return _EditSaveOutcome.unavailable;
+    return _EditSaveOutcome.error;
+  }
+
+  /// Clona una nota ajena: POST /notes/:id/copy. Con 201 registra el nuevo id
+  /// en _ownedNoteIds y refresca la lista local con la copia.
+  Future<_RemoteResult> _cloneFlow(LocalNote note) async {
+    final url = '$notesBaseUrl/notes/${note.id}/copy';
+    try {
+      final res = await http.post(Uri.parse(url), headers: _authHeaders()).timeout(const Duration(seconds: 8));
+      if (res.statusCode == 201) {
+        try {
+          final data = jsonDecode(res.body);
+          final newId = data['note_id'] as String?;
+          if (newId != null && newId.isNotEmpty) _ownedNoteIds.add(newId);
+        } catch (_) {}
+        if (!_useMemoryFallback && _repo != null) {
+          await _syncFromBackend();
+        }
+        await _applySearch(_currentQuery);
+        if (mounted) setState(() {});
+        return _RemoteResult(ok: true, status: res.statusCode);
+      }
+      final parsed = _parseBackendError(res.body);
+      return _RemoteResult(ok: false, status: res.statusCode, code: parsed['code'], message: parsed['message']);
+    } catch (e) {
+      return _RemoteResult(ok: false, status: -1, message: e.toString());
+    }
+  }
+  /// Borra en backend y, con 200/204, elimina local. Con 404 (el recurso ya no
+  /// existe en el backend) también limpia local para no dejar la referencia bloqueada.
+  Future<_RemoteResult> _deleteFlow(LocalNote note) async {
+    final remote = await _deleteNoteRemote(note);
+    if (!mounted) return remote;
+    if (remote.ok) {
+      await _applyLocalDelete(note);
+      if (!mounted) return remote;
+      setState(() {});
+      return remote;
+    }
+    if (remote.status == 404) {
+      await _applyLocalDelete(note);
+      if (!mounted) return const _RemoteResult(ok: true, status: 404);
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        backgroundColor: Colors.black,
+        content: Text('La nota ya no existía en el servidor; se eliminó la copia local.', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+      ));
+      return const _RemoteResult(ok: true, status: 404);
+    }
+    return remote;
   }
 
   void _onSearchChanged(String query) {
@@ -232,8 +504,6 @@ class _AllNotesScreenState extends State<AllNotesScreen> {
     }
     return res;
   }
-
-  String _formatDate(DateTime d) => '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
 
   Future<void> _retry() async {
     _searchController.clear();
@@ -330,59 +600,21 @@ class _AllNotesScreenState extends State<AllNotesScreen> {
         initialChildSize: 0.75,
         minChildSize: 0.5,
         maxChildSize: 0.95,
-        builder: (context, scroll) => Container(
-          decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Colors.black, width: 2), borderRadius: const BorderRadius.vertical(top: Radius.circular(0)), boxShadow: const [BoxShadow(color: Colors.black, offset: Offset(6, 6))]),
-          child: Column(
-            children: [
-              Container(
-                margin: const EdgeInsets.only(top: 12),
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(0)),
-              ),
-              Expanded(
-                child: ListView(
-                  controller: scroll,
-                  padding: const EdgeInsets.all(20),
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(color: note.visibility == 'public' ? const Color(0xFF0055FF) : const Color(0xFFFFCC00), border: Border.all(color: Colors.black, width: 1.5)),
-                          child: Text(note.visibility.toUpperCase(), style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: note.visibility == 'public' ? Colors.white : Colors.black)),
-                        ),
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(color: const Color(0xFFF5F0E8), border: Border.all(color: Colors.black, width: 1.5)),
-                          child: Text(_noteTags[note.id] ?? 'General', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Colors.black)),
-                        ),
-                        const Spacer(),
-                        Text(_formatDate(note.updatedAt), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF1A1A1A))),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    Text(note.title, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Colors.black, height: 1.2)),
-                    const SizedBox(height: 12),
-                    Container(height: 2, color: Colors.black),
-                    const SizedBox(height: 16),
-                    Text(note.content, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.black, height: 1.5)),
-                    const SizedBox(height: 24),
-                    Row(
-                      children: [
-                        _ActionButton(icon: Icons.favorite_rounded, label: '${_likesCount[note.id] ?? 0}', isActive: _isLiked[note.id] ?? false, activeColor: const Color(0xFFE63B2E), onTap: () => _toggleLike(note)),
-                        const SizedBox(width: 8),
-                        _ActionButton(icon: Icons.bookmark_rounded, label: 'Guardar', isActive: _isSaved[note.id] ?? false, activeColor: const Color(0xFFFFCC00), onTap: () => _toggleSave(note)),
-                        const SizedBox(width: 8),
-                        _ActionButton(icon: Icons.share_rounded, label: 'Compartir', onTap: () => _shareNote(note)),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
+        builder: (context, scroll) => _NoteDetailSheet(
+          scrollController: scroll,
+          note: note,
+          isMine: _isMine(note),
+          tag: _noteTags[note.id] ?? 'General',
+          likesCount: _likesCount[note.id] ?? 0,
+          isLiked: _isLiked[note.id] ?? false,
+          isSaved: _isSaved[note.id] ?? false,
+          onToggleLike: () => _toggleLike(note),
+          onToggleSave: () => _toggleSave(note),
+          onShare: () => _shareNote(note),
+          onFetchRemote: () => _fetchHybridContent(note),
+          onSaveEdit: (title, content) => _saveEditFlow(note, title, content),
+          onDelete: () => _deleteFlow(note),
+          onClone: () => _cloneFlow(note),
         ),
       ),
     );
@@ -529,6 +761,7 @@ class _AllNotesScreenState extends State<AllNotesScreen> {
                   updatedAt: DateTime.now(),
                 );
                 _noteTags[note.id] = visibility == 'public' ? 'General' : 'Privado';
+                final tempId = note.id;
                 if (_useMemoryFallback) {
                   setState(() {
                     _memoryFallback.insert(0, note);
@@ -554,6 +787,13 @@ class _AllNotesScreenState extends State<AllNotesScreen> {
                   }
                 }
                 if (mounted) Navigator.pop(context);
+                // Reemplazar el id temporal por el UUID real del backend (201).
+                // No bloquea: el diálogo ya se cerró; al llegar el UUID se renombra en local.
+                unawaited(_createNoteOnBackend(title: note.title, content: note.content, visibility: note.visibility).then((realId) async {
+                  if (realId != null && realId.isNotEmpty) {
+                    await _replaceLocalId(tempId, realId);
+                  }
+                }));
               },
               child: const Text('GUARDAR', style: TextStyle(fontWeight: FontWeight.w900)),
             ),
@@ -998,6 +1238,392 @@ class _ActionButton extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(color: isActive ? activeColor : Colors.white, border: Border.all(color: Colors.black, width: 1.5)),
         child: Row(children: [Icon(icon, size: 14, color: isActive ? Colors.white : Colors.black), const SizedBox(width: 4), Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: isActive ? Colors.white : Colors.black))]),
+      ),
+    );
+  }
+}
+
+/// Resultado de una operación remota contra el backend de notas (8082).
+class _RemoteResult {
+  final bool ok;
+  final int status; // -1 = error de red/offline
+  final String? code; // code semántico del backend (note_unavailable, forbidden...)
+  final String? message;
+  final Map<String, dynamic>? data; // payload del 200
+  const _RemoteResult({required this.ok, required this.status, this.code, this.message, this.data});
+}
+
+enum _EditSaveOutcome { synced, forbidden, unavailable, offline, error }
+
+/// Modal de detalle con lectura híbrida (GET /notes/:id), edición (PATCH) y
+/// borrado (DELETE). El contenido local se muestra de inmediato como fallback.
+class _NoteDetailSheet extends StatefulWidget {
+  final ScrollController scrollController;
+  final LocalNote note;
+  final bool isMine;
+  final String tag;
+  final int likesCount;
+  final bool isLiked;
+  final bool isSaved;
+  final VoidCallback onToggleLike;
+  final VoidCallback onToggleSave;
+  final VoidCallback onShare;
+  final Future<_RemoteResult> Function() onFetchRemote;
+  final Future<_EditSaveOutcome> Function(String title, String content) onSaveEdit;
+  final Future<_RemoteResult> Function() onDelete;
+  final Future<_RemoteResult> Function() onClone;
+
+  const _NoteDetailSheet({
+    required this.scrollController,
+    required this.note,
+    required this.isMine,
+    required this.tag,
+    required this.likesCount,
+    required this.isLiked,
+    required this.isSaved,
+    required this.onToggleLike,
+    required this.onToggleSave,
+    required this.onShare,
+    required this.onFetchRemote,
+    required this.onSaveEdit,
+    required this.onDelete,
+    required this.onClone,
+  });
+
+  @override
+  State<_NoteDetailSheet> createState() => _NoteDetailSheetState();
+}
+
+class _NoteDetailSheetState extends State<_NoteDetailSheet> {
+  late String _title;
+  late String _content;
+  late int _likes;
+  late bool _liked;
+  late bool _saved;
+  bool _loadingRemote = true;
+  String? _driveWarning;
+  bool _editing = false;
+  bool _saving = false;
+  String? _editError;
+  bool _deleting = false;
+  bool _cloning = false;
+  TextEditingController? _titleCtrl;
+  TextEditingController? _contentCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _title = widget.note.title;
+    _content = widget.note.content;
+    _likes = widget.likesCount;
+    _liked = widget.isLiked;
+    _saved = widget.isSaved;
+    _loadRemote();
+  }
+
+  @override
+  void dispose() {
+    _disposeEditControllers();
+    super.dispose();
+  }
+
+  Future<void> _loadRemote() async {
+    final res = await widget.onFetchRemote();
+    if (!mounted) return;
+    setState(() {
+      _loadingRemote = false;
+      if (res.ok) {
+        final d = res.data ?? {};
+        final rc = d['content'];
+        if (rc is String) _content = rc;
+        final rt = d['title'];
+        if (rt is String && rt.isNotEmpty) _title = rt;
+      } else if (res.status == -1) {
+        // Offline: se mantiene el contenido local como fallback.
+      } else if (res.code == 'note_unavailable' || (res.message ?? '').contains('no disponible') || res.status == 404) {
+        _driveWarning = '⚠️ Nota no disponible en almacenamiento remoto (Google Drive)';
+      } else if (res.status == 403) {
+        _driveWarning = 'Acceso denegado a esta nota en el servidor.';
+      } else {
+        _driveWarning = 'No se pudo cargar la versión del servidor (${res.status}). Se muestra la copia local.';
+      }
+    });
+  }
+
+  /// Editar solo si la lectura remota no reportó error: con el banner de
+  /// advertencia visible (Drive no disponible) se bloquea con aviso.
+  /// Eliminar permanece habilitado para limpiar la referencia local.
+  void _onEditTap() {
+    if (_driveWarning != null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        backgroundColor: Colors.black,
+        content: Text('No se puede editar: la nota no existe en Google Drive.', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+      ));
+      return;
+    }
+    _startEdit();
+  }
+
+  void _startEdit() {
+    _titleCtrl = TextEditingController(text: _title);
+    _contentCtrl = TextEditingController(text: _content);
+    setState(() {
+      _editing = true;
+      _editError = null;
+    });
+  }
+
+  void _cancelEdit() {
+    _disposeEditControllers();
+    setState(() {
+      _editing = false;
+      _editError = null;
+    });
+  }
+
+  void _disposeEditControllers() {
+    _titleCtrl?.dispose();
+    _titleCtrl = null;
+    _contentCtrl?.dispose();
+    _contentCtrl = null;
+  }
+
+  Future<void> _confirmEdit() async {
+    final t = _titleCtrl?.text.trim() ?? '';
+    final c = _contentCtrl?.text ?? '';
+    if (t.isEmpty) {
+      setState(() => _editError = 'El título no puede estar vacío.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _editError = null;
+    });
+    final outcome = await widget.onSaveEdit(t, c);
+    if (!mounted) return;
+    setState(() => _saving = false);
+    switch (outcome) {
+      case _EditSaveOutcome.synced:
+        _title = t;
+        _content = c;
+        _disposeEditControllers();
+        _editing = false;
+        break;
+      case _EditSaveOutcome.forbidden:
+        _editError = 'Solo el autor puede editar esta nota.';
+        break;
+      case _EditSaveOutcome.unavailable:
+        _editError = '⚠️ Nota no disponible en almacenamiento remoto (Google Drive)';
+        break;
+      case _EditSaveOutcome.offline:
+        _editError = 'Sin conexión: se mantiene el contenido local.';
+        break;
+      case _EditSaveOutcome.error:
+        _editError = 'No se pudo guardar la edición en el servidor.';
+        break;
+    }
+  }
+
+  Future<void> _confirmDelete() async {
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (dctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide(color: Colors.black, width: 2)),
+        title: const Text('ELIMINAR NOTA', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: Colors.black)),
+        content: const Text('¿Eliminar esta nota? También se borrará de Google Drive.', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.black)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text('CANCELAR', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE63B2E), foregroundColor: Colors.white, shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero)),
+            onPressed: () => Navigator.pop(dctx, true),
+            child: const Text('ELIMINAR', style: TextStyle(fontWeight: FontWeight.w900)),
+          ),
+        ],
+      ),
+    );
+    if (sure != true || !mounted) return;
+    setState(() => _deleting = true);
+    final res = await widget.onDelete();
+    if (!mounted) return;
+    setState(() => _deleting = false);
+    if (res.ok) {
+      Navigator.pop(context);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        backgroundColor: Colors.black,
+        content: Text(res.status == -1 ? 'Sin conexión: no se pudo eliminar.' : 'No se pudo eliminar (${res.status}).', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+      ));
+    }
+  }
+
+  String _fmtDate(DateTime d) => '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+
+  String _cloneErrorText(_RemoteResult res) {
+    if (res.status == -1) return 'Sin conexión: no se pudo guardar la copia.';
+    if (res.message != null && res.message!.isNotEmpty) return res.message!;
+    return 'No se pudo guardar la copia (${res.status}).';
+  }
+
+  Future<void> _confirmClone() async {
+    setState(() => _cloning = true);
+    final res = await widget.onClone();
+    if (!mounted) return;
+    setState(() => _cloning = false);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      backgroundColor: Colors.black,
+      content: Text(
+        res.ok ? 'Copia guardada exitosamente en tu Drive' : _cloneErrorText(res),
+        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+      ),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: Colors.black, width: 2), left: BorderSide(color: Colors.black, width: 2), right: BorderSide(color: Colors.black, width: 2)), boxShadow: [BoxShadow(color: Colors.black, offset: Offset(6, 6))]),
+      child: Column(
+        children: [
+          Container(
+            margin: const EdgeInsets.only(top: 12),
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(0)),
+          ),
+          Expanded(
+            child: ListView(
+              controller: widget.scrollController,
+              padding: const EdgeInsets.all(20),
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(color: widget.note.visibility == 'public' ? const Color(0xFF0055FF) : const Color(0xFFFFCC00), border: Border.all(color: Colors.black, width: 1.5)),
+                      child: Text(widget.note.visibility.toUpperCase(), style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: widget.note.visibility == 'public' ? Colors.white : Colors.black)),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(color: const Color(0xFFF5F0E8), border: Border.all(color: Colors.black, width: 1.5)),
+                      child: Text(widget.tag, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Colors.black)),
+                    ),
+                    const Spacer(),
+                    Text(_fmtDate(widget.note.updatedAt), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF1A1A1A))),
+                  ],
+                ),
+                if (_loadingRemote) ...[
+                  const SizedBox(height: 12),
+                  const LinearProgressIndicator(color: Colors.black, backgroundColor: Color(0xFFF5F0E8)),
+                  const SizedBox(height: 4),
+                  const Text('Sincronizando con Drive…', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF555555))),
+                ],
+                if (_driveWarning != null) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(color: const Color(0xFFFFF3C4), border: Border.all(color: Colors.black, width: 1.5)),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.warning_amber_rounded, color: Colors.black, size: 18),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text(_driveWarning!, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Colors.black))),
+                      ],
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 16),
+                if (_editing) ...[
+                  TextField(
+                    controller: _titleCtrl,
+                    decoration: const InputDecoration(
+                      hintText: 'Título',
+                      filled: true,
+                      fillColor: Color(0xFFF5F0E8),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.zero, borderSide: BorderSide(color: Colors.black, width: 2)),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _contentCtrl,
+                    maxLines: 6,
+                    decoration: const InputDecoration(
+                      hintText: 'Contenido Markdown',
+                      filled: true,
+                      fillColor: Color(0xFFF5F0E8),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.zero, borderSide: BorderSide(color: Colors.black, width: 2)),
+                    ),
+                  ),
+                  if (_editError != null) ...[
+                    const SizedBox(height: 8),
+                    Text(_editError!, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Color(0xFFE63B2E))),
+                  ],
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextButton(onPressed: _saving ? null : _cancelEdit, child: const Text('CANCELAR', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800))),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.black, foregroundColor: Colors.white, shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero)),
+                          onPressed: _saving ? null : _confirmEdit,
+                          child: Text(_saving ? 'GUARDANDO…' : 'GUARDAR', style: const TextStyle(fontWeight: FontWeight.w900)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ] else ...[
+                  Text(_title, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Colors.black, height: 1.2)),
+                  const SizedBox(height: 12),
+                  Container(height: 2, color: Colors.black),
+                  const SizedBox(height: 16),
+                  Text(_content, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.black, height: 1.5)),
+                ],
+                const SizedBox(height: 24),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _ActionButton(
+                      icon: Icons.favorite_rounded,
+                      label: '$_likes',
+                      isActive: _liked,
+                      activeColor: const Color(0xFFE63B2E),
+                      onTap: () {
+                        setState(() {
+                          _liked = !_liked;
+                          _likes += _liked ? 1 : -1;
+                        });
+                        widget.onToggleLike();
+                      },
+                    ),
+                    _ActionButton(
+                      icon: Icons.bookmark_rounded,
+                      label: 'Guardar',
+                      isActive: _saved,
+                      activeColor: const Color(0xFFFFCC00),
+                      onTap: () {
+                        setState(() => _saved = !_saved);
+                        widget.onToggleSave();
+                      },
+                    ),
+                    _ActionButton(icon: Icons.share_rounded, label: 'Compartir', onTap: widget.onShare),
+                    if (!widget.isMine) ...[
+                      _ActionButton(icon: Icons.copy_rounded, label: _cloning ? '…' : 'Guardar copia', onTap: _cloning ? () {} : _confirmClone),
+                    ],
+                    if (widget.isMine && !_editing) ...[
+                      _ActionButton(icon: Icons.edit_rounded, label: 'Editar', onTap: _onEditTap),
+                      _ActionButton(icon: Icons.delete_rounded, label: _deleting ? '…' : 'Eliminar', onTap: _deleting ? () {} : _confirmDelete),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
