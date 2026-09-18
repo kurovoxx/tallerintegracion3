@@ -35,9 +35,6 @@ services:
       SUPABASE_URL: https://cdzzcawgcbfdkwqyatex.supabase.co
       DISCOVERY_URL: https://cdzzcawgcbfdkwqyatex.supabase.co/auth/v1/.well-known/jwks.json
       INTERNAL_API_KEY: dev-internal-key-change-me
-      GOOGLE_CLIENT_ID: http://920602669668-abfen7v0mh23d2gsebvot0r413j90gnh.apps.googleusercontent.com/
-      GOOGLE_CLIENT_SECRET: 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
-      GOOGLE_REDIRECT_URI:
     depends_on:
       postgres:
         condition: service_healthy
