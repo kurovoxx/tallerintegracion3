@@ -905,6 +905,192 @@ func TestListGroupNotesOrdering(t *testing.T) {
 	_ = noteStore
 }
 
+// --- Suite Drive integration: ciclo de vida POST/PATCH/DELETE/GET/copy ---
+
+func TestDriveCreateSyncsPostgresAndDrive(t *testing.T) {
+	svc, driveMock, noteStore, _, _, _, _, _ := newTestService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	note, err := svc.Create(ctx, author, "Drive sync", nil, "private", stringPtr("# md body"), nil)
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	if note.ExternalFileID == nil || *note.ExternalFileID == "" {
+		t.Fatal("drive_file_id (external_file_id) debe persistirse en Postgres")
+	}
+	stored, _ := noteStore.GetByID(ctx, note.ID)
+	if stored == nil || stored.ExternalFileID == nil || *stored.ExternalFileID != *note.ExternalFileID {
+		t.Fatal("Postgres no guarda el drive_file_id devuelto por Drive")
+	}
+	if !driveMock.HasFile(*note.ExternalFileID) {
+		t.Fatal("Drive debe contener el .md creado")
+	}
+	body, _ := driveMock.GetFileContent(ctx, author, *note.ExternalFileID)
+	if body != "# md body" {
+		t.Fatalf("contenido Drive mismatch: %q", body)
+	}
+}
+
+func TestDriveUpdateSyncsContent(t *testing.T) {
+	svc, driveMock, _, _, _, _, _, _ := newTestService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	note, _ := svc.Create(ctx, author, "Editable", nil, "private", stringPtr("v1"), nil)
+	newBody := "v2 actualizado"
+	updated, err := svc.Update(ctx, author, note.ID, stringPtr("Editable v2"), nil, &newBody)
+	if err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+	if updated.Title != "Editable v2" {
+		t.Fatalf("título PG no actualizado")
+	}
+	driveBody, _ := driveMock.GetFileContent(ctx, author, *note.ExternalFileID)
+	if driveBody != newBody {
+		t.Fatalf("Drive no sincronizado: got %q", driveBody)
+	}
+	got, _ := svc.Get(ctx, author, note.ID)
+	if got.Content == nil || *got.Content != newBody {
+		t.Fatalf("GET híbrido debe devolver contenido de Drive")
+	}
+}
+
+func TestDriveUpdateRecreatesMissingFile(t *testing.T) {
+	svc, driveMock, noteStore, _, _, _, _, _ := newTestService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	note, _ := svc.Create(ctx, author, "Legacy sin file", nil, "private", stringPtr("orig"), nil)
+	// Simular nota legacy sin drive_file_id
+	stored, _ := noteStore.GetByID(ctx, note.ID)
+	stored.ExternalFileID = nil
+	noteStore.mu.Lock()
+	noteStore.notes[note.ID].ExternalFileID = nil
+	noteStore.mu.Unlock()
+	newBody := "contenido recuperado"
+	updated, err := svc.Update(ctx, author, note.ID, nil, nil, &newBody)
+	if err != nil {
+		t.Fatalf("update self-healing failed: %v", err)
+	}
+	if updated.ExternalFileID == nil || *updated.ExternalFileID == "" {
+		t.Fatal("update debe crear drive_file_id cuando falta")
+	}
+	if !driveMock.HasFile(*updated.ExternalFileID) {
+		t.Fatal("Drive debe contener el archivo recreado")
+	}
+	got, _ := svc.Get(ctx, author, note.ID)
+	if got.Content == nil || *got.Content != newBody {
+		t.Fatalf("contenido recreado mismatch: %v", got.Content)
+	}
+	_ = stored
+}
+
+func TestDriveUpdateNotFoundMapsNoteUnavailable(t *testing.T) {
+	svc, driveMock, _, _, _, _, _, _ := newTestService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	note, _ := svc.Create(ctx, author, "Borrada externa", nil, "private", stringPtr("x"), nil)
+	driveMock.InjectGetError(*note.ExternalFileID, &drive.DriveError{Code: 404, Message: "Nota no disponible en almacenamiento remoto"})
+	// Forzar que UpdateFile falle con 404 eliminando el archivo del mock y usando otro owner path:
+	// Mock UpdateFile devuelve 404 si el archivo no existe.
+	// Eliminamos directamente vía DeleteFile con owner correcto y luego intentamos update.
+	_ = driveMock.DeleteFile(ctx, author, *note.ExternalFileID)
+	newBody := "intento"
+	_, err := svc.Update(ctx, author, note.ID, nil, nil, &newBody)
+	if err == nil {
+		t.Fatal("esperaba note_unavailable al actualizar archivo borrado en Drive")
+	}
+	se, ok := err.(*ServiceError)
+	if !ok || se.Code != "note_unavailable" {
+		t.Fatalf("esperaba note_unavailable, got %v", err)
+	}
+}
+
+func TestDriveDeleteCascadesDriveAndPostgres(t *testing.T) {
+	svc, driveMock, noteStore, _, _, _, _, _ := newTestService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	note, _ := svc.Create(ctx, author, "Eliminar cascada", nil, "private", stringPtr("bye"), nil)
+	fileID := *note.ExternalFileID
+	if err := svc.Delete(ctx, author, note.ID); err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+	if driveMock.HasFile(fileID) {
+		t.Fatal("Drive debe eliminar el archivo en cascada")
+	}
+	if stored, _ := noteStore.GetByID(ctx, note.ID); stored != nil {
+		t.Fatal("Postgres debe eliminar la metadata")
+	}
+}
+
+func TestDriveGetMaps403And404ToNoteUnavailable(t *testing.T) {
+	for _, code := range []int{403, 404} {
+		svc, driveMock, _, _, _, _, _, _ := newTestService()
+		ctx := context.Background()
+		author := uuid.NewString()
+		note, _ := svc.Create(ctx, author, "Híbrida", nil, "public", stringPtr("c"), nil)
+		driveMock.InjectGetError(*note.ExternalFileID, &drive.DriveError{Code: code, Message: "Nota no disponible en almacenamiento remoto"})
+		_, err := svc.Get(ctx, author, note.ID)
+		if err == nil {
+			t.Fatalf("código %d: esperaba error", code)
+		}
+		se, ok := err.(*ServiceError)
+		if !ok {
+			t.Fatalf("código %d: esperaba ServiceError got %T", code, err)
+		}
+		if se.Code != "note_unavailable" {
+			t.Fatalf("código %d: esperaba note_unavailable got %q", code, se.Code)
+		}
+		if !strings.Contains(se.Message, "Nota no disponible") {
+			t.Fatalf("código %d: payload debe ser informativo, got %q", code, se.Message)
+		}
+	}
+}
+
+func TestDriveCopyCreatesIndependentFile(t *testing.T) {
+	svc, driveMock, _, _, _, _, _, _ := newTestService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	copier := uuid.NewString()
+	note, _ := svc.Create(ctx, author, "Para copiar", nil, "public", stringPtr("original md"), nil)
+	origID := *note.ExternalFileID
+	cloned, err := svc.Copy(ctx, copier, note.ID)
+	if err != nil {
+		t.Fatalf("copy failed: %v", err)
+	}
+	if cloned.UserID != copier {
+		t.Fatalf("autor del clon debe ser quien copia")
+	}
+	if cloned.ExternalFileID == nil || *cloned.ExternalFileID == origID {
+		t.Fatal("clon debe tener nuevo drive_file_id independiente")
+	}
+	if !driveMock.HasFile(*cloned.ExternalFileID) {
+		t.Fatal("Drive del copiador debe contener la copia")
+	}
+	body, _ := driveMock.GetFileContent(ctx, copier, *cloned.ExternalFileID)
+	if body != "original md" {
+		t.Fatalf("contenido clonado mismatch: %q", body)
+	}
+}
+
+func TestDriveCopyMissingSourceMapsNotFound(t *testing.T) {
+	svc, driveMock, _, _, _, _, _, _ := newTestService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	copier := uuid.NewString()
+	note, _ := svc.Create(ctx, author, "Origen frágil", nil, "public", stringPtr("x"), nil)
+	_ = driveMock.DeleteFile(ctx, author, *note.ExternalFileID)
+	_, err := svc.Copy(ctx, copier, note.ID)
+	if err == nil {
+		t.Fatal("esperaba error al copiar origen borrado en Drive")
+	}
+	se, ok := err.(*ServiceError)
+	if !ok {
+		t.Fatalf("esperaba ServiceError got %T", err)
+	}
+	if se.Code != "not_found" && se.Code != "note_unavailable" {
+		t.Fatalf("código semántico esperado not_found/note_unavailable, got %q", se.Code)
+	}
+}
+
 func parseTime(s string) time.Time {
 	t, _ := time.Parse(time.RFC3339, s)
 	return t
