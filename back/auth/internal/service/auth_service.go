@@ -35,29 +35,15 @@ func normalizeOptional(s *string) *string {
 	return &v
 }
 
-type UserRepository interface {
-	CreateUser(ctx context.Context, email, passwordHash, displayName string, photoURL, phone, institution, description, visibility *string) (*model.User, error)
-	GetByEmail(ctx context.Context, email string) (*model.User, error)
-	ExistsByEmail(ctx context.Context, email string) (bool, error)
-}
-
-type RefreshTokenRepository interface {
-	Create(ctx context.Context, userID string, tokenHash string, expiresAt time.Time) (string, error)
-	CountByUser(ctx context.Context, userID string) (int, error)
-	FindByRawToken(ctx context.Context, raw string) (*repository.RefreshToken, error)
-	Revoke(ctx context.Context, id string) error
-	Rotate(ctx context.Context, oldID, userID, newHash string, newExpires time.Time) (string, error)
-}
-
 type AuthService struct {
-	users         UserRepository
-	refreshTokens RefreshTokenRepository
+	users         *repository.UserRepository
+	refreshTokens *repository.RefreshTokenRepository
 	jwt           *JWTService
 	cfgAccessExp  int // segundos
 	cfgRefreshExp int // segundos
 }
 
-func NewAuthService(users UserRepository, refreshTokens RefreshTokenRepository, jwtService *JWTService, accessExp, refreshExp int) *AuthService {
+func NewAuthService(users *repository.UserRepository, refreshTokens *repository.RefreshTokenRepository, jwtService *JWTService, accessExp, refreshExp int) *AuthService {
 	return &AuthService{
 		users:         users,
 		refreshTokens: refreshTokens,
@@ -68,52 +54,32 @@ func NewAuthService(users UserRepository, refreshTokens RefreshTokenRepository, 
 }
 
 // Constructor legacy para compatibilidad con tests que solo usan register sin JWT
-func NewAuthServiceLegacy(users UserRepository) *AuthService {
+func NewAuthServiceLegacy(users *repository.UserRepository) *AuthService {
 	return &AuthService{users: users}
 }
 
-// Register implementa POST /auth/register según contrato vigente {email,password} (agentApiContract.md:13).
-// - Valida email y password.
-// - display_name es NOT NULL en identity.profiles (agentSql.md:40) pero el contrato ya no lo recibe.
-//   Para mantener la creación transaccional sin inventar un flujo nuevo, se deriva del email si no viene:
-//   local-part del email, trim, fallback "Usuario", truncado a 100. Si el cliente lo envía (compatibilidad), se valida 1..100.
-// - Hashea con bcrypt antes de persistir.
-// - Inserta en identity.users + identity.profiles (visibility private por defecto, opcionales null).
-func (s *AuthService) Register(ctx context.Context, email, password string, displayName *string, photoURL, phone, institution, description, visibility *string) (*model.User, error) {
+// Register implementa POST /auth/register según contrato + extensión display_name y campos opcionales nulables:
+// - Valida email, password, role, display_name en Service para dar 400 legible
+// - Hashea con bcrypt antes de persistir
+// - Inserta en identity.users + identity.profiles (visibility private por defecto, opcionales null)
+func (s *AuthService) Register(ctx context.Context, email, password, role, displayName string, photoURL, phone, institution, description, visibility *string) (*model.User, error) {
 	email = strings.TrimSpace(email)
+	displayName = strings.TrimSpace(displayName)
 	// Validar email
 	if !utils.ValidateEmail(email) {
 		return nil, NewServiceError(utils.ErrInvalidEmail)
+	}
+	// Validar role
+	if !model.IsValidRole(role) {
+		return nil, NewServiceError(utils.ErrInvalidRole)
 	}
 	// Validar password
 	if !utils.ValidatePassword(password) {
 		return nil, NewServiceError(utils.ErrWeakPassword)
 	}
-	// Resolver display_name: si no viene o vacío, derivar del email (coherente con NOT NULL y sin agregar campo obligatorio)
-	var displayNameVal string
-	if displayName != nil {
-		v := strings.TrimSpace(*displayName)
-		if v != "" {
-			if len(v) > 100 {
-				return nil, NewServiceError(utils.ErrInvalidDisplayName)
-			}
-			displayNameVal = v
-		}
-	}
-	if displayNameVal == "" {
-		// Derivar del email: local-part antes de @
-		local := email
-		if idx := strings.Index(email, "@"); idx > 0 {
-			local = email[:idx]
-		}
-		local = strings.TrimSpace(local)
-		if local == "" {
-			local = "Usuario"
-		}
-		if len(local) > 100 {
-			local = local[:100]
-		}
-		displayNameVal = local
+	// Validar display_name (requerido, no derivado del email)
+	if displayName == "" || len(displayName) > 255 {
+		return nil, NewServiceError(utils.ErrInvalidDisplayName)
 	}
 	// Validar visibility si viene (puede ser null/omitido → private)
 	if visibility != nil {
@@ -136,7 +102,7 @@ func (s *AuthService) Register(ctx context.Context, email, password string, disp
 	}
 
 	// Persistir (Repository es única capa que toca SQL, tx atómica user+profile)
-	user, err := s.users.CreateUser(ctx, email, string(hash), displayNameVal, photoURL, phone, institution, description, visibility)
+	user, err := s.users.CreateUser(ctx, email, string(hash), role, displayName, photoURL, phone, institution, description, visibility)
 	if err != nil {
 		if strings.Contains(err.Error(), "email_taken") {
 			return nil, NewServiceError(utils.ErrEmailTaken)
@@ -171,8 +137,9 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*Login
 	if s.jwt == nil {
 		return nil, &ServiceError{Code: "internal_error", Message: "jwt service no configurado"}
 	}
-	// Generar access token (JWT) sin role global — solo user_id + iss/aud/iat/exp
-	jwtRes, err := s.jwt.GenerarAccessToken(UsuarioAutenticado{ID: user.ID})
+	// Generar access token (JWT) usando lógica existente standalone integrada
+	// masterprompt 3.1: integrar función existente, no reescribir
+	jwtRes, err := s.jwt.GenerarAccessToken(UsuarioAutenticado{ID: user.ID, Role: user.Role})
 	if err != nil {
 		return nil, err
 	}
@@ -196,92 +163,4 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*Login
 		RefreshToken: raw,
 		ExpiresIn:    s.cfgAccessExp,
 	}, nil
-}
-
-type RefreshResult struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    int    `json:"expires_in"`
-}
-
-// Refresh valida el refresh_token (hash bcrypt, no revocado, no expirado), lo rota y emite nuevo access_token.
-// Contrato: POST /auth/refresh {refresh_token} -> 200 {access_token, expires_in} + nuevo refresh_token por rotación, 401 si revocado/expirado/inexistente.
-func (s *AuthService) Refresh(ctx context.Context, rawToken string) (*RefreshResult, error) {
-	rawToken = strings.TrimSpace(rawToken)
-	if rawToken == "" {
-		return nil, NewServiceError(utils.ErrInvalidToken)
-	}
-	if s.jwt == nil {
-		return nil, &ServiceError{Code: "internal_error", Message: "jwt service no configurado"}
-	}
-	// Localizar fila por bcrypt (sin índice SHA256)
-	rt, err := s.refreshTokens.FindByRawToken(ctx, rawToken)
-	if err != nil {
-		return nil, err
-	}
-	if rt == nil {
-		return nil, NewServiceError(utils.ErrInvalidToken)
-	}
-	if rt.Revoked {
-		return nil, NewServiceError(utils.ErrInvalidToken)
-	}
-	if time.Now().After(rt.ExpiresAt) {
-		return nil, NewServiceError(utils.ErrTokenExpired)
-	}
-	// Emitir nuevo access_token para el user_id del refresh_token
-	jwtRes, err := s.jwt.GenerarAccessToken(UsuarioAutenticado{ID: rt.UserID})
-	if err != nil {
-		return nil, err
-	}
-	// Generar nuevo refresh_token y rotar (revocar viejo + crear nuevo en tx)
-	newRaw, newHash, err := repository.GenerateRawToken()
-	if err != nil {
-		return nil, err
-	}
-	newExpires := time.Now().Add(time.Duration(s.cfgRefreshExp) * time.Second)
-	if _, err := s.refreshTokens.Rotate(ctx, rt.ID, rt.UserID, newHash, newExpires); err != nil {
-		// Mapear errores de Rotate a códigos de dominio
-		msg := err.Error()
-		if strings.Contains(msg, "revoked") {
-			return nil, NewServiceError(utils.ErrInvalidToken)
-		}
-		if strings.Contains(msg, "expired") {
-			return nil, NewServiceError(utils.ErrTokenExpired)
-		}
-		if strings.Contains(msg, "not_found") {
-			return nil, NewServiceError(utils.ErrInvalidToken)
-		}
-		return nil, err
-	}
-	return &RefreshResult{
-		AccessToken:  jwtRes.AccessToken,
-		RefreshToken: newRaw,
-		ExpiresIn:    s.cfgAccessExp,
-	}, nil
-}
-
-// Logout marca revoked=true para el refresh_token dado. Idempotente: activo, ya revocado, expirado o inexistente → 204.
-// No genera tokens. Usa FindByRawToken + Revoke; nunca revela existencia.
-func (s *AuthService) Logout(ctx context.Context, rawToken string) error {
-	rawToken = strings.TrimSpace(rawToken)
-	if rawToken == "" {
-		return NewServiceError("bad_request")
-	}
-	// Buscar por bcrypt; si no se encuentra, es idempotente (204)
-	rt, err := s.refreshTokens.FindByRawToken(ctx, rawToken)
-	if err != nil {
-		return err
-	}
-	if rt == nil {
-		return nil
-	}
-	// Si ya está revocado, sigue siendo 204
-	if rt.Revoked {
-		return nil
-	}
-	// Marcar revocado (incluso si expirado, se revoca igual)
-	if err := s.refreshTokens.Revoke(ctx, rt.ID); err != nil {
-		return err
-	}
-	return nil
 }
