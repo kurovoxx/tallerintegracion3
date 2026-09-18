@@ -4,7 +4,6 @@ import '../../core/common_widgets.dart';
 import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
 import '../auth/login_screen.dart';
-import '../auth/google_drive_service.dart';
 
 const String kSubjectApproved = 'approved';
 const String kSubjectInProgress = 'in_progress';
@@ -207,37 +206,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
       mainAxisSize: MainAxisSize.min,
       children: [
         _SquareIconButton(icon: Icons.share_rounded, tooltip: 'Compartir perfil', onPressed: _handleShare),
-        const SizedBox(width: 8),
-        _SquareIconButton(
-          icon: Icons.cloud_done_rounded,
-          tooltip: 'Conectar Drive (prueba real)',
-          onPressed: () async {
-            try {
-              final code = await GoogleDriveService().getServerAuthCode();
-              if (code == null) {
-                if (!context.mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cancelado')));
-                return;
-              }
-              final token = SessionManager.token;
-              if (token == null) {
-                if (!context.mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No hay sesión')));
-                return;
-              }
-              final ok = await GoogleDriveService().connectDrive(
-                backendBaseUrl: 'http://localhost:8081',
-                appAccessToken: token,
-                oauthCode: code,
-              );
-              if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(ok ? 'Drive conectado (200)' : 'Falló')));
-            } catch (e) {
-              if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-            }
-          },
-        ),
         const SizedBox(width: 8),
         _SquareIconButton(icon: Icons.logout_rounded, tooltip: 'Cerrar sesión', onPressed: _handleLogout),
       ],
