@@ -13,7 +13,7 @@ class TallerIntegracionApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Gestión de Ramos',
+      title: 'Sigma Academy',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
       home: const LoginScreen(),

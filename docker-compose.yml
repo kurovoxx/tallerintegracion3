@@ -1,0 +1,110 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ti3-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: esomeprazol2002
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro,z
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - ti3-net
+
+  auth:
+    build:
+      context: ./back/auth
+      dockerfile: Dockerfile
+    container_name: ti3-auth
+    ports:
+      - "8081:8080" # host 8080 ocupado por WordPress/nginx -> mapea 8081
+    environment:
+      DATABASE_URL: postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable
+      DIRECT_URL: postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable
+      JWT_SECRET: 5987f6ae236ec37e229aaf3bcbd488b0ca3aa8c1c980a3a699ac47e42402e41f
+      JWT: 961e9b2e-0333-4ec9-aadb-72e95ca06e4d
+      PORT: 8080
+      SUPABASE_URL: https://cdzzcawgcbfdkwqyatex.supabase.co
+      DISCOVERY_URL: https://cdzzcawgcbfdkwqyatex.supabase.co/auth/v1/.well-known/jwks.json
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ti3-net
+    restart: unless-stopped
+
+  notes:
+    build:
+      context: ./back/notes
+      dockerfile: Dockerfile
+    container_name: ti3-notes
+    ports:
+      - "8082:8082"
+    environment:
+      DATABASE_URL: postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable
+      DIRECT_URL: postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable
+      JWT_SECRET: 5987f6ae236ec37e229aaf3bcbd488b0ca3aa8c1c980a3a699ac47e42402e41f
+      JWT: 961e9b2e-0333-4ec9-aadb-72e95ca06e4d
+      PORT: 8082
+      NOTES_PORT: 8082
+      STORAGE_MODE: mock
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ti3-net
+    restart: unless-stopped
+
+  social:
+    build:
+      context: ./back/social
+      dockerfile: Dockerfile
+    container_name: ti3-social
+    ports:
+      - "8083:8083"
+    environment:
+      DATABASE_URL: postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable
+      DIRECT_URL: postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable
+      JWT_SECRET: 5987f6ae236ec37e229aaf3bcbd488b0ca3aa8c1c980a3a699ac47e42402e41f
+      JWT: 961e9b2e-0333-4ec9-aadb-72e95ca06e4d
+      PORT: 8083
+      SOCIAL_PORT: 8083
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ti3-net
+    restart: unless-stopped
+
+  # Frontend Flutter Web (nginx) - para linux/windows nativo usa scripts/run-front.sh
+  front:
+    build:
+      context: ./front
+      dockerfile: Dockerfile
+      args:
+        BASE_URL: http://localhost:8081
+    container_name: ti3-front
+    ports:
+      - "8085:80"
+    depends_on:
+      - auth
+      - notes
+      - social
+    networks:
+      - ti3-net
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+networks:
+  ti3-net:
+    driver: bridge
