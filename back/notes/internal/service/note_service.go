@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 
@@ -80,8 +81,12 @@ type SocialResolver interface {
 
 type noopSocialResolver struct{}
 
-func (n *noopSocialResolver) IsMember(ctx context.Context, userID, groupID string) (bool, error) { return true, nil }
-func (n *noopSocialResolver) IsAdmin(ctx context.Context, userID, groupID string) (bool, error)  { return false, nil }
+func (n *noopSocialResolver) IsMember(ctx context.Context, userID, groupID string) (bool, error) {
+	return true, nil
+}
+func (n *noopSocialResolver) IsAdmin(ctx context.Context, userID, groupID string) (bool, error) {
+	return false, nil
+}
 func (n *noopSocialResolver) GetFollowersCount(ctx context.Context, userID string) (int, error) {
 	return 0, nil
 }
@@ -94,6 +99,7 @@ type NoteService struct {
 	shared      SharedStore
 	drive       drive.Client
 	social      SocialResolver
+	members     GroupMemberDirectory
 }
 
 func NewNoteService(notes NoteStore, attachments AttachmentStore, saved SavedStore, likes LikeStore, shared SharedStore, d drive.Client, social SocialResolver) *NoteService {
@@ -111,7 +117,18 @@ func NewNoteService(notes NoteStore, attachments AttachmentStore, saved SavedSto
 		shared:      shared,
 		drive:       d,
 		social:      social,
+		members:     NewNoopMemberDirectory(),
 	}
+}
+
+// SetMemberDirectory inyecta el directorio de correos de miembros usado por el
+// share restricted. El adaptador real (gRPC a Social/Identity) se conectará
+// aquí; por defecto es noop (grupo sin miembros).
+func (s *NoteService) SetMemberDirectory(d GroupMemberDirectory) {
+	if d == nil {
+		d = NewNoopMemberDirectory()
+	}
+	s.members = d
 }
 
 // --- helpers validación ---
@@ -618,12 +635,37 @@ func (s *NoteService) Share(ctx context.Context, ownerID string, noteID string, 
 	if err != nil {
 		return nil, &ServiceError{Code: utils.ErrInternal, Message: err.Error()}
 	}
-	// si access_mode=restricted, otorgar permisos en Drive a miembros (best-effort, no bloquea)
-	if accessMode == "restricted" && note.ExternalFileID != nil {
-		// En real, iterar miembros y GrantPermission; mock no-op
-		_ = s.drive.GrantPermission(ctx, ownerID, *note.ExternalFileID, "member@example.com", "reader")
+	// access_mode=link no crea permisos nominales en Drive.
+	if accessMode == "restricted" {
+		s.grantRestrictedPermissions(ctx, ownerID, note, groupID)
 	}
 	return shared, nil
+}
+
+// grantRestrictedPermissions otorga permiso reader en Drive a cada miembro del
+// grupo de forma best-effort: si un permiso falla se registra el error (sin
+// secretos) y se continúa con los demás; nunca revierte la fila de
+// notes.shared_notes ya creada. Los correos se normalizan (trim, lowercase,
+// sin vacíos ni duplicados); si el correo del autor viene en el listado queda
+// incluido una sola vez (ya es dueño del archivo, el permiso es inofensivo).
+func (s *NoteService) grantRestrictedPermissions(ctx context.Context, ownerID string, note *model.Note, groupID string) {
+	if note.ExternalFileID == nil || strings.TrimSpace(*note.ExternalFileID) == "" {
+		return
+	}
+	dir := s.members
+	if dir == nil {
+		dir = NewNoopMemberDirectory()
+	}
+	emails, err := dir.ListMemberEmails(ctx, groupID)
+	if err != nil {
+		log.Printf("notes: share restricted nota %s: no se pudieron obtener emails del grupo (se mantiene el share): %v", note.ID, err)
+		return
+	}
+	for _, email := range NormalizeEmails(emails) {
+		if err := s.drive.GrantPermission(ctx, ownerID, *note.ExternalFileID, email, "reader"); err != nil {
+			log.Printf("notes: share restricted nota %s: no se pudo otorgar permiso a %s: %v", note.ID, email, err)
+		}
+	}
 }
 
 func (s *NoteService) Unshare(ctx context.Context, userID string, sharedNoteID string) error {
