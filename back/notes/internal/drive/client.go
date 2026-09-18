@@ -11,7 +11,7 @@ import (
 
 // DriveError representa error de la API de Drive con código HTTP semántico.
 type DriveError struct {
-	Code    int    // 403, 404, 413, 500
+	Code    int // 403, 404, 413, 500
 	Message string
 }
 
@@ -56,6 +56,13 @@ type Client interface {
 	RevokeAllPermissions(ctx context.Context, ownerUserID string, fileID string) error
 }
 
+// GrantCall registra un intento de GrantPermission (observable en tests).
+type GrantCall struct {
+	FileID string
+	Email  string
+	Role   string
+}
+
 // MockClient implementación en memoria para tests y modo StorageMode=mock.
 type MockClient struct {
 	mu    sync.RWMutex
@@ -66,6 +73,9 @@ type MockClient struct {
 	UpdateErr error
 	DeleteErr error
 	CopyErr   error
+	// GrantCalls registra cada GrantPermission; GrantErr inyecta fallo por email.
+	GrantCalls []GrantCall
+	GrantErr   map[string]error // email normalizado o crudo -> error
 }
 
 type mockFile struct {
@@ -199,7 +209,14 @@ func (m *MockClient) CopyFile(ctx context.Context, srcUserID string, srcFileID s
 }
 
 func (m *MockClient) GrantPermission(ctx context.Context, ownerUserID string, fileID string, granteeEmail string, role string) error {
-	// mock no-op
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.GrantCalls = append(m.GrantCalls, GrantCall{FileID: fileID, Email: granteeEmail, Role: role})
+	if m.GrantErr != nil {
+		if err, ok := m.GrantErr[granteeEmail]; ok && err != nil {
+			return err
+		}
+	}
 	return nil
 }
 func (m *MockClient) RevokePermission(ctx context.Context, ownerUserID string, fileID string, granteeEmail string) error {
@@ -207,6 +224,16 @@ func (m *MockClient) RevokePermission(ctx context.Context, ownerUserID string, f
 }
 func (m *MockClient) RevokeAllPermissions(ctx context.Context, ownerUserID string, fileID string) error {
 	return nil
+}
+
+// InjectGrantError inyecta un fallo de GrantPermission para un email dado.
+func (m *MockClient) InjectGrantError(email string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.GrantErr == nil {
+		m.GrantErr = make(map[string]error)
+	}
+	m.GrantErr[email] = err
 }
 
 // Helpers para tests: inyectar errores específicos por fileID

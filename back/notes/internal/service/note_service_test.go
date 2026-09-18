@@ -113,7 +113,9 @@ type failingNoteStore struct{ err error }
 func (f *failingNoteStore) Create(ctx context.Context, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string) (*model.Note, error) {
 	return nil, f.err
 }
-func (f *failingNoteStore) GetByID(ctx context.Context, id string) (*model.Note, error) { return nil, nil }
+func (f *failingNoteStore) GetByID(ctx context.Context, id string) (*model.Note, error) {
+	return nil, nil
+}
 func (f *failingNoteStore) ListByUser(ctx context.Context, userID, cursor string, limit int) ([]*model.Note, string, error) {
 	return nil, "", nil
 }
@@ -124,7 +126,9 @@ func (f *failingNoteStore) Delete(ctx context.Context, id string) error { return
 func (f *failingNoteStore) IncrementLikes(ctx context.Context, noteID string, delta int) error {
 	return nil
 }
-func (f *failingNoteStore) UpdateExternalFileID(ctx context.Context, noteID, fileID string) error { return nil }
+func (f *failingNoteStore) UpdateExternalFileID(ctx context.Context, noteID, fileID string) error {
+	return nil
+}
 
 func TestGetWithContent(t *testing.T) {
 	svc, _, _, _, _, _, _, _ := newTestService()
@@ -1104,3 +1108,359 @@ func idToTitle(store *MemoryNoteStore, id string) string {
 }
 
 func stringPtr(s string) *string { return &s }
+
+// --- Etapa feat/notes-access-restricted-mode: GetAccess endurecido ---
+
+func TestGetAccessAuthor(t *testing.T) {
+	svc, _, _, _, _, _, _, _ := newTestService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	note, _ := svc.Create(ctx, author, "Autor access", nil, "private", stringPtr("c"), nil)
+	access, err := svc.GetAccess(ctx, author, note.ID)
+	if err != nil {
+		t.Fatalf("author GetAccess failed: %v", err)
+	}
+	if access["can_read"] != true {
+		t.Fatalf("author can_read debe ser true")
+	}
+	if access["access_mode"] != "private" {
+		t.Fatalf("author access_mode debe ser su visibility (private), got %v", access["access_mode"])
+	}
+	url, _ := access["drive_url"].(string)
+	if !strings.Contains(url, *note.ExternalFileID) {
+		t.Fatalf("drive_url debe contener external_file_id, got %q", url)
+	}
+}
+
+func TestGetAccessNotFound(t *testing.T) {
+	svc, _, _, _, _, _, _, _ := newTestService()
+	ctx := context.Background()
+	user := uuid.NewString()
+	if _, err := svc.GetAccess(ctx, user, "no-uuid"); err == nil {
+		t.Fatal("UUID inválido debe dar 404")
+	} else if se := err.(*ServiceError); se.Code != "not_found" {
+		t.Fatalf("esperaba not_found, got %q", se.Code)
+	}
+	if _, err := svc.GetAccess(ctx, user, uuid.NewString()); err == nil {
+		t.Fatal("nota inexistente debe dar 404")
+	} else if se := err.(*ServiceError); se.Code != "not_found" {
+		t.Fatalf("esperaba not_found, got %q", se.Code)
+	}
+}
+
+func TestGetAccessLink(t *testing.T) {
+	svc, _, _, _, _, _, _, social := newTestService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	outsider := uuid.NewString()
+	groupID := uuid.NewString()
+	social.AddAdmin(author, groupID)
+	note, _ := svc.Create(ctx, author, "Link access", nil, "private", stringPtr("link"), nil)
+	if _, err := svc.Share(ctx, author, note.ID, groupID, "link"); err != nil {
+		t.Fatalf("share link failed: %v", err)
+	}
+	access, err := svc.GetAccess(ctx, outsider, note.ID)
+	if err != nil {
+		t.Fatalf("outsider con link debe leer: %v", err)
+	}
+	if access["can_read"] != true || access["access_mode"] != "link" {
+		t.Fatalf("esperaba can_read=true access_mode=link, got %v", access)
+	}
+}
+
+func TestGetAccessRestrictedMemberAndOutsider(t *testing.T) {
+	svc, _, _, _, _, _, _, social := newTestService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	member := uuid.NewString()
+	outsider := uuid.NewString()
+	groupID := uuid.NewString()
+	social.AddAdmin(author, groupID)
+	social.AddMember(member, groupID)
+	note, _ := svc.Create(ctx, author, "Restricted access", nil, "private", stringPtr("r"), nil)
+	// privada sin compartir para no autor -> 403 (no 404)
+	if _, err := svc.GetAccess(ctx, member, note.ID); err == nil {
+		t.Fatal("miembro sin share debe 403")
+	} else if se := err.(*ServiceError); se.Code != "forbidden" {
+		t.Fatalf("esperaba forbidden, got %q", se.Code)
+	}
+	if _, err := svc.Share(ctx, author, note.ID, groupID, "restricted"); err != nil {
+		t.Fatalf("share restricted failed: %v", err)
+	}
+	access, err := svc.GetAccess(ctx, member, note.ID)
+	if err != nil {
+		t.Fatalf("miembro restricted debe leer: %v", err)
+	}
+	if access["access_mode"] != "restricted" {
+		t.Fatalf("esperaba access_mode=restricted, got %v", access["access_mode"])
+	}
+	if _, err := svc.GetAccess(ctx, outsider, note.ID); err == nil {
+		t.Fatal("outsider restricted debe 403")
+	} else if se := err.(*ServiceError); se.Code != "forbidden" {
+		t.Fatalf("esperaba forbidden, got %q", se.Code)
+	}
+}
+
+func TestGetAccessNoExternalFile(t *testing.T) {
+	svc, _, noteStore, _, _, _, _, _ := newTestService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	other := uuid.NewString()
+	// privada sin external_file_id (offline-first aún no sincronizado)
+	priv, err := noteStore.Create(ctx, author, nil, "Sin archivo", nil, "private", nil)
+	if err != nil {
+		t.Fatalf("create memoria failed: %v", err)
+	}
+	if _, err := svc.GetAccess(ctx, author, priv.ID); err == nil {
+		t.Fatal("sin external_file_id debe dar nota no disponible")
+	} else if se := err.(*ServiceError); se.Code != "note_unavailable" {
+		t.Fatalf("esperaba note_unavailable, got %q", se.Code)
+	}
+	// pública sin archivo: autoriza pero no hay qué servir
+	pub, _ := noteStore.Create(ctx, author, nil, "Pública sin archivo", nil, "public", nil)
+	if _, err := svc.GetAccess(ctx, other, pub.ID); err == nil {
+		t.Fatal("pública sin archivo debe dar nota no disponible")
+	} else if se := err.(*ServiceError); se.Code != "note_unavailable" {
+		t.Fatalf("esperaba note_unavailable, got %q", se.Code)
+	}
+}
+
+func TestGetAccessMultiShare(t *testing.T) {
+	svc, _, _, _, _, _, _, social := newTestService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	memberA := uuid.NewString()
+	memberB := uuid.NewString()
+	outsider := uuid.NewString()
+	groupA := uuid.NewString()
+	groupB := uuid.NewString()
+	groupC := uuid.NewString()
+	social.AddAdmin(author, groupA)
+	social.AddMember(memberA, groupA)
+	social.AddAdmin(author, groupB)
+	social.AddMember(memberB, groupB)
+	social.AddAdmin(author, groupC)
+	note, _ := svc.Create(ctx, author, "Multi share", nil, "private", stringPtr("m"), nil)
+	if _, err := svc.Share(ctx, author, note.ID, groupA, "restricted"); err != nil {
+		t.Fatalf("share A failed: %v", err)
+	}
+	if _, err := svc.Share(ctx, author, note.ID, groupB, "restricted"); err != nil {
+		t.Fatalf("share B failed: %v", err)
+	}
+	// miembro de uno de los grupos restricted lee
+	for _, m := range []string{memberA, memberB} {
+		access, err := svc.GetAccess(ctx, m, note.ID)
+		if err != nil {
+			t.Fatalf("miembro debe leer: %v", err)
+		}
+		if access["access_mode"] != "restricted" {
+			t.Fatalf("esperaba restricted, got %v", access["access_mode"])
+		}
+	}
+	// outsider 403 mientras todo es restricted
+	if _, err := svc.GetAccess(ctx, outsider, note.ID); err == nil {
+		t.Fatal("outsider con todo restricted debe 403")
+	} else if se := err.(*ServiceError); se.Code != "forbidden" {
+		t.Fatalf("esperaba forbidden, got %q", se.Code)
+	}
+	// al agregar un share link, cualquiera lee
+	if _, err := svc.Share(ctx, author, note.ID, groupC, "link"); err != nil {
+		t.Fatalf("share C link failed: %v", err)
+	}
+	access, err := svc.GetAccess(ctx, outsider, note.ID)
+	if err != nil {
+		t.Fatalf("outsider con link debe leer: %v", err)
+	}
+	if access["access_mode"] != "link" {
+		t.Fatalf("esperaba access_mode=link, got %v", access["access_mode"])
+	}
+}
+
+// --- Etapa feat/notes-access-restricted-mode: share restricted ---
+
+func newRestrictedService() (*NoteService, *drive.MockClient, *MemoryMemberDirectory, *MemorySocialResolver) {
+	svc, driveMock, _, _, _, _, _, social := newTestService()
+	md := NewMemoryMemberDirectory()
+	svc.SetMemberDirectory(md)
+	return svc, driveMock, md, social
+}
+
+func TestShareRestrictedGrants(t *testing.T) {
+	svc, driveMock, md, social := newRestrictedService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	groupID := uuid.NewString()
+	social.AddAdmin(author, groupID)
+	md.SetEmails(groupID, []string{"ana@example.com", "ben@example.com", "cal@example.com"})
+	note, _ := svc.Create(ctx, author, "Restr grants", nil, "private", stringPtr("x"), nil)
+	shared, err := svc.Share(ctx, author, note.ID, groupID, "restricted")
+	if err != nil {
+		t.Fatalf("share restricted failed: %v", err)
+	}
+	if shared.AccessMode != "restricted" {
+		t.Fatalf("access_mode mismatch")
+	}
+	if len(driveMock.GrantCalls) != 3 {
+		t.Fatalf("esperaba 3 grants, got %d", len(driveMock.GrantCalls))
+	}
+	for _, gc := range driveMock.GrantCalls {
+		if gc.Role != "reader" {
+			t.Fatalf("role debe ser reader, got %q", gc.Role)
+		}
+		if gc.FileID != *note.ExternalFileID {
+			t.Fatalf("fileID mismatch")
+		}
+	}
+}
+
+func TestShareRestrictedDedup(t *testing.T) {
+	svc, driveMock, md, social := newRestrictedService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	groupID := uuid.NewString()
+	social.AddAdmin(author, groupID)
+	md.SetEmails(groupID, []string{"Ana@Example.com", " ana@example.com ", "", "   ", "BEN@example.com", "ben@EXAMPLE.com"})
+	note, _ := svc.Create(ctx, author, "Restr dedup", nil, "private", stringPtr("x"), nil)
+	if _, err := svc.Share(ctx, author, note.ID, groupID, "restricted"); err != nil {
+		t.Fatalf("share failed: %v", err)
+	}
+	if len(driveMock.GrantCalls) != 2 {
+		t.Fatalf("esperaba 2 grants únicos, got %d (%v)", len(driveMock.GrantCalls), driveMock.GrantCalls)
+	}
+	counts := map[string]int{}
+	for _, gc := range driveMock.GrantCalls {
+		counts[gc.Email]++
+	}
+	if counts["ana@example.com"] != 1 || counts["ben@example.com"] != 1 {
+		t.Fatalf("dedup falló, grants: %v", counts)
+	}
+}
+
+func TestShareRestrictedSkipsBlankEmails(t *testing.T) {
+	svc, driveMock, md, social := newRestrictedService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	groupID := uuid.NewString()
+	social.AddAdmin(author, groupID)
+	// miembros sin correo válido se omiten
+	md.SetEmails(groupID, []string{"", "   ", "ok@example.com"})
+	note, _ := svc.Create(ctx, author, "Restr sin email", nil, "private", stringPtr("x"), nil)
+	if _, err := svc.Share(ctx, author, note.ID, groupID, "restricted"); err != nil {
+		t.Fatalf("share failed: %v", err)
+	}
+	if len(driveMock.GrantCalls) != 1 || driveMock.GrantCalls[0].Email != "ok@example.com" {
+		t.Fatalf("solo ok@example.com debe recibir permiso, got %v", driveMock.GrantCalls)
+	}
+}
+
+func TestShareRestrictedMemberError(t *testing.T) {
+	svc, driveMock, md, social := newRestrictedService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	groupID := uuid.NewString()
+	social.AddAdmin(author, groupID)
+	md.SetError(fmt.Errorf("social caído"))
+	note, _ := svc.Create(ctx, author, "Restr dir error", nil, "private", stringPtr("x"), nil)
+	// error al obtener miembros no rompe el flujo principal: el share persiste
+	shared, err := svc.Share(ctx, author, note.ID, groupID, "restricted")
+	if err != nil {
+		t.Fatalf("share debe mantenerse aunque falle el directorio: %v", err)
+	}
+	if shared == nil {
+		t.Fatal("share nil")
+	}
+	if len(driveMock.GrantCalls) != 0 {
+		t.Fatalf("sin miembros no hay grants, got %d", len(driveMock.GrantCalls))
+	}
+}
+
+func TestShareRestrictedPartialFailure(t *testing.T) {
+	svc, driveMock, md, social := newRestrictedService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	groupID := uuid.NewString()
+	social.AddAdmin(author, groupID)
+	md.SetEmails(groupID, []string{"bad@example.com", "good@example.com"})
+	driveMock.InjectGrantError("bad@example.com", &drive.DriveError{Code: 500, Message: "boom"})
+	note, _ := svc.Create(ctx, author, "Restr parcial", nil, "private", stringPtr("x"), nil)
+	// éxito parcial: el share se crea y se continúa con los demás miembros
+	shared, err := svc.Share(ctx, author, note.ID, groupID, "restricted")
+	if err != nil {
+		t.Fatalf("fallo parcial de Drive no debe revertir el share: %v", err)
+	}
+	if shared == nil {
+		t.Fatal("share nil")
+	}
+	if len(driveMock.GrantCalls) != 2 {
+		t.Fatalf("se debe intentar con ambos miembros, got %d", len(driveMock.GrantCalls))
+	}
+}
+
+func TestShareRestrictedEmptyGroup(t *testing.T) {
+	svc, driveMock, _, social := newRestrictedService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	groupID := uuid.NewString()
+	social.AddAdmin(author, groupID)
+	// grupo sin miembros: share creado, sin permisos
+	note, _ := svc.Create(ctx, author, "Restr vacío", nil, "private", stringPtr("x"), nil)
+	if _, err := svc.Share(ctx, author, note.ID, groupID, "restricted"); err != nil {
+		t.Fatalf("share failed: %v", err)
+	}
+	if len(driveMock.GrantCalls) != 0 {
+		t.Fatalf("grupo vacío no otorga permisos, got %d", len(driveMock.GrantCalls))
+	}
+}
+
+func TestShareRestrictedAuthorOnce(t *testing.T) {
+	svc, driveMock, md, social := newRestrictedService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	groupID := uuid.NewString()
+	social.AddAdmin(author, groupID)
+	// el correo del autor viene duplicado en el listado: un solo permiso
+	md.SetEmails(groupID, []string{"author@example.com", " AUTHOR@example.com ", "other@example.com"})
+	note, _ := svc.Create(ctx, author, "Restr autor", nil, "private", stringPtr("x"), nil)
+	if _, err := svc.Share(ctx, author, note.ID, groupID, "restricted"); err != nil {
+		t.Fatalf("share failed: %v", err)
+	}
+	counts := map[string]int{}
+	for _, gc := range driveMock.GrantCalls {
+		counts[gc.Email]++
+	}
+	if counts["author@example.com"] != 1 {
+		t.Fatalf("autor debe quedar incluido una sola vez, got %v", counts)
+	}
+	if len(driveMock.GrantCalls) != 2 {
+		t.Fatalf("esperaba 2 grants únicos, got %d", len(driveMock.GrantCalls))
+	}
+}
+
+func TestShareLinkNoGrants(t *testing.T) {
+	svc, driveMock, md, social := newRestrictedService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	groupID := uuid.NewString()
+	social.AddAdmin(author, groupID)
+	md.SetEmails(groupID, []string{"a@example.com"})
+	note, _ := svc.Create(ctx, author, "Link sin grants", nil, "private", stringPtr("x"), nil)
+	if _, err := svc.Share(ctx, author, note.ID, groupID, "link"); err != nil {
+		t.Fatalf("share link failed: %v", err)
+	}
+	if len(driveMock.GrantCalls) != 0 {
+		t.Fatalf("modo link no crea permisos nominales, got %d", len(driveMock.GrantCalls))
+	}
+}
+
+func TestNormalizeEmails(t *testing.T) {
+	got := NormalizeEmails([]string{"  A@X.com ", "a@x.com", "", "B@y.cl", " b@Y.cl\t"})
+	want := []string{"a@x.com", "b@y.cl"}
+	if len(got) != len(want) {
+		t.Fatalf("esperaba %v, got %v", want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("esperaba %v, got %v", want, got)
+		}
+	}
+}

@@ -80,6 +80,9 @@ func runServer(pool *pgxpool.Pool, driveClient drive.Client, cfg *config.Config)
 		log.Println("notes: semilla de desarrollo cargada para SocialResolver")
 	}
 	svc := service.NewNoteService(noteStore, attStore, savedStore, likeStore, sharedStore, driveClient, social)
+	// Directorio de correos para share restricted: noop por ahora. El adaptador
+	// real (gRPC a Social/Identity) se inyectará aquí vía SetMemberDirectory.
+	svc.SetMemberDirectory(service.NewNoopMemberDirectory())
 	startGin(svc, cfg)
 }
 
@@ -93,6 +96,8 @@ func runServerMemory(driveClient drive.Client, cfg *config.Config) {
 	social := service.NewMemorySocialResolver()
 
 	svc := service.NewNoteService(noteStore, attStore, savedStore, likeStore, sharedStore, driveClient, social)
+	// Mismo seam que runServer: el adaptador gRPC real irá aquí.
+	svc.SetMemberDirectory(service.NewNoopMemberDirectory())
 	startGin(svc, cfg)
 }
 
