@@ -322,8 +322,11 @@ func (s *NoteService) Update(ctx context.Context, userID string, noteID string, 
 		}
 		visibility = &v
 	}
-	// Si cambia contenido, actualizar archivo en Drive
-	if content != nil && note.ExternalFileID != nil {
+	// Si cambia contenido, actualizar archivo en Drive mediante drive_file_id.
+	// Self-healing: si la metadata no tiene external_file_id (nota legacy/offline),
+	// crear el archivo .md en Drive y persistir el nuevo drive_file_id.
+	hasDriveFile := note.ExternalFileID != nil && strings.TrimSpace(*note.ExternalFileID) != ""
+	if content != nil && hasDriveFile {
 		err := s.drive.UpdateFile(ctx, userID, *note.ExternalFileID, content, newTitle)
 		if err != nil {
 			if drive.IsNotFound(err) || drive.IsForbidden(err) {
@@ -332,7 +335,24 @@ func (s *NoteService) Update(ctx context.Context, userID string, noteID string, 
 			return nil, &ServiceError{Code: utils.ErrInternal, Message: fmt.Sprintf("error actualizando Drive: %v", err)}
 		}
 		// si solo cambió título y contenido ya incluyó título, no duplicar update PG? igual necesitamos actualizar título en PG si cambió.
-	} else if newTitle != nil && note.ExternalFileID != nil && content == nil {
+	} else if content != nil && !hasDriveFile {
+		titleForFile := note.Title
+		if newTitle != nil {
+			titleForFile = *newTitle
+		}
+		newFileID, err := s.drive.CreateFile(ctx, userID, titleForFile+".md", *content)
+		if err != nil {
+			if de, ok := err.(*drive.DriveError); ok && de.Code == 413 {
+				return nil, newServiceError(utils.ErrFileTooLarge)
+			}
+			return nil, &ServiceError{Code: utils.ErrInternal, Message: fmt.Sprintf("error creando archivo en Drive: %v", err)}
+		}
+		if err := s.notes.UpdateExternalFileID(ctx, noteID, newFileID); err != nil {
+			_ = s.drive.DeleteFile(ctx, userID, newFileID)
+			return nil, &ServiceError{Code: utils.ErrInternal, Message: fmt.Sprintf("error persistiendo drive_file_id: %v", err)}
+		}
+		note.ExternalFileID = &newFileID
+	} else if newTitle != nil && hasDriveFile && content == nil {
 		// solo renombrar en Drive
 		err := s.drive.UpdateFile(ctx, userID, *note.ExternalFileID, nil, newTitle)
 		if err != nil {

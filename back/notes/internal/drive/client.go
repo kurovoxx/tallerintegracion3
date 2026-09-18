@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -264,48 +263,3 @@ func (m *MockClient) HasFile(fileID string) bool {
 
 // Ensure interface compliance
 var _ Client = (*MockClient)(nil)
-
-// RealDriveClient placeholder: en producción usaría Google Drive API.
-// Por ahora delega a Mock para no requerir credenciales reales.
-type RealDriveClient struct {
-	mock *MockClient
-}
-
-func NewRealDriveClient() *RealDriveClient {
-	return &RealDriveClient{mock: NewMockClient()}
-}
-func (r *RealDriveClient) CreateFile(ctx context.Context, userID string, title string, content string) (string, error) {
-	// TODO: implementar con driveService.Files.Create(...).Do()
-	// Por ahora fallback a mock + log
-	if strings.TrimSpace(title) == "" {
-		return "", &DriveError{Code: 400, Message: "título vacío"}
-	}
-	return r.mock.CreateFile(ctx, userID, title, content)
-}
-func (r *RealDriveClient) GetFileContent(ctx context.Context, userID string, driveFileID string) (string, error) {
-	return r.mock.GetFileContent(ctx, userID, driveFileID)
-}
-func (r *RealDriveClient) UpdateFile(ctx context.Context, userID string, driveFileID string, newContent *string, newTitle *string) error {
-	return r.mock.UpdateFile(ctx, userID, driveFileID, newContent, newTitle)
-}
-func (r *RealDriveClient) DeleteFile(ctx context.Context, userID string, driveFileID string) error {
-	return r.mock.DeleteFile(ctx, userID, driveFileID)
-}
-func (r *RealDriveClient) UploadAttachment(ctx context.Context, userID string, noteID string, fileName string, fileType string, data []byte, isInline bool) (string, string, error) {
-	return r.mock.UploadAttachment(ctx, userID, noteID, fileName, fileType, data, isInline)
-}
-func (r *RealDriveClient) DeleteAttachment(ctx context.Context, userID string, externalFileID string) error {
-	return r.mock.DeleteAttachment(ctx, userID, externalFileID)
-}
-func (r *RealDriveClient) CopyFile(ctx context.Context, srcUserID string, srcFileID string, dstUserID string, newTitle string) (string, error) {
-	return r.mock.CopyFile(ctx, srcUserID, srcFileID, dstUserID, newTitle)
-}
-func (r *RealDriveClient) GrantPermission(ctx context.Context, ownerUserID string, fileID string, granteeEmail string, role string) error {
-	return r.mock.GrantPermission(ctx, ownerUserID, fileID, granteeEmail, role)
-}
-func (r *RealDriveClient) RevokePermission(ctx context.Context, ownerUserID string, fileID string, granteeEmail string) error {
-	return r.mock.RevokePermission(ctx, ownerUserID, fileID, granteeEmail)
-}
-func (r *RealDriveClient) RevokeAllPermissions(ctx context.Context, ownerUserID string, fileID string) error {
-	return r.mock.RevokeAllPermissions(ctx, ownerUserID, fileID)
-}

@@ -8,11 +8,11 @@ class AuthService {
   final http.Client _client;
 
   // Backend Gin - auth-service
-  // Docker: auth en 8081:8080 (host 8080 ocupado por WordPress) -> http://localhost:8081
+  // Docker: auth en 8085:8080 (host 8081 reservado para callback OAuth local de Drive) -> http://localhost:8085
   // Host directo (go run): PORT=8082 -> http://localhost:8082
   // Rutas reales: POST /auth/register y POST /auth/login (sin /api)
   // Ver back/auth/cmd/server/main.go:73 y agentApiContract.md:22 y docker-compose.yml:28
-  static const String baseUrl = 'http://localhost:8081';
+  static const String baseUrl = 'http://localhost:8085';
   static const String loginPath = '/auth/login';
   static const String registerPath = '/auth/register';
 
