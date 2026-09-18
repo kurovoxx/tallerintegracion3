@@ -1,14 +1,12 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 
 /// Servicio temporal para probar POST /auth/google-drive/connect con Google real.
-/// No se usa en producción aún; solo para verificar que el backend con
-/// GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI=postmessage funciona con tu cuenta
-/// agustin.vega2024@alu.uct.cl y el cliente "Cliente testeo web".
+/// En móvil (Android/iOS) usa google_sign_in; en Windows usa url_launcher + localhost.
 class GoogleDriveService {
-  // Usa el mismo serverClientId que está en back/auth/.env GOOGLE_CLIENT_ID
-  // Para google_sign_in, se pasa como serverClientId para obtener serverAuthCode.
   static const _serverClientId = String.fromEnvironment(
     'GOOGLE_CLIENT_ID',
     defaultValue: '148833740945-b2k56p1fb6oqbpo076gvgbulm40ks7r1.apps.googleusercontent.com',
@@ -24,13 +22,37 @@ class GoogleDriveService {
     serverClientId: _serverClientId,
   );
 
-  /// Inicia flujo Google Sign-In y retorna serverAuthCode (oauth_code) para backend.
-  /// Retorna null si el usuario cancela.
+  /// Retorna serverAuthCode (oauth_code). En Windows abre navegador y escucha localhost.
   Future<String?> getServerAuthCode() async {
+    if (Platform.isWindows || Platform.isLinux) {
+      return _getServerAuthCodeWindows();
+    }
     final account = await _googleSignIn.signIn();
     if (account == null) return null;
     final auth = await account.authentication;
-    return auth.serverAuthCode; // <- este es tu oauth_code
+    return auth.serverAuthCode;
+  }
+
+  Future<String?> _getServerAuthCodeWindows() async {
+    // Usa redirect_uri http://localhost:8081/auth/google/callback (debe estar en Cloud Console)
+    const redirectUri = 'http://localhost:8081/auth/google/callback';
+    const authUrl =
+        'https://accounts.google.com/o/oauth2/v2/auth?response_type=code&scope=https://www.googleapis.com/auth/drive.file%20openid%20email%20profile&access_type=offline&prompt=consent&client_id=$_serverClientId&redirect_uri=$redirectUri';
+    // Inicia servidor local para capturar code
+    final server = await HttpServer.bind('localhost', 8081);
+    if (!await launchUrl(Uri.parse(authUrl), mode: LaunchMode.externalApplication)) {
+      await server.close();
+      return null;
+    }
+    final request = await server.first;
+    final code = request.uri.queryParameters['code'];
+    request.response
+      ..statusCode = 200
+      ..headers.contentType = ContentType.html
+      ..write('<h1>Drive conectado, vuelve a la app</h1>');
+    await request.response.close();
+    await server.close();
+    return code;
   }
 
   /// Envía oauth_code al backend. Requiere access_token de tu app (de POST /auth/login).
