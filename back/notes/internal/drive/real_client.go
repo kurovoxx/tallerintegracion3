@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"strings"
 
 	"golang.org/x/oauth2"
@@ -41,10 +40,10 @@ func defaultDriveService(ctx context.Context, accessToken string) (*drive.Servic
 	return drive.NewService(ctx, option.WithHTTPClient(hc))
 }
 
-// serviceFor resuelve token + servicio para un usuario, con error claro si no hay conexión.
+// serviceFor resuelve token + servicio para un usuario, con error tipado si no hay conexión.
 func (r *RealDriveClient) serviceFor(ctx context.Context, userID string) (*drive.Service, error) {
 	if r.tokens == nil {
-		return nil, fmt.Errorf("no oauth connection found for user %s: token provider no configurado", userID)
+		return nil, &OAuthError{Message: "Conecte o renueve su Google Drive"}
 	}
 	token, err := r.tokens.GetValidAccessToken(ctx, userID)
 	if err != nil {
@@ -52,8 +51,8 @@ func (r *RealDriveClient) serviceFor(ctx context.Context, userID string) (*drive
 	}
 	srv, err := r.newService(ctx, token)
 	if err != nil {
-		log.Printf("drive: no se pudo crear servicio Drive para user %s: %v", userID, err)
-		return nil, fmt.Errorf("drive: google_unavailable creando servicio para user %s: %w", userID, err)
+		log.Printf("drive: no se pudo crear servicio Drive: %v", err)
+		return nil, fmt.Errorf("drive: google_unavailable creando servicio: %w", err)
 	}
 	return srv, nil
 }
@@ -85,13 +84,11 @@ func mapGoogleError(op string, err error) error {
 }
 
 func (r *RealDriveClient) CreateFile(ctx context.Context, userID string, title string, content string) (string, error) {
-	log.Printf("[DRIVE DEBUG] CreateFile llamado para userID: %s, fileName: %s", userID, title)
 	if strings.TrimSpace(title) == "" {
 		return "", &DriveError{Code: 400, Message: "título vacío"}
 	}
 	srv, err := r.serviceFor(ctx, userID)
 	if err != nil {
-		log.Printf("[DRIVE DEBUG] CreateFile abortado para userID %s: %v", userID, err)
 		return "", err
 	}
 	f, err := srv.Files.Create(&drive.File{Name: title, MimeType: markdownMimeType}).
@@ -100,10 +97,9 @@ func (r *RealDriveClient) CreateFile(ctx context.Context, userID string, title s
 		Context(ctx).
 		Do()
 	if err != nil {
-		log.Printf("[DRIVE DEBUG] Error detallado de Google Drive API en CreateFile para userID %s: %v", userID, err)
 		return "", mapGoogleError("CreateFile", err)
 	}
-	log.Printf("drive: archivo creado id=%s user=%s title=%q", f.Id, userID, title)
+	log.Printf("drive: archivo creado id=%s", f.Id)
 	return f.Id, nil
 }
 
@@ -193,22 +189,29 @@ func (r *RealDriveClient) DeleteAttachment(ctx context.Context, userID string, e
 }
 
 func (r *RealDriveClient) CopyFile(ctx context.Context, srcUserID string, srcFileID string, dstUserID string, newTitle string) (string, error) {
-	srcSrv, err := r.serviceFor(ctx, srcUserID)
-	if err != nil {
-		return "", err
-	}
-	resp, err := srcSrv.Files.Get(srcFileID).Download()
-	if err != nil {
-		return "", mapGoogleError("CopyFile/download", err)
-	}
-	data, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-		return "", &DriveError{Code: 500, Message: fmt.Sprintf("error leyendo original de Drive: %v", err)}
-	}
+	// Desacoplado del token del autor: la clonación de apuntes públicos no debe
+	// romperse si el autor revocó Drive o su token expiró sin refresh. Se exige
+	// OAuth válido solo del clonador (dst). La descarga se intenta primero con
+	// el servicio del clonador (funciona si el archivo es público o fue
+	// compartido restricted con permiso reader); solo como fallback se intenta
+	// con el token del autor para archivos aún no compartidos en Drive.
 	dstSrv, err := r.serviceFor(ctx, dstUserID)
 	if err != nil {
 		return "", err
+	}
+	data, err := downloadWith(dstSrv, srcFileID)
+	if err != nil {
+		srcSrv, errSrc := r.serviceFor(ctx, srcUserID)
+		if errSrc != nil {
+			// Sin token del autor tampoco hay fallback: retornar el error
+			// original del clonador (más relevante para el usuario que clona).
+			return "", err
+		}
+		dataFallback, errFallback := downloadWith(srcSrv, srcFileID)
+		if errFallback != nil {
+			return "", errFallback
+		}
+		data = dataFallback
 	}
 	f, err := dstSrv.Files.Create(&drive.File{Name: newTitle, MimeType: markdownMimeType}).
 		Media(bytes.NewReader(data)).
@@ -218,8 +221,34 @@ func (r *RealDriveClient) CopyFile(ctx context.Context, srcUserID string, srcFil
 	if err != nil {
 		return "", mapGoogleError("CopyFile/create", err)
 	}
-	log.Printf("drive: archivo copiado %s (user %s) -> %s (user %s)", srcFileID, srcUserID, f.Id, dstUserID)
+	log.Printf("drive: archivo copiado %s -> %s", srcFileID, f.Id)
 	return f.Id, nil
+}
+
+// downloadWith descarga el contenido crudo de un archivo con errores mapeados.
+func downloadWith(srv *drive.Service, fileID string) ([]byte, error) {
+	resp, err := srv.Files.Get(fileID).Download()
+	if err != nil {
+		return nil, mapGoogleError("CopyFile/download", err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, &DriveError{Code: 500, Message: fmt.Sprintf("error leyendo original de Drive: %v", err)}
+	}
+	return data, nil
+}
+
+func (r *RealDriveClient) VerifyFileAccess(ctx context.Context, userID string, driveFileID string) error {
+	srv, err := r.serviceFor(ctx, userID)
+	if err != nil {
+		return err
+	}
+	_, err = srv.Files.Get(driveFileID).Fields("id").Context(ctx).Do()
+	if err != nil {
+		return mapGoogleError("VerifyFileAccess", err)
+	}
+	return nil
 }
 
 func (r *RealDriveClient) GrantPermission(ctx context.Context, ownerUserID string, fileID string, granteeEmail string, role string) error {
@@ -278,5 +307,3 @@ func (r *RealDriveClient) RevokeAllPermissions(ctx context.Context, ownerUserID 
 
 // Ensure interface compliance
 var _ Client = (*RealDriveClient)(nil)
-
-var _ = http.StatusOK // evita import sin uso si se ajusta el archivo

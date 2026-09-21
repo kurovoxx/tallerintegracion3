@@ -8,7 +8,7 @@ import (
 
 func ValidateTitle(title string) bool {
 	t := strings.TrimSpace(title)
-	return t != "" && len(t) <= 300
+	return len(t) >= 1 && len(t) <= 255
 }
 
 func ValidateVisibility(v string) bool {

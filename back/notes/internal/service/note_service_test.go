@@ -31,7 +31,7 @@ func TestCreateSuccess(t *testing.T) {
 	svc, driveMock, _, _, _, _, _, _ := newTestService()
 	ctx := context.Background()
 	userID := uuid.NewString()
-	note, err := svc.Create(ctx, userID, "Mi primer apunte", nil, "private", stringPtr("# Hola"), nil)
+	note, err := svc.Create(ctx, userID, "Mi primer apunte", nil, "private", stringPtr("# Hola"), "")
 	if err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestCreateValidations(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := svc.Create(ctx, userID, tc.title, tc.subjectID, tc.visibility, nil, nil)
+			_, err := svc.Create(ctx, userID, tc.title, tc.subjectID, tc.visibility, nil, "")
 			if err == nil {
 				t.Fatal("esperaba error validación")
 			}
@@ -98,7 +98,7 @@ func TestCreateRollbackOnDBFailure(t *testing.T) {
 	svc := NewNoteService(failingNoteStore, NewMemoryAttachmentStore(), NewMemorySavedStore(), NewMemoryLikeStore(), NewMemorySharedStore(), driveMock, NewMemorySocialResolver())
 	ctx := context.Background()
 	userID := uuid.NewString()
-	_, err := svc.Create(ctx, userID, "Rollback test", nil, "private", nil, nil)
+	_, err := svc.Create(ctx, userID, "Rollback test", nil, "private", nil, "")
 	if err == nil {
 		t.Fatal("esperaba error DB")
 	}
@@ -110,7 +110,7 @@ func TestCreateRollbackOnDBFailure(t *testing.T) {
 
 type failingNoteStore struct{ err error }
 
-func (f *failingNoteStore) Create(ctx context.Context, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string) (*model.Note, error) {
+func (f *failingNoteStore) Create(ctx context.Context, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string, syncStatus string) (*model.Note, error) {
 	return nil, f.err
 }
 func (f *failingNoteStore) GetByID(ctx context.Context, id string) (*model.Note, error) {
@@ -123,6 +123,10 @@ func (f *failingNoteStore) Update(ctx context.Context, id string, title *string,
 	return nil, nil
 }
 func (f *failingNoteStore) Delete(ctx context.Context, id string) error { return nil }
+func (f *failingNoteStore) UpdateSyncStatus(ctx context.Context, noteID, syncStatus string) error { return nil }
+
+func (f *failingNoteStore) InsertDeadLetter(ctx context.Context, fileID, reason string) error { return nil }
+
 func (f *failingNoteStore) IncrementLikes(ctx context.Context, noteID string, delta int) error {
 	return nil
 }
@@ -134,7 +138,7 @@ func TestGetWithContent(t *testing.T) {
 	svc, _, _, _, _, _, _, _ := newTestService()
 	ctx := context.Background()
 	author := uuid.NewString()
-	note, _ := svc.Create(ctx, author, "Get content", nil, "public", stringPtr("contenido markdown"), nil)
+	note, _ := svc.Create(ctx, author, "Get content", nil, "public", stringPtr("contenido markdown"), "")
 	got, err := svc.Get(ctx, author, note.ID)
 	if err != nil {
 		t.Fatalf("get failed: %v", err)
@@ -148,7 +152,7 @@ func TestGetDriveNotFound(t *testing.T) {
 	svc, driveMock, noteStore, _, _, _, _, _ := newTestService()
 	ctx := context.Background()
 	author := uuid.NewString()
-	note, _ := svc.Create(ctx, author, "Drive missing", nil, "public", stringPtr("x"), nil)
+	note, _ := svc.Create(ctx, author, "Drive missing", nil, "public", stringPtr("x"), "")
 	// simular borrado manual en Drive
 	driveMock.InjectGetError(*note.ExternalFileID, &drive.DriveError{Code: 404, Message: "Nota no disponible en almacenamiento remoto"})
 	_, err := svc.Get(ctx, author, note.ID)
@@ -172,7 +176,7 @@ func TestGetDriveForbidden(t *testing.T) {
 	svc, driveMock, _, _, _, _, _, _ := newTestService()
 	ctx := context.Background()
 	author := uuid.NewString()
-	note, _ := svc.Create(ctx, author, "Drive forbidden", nil, "public", stringPtr("secret"), nil)
+	note, _ := svc.Create(ctx, author, "Drive forbidden", nil, "public", stringPtr("secret"), "")
 	driveMock.InjectGetError(*note.ExternalFileID, &drive.DriveError{Code: 403, Message: "Nota no disponible en almacenamiento remoto"})
 	_, err := svc.Get(ctx, author, note.ID)
 	if err == nil {
@@ -189,19 +193,19 @@ func TestUpdateOnlyAuthor(t *testing.T) {
 	ctx := context.Background()
 	author := uuid.NewString()
 	other := uuid.NewString()
-	note, _ := svc.Create(ctx, author, "Original", nil, "private", stringPtr("old"), nil)
+	note, _ := svc.Create(ctx, author, "Original", nil, "private", stringPtr("old"), "")
 	// other intenta editar
-	_, err := svc.Update(ctx, other, note.ID, stringPtr("hack"), nil, nil)
+	_, err := svc.Update(ctx, other, note.ID, stringPtr("hack"), nil, nil, "")
 	if err == nil {
 		t.Fatal("esperaba 403 forbidden")
 	}
 	se := err.(*ServiceError)
-	if se.Code != "forbidden" {
-		t.Fatalf("esperaba forbidden, got %q", se.Code)
+	if se.Code != "not_found" {
+		t.Fatalf("esperaba not_found, got %q", se.Code)
 	}
 	// author edita título y contenido
 	newContent := "new content"
-	updated, err := svc.Update(ctx, author, note.ID, stringPtr("Nuevo título"), stringPtr("public"), &newContent)
+	updated, err := svc.Update(ctx, author, note.ID, stringPtr("Nuevo título"), stringPtr("public"), &newContent, "")
 	if err != nil {
 		t.Fatalf("update author failed: %v", err)
 	}
@@ -223,7 +227,7 @@ func TestDeleteOnlyAuthor(t *testing.T) {
 	ctx := context.Background()
 	author := uuid.NewString()
 	other := uuid.NewString()
-	note, _ := svc.Create(ctx, author, "Borrable", nil, "private", nil, nil)
+	note, _ := svc.Create(ctx, author, "Borrable", nil, "private", nil, "")
 	fileID := *note.ExternalFileID
 	// other falla
 	err := svc.Delete(ctx, other, note.ID)
@@ -251,7 +255,7 @@ func TestListMyPagination(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.NewString()
 	for i := 0; i < 5; i++ {
-		_, _ = svc.Create(ctx, userID, fmt.Sprintf("Apunte %d", i), nil, "private", nil, nil)
+		_, _ = svc.Create(ctx, userID, fmt.Sprintf("Apunte %d", i), nil, "private", nil, "")
 	}
 	notes, next, err := svc.ListMy(ctx, userID, "", 2)
 	if err != nil {
@@ -274,7 +278,7 @@ func TestAttachmentUploadAndDelete(t *testing.T) {
 	svc, _, _, _, _, _, _, _ := newTestService()
 	ctx := context.Background()
 	author := uuid.NewString()
-	note, _ := svc.Create(ctx, author, "Con adjunto", nil, "private", nil, nil)
+	note, _ := svc.Create(ctx, author, "Con adjunto", nil, "private", nil, "")
 	data := []byte("fake image data")
 	att, err := svc.AddAttachment(ctx, author, note.ID, "foto.png", "image/png", data, false)
 	if err != nil {
@@ -310,7 +314,7 @@ func TestAttachmentTooLarge(t *testing.T) {
 	svc, _, _, _, _, _, _, _ := newTestService()
 	ctx := context.Background()
 	author := uuid.NewString()
-	note, _ := svc.Create(ctx, author, "Grande", nil, "private", nil, nil)
+	note, _ := svc.Create(ctx, author, "Grande", nil, "private", nil, "")
 	big := make([]byte, 11*1024*1024)
 	_, err := svc.AddAttachment(ctx, author, note.ID, "big.pdf", "application/pdf", big, false)
 	if err == nil {
@@ -327,7 +331,7 @@ func TestSaveAndAlreadySaved(t *testing.T) {
 	ctx := context.Background()
 	author := uuid.NewString()
 	saver := uuid.NewString()
-	note, _ := svc.Create(ctx, author, "Guardable", nil, "public", nil, nil)
+	note, _ := svc.Create(ctx, author, "Guardable", nil, "public", nil, "")
 	_, err := svc.Save(ctx, saver, note.ID)
 	if err != nil {
 		t.Fatalf("save failed: %v", err)
@@ -347,9 +351,9 @@ func TestCopyClonesFile(t *testing.T) {
 	ctx := context.Background()
 	author := uuid.NewString()
 	copier := uuid.NewString()
-	note, _ := svc.Create(ctx, author, "Original copy", nil, "public", stringPtr("contenido original"), nil)
+	note, _ := svc.Create(ctx, author, "Original copy", nil, "public", stringPtr("contenido original"), "")
 	origFileID := *note.ExternalFileID
-	newNote, err := svc.Copy(ctx, copier, note.ID)
+	newNote, err := svc.Copy(ctx, copier, note.ID, "")
 	if err != nil {
 		t.Fatalf("copy failed: %v", err)
 	}
@@ -376,19 +380,21 @@ func TestCopyClonesFile(t *testing.T) {
 	}
 }
 
-func TestCopyPrivateWithoutAccessFails(t *testing.T) {
+func TestCopyPrivateWithoutAccessNotFound(t *testing.T) {
 	svc, _, _, _, _, _, _, _ := newTestService()
 	ctx := context.Background()
 	author := uuid.NewString()
 	copier := uuid.NewString()
-	note, _ := svc.Create(ctx, author, "Privada", nil, "private", nil, nil)
-	_, err := svc.Copy(ctx, copier, note.ID)
+	note, _ := svc.Create(ctx, author, "Privada", nil, "private", nil, "")
+	_, err := svc.Copy(ctx, copier, note.ID, "")
 	if err == nil {
-		t.Fatal("esperaba forbidden copy privada")
+		t.Fatal("esperaba not_found copy privada sin acceso")
 	}
+	// Zero-knowledge: privada sin acceso se reporta 404 (no 403) para no
+	// filtrar la existencia del recurso.
 	se := err.(*ServiceError)
-	if se.Code != "forbidden" {
-		t.Fatalf("esperaba forbidden got %q", se.Code)
+	if se.Code != "not_found" {
+		t.Fatalf("esperaba not_found got %q", se.Code)
 	}
 }
 
@@ -397,7 +403,7 @@ func TestLikeUnlikeTransactional(t *testing.T) {
 	ctx := context.Background()
 	author := uuid.NewString()
 	liker := uuid.NewString()
-	note, _ := svc.Create(ctx, author, "Likeable", nil, "public", nil, nil)
+	note, _ := svc.Create(ctx, author, "Likeable", nil, "public", nil, "")
 	if note.LikesCount != 0 {
 		t.Fatalf("likes inicial 0")
 	}
@@ -446,15 +452,15 @@ func TestShareAndAccessControl(t *testing.T) {
 	social.AddAdmin(author, groupID)
 	social.AddMember(member, groupID)
 	// crear nota privada
-	note, _ := svc.Create(ctx, author, "Privada share", nil, "private", stringPtr("secreto"), nil)
-	// member sin share no puede leer
+	note, _ := svc.Create(ctx, author, "Privada share", nil, "private", stringPtr("secreto"), "")
+	// member sin share no puede leer (404 zero-knowledge, no 403)
 	_, err := svc.Get(ctx, member, note.ID)
 	if err == nil {
-		t.Fatal("member sin share debería 403")
+		t.Fatal("member sin share debería 404")
 	}
 	se := err.(*ServiceError)
-	if se.Code != "forbidden" {
-		t.Fatalf("esperaba forbidden got %q", se.Code)
+	if se.Code != "not_found" {
+		t.Fatalf("esperaba not_found got %q", se.Code)
 	}
 	// author comparte con grupo link
 	shared, err := svc.Share(ctx, author, note.ID, groupID, "link")
@@ -502,7 +508,7 @@ func TestShareForbiddenIfNotAuthor(t *testing.T) {
 	groupID := uuid.NewString()
 	social.AddMember(author, groupID)
 	social.AddMember(other, groupID)
-	note, _ := svc.Create(ctx, author, "No share ajeno", nil, "private", nil, nil)
+	note, _ := svc.Create(ctx, author, "No share ajeno", nil, "private", nil, "")
 	_, err := svc.Share(ctx, other, note.ID, groupID, "link")
 	if err == nil {
 		t.Fatal("other no autor no puede compartir")
@@ -518,7 +524,7 @@ func TestShareForbiddenIfNotMember(t *testing.T) {
 	ctx := context.Background()
 	author := uuid.NewString()
 	groupID := uuid.NewString()
-	note, _ := svc.Create(ctx, author, "Sin membresía", nil, "private", nil, nil)
+	note, _ := svc.Create(ctx, author, "Sin membresía", nil, "private", nil, "")
 	_, err := svc.Share(ctx, author, note.ID, groupID, "link")
 	if err == nil {
 		t.Fatal("author no miembro no puede compartir")
@@ -535,7 +541,7 @@ func TestShareInvalidAccessMode(t *testing.T) {
 	author := uuid.NewString()
 	groupID := uuid.NewString()
 	social.AddMember(author, groupID)
-	note, _ := svc.Create(ctx, author, "Invalid mode", nil, "private", nil, nil)
+	note, _ := svc.Create(ctx, author, "Invalid mode", nil, "private", nil, "")
 	_, err := svc.Share(ctx, author, note.ID, groupID, "invalid")
 	if err == nil {
 		t.Fatal("esperaba invalid_access_mode")
@@ -553,8 +559,8 @@ func TestUnshareAll(t *testing.T) {
 	groupID := uuid.NewString()
 	social.AddAdmin(author, groupID)
 	// crear dos notas y compartir ambas
-	n1, _ := svc.Create(ctx, author, "N1", nil, "private", nil, nil)
-	n2, _ := svc.Create(ctx, author, "N2", nil, "private", nil, nil)
+	n1, _ := svc.Create(ctx, author, "N1", nil, "private", nil, "")
+	n2, _ := svc.Create(ctx, author, "N2", nil, "private", nil, "")
 	_, _ = svc.Share(ctx, author, n1.ID, groupID, "link")
 	_, _ = svc.Share(ctx, author, n2.ID, groupID, "link")
 	list, _ := sharedStore.ListByNote(ctx, n1.ID)
@@ -582,7 +588,7 @@ func TestGetAccess(t *testing.T) {
 	groupID := uuid.NewString()
 	social.AddAdmin(author, groupID)
 	social.AddMember(member, groupID)
-	note, _ := svc.Create(ctx, author, "Access test", nil, "private", nil, nil)
+	note, _ := svc.Create(ctx, author, "Access test", nil, "private", nil, "")
 	// author can_read
 	access, err := svc.GetAccess(ctx, author, note.ID)
 	if err != nil {
@@ -615,7 +621,7 @@ func TestPublicNoteAccessibleWithoutShare(t *testing.T) {
 	ctx := context.Background()
 	author := uuid.NewString()
 	other := uuid.NewString()
-	note, _ := svc.Create(ctx, author, "Publica", nil, "public", stringPtr("public content"), nil)
+	note, _ := svc.Create(ctx, author, "Publica", nil, "public", stringPtr("public content"), "")
 	got, err := svc.Get(ctx, other, note.ID)
 	if err != nil {
 		t.Fatalf("public note debe ser accesible: %v", err)
@@ -630,14 +636,14 @@ func TestEditPrivateNoteForbidden(t *testing.T) {
 	ctx := context.Background()
 	author := uuid.NewString()
 	other := uuid.NewString()
-	note, _ := svc.Create(ctx, author, "Private edit", nil, "private", nil, nil)
-	_, err := svc.Update(ctx, other, note.ID, stringPtr("hacked"), nil, nil)
+	note, _ := svc.Create(ctx, author, "Private edit", nil, "private", nil, "")
+	_, err := svc.Update(ctx, other, note.ID, stringPtr("hacked"), nil, nil, "")
 	if err == nil {
 		t.Fatal("other no debe editar privada")
 	}
 	se := err.(*ServiceError)
-	if se.Code != "forbidden" {
-		t.Fatalf("esperaba forbidden got %q", se.Code)
+	if se.Code != "not_found" {
+		t.Fatalf("esperaba not_found got %q", se.Code)
 	}
 }
 
@@ -651,7 +657,7 @@ func TestListGroupNotes(t *testing.T) {
 	social.AddAdmin(author, groupID)
 	social.AddMember(member, groupID)
 	// author crea y comparte
-	n, _ := svc.Create(ctx, author, "Grupo note", nil, "private", nil, nil)
+	n, _ := svc.Create(ctx, author, "Grupo note", nil, "private", nil, "")
 	_, _ = svc.Share(ctx, author, n.ID, groupID, "link")
 	// member lista
 	notes, _, err := svc.ListGroupNotes(ctx, member, groupID, "", 10)
@@ -676,7 +682,7 @@ func TestConcurrentLikes(t *testing.T) {
 	svc, _, noteStore, _, _, _, _, _ := newTestService()
 	ctx := context.Background()
 	author := uuid.NewString()
-	note, _ := svc.Create(ctx, author, "Concurrent likes", nil, "public", nil, nil)
+	note, _ := svc.Create(ctx, author, "Concurrent likes", nil, "public", nil, "")
 	const workers = 10
 	var wg sync.WaitGroup
 	wg.Add(workers)
@@ -738,7 +744,7 @@ func TestAccessModeLinkVsRestricted(t *testing.T) {
 	social.AddAdmin(author, groupID)
 	social.AddMember(member, groupID)
 	// nota private compartida con link -> nonMember debe leer
-	noteLink, _ := svc.Create(ctx, author, "Link note", nil, "private", stringPtr("link content"), nil)
+	noteLink, _ := svc.Create(ctx, author, "Link note", nil, "private", stringPtr("link content"), "")
 	_, err := svc.Share(ctx, author, noteLink.ID, groupID, "link")
 	if err != nil {
 		t.Fatalf("share link failed: %v", err)
@@ -751,26 +757,26 @@ func TestAccessModeLinkVsRestricted(t *testing.T) {
 		t.Fatalf("contenido link no coincide")
 	}
 	// copy también debe permitir link sin membresía
-	_, err = svc.Copy(ctx, nonMember, noteLink.ID)
+	_, err = svc.Copy(ctx, nonMember, noteLink.ID, "")
 	if err != nil {
 		t.Fatalf("nonMember copy con link debería permitir: %v", err)
 	}
 	// nota private compartida con restricted -> nonMember 403, member 200
-	noteRestr, _ := svc.Create(ctx, author, "Restricted note", nil, "private", stringPtr("restricted content"), nil)
+	noteRestr, _ := svc.Create(ctx, author, "Restricted note", nil, "private", stringPtr("restricted content"), "")
 	_, err = svc.Share(ctx, author, noteRestr.ID, groupID, "restricted")
 	if err != nil {
 		t.Fatalf("share restricted failed: %v", err)
 	}
 	_, err = svc.Get(ctx, nonMember, noteRestr.ID)
 	if err == nil {
-		t.Fatal("nonMember con restricted debe recibir 403")
+		t.Fatal("nonMember con restricted debe recibir 404")
 	}
-	if se, ok := err.(*ServiceError); !ok || se.Code != "forbidden" {
-		t.Fatalf("esperaba forbidden, got %v", err)
+	if se, ok := err.(*ServiceError); !ok || se.Code != "not_found" {
+		t.Fatalf("esperaba not_found, got %v", err)
 	}
-	_, err = svc.Copy(ctx, nonMember, noteRestr.ID)
+	_, err = svc.Copy(ctx, nonMember, noteRestr.ID, "")
 	if err == nil {
-		t.Fatal("nonMember copy con restricted debe 403")
+		t.Fatal("nonMember copy con restricted debe 404")
 	}
 	got2, err := svc.Get(ctx, member, noteRestr.ID)
 	if err != nil {
@@ -792,10 +798,10 @@ func TestListGroupNotesOrdering(t *testing.T) {
 	social.AddMember(authorMember, groupID)
 	social.AddMember(member, groupID)
 	// crear 4 notas
-	nAdminHigh, _ := svc.Create(ctx, authorAdmin, "Admin high", nil, "private", nil, nil)
-	nAdminLow, _ := svc.Create(ctx, authorAdmin, "Admin low", nil, "private", nil, nil)
-	nMemberHigh, _ := svc.Create(ctx, authorMember, "Member high", nil, "private", nil, nil)
-	nMemberLow, _ := svc.Create(ctx, authorMember, "Member low", nil, "private", nil, nil)
+	nAdminHigh, _ := svc.Create(ctx, authorAdmin, "Admin high", nil, "private", nil, "")
+	nAdminLow, _ := svc.Create(ctx, authorAdmin, "Admin low", nil, "private", nil, "")
+	nMemberHigh, _ := svc.Create(ctx, authorMember, "Member high", nil, "private", nil, "")
+	nMemberLow, _ := svc.Create(ctx, authorMember, "Member low", nil, "private", nil, "")
 	// compartir todas en el mismo grupo
 	_, _ = svc.Share(ctx, authorAdmin, nAdminHigh.ID, groupID, "link")
 	_, _ = svc.Share(ctx, authorAdmin, nAdminLow.ID, groupID, "link")
@@ -855,8 +861,8 @@ func TestListGroupNotesOrdering(t *testing.T) {
 		}
 	}
 	// --- Desempate por fecha: mismo likes (3) y mismo is_admin_note, debe ordenar por shared_at DESC ---
-	nTieRecent, _ := svc.Create(ctx, authorMember, "Tie recent", nil, "private", nil, nil)
-	nTieOld, _ := svc.Create(ctx, authorMember, "Tie old", nil, "private", nil, nil)
+	nTieRecent, _ := svc.Create(ctx, authorMember, "Tie recent", nil, "private", nil, "")
+	nTieOld, _ := svc.Create(ctx, authorMember, "Tie old", nil, "private", nil, "")
 	_, _ = svc.Share(ctx, authorMember, nTieRecent.ID, groupID, "link")
 	_, _ = svc.Share(ctx, authorMember, nTieOld.ID, groupID, "link")
 	for i := 0; i < 3; i++ {
@@ -915,7 +921,7 @@ func TestDriveCreateSyncsPostgresAndDrive(t *testing.T) {
 	svc, driveMock, noteStore, _, _, _, _, _ := newTestService()
 	ctx := context.Background()
 	author := uuid.NewString()
-	note, err := svc.Create(ctx, author, "Drive sync", nil, "private", stringPtr("# md body"), nil)
+	note, err := svc.Create(ctx, author, "Drive sync", nil, "private", stringPtr("# md body"), "")
 	if err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
@@ -939,9 +945,9 @@ func TestDriveUpdateSyncsContent(t *testing.T) {
 	svc, driveMock, _, _, _, _, _, _ := newTestService()
 	ctx := context.Background()
 	author := uuid.NewString()
-	note, _ := svc.Create(ctx, author, "Editable", nil, "private", stringPtr("v1"), nil)
+	note, _ := svc.Create(ctx, author, "Editable", nil, "private", stringPtr("v1"), "")
 	newBody := "v2 actualizado"
-	updated, err := svc.Update(ctx, author, note.ID, stringPtr("Editable v2"), nil, &newBody)
+	updated, err := svc.Update(ctx, author, note.ID, stringPtr("Editable v2"), nil, &newBody, "")
 	if err != nil {
 		t.Fatalf("update failed: %v", err)
 	}
@@ -962,7 +968,7 @@ func TestDriveUpdateRecreatesMissingFile(t *testing.T) {
 	svc, driveMock, noteStore, _, _, _, _, _ := newTestService()
 	ctx := context.Background()
 	author := uuid.NewString()
-	note, _ := svc.Create(ctx, author, "Legacy sin file", nil, "private", stringPtr("orig"), nil)
+	note, _ := svc.Create(ctx, author, "Legacy sin file", nil, "private", stringPtr("orig"), "")
 	// Simular nota legacy sin drive_file_id
 	stored, _ := noteStore.GetByID(ctx, note.ID)
 	stored.ExternalFileID = nil
@@ -970,7 +976,7 @@ func TestDriveUpdateRecreatesMissingFile(t *testing.T) {
 	noteStore.notes[note.ID].ExternalFileID = nil
 	noteStore.mu.Unlock()
 	newBody := "contenido recuperado"
-	updated, err := svc.Update(ctx, author, note.ID, nil, nil, &newBody)
+	updated, err := svc.Update(ctx, author, note.ID, nil, nil, &newBody, "")
 	if err != nil {
 		t.Fatalf("update self-healing failed: %v", err)
 	}
@@ -991,14 +997,14 @@ func TestDriveUpdateNotFoundMapsNoteUnavailable(t *testing.T) {
 	svc, driveMock, _, _, _, _, _, _ := newTestService()
 	ctx := context.Background()
 	author := uuid.NewString()
-	note, _ := svc.Create(ctx, author, "Borrada externa", nil, "private", stringPtr("x"), nil)
+	note, _ := svc.Create(ctx, author, "Borrada externa", nil, "private", stringPtr("x"), "")
 	driveMock.InjectGetError(*note.ExternalFileID, &drive.DriveError{Code: 404, Message: "Nota no disponible en almacenamiento remoto"})
 	// Forzar que UpdateFile falle con 404 eliminando el archivo del mock y usando otro owner path:
 	// Mock UpdateFile devuelve 404 si el archivo no existe.
 	// Eliminamos directamente vía DeleteFile con owner correcto y luego intentamos update.
 	_ = driveMock.DeleteFile(ctx, author, *note.ExternalFileID)
 	newBody := "intento"
-	_, err := svc.Update(ctx, author, note.ID, nil, nil, &newBody)
+	_, err := svc.Update(ctx, author, note.ID, nil, nil, &newBody, "")
 	if err == nil {
 		t.Fatal("esperaba note_unavailable al actualizar archivo borrado en Drive")
 	}
@@ -1012,7 +1018,7 @@ func TestDriveDeleteCascadesDriveAndPostgres(t *testing.T) {
 	svc, driveMock, noteStore, _, _, _, _, _ := newTestService()
 	ctx := context.Background()
 	author := uuid.NewString()
-	note, _ := svc.Create(ctx, author, "Eliminar cascada", nil, "private", stringPtr("bye"), nil)
+	note, _ := svc.Create(ctx, author, "Eliminar cascada", nil, "private", stringPtr("bye"), "")
 	fileID := *note.ExternalFileID
 	if err := svc.Delete(ctx, author, note.ID); err != nil {
 		t.Fatalf("delete failed: %v", err)
@@ -1030,7 +1036,7 @@ func TestDriveGetMaps403And404ToNoteUnavailable(t *testing.T) {
 		svc, driveMock, _, _, _, _, _, _ := newTestService()
 		ctx := context.Background()
 		author := uuid.NewString()
-		note, _ := svc.Create(ctx, author, "Híbrida", nil, "public", stringPtr("c"), nil)
+		note, _ := svc.Create(ctx, author, "Híbrida", nil, "public", stringPtr("c"), "")
 		driveMock.InjectGetError(*note.ExternalFileID, &drive.DriveError{Code: code, Message: "Nota no disponible en almacenamiento remoto"})
 		_, err := svc.Get(ctx, author, note.ID)
 		if err == nil {
@@ -1054,9 +1060,9 @@ func TestDriveCopyCreatesIndependentFile(t *testing.T) {
 	ctx := context.Background()
 	author := uuid.NewString()
 	copier := uuid.NewString()
-	note, _ := svc.Create(ctx, author, "Para copiar", nil, "public", stringPtr("original md"), nil)
+	note, _ := svc.Create(ctx, author, "Para copiar", nil, "public", stringPtr("original md"), "")
 	origID := *note.ExternalFileID
-	cloned, err := svc.Copy(ctx, copier, note.ID)
+	cloned, err := svc.Copy(ctx, copier, note.ID, "")
 	if err != nil {
 		t.Fatalf("copy failed: %v", err)
 	}
@@ -1080,9 +1086,9 @@ func TestDriveCopyMissingSourceMapsNotFound(t *testing.T) {
 	ctx := context.Background()
 	author := uuid.NewString()
 	copier := uuid.NewString()
-	note, _ := svc.Create(ctx, author, "Origen frágil", nil, "public", stringPtr("x"), nil)
+	note, _ := svc.Create(ctx, author, "Origen frágil", nil, "public", stringPtr("x"), "")
 	_ = driveMock.DeleteFile(ctx, author, *note.ExternalFileID)
-	_, err := svc.Copy(ctx, copier, note.ID)
+	_, err := svc.Copy(ctx, copier, note.ID, "")
 	if err == nil {
 		t.Fatal("esperaba error al copiar origen borrado en Drive")
 	}
@@ -1115,7 +1121,7 @@ func TestGetAccessAuthor(t *testing.T) {
 	svc, _, _, _, _, _, _, _ := newTestService()
 	ctx := context.Background()
 	author := uuid.NewString()
-	note, _ := svc.Create(ctx, author, "Autor access", nil, "private", stringPtr("c"), nil)
+	note, _ := svc.Create(ctx, author, "Autor access", nil, "private", stringPtr("c"), "")
 	access, err := svc.GetAccess(ctx, author, note.ID)
 	if err != nil {
 		t.Fatalf("author GetAccess failed: %v", err)
@@ -1155,7 +1161,7 @@ func TestGetAccessLink(t *testing.T) {
 	outsider := uuid.NewString()
 	groupID := uuid.NewString()
 	social.AddAdmin(author, groupID)
-	note, _ := svc.Create(ctx, author, "Link access", nil, "private", stringPtr("link"), nil)
+	note, _ := svc.Create(ctx, author, "Link access", nil, "private", stringPtr("link"), "")
 	if _, err := svc.Share(ctx, author, note.ID, groupID, "link"); err != nil {
 		t.Fatalf("share link failed: %v", err)
 	}
@@ -1177,12 +1183,12 @@ func TestGetAccessRestrictedMemberAndOutsider(t *testing.T) {
 	groupID := uuid.NewString()
 	social.AddAdmin(author, groupID)
 	social.AddMember(member, groupID)
-	note, _ := svc.Create(ctx, author, "Restricted access", nil, "private", stringPtr("r"), nil)
-	// privada sin compartir para no autor -> 403 (no 404)
+	note, _ := svc.Create(ctx, author, "Restricted access", nil, "private", stringPtr("r"), "")
+	// privada sin compartir para no autor -> 404 zero-knowledge (no 403)
 	if _, err := svc.GetAccess(ctx, member, note.ID); err == nil {
-		t.Fatal("miembro sin share debe 403")
-	} else if se := err.(*ServiceError); se.Code != "forbidden" {
-		t.Fatalf("esperaba forbidden, got %q", se.Code)
+		t.Fatal("miembro sin share debe 404")
+	} else if se := err.(*ServiceError); se.Code != "not_found" {
+		t.Fatalf("esperaba not_found, got %q", se.Code)
 	}
 	if _, err := svc.Share(ctx, author, note.ID, groupID, "restricted"); err != nil {
 		t.Fatalf("share restricted failed: %v", err)
@@ -1195,9 +1201,9 @@ func TestGetAccessRestrictedMemberAndOutsider(t *testing.T) {
 		t.Fatalf("esperaba access_mode=restricted, got %v", access["access_mode"])
 	}
 	if _, err := svc.GetAccess(ctx, outsider, note.ID); err == nil {
-		t.Fatal("outsider restricted debe 403")
-	} else if se := err.(*ServiceError); se.Code != "forbidden" {
-		t.Fatalf("esperaba forbidden, got %q", se.Code)
+		t.Fatal("outsider restricted debe 404")
+	} else if se := err.(*ServiceError); se.Code != "not_found" {
+		t.Fatalf("esperaba not_found, got %q", se.Code)
 	}
 }
 
@@ -1207,7 +1213,7 @@ func TestGetAccessNoExternalFile(t *testing.T) {
 	author := uuid.NewString()
 	other := uuid.NewString()
 	// privada sin external_file_id (offline-first aún no sincronizado)
-	priv, err := noteStore.Create(ctx, author, nil, "Sin archivo", nil, "private", nil)
+	priv, err := noteStore.Create(ctx, author, nil, "Sin archivo", nil, "private", nil, "")
 	if err != nil {
 		t.Fatalf("create memoria failed: %v", err)
 	}
@@ -1217,7 +1223,7 @@ func TestGetAccessNoExternalFile(t *testing.T) {
 		t.Fatalf("esperaba note_unavailable, got %q", se.Code)
 	}
 	// pública sin archivo: autoriza pero no hay qué servir
-	pub, _ := noteStore.Create(ctx, author, nil, "Pública sin archivo", nil, "public", nil)
+	pub, _ := noteStore.Create(ctx, author, nil, "Pública sin archivo", nil, "public", nil, "")
 	if _, err := svc.GetAccess(ctx, other, pub.ID); err == nil {
 		t.Fatal("pública sin archivo debe dar nota no disponible")
 	} else if se := err.(*ServiceError); se.Code != "note_unavailable" {
@@ -1240,7 +1246,7 @@ func TestGetAccessMultiShare(t *testing.T) {
 	social.AddAdmin(author, groupB)
 	social.AddMember(memberB, groupB)
 	social.AddAdmin(author, groupC)
-	note, _ := svc.Create(ctx, author, "Multi share", nil, "private", stringPtr("m"), nil)
+	note, _ := svc.Create(ctx, author, "Multi share", nil, "private", stringPtr("m"), "")
 	if _, err := svc.Share(ctx, author, note.ID, groupA, "restricted"); err != nil {
 		t.Fatalf("share A failed: %v", err)
 	}
@@ -1257,11 +1263,11 @@ func TestGetAccessMultiShare(t *testing.T) {
 			t.Fatalf("esperaba restricted, got %v", access["access_mode"])
 		}
 	}
-	// outsider 403 mientras todo es restricted
+	// outsider 404 mientras todo es restricted
 	if _, err := svc.GetAccess(ctx, outsider, note.ID); err == nil {
-		t.Fatal("outsider con todo restricted debe 403")
-	} else if se := err.(*ServiceError); se.Code != "forbidden" {
-		t.Fatalf("esperaba forbidden, got %q", se.Code)
+		t.Fatal("outsider con todo restricted debe 404")
+	} else if se := err.(*ServiceError); se.Code != "not_found" {
+		t.Fatalf("esperaba not_found, got %q", se.Code)
 	}
 	// al agregar un share link, cualquiera lee
 	if _, err := svc.Share(ctx, author, note.ID, groupC, "link"); err != nil {
@@ -1292,7 +1298,7 @@ func TestShareRestrictedGrants(t *testing.T) {
 	groupID := uuid.NewString()
 	social.AddAdmin(author, groupID)
 	md.SetEmails(groupID, []string{"ana@example.com", "ben@example.com", "cal@example.com"})
-	note, _ := svc.Create(ctx, author, "Restr grants", nil, "private", stringPtr("x"), nil)
+	note, _ := svc.Create(ctx, author, "Restr grants", nil, "private", stringPtr("x"), "")
 	shared, err := svc.Share(ctx, author, note.ID, groupID, "restricted")
 	if err != nil {
 		t.Fatalf("share restricted failed: %v", err)
@@ -1320,7 +1326,7 @@ func TestShareRestrictedDedup(t *testing.T) {
 	groupID := uuid.NewString()
 	social.AddAdmin(author, groupID)
 	md.SetEmails(groupID, []string{"Ana@Example.com", " ana@example.com ", "", "   ", "BEN@example.com", "ben@EXAMPLE.com"})
-	note, _ := svc.Create(ctx, author, "Restr dedup", nil, "private", stringPtr("x"), nil)
+	note, _ := svc.Create(ctx, author, "Restr dedup", nil, "private", stringPtr("x"), "")
 	if _, err := svc.Share(ctx, author, note.ID, groupID, "restricted"); err != nil {
 		t.Fatalf("share failed: %v", err)
 	}
@@ -1344,7 +1350,7 @@ func TestShareRestrictedSkipsBlankEmails(t *testing.T) {
 	social.AddAdmin(author, groupID)
 	// miembros sin correo válido se omiten
 	md.SetEmails(groupID, []string{"", "   ", "ok@example.com"})
-	note, _ := svc.Create(ctx, author, "Restr sin email", nil, "private", stringPtr("x"), nil)
+	note, _ := svc.Create(ctx, author, "Restr sin email", nil, "private", stringPtr("x"), "")
 	if _, err := svc.Share(ctx, author, note.ID, groupID, "restricted"); err != nil {
 		t.Fatalf("share failed: %v", err)
 	}
@@ -1360,7 +1366,7 @@ func TestShareRestrictedMemberError(t *testing.T) {
 	groupID := uuid.NewString()
 	social.AddAdmin(author, groupID)
 	md.SetError(fmt.Errorf("social caído"))
-	note, _ := svc.Create(ctx, author, "Restr dir error", nil, "private", stringPtr("x"), nil)
+	note, _ := svc.Create(ctx, author, "Restr dir error", nil, "private", stringPtr("x"), "")
 	// error al obtener miembros no rompe el flujo principal: el share persiste
 	shared, err := svc.Share(ctx, author, note.ID, groupID, "restricted")
 	if err != nil {
@@ -1382,7 +1388,7 @@ func TestShareRestrictedPartialFailure(t *testing.T) {
 	social.AddAdmin(author, groupID)
 	md.SetEmails(groupID, []string{"bad@example.com", "good@example.com"})
 	driveMock.InjectGrantError("bad@example.com", &drive.DriveError{Code: 500, Message: "boom"})
-	note, _ := svc.Create(ctx, author, "Restr parcial", nil, "private", stringPtr("x"), nil)
+	note, _ := svc.Create(ctx, author, "Restr parcial", nil, "private", stringPtr("x"), "")
 	// éxito parcial: el share se crea y se continúa con los demás miembros
 	shared, err := svc.Share(ctx, author, note.ID, groupID, "restricted")
 	if err != nil {
@@ -1403,7 +1409,7 @@ func TestShareRestrictedEmptyGroup(t *testing.T) {
 	groupID := uuid.NewString()
 	social.AddAdmin(author, groupID)
 	// grupo sin miembros: share creado, sin permisos
-	note, _ := svc.Create(ctx, author, "Restr vacío", nil, "private", stringPtr("x"), nil)
+	note, _ := svc.Create(ctx, author, "Restr vacío", nil, "private", stringPtr("x"), "")
 	if _, err := svc.Share(ctx, author, note.ID, groupID, "restricted"); err != nil {
 		t.Fatalf("share failed: %v", err)
 	}
@@ -1420,7 +1426,7 @@ func TestShareRestrictedAuthorOnce(t *testing.T) {
 	social.AddAdmin(author, groupID)
 	// el correo del autor viene duplicado en el listado: un solo permiso
 	md.SetEmails(groupID, []string{"author@example.com", " AUTHOR@example.com ", "other@example.com"})
-	note, _ := svc.Create(ctx, author, "Restr autor", nil, "private", stringPtr("x"), nil)
+	note, _ := svc.Create(ctx, author, "Restr autor", nil, "private", stringPtr("x"), "")
 	if _, err := svc.Share(ctx, author, note.ID, groupID, "restricted"); err != nil {
 		t.Fatalf("share failed: %v", err)
 	}
@@ -1443,7 +1449,7 @@ func TestShareLinkNoGrants(t *testing.T) {
 	groupID := uuid.NewString()
 	social.AddAdmin(author, groupID)
 	md.SetEmails(groupID, []string{"a@example.com"})
-	note, _ := svc.Create(ctx, author, "Link sin grants", nil, "private", stringPtr("x"), nil)
+	note, _ := svc.Create(ctx, author, "Link sin grants", nil, "private", stringPtr("x"), "")
 	if _, err := svc.Share(ctx, author, note.ID, groupID, "link"); err != nil {
 		t.Fatalf("share link failed: %v", err)
 	}

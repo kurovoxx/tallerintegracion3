@@ -17,6 +17,24 @@ type DriveError struct {
 
 func (e *DriveError) Error() string { return fmt.Sprintf("drive %d: %s", e.Code, e.Message) }
 
+// OAuthError representa falta de conexión OAuth vigente (semántica 403).
+// Se usa en lugar de fmt.Errorf con texto interno ("no oauth connection found...")
+// para que el handler pueda mapear a 403 genérico ("Conecte o renueve su
+// Google Drive") sin filtrar detalles internos al frontend. El Message es
+// deliberadamente genérico y seguro para logs; nunca incluye DSNs, tokens ni
+// trazas de BD.
+type OAuthError struct {
+	Message string
+}
+
+func (e *OAuthError) Error() string { return "oauth 403: " + e.Message }
+
+// IsOAuthError reporta si err es (o envuelve) un *OAuthError.
+func IsOAuthError(err error) bool {
+	var oe *OAuthError
+	return errors.As(err, &oe)
+}
+
 func IsNotFound(err error) bool {
 	var de *DriveError
 	if errors.As(err, &de) {
@@ -54,6 +72,8 @@ type Client interface {
 	GrantPermission(ctx context.Context, ownerUserID string, fileID string, granteeEmail string, role string) error
 	RevokePermission(ctx context.Context, ownerUserID string, fileID string, granteeEmail string) error
 	RevokeAllPermissions(ctx context.Context, ownerUserID string, fileID string) error
+	// VerifyFileAccess comprueba que el usuario puede acceder al archivo.
+	VerifyFileAccess(ctx context.Context, userID string, driveFileID string) error
 }
 
 // GrantCall registra un intento de GrantPermission (observable en tests).
@@ -76,6 +96,12 @@ type MockClient struct {
 	// GrantCalls registra cada GrantPermission; GrantErr inyecta fallo por email.
 	GrantCalls []GrantCall
 	GrantErr   map[string]error // email normalizado o crudo -> error
+	// NoOAuth simula usuarios sin conexión OAuth (comportamiento RealDriveClient:
+	// serviceFor falla con "no oauth connection found"). Cuando un userID está
+	// marcado, las operaciones que requieren su token fallan igual que en prod.
+	// CopyFile solo exige OAuth del destino (dst), replicando el Real desacoplado
+	// que no requiere token del autor original para clonar apuntes públicos.
+	NoOAuth map[string]bool
 }
 
 type mockFile struct {
@@ -93,7 +119,38 @@ func NewMockClient() *MockClient {
 	}
 }
 
+// checkOAuth replica serviceFor: falla si el usuario no tiene OAuth vinculado.
+func (m *MockClient) checkOAuth(userID string) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.NoOAuth != nil && m.NoOAuth[userID] {
+		return &OAuthError{Message: "Conecte o renueve su Google Drive"}
+	}
+	return nil
+}
+
+// Disconnect marca a un usuario sin OAuth (simula fila ausente/revocada en
+// identity.oauth_connections). Reconnect revierte el efecto.
+func (m *MockClient) Disconnect(userID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.NoOAuth == nil {
+		m.NoOAuth = make(map[string]bool)
+	}
+	m.NoOAuth[userID] = true
+}
+func (m *MockClient) Reconnect(userID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.NoOAuth != nil {
+		delete(m.NoOAuth, userID)
+	}
+}
+
 func (m *MockClient) CreateFile(ctx context.Context, userID string, title string, content string) (string, error) {
+	if err := m.checkOAuth(userID); err != nil {
+		return "", err
+	}
 	if m.CreateErr != nil {
 		return "", m.CreateErr
 	}
@@ -105,6 +162,9 @@ func (m *MockClient) CreateFile(ctx context.Context, userID string, title string
 }
 
 func (m *MockClient) GetFileContent(ctx context.Context, userID string, driveFileID string) (string, error) {
+	if err := m.checkOAuth(userID); err != nil {
+		return "", err
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if err, ok := m.GetErr[driveFileID]; ok && err != nil {
@@ -121,6 +181,9 @@ func (m *MockClient) GetFileContent(ctx context.Context, userID string, driveFil
 }
 
 func (m *MockClient) UpdateFile(ctx context.Context, userID string, driveFileID string, newContent *string, newTitle *string) error {
+	if err := m.checkOAuth(userID); err != nil {
+		return err
+	}
 	if m.UpdateErr != nil {
 		return m.UpdateErr
 	}
@@ -143,6 +206,26 @@ func (m *MockClient) UpdateFile(ctx context.Context, userID string, driveFileID 
 }
 
 func (m *MockClient) DeleteFile(ctx context.Context, userID string, driveFileID string) error {
+	if err := m.checkOAuth(userID); err != nil {
+		// Compensación y borrados en cascada no deben fallar por OAuth ausente:
+		// si el archivo no requiere token válido (ya huérfano o borrado), la
+		// limpieza debe ser best-effort. Solo se propaga el error OAuth cuando
+		// el archivo aún existe y pertenece al usuario.
+		m.mu.RLock()
+		f, ok := m.files[driveFileID]
+		m.mu.RUnlock()
+		if !ok {
+			return nil
+		}
+		if f.OwnerID == userID {
+			// Permitir borrado compensatorio aun sin OAuth para evitar huérfanos.
+			m.mu.Lock()
+			delete(m.files, driveFileID)
+			m.mu.Unlock()
+			return nil
+		}
+		return err
+	}
 	if m.DeleteErr != nil {
 		return m.DeleteErr
 	}
@@ -161,6 +244,9 @@ func (m *MockClient) DeleteFile(ctx context.Context, userID string, driveFileID 
 }
 
 func (m *MockClient) UploadAttachment(ctx context.Context, userID string, noteID string, fileName string, fileType string, data []byte, isInline bool) (string, string, error) {
+	if err := m.checkOAuth(userID); err != nil {
+		return "", "", err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if len(data) > 10*1024*1024 {
@@ -187,6 +273,12 @@ func (m *MockClient) DeleteAttachment(ctx context.Context, userID string, extern
 }
 
 func (m *MockClient) CopyFile(ctx context.Context, srcUserID string, srcFileID string, dstUserID string, newTitle string) (string, error) {
+	// Paridad con RealDriveClient desacoplado: solo se exige OAuth del destino.
+	// El token del autor original NO es requerido (permite clonar apuntes
+	// públicos aunque el autor haya revocado Drive).
+	if err := m.checkOAuth(dstUserID); err != nil {
+		return "", err
+	}
 	if m.CopyErr != nil {
 		return "", m.CopyErr
 	}
@@ -206,6 +298,29 @@ func (m *MockClient) CopyFile(ctx context.Context, srcUserID string, srcFileID s
 	m.files[newID] = &mockFile{ID: newID, OwnerID: dstUserID, Title: newTitle, Content: src.Content}
 	_ = srcUserID
 	return newID, nil
+}
+
+func (m *MockClient) VerifyFileAccess(ctx context.Context, userID string, driveFileID string) error {
+	if err := m.checkOAuth(userID); err != nil {
+		return err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if err, ok := m.GetErr[driveFileID]; ok && err != nil {
+		return err
+	}
+	f, ok := m.files[driveFileID]
+	if !ok {
+		return &DriveError{Code: 404, Message: "Archivo no encontrado"}
+	}
+	// Trust boundary: el archivo debe pertenecer al usuario que lo declara.
+	// En producción RealDriveClient.VerifyFileAccess hace Files.Get con el token
+	// del usuario: si el fileID es ajeno y no compartido, Drive responde 403.
+	// El mock replica esa semántica verificando OwnerID.
+	if f.OwnerID != userID {
+		return &DriveError{Code: 403, Message: "Nota no disponible en almacenamiento remoto"}
+	}
+	return nil
 }
 
 func (m *MockClient) GrantPermission(ctx context.Context, ownerUserID string, fileID string, granteeEmail string, role string) error {

@@ -2,10 +2,10 @@ package drive
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -41,6 +41,16 @@ type PGOAuthTokenStore struct {
 	// tokenURL y httpClient solo se usan en tests para inyectar un servidor falso.
 	tokenURL   string
 	httpClient *http.Client
+	// refreshLocks evita refresh concurrente duplicado: dos requests simultáneas
+	// con el mismo refresh_token expirado comparten un mutex por usuario, de modo
+	// que solo una llama a Google y la otra reutiliza el token ya refrescado.
+	refreshLocks sync.Map // userID -> *sync.Mutex
+}
+
+func (s *PGOAuthTokenStore) lockFor(userID string) *sync.Mutex {
+	v, _ := s.refreshLocks.LoadOrStore(userID, &sync.Mutex{})
+	m, _ := v.(*sync.Mutex)
+	return m
 }
 
 // NewPGOAuthTokenStore crea el store. clientID/clientSecret pueden venir vacíos:
@@ -49,29 +59,30 @@ func NewPGOAuthTokenStore(pool *pgxpool.Pool, clientID, clientSecret string) *PG
 	return &PGOAuthTokenStore{pool: pool, clientID: clientID, clientSecret: clientSecret}
 }
 
-// GetValidAccessToken devuelve el access_token vigente o un error claro:
-//   - "no oauth connection found for user <id>" si no hay fila en BD.
-//   - DriveError 403 si la conexión fue revocada.
+// GetValidAccessToken devuelve el access_token vigente o un error tipado:
+//   - *OAuthError (403) si no hay conexión, fue revocada, expiró sin refresh
+//     posible o el refresh fue rechazado (invalid_grant). El Message es
+//     genérico ("Conecte o renueve su Google Drive") para no filtrar texto
+//     interno al frontend; el detalle se registra vía log.
+//   - *DriveError 500 si Google no está disponible o la BD falla.
 //   - error de reconexión si expiró y no se puede refrescar.
 func (s *PGOAuthTokenStore) GetValidAccessToken(ctx context.Context, userID string) (string, error) {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
-		return "", fmt.Errorf("no oauth connection found for user %q: user_id vacío", userID)
+		return "", &OAuthError{Message: "Conecte o renueve su Google Drive"}
 	}
 	if s.pool == nil {
-		return "", fmt.Errorf("no oauth connection found for user %s: sin pool de BD (STORAGE_MODE=drive requiere DATABASE_URL)", userID)
+		return "", &OAuthError{Message: "Conecte o renueve su Google Drive"}
 	}
 	conn, err := s.getConnection(ctx, userID)
 	if err != nil {
 		return "", err
 	}
 	if conn == nil {
-		log.Printf("[DRIVE DEBUG] No se encontró token OAuth para userID: %s", userID)
-		return "", fmt.Errorf("no oauth connection found for user %s: conecte Google Drive primero (POST /auth/google-drive/connect)", userID)
+		return "", &OAuthError{Message: "Conecte o renueve su Google Drive"}
 	}
-	log.Printf("[DRIVE DEBUG] Token OAuth encontrado para userID: %s. Subiendo archivo a Drive...", userID)
 	if conn.RevokedAt != nil {
-		log.Printf("drive: conexión revocada para user %s (revoked_at=%v)", userID, conn.RevokedAt)
+		log.Printf("drive: conexión revocada (revoked_at=%v)", conn.RevokedAt)
 		return "", &DriveError{Code: 403, Message: "Nota no disponible en almacenamiento remoto"}
 	}
 	if strings.TrimSpace(conn.AccessToken) == "" {
@@ -81,24 +92,51 @@ func (s *PGOAuthTokenStore) GetValidAccessToken(ctx context.Context, userID stri
 	if conn.ExpiresAt == nil || time.Now().Add(5*time.Minute).Before(*conn.ExpiresAt) {
 		return conn.AccessToken, nil
 	}
-	// Expirado: intentar refresh.
-	if conn.RefreshToken == nil || strings.TrimSpace(*conn.RefreshToken) == "" {
-		log.Printf("drive: token expirado sin refresh_token para user %s", userID)
-		return "", fmt.Errorf("drive connection expired for user %s: sin refresh_token, reconecte Drive", userID)
+	// Expirado: serializar refresh por usuario para no desperdiciar cuota de
+	// Google ni generar UPDATEs concurrentes sobre la misma fila.
+	mu := s.lockFor(userID)
+	mu.Lock()
+	defer func() {
+		mu.Unlock()
+		// Evitar leak de memoria: eliminar la entrada una vez liberado el lock.
+		// Solo borrar si el mapa aún apunta a este mismo mutex (evita borrar
+		// el mutex nuevo creado por un lockFor concurrente posterior al Unlock).
+		if v, ok := s.refreshLocks.Load(userID); ok && v == mu {
+			s.refreshLocks.Delete(userID)
+		}
+	}()
+	// Releer tras adquirir el lock: otra goroutine pudo haber refrescado ya.
+	conn2, err := s.getConnection(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	if conn2 == nil {
+		return "", &OAuthError{Message: "Conecte o renueve su Google Drive"}
+	}
+	if conn2.RevokedAt != nil {
+		return "", &DriveError{Code: 403, Message: "Nota no disponible en almacenamiento remoto"}
+	}
+	if conn2.ExpiresAt == nil || time.Now().Add(5*time.Minute).Before(*conn2.ExpiresAt) {
+		if strings.TrimSpace(conn2.AccessToken) == "" {
+			return "", &DriveError{Code: 403, Message: "Nota no disponible en almacenamiento remoto"}
+		}
+		return conn2.AccessToken, nil
+	}
+	if conn2.RefreshToken == nil || strings.TrimSpace(*conn2.RefreshToken) == "" {
+		return "", &OAuthError{Message: "Conecte o renueve su Google Drive"}
 	}
 	if strings.TrimSpace(s.clientID) == "" || strings.TrimSpace(s.clientSecret) == "" {
-		log.Printf("drive: token expirado para user %s y GOOGLE_CLIENT_ID/SECRET vacíos (refresh deshabilitado)", userID)
-		return "", fmt.Errorf("drive connection expired for user %s: GOOGLE_CLIENT_ID/SECRET no configurados, reconecte Drive", userID)
+		log.Printf("drive: refresh deshabilitado (GOOGLE_CLIENT_ID/SECRET ausentes) user=%s", userID)
+		return "", &OAuthError{Message: "Conecte o renueve su Google Drive"}
 	}
-	refreshed, expiresAt, err := s.refresh(ctx, strings.TrimSpace(*conn.RefreshToken))
+	refreshed, expiresAt, err := s.refresh(ctx, strings.TrimSpace(*conn2.RefreshToken))
 	if err != nil {
 		return "", err
 	}
 	if err := s.updateAccessToken(ctx, userID, refreshed, expiresAt); err != nil {
-		log.Printf("drive: no se pudo persistir token refrescado para user %s: %v", userID, err)
-		return "", fmt.Errorf("drive: error persistiendo token refrescado para user %s: %w", userID, err)
+		log.Printf("drive: no se pudo persistir token refrescado: %v", err)
+		return "", &DriveError{Code: 500, Message: "Servicio de almacenamiento no disponible"}
 	}
-	log.Printf("drive: token refrescado OK para user %s", userID)
 	return refreshed, nil
 }
 
@@ -113,7 +151,8 @@ func (s *PGOAuthTokenStore) getConnection(ctx context.Context, userID string) (*
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("drive: error consultando oauth_connections para user %s: %w", userID, err)
+		log.Printf("drive: error consultando oauth_connections user=%s: %v", userID, err)
+		return nil, &DriveError{Code: 500, Message: "Servicio de almacenamiento no disponible"}
 	}
 	return &c, nil
 }
@@ -129,7 +168,7 @@ func (s *PGOAuthTokenStore) updateAccessToken(ctx context.Context, userID, acces
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("no oauth connection found for user %s", userID)
+		return &OAuthError{Message: "Conecte o renueve su Google Drive"}
 	}
 	return nil
 }
@@ -152,12 +191,14 @@ func (s *PGOAuthTokenStore) refresh(ctx context.Context, refreshToken string) (s
 	if err != nil {
 		msg := strings.ToLower(err.Error())
 		if strings.Contains(msg, "invalid_grant") || strings.Contains(msg, "400") {
-			return "", time.Time{}, fmt.Errorf("drive connection invalid: refresh rechazado por Google (invalid_grant), reconecte Drive: %w", err)
+			log.Printf("drive: refresh rechazado por Google (invalid_grant)")
+			return "", time.Time{}, &OAuthError{Message: "invalid_grant: refresh rechazado por Google, reconecte Drive"}
 		}
-		return "", time.Time{}, fmt.Errorf("drive: google_unavailable refrescando token: %w", err)
+		log.Printf("drive: google_unavailable refrescando token: %v", err)
+		return "", time.Time{}, &DriveError{Code: 500, Message: "google_unavailable refrescando token"}
 	}
 	if tok == nil || strings.TrimSpace(tok.AccessToken) == "" {
-		return "", time.Time{}, fmt.Errorf("drive: google devolvió access_token vacío al refrescar")
+		return "", time.Time{}, &DriveError{Code: 500, Message: "Servicio de almacenamiento no disponible"}
 	}
 	exp := tok.Expiry
 	if exp.IsZero() {

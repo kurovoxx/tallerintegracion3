@@ -209,7 +209,7 @@ func TestHandlerGetWithDriveResilienceAlternative(t *testing.T) {
 
 func nilContext() context.Context { return context.Background() }
 
-func TestHandlerPrivateAccessForbidden(t *testing.T) {
+func TestHandlerPrivateAccessNotFound(t *testing.T) {
 	r, _, _, social := setupRouter()
 	author := uuid.NewString()
 	other := uuid.NewString()
@@ -229,13 +229,13 @@ func TestHandlerPrivateAccessForbidden(t *testing.T) {
 	var cre map[string]string
 	json.Unmarshal(w.Body.Bytes(), &cre)
 	noteID := cre["note_id"]
-	// other intenta leer
+	// other intenta leer: 404 zero-knowledge (no 403, que revelaría existencia)
 	w2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodGet, "/notes/"+noteID, nil)
 	req2.Header.Set("Authorization", "Bearer "+otherToken)
 	r.ServeHTTP(w2, req2)
-	if w2.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d %s", w2.Code, w2.Body.String())
+	if w2.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d %s", w2.Code, w2.Body.String())
 	}
 	// other intenta editar
 	w3 := httptest.NewRecorder()
@@ -243,8 +243,8 @@ func TestHandlerPrivateAccessForbidden(t *testing.T) {
 	req3.Header.Set("Content-Type", "application/json")
 	req3.Header.Set("Authorization", "Bearer "+otherToken)
 	r.ServeHTTP(w3, req3)
-	if w3.Code != http.StatusForbidden {
-		t.Fatalf("expected 403 on patch, got %d %s", w3.Code, w3.Body.String())
+	if w3.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 on patch (obfuscated), got %d %s", w3.Code, w3.Body.String())
 	}
 }
 
@@ -511,7 +511,7 @@ func TestHandlerListMyPagination(t *testing.T) {
 }
 
 func TestHandlerExternalAttachment(t *testing.T) {
-	r, _, _, _ := setupRouter()
+	r, _, driveMock, _ := setupRouter()
 	userID := uuid.NewString()
 	token := genToken(userID, "student")
 	w := httptest.NewRecorder()
@@ -522,7 +522,12 @@ func TestHandlerExternalAttachment(t *testing.T) {
 	var cre map[string]string
 	json.Unmarshal(w.Body.Bytes(), &cre)
 	nid := cre["note_id"]
-	extID := "drive_external_12345"
+	// Precondición: el archivo debe existir y pertenecer al usuario en Drive
+	// (VerifyFileAccess valida el trust boundary antes de registrar el adjunto).
+	extID, err := driveMock.CreateFile(context.Background(), userID, "doc.pdf", "contenido")
+	if err != nil {
+		t.Fatalf("precondición: no se pudo crear archivo externo en Drive mock: %v", err)
+	}
 	body := fmt.Sprintf(`{"external_file_id":"%s","file_name":"doc.pdf","file_type":"application/pdf","is_inline":false}`, extID)
 	w2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodPost, "/notes/"+nid+"/attachments", bytes.NewBufferString(body))
@@ -683,13 +688,13 @@ func TestAccessModeLinkVsRestricted(t *testing.T) {
 	if w5.Code != 201 {
 		t.Fatalf("share restricted %d %s", w5.Code, w5.Body.String())
 	}
-	// nonMember 403
+	// nonMember 404 zero-knowledge
 	w6 := httptest.NewRecorder()
 	req6 := httptest.NewRequest(http.MethodGet, "/notes/"+nidRestr, nil)
 	req6.Header.Set("Authorization", "Bearer "+nt)
 	r.ServeHTTP(w6, req6)
-	if w6.Code != 403 {
-		t.Fatalf("nonMember restricted expected 403 got %d %s", w6.Code, w6.Body.String())
+	if w6.Code != 404 {
+		t.Fatalf("nonMember restricted expected 404 got %d %s", w6.Code, w6.Body.String())
 	}
 	// member 200
 	w7 := httptest.NewRecorder()
@@ -922,7 +927,7 @@ func TestHandlerGetAccessNotFound404(t *testing.T) {
 	}
 }
 
-func TestHandlerGetAccessForbidden403(t *testing.T) {
+func TestHandlerGetAccessZeroKnowledge404(t *testing.T) {
 	r, _, _, _ := setupRouter()
 	author := uuid.NewString()
 	other := uuid.NewString()
@@ -936,13 +941,21 @@ func TestHandlerGetAccessForbidden403(t *testing.T) {
 	var cre map[string]string
 	json.Unmarshal(w.Body.Bytes(), &cre)
 	nid := cre["note_id"]
-	// privada sin compartir para no autor -> 403
+	// privada sin compartir para no autor -> 404 (no 403: zero-knowledge)
 	w2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodGet, "/notes/"+nid+"/access", nil)
 	req2.Header.Set("Authorization", "Bearer "+ot)
 	r.ServeHTTP(w2, req2)
-	if w2.Code != 403 {
-		t.Fatalf("esperaba 403 got %d %s", w2.Code, w2.Body.String())
+	if w2.Code != 404 {
+		t.Fatalf("esperaba 404 got %d %s", w2.Code, w2.Body.String())
+	}
+	// mismo error canónico que una nota inexistente (anti-enumeración)
+	w3 := httptest.NewRecorder()
+	req3 := httptest.NewRequest(http.MethodGet, "/notes/"+uuid.NewString()+"/access", nil)
+	req3.Header.Set("Authorization", "Bearer "+ot)
+	r.ServeHTTP(w3, req3)
+	if w3.Body.String() != w2.Body.String() {
+		t.Fatalf("respuesta indistinguible esperada: privada=%s inexistente=%s", w2.Body.String(), w3.Body.String())
 	}
 }
 
@@ -965,13 +978,13 @@ func TestHandlerGetAccessRestrictedFlow(t *testing.T) {
 	var cre map[string]string
 	json.Unmarshal(w.Body.Bytes(), &cre)
 	nid := cre["note_id"]
-	// miembro sin share -> 403
+	// miembro sin share -> 404 zero-knowledge
 	w0 := httptest.NewRecorder()
 	req0 := httptest.NewRequest(http.MethodGet, "/notes/"+nid+"/access", nil)
 	req0.Header.Set("Authorization", "Bearer "+mt)
 	r.ServeHTTP(w0, req0)
-	if w0.Code != 403 {
-		t.Fatalf("miembro sin share esperaba 403 got %d %s", w0.Code, w0.Body.String())
+	if w0.Code != 404 {
+		t.Fatalf("miembro sin share esperaba 404 got %d %s", w0.Code, w0.Body.String())
 	}
 	// compartir restricted
 	w2 := httptest.NewRecorder()
@@ -995,13 +1008,13 @@ func TestHandlerGetAccessRestrictedFlow(t *testing.T) {
 	if resp["access_mode"] != "restricted" || resp["can_read"] != true {
 		t.Fatalf("respuesta inesperada: %v", resp)
 	}
-	// outsider -> 403
+	// outsider -> 404 zero-knowledge
 	w4 := httptest.NewRecorder()
 	req4 := httptest.NewRequest(http.MethodGet, "/notes/"+nid+"/access", nil)
 	req4.Header.Set("Authorization", "Bearer "+ot)
 	r.ServeHTTP(w4, req4)
-	if w4.Code != 403 {
-		t.Fatalf("outsider restricted esperaba 403 got %d %s", w4.Code, w4.Body.String())
+	if w4.Code != 404 {
+		t.Fatalf("outsider restricted esperaba 404 got %d %s", w4.Code, w4.Body.String())
 	}
 }
 
