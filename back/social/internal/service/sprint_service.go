@@ -203,6 +203,18 @@ func (s *SprintService) CreateSprintTask(ctx context.Context, groupID, sheetID, 
 	return SprintTaskView{Task: task, Sheet: sheet}, nil
 }
 
+// ListSheets devuelve las hojas de sprint del grupo (la más antigua primero).
+func (s *SprintService) ListSheets(ctx context.Context, groupID string) ([]sqlc.SocialSprintSheet, error) {
+	gid, err := parseGroupUUID(groupID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.requireGroup(ctx, gid); err != nil {
+		return nil, err
+	}
+	return s.repo.ListSheetsByGroup(ctx, gid)
+}
+
 func (s *SprintService) ListSprintTasks(ctx context.Context, groupID, status, priority, sheetID string) ([]SprintTaskView, error) {
 	gid, err := parseGroupUUID(groupID)
 	if err != nil {

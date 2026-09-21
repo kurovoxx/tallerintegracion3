@@ -164,3 +164,33 @@ func (s *MeetingService) CreateMeeting(ctx context.Context, groupID, userID, tit
 
 	return meeting, nil
 }
+
+// ListUpcomingMeetings devuelve las reuniones del grupo con scheduled_at >= now,
+// en orden cronológico. Solo para miembros.
+func (s *MeetingService) ListUpcomingMeetings(ctx context.Context, groupID, userID string, now time.Time) ([]sqlc.SocialMeeting, error) {
+	gid, err := parseGroupUUID(groupID)
+	if err != nil {
+		return nil, err
+	}
+	uid, err := parseMeetingUserUUID(userID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.requireMeetingGroup(ctx, gid); err != nil {
+		return nil, err
+	}
+	if err := s.requireMembership(ctx, gid, uid); err != nil {
+		return nil, err
+	}
+	all, err := s.repo.ListMeetingsByGroup(ctx, gid)
+	if err != nil {
+		return nil, err
+	}
+	upcoming := make([]sqlc.SocialMeeting, 0, len(all))
+	for _, m := range all {
+		if m.ScheduledAt.Valid && !m.ScheduledAt.Time.Before(now) {
+			upcoming = append(upcoming, m)
+		}
+	}
+	return upcoming, nil
+}
