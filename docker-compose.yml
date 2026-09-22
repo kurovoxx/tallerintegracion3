@@ -35,6 +35,7 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
       SUPABASE_URL: ${SUPABASE_URL}
       DISCOVERY_URL: ${DISCOVERY_URL}
     depends_on:
@@ -82,6 +83,9 @@ services:
       JWT: 961e9b2e-0333-4ec9-aadb-72e95ca06e4d
       PORT: 8083
       SOCIAL_PORT: 8083
+      AUTH_BASE_URL: http://auth:8080
+      INTERNAL_API_KEY: dev-internal-key-change-me
+      CALENDAR_MODE: mock
     depends_on:
       postgres:
         condition: service_healthy

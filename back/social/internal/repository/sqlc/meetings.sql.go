@@ -172,3 +172,32 @@ func (q *Queries) IsGroupMember(ctx context.Context, arg IsGroupMemberParams) (b
 	err := row.Scan(&exists)
 	return exists, err
 }
+
+const updateMeetingCalendarEventID = `-- name: UpdateMeetingCalendarEventID :one
+UPDATE social.meetings SET
+  google_calendar_event_id = $2
+WHERE id = $1
+RETURNING id, group_id, title, description, scheduled_at, created_by_user_id, notify_discord, google_calendar_event_id, created_at
+`
+
+type UpdateMeetingCalendarEventIDParams struct {
+	ID                    pgtype.UUID
+	GoogleCalendarEventID pgtype.Text
+}
+
+func (q *Queries) UpdateMeetingCalendarEventID(ctx context.Context, arg UpdateMeetingCalendarEventIDParams) (SocialMeeting, error) {
+	row := q.db.QueryRow(ctx, updateMeetingCalendarEventID, arg.ID, arg.GoogleCalendarEventID)
+	var i SocialMeeting
+	err := row.Scan(
+		&i.ID,
+		&i.GroupID,
+		&i.Title,
+		&i.Description,
+		&i.ScheduledAt,
+		&i.CreatedByUserID,
+		&i.NotifyDiscord,
+		&i.GoogleCalendarEventID,
+		&i.CreatedAt,
+	)
+	return i, err
+}

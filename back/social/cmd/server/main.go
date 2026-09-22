@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/calendar"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/config"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/discord"
 	httpHandler "github.com/kurovoxx/tallerintegracion3/back/social/internal/handler/http"
@@ -83,7 +84,10 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	discordSvc := service.NewDiscordService(discordRepo)
 	discordH := httpHandler.NewDiscordHandler(discordSvc)
 	meetingSvc := service.NewMeetingService(meetingRepo,
-		service.NewDiscordMeetingNotifier(discordRepo, discord.NewWebhookClient()))
+		service.NewMultiMeetingNotifier(
+			calendarNotifierFor(cfg, meetingRepo),
+			service.NewDiscordMeetingNotifier(discordRepo, discord.NewWebhookClient()),
+		))
 	meetingH := httpHandler.NewMeetingHandler(meetingSvc)
 
 	viewSvc := service.NewViewService(groupSvc, todoSvc, sprintSvc, meetingSvc)
@@ -91,6 +95,27 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 
 	startGin(groupSvc, todoH, sprintH, hoursH, meetingH, discordH, viewH, pool, cfg)
 }
+
+func calendarNotifierFor(cfg *config.Config, meetingRepo *repository.MeetingRepository) service.MeetingCreatedNotifier {
+	// CALENDAR_MODE=mock (default): sync simulado, sin llamar a Google ni a Auth.
+	// Persiste un google_calendar_event_id falso para verificar el cableado E2E.
+	if strings.ToLower(strings.TrimSpace(cfg.CalendarMode)) != "real" {
+		log.Printf("calendar sync: modo mock (CALENDAR_MODE=%s)", cfg.CalendarMode)
+		return service.NewCalendarMeetingNotifier(
+			&service.StubCalendarGateway{},
+			calendar.NewMockClient(),
+			meetingRepo,
+		)
+	}
+	// CALENDAR_MODE=real: token vía Auth interno + API REST de Google.
+	log.Printf("calendar sync: modo real contra Auth %s", cfg.AuthBaseURL)
+	return service.NewCalendarMeetingNotifier(
+		&service.AuthCalendarGateway{BaseURL: cfg.AuthBaseURL, InternalKey: cfg.InternalKey},
+		calendar.NewRESTClient(),
+		meetingRepo,
+	)
+}
+
 
 func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, meetingH *httpHandler.MeetingHandler, discordH *httpHandler.DiscordHandler, viewH *httpHandler.ViewHandler, pool *pgxpool.Pool, cfg *config.Config) {
 	validator := &middleware.SimpleHS256Validator{

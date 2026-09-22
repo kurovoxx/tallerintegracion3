@@ -67,6 +67,16 @@ func main() {
 	driveSvc := service.NewDriveOAuthService(oauthRepo, driveProvider)
 	driveH := httpHandler.NewDriveHandler(driveSvc)
 
+	// Calendar OAuth: Handler → Service → Repository (google-calendar/connect + interno para Social)
+	calendarProvider := &service.ConfigCalendarOAuthProvider{
+		ClientID:     cfg.GoogleClientID,
+		ClientSecret: cfg.GoogleClientSecret,
+		RedirectURI:  cfg.GoogleRedirectURI,
+	}
+	calendarSvc := service.NewCalendarOAuthService(oauthRepo, calendarProvider)
+	calendarH := httpHandler.NewCalendarHandler(calendarSvc)
+	internalOAuthH := httpHandler.NewInternalOAuthHandler(calendarSvc)
+
 	r := gin.Default()
 
 	// Público (sin auth) según agentApiContract.md
@@ -75,6 +85,15 @@ func main() {
 	r.POST("/auth/refresh", authH.Refresh)
 	r.POST("/auth/logout", authH.Logout)
 	r.POST("/auth/google-drive/connect", authMw.RequireAuth(), driveH.Connect)
+	r.POST("/auth/google-calendar/connect", authMw.RequireAuth(), calendarH.Connect)
+
+	// Interno servicio-a-servicio (Social → Auth): secreto compartido, sin JWT de usuario
+	internal := r.Group("/internal")
+	internal.Use(middleware.RequireInternalKey(cfg.InternalAPIKey))
+	{
+		internal.GET("/oauth/calendar-token", internalOAuthH.GetCalendarToken)
+		internal.POST("/oauth/calendar-revoked", internalOAuthH.ReportCalendarRevoked)
+	}
 
 	// Protegido: middleware valida firma+expiración, inyecta solo user_id (sin role global)
 	// 401 token inválido/expirado
