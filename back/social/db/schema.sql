@@ -112,3 +112,17 @@ CREATE TABLE IF NOT EXISTS social.meeting_notifications (
 );
 
 CREATE INDEX IF NOT EXISTS idx_meeting_notifications_user_id on social.meeting_notifications using btree (user_id);
+
+CREATE TABLE IF NOT EXISTS social.discord_integrations (
+  id uuid not null default gen_random_uuid (),
+  group_id uuid not null,
+  server_name character varying(200) null,
+  invite_url character varying(500) null,
+  webhook_url character varying(500) null,
+  category_id character varying(50) null,
+  channel_id character varying(50) null,
+  created_at timestamp with time zone not null default now(),
+  constraint discord_integrations_pkey primary key (id),
+  constraint discord_integrations_group_id_key unique (group_id),
+  constraint discord_integrations_group_id_fkey foreign KEY (group_id) references social.groups (id) on delete CASCADE
+);
