@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/calendar"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/config"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/discord"
 	httpHandler "github.com/kurovoxx/tallerintegracion3/back/social/internal/handler/http"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/middleware"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository"
@@ -79,10 +80,20 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	hoursH := httpHandler.NewHoursHandler(hoursSvc)
 
 	meetingRepo := repository.NewMeetingRepository(pool)
-	meetingSvc := service.NewMeetingService(meetingRepo, calendarNotifierFor(cfg, meetingRepo))
+	discordRepo := repository.NewDiscordRepository(pool)
+	discordSvc := service.NewDiscordService(discordRepo)
+	discordH := httpHandler.NewDiscordHandler(discordSvc)
+	meetingSvc := service.NewMeetingService(meetingRepo,
+		service.NewMultiMeetingNotifier(
+			calendarNotifierFor(cfg, meetingRepo),
+			service.NewDiscordMeetingNotifier(discordRepo, discord.NewWebhookClient()),
+		))
 	meetingH := httpHandler.NewMeetingHandler(meetingSvc)
 
-	startGin(groupSvc, todoH, sprintH, hoursH, meetingH, pool, cfg)
+	viewSvc := service.NewViewService(groupSvc, todoSvc, sprintSvc, meetingSvc)
+	viewH := httpHandler.NewViewHandler(groupSvc, viewSvc)
+
+	startGin(groupSvc, todoH, sprintH, hoursH, meetingH, discordH, viewH, pool, cfg)
 }
 
 func calendarNotifierFor(cfg *config.Config, meetingRepo *repository.MeetingRepository) service.MeetingCreatedNotifier {
@@ -105,7 +116,8 @@ func calendarNotifierFor(cfg *config.Config, meetingRepo *repository.MeetingRepo
 	)
 }
 
-func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, meetingH *httpHandler.MeetingHandler, pool *pgxpool.Pool, cfg *config.Config) {
+
+func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, meetingH *httpHandler.MeetingHandler, discordH *httpHandler.DiscordHandler, viewH *httpHandler.ViewHandler, pool *pgxpool.Pool, cfg *config.Config) {
 	validator := &middleware.SimpleHS256Validator{
 		Secret:   []byte(cfg.JWTSecret),
 		Issuer:   "apuntes-auth",
@@ -148,20 +160,8 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 	protected := r.Group("")
 	protected.Use(authMw.RequireAuth())
 	{
-		protected.POST("/groups", groupHandler.Create)
-		// Próximas tareas del backlog de Benjamín (2_3_2 en adelante) se
-		// registran acá a medida que se implementan:
-		protected.GET("/groups/me", groupHandler.ListMy)
-		protected.GET("/groups/:id", groupHandler.Get)
-		protected.POST("/groups/:id/join", groupHandler.Join)
-		protected.POST("/groups/:id/invite/regenerate", groupHandler.RegenerateInvite)
-		protected.GET("/groups/:id/members", groupHandler.ListMembers)
-
-		protected.POST("/groups/:id/members/:user_id/kick", groupHandler.KickMember)
-		protected.POST("/groups/:id/members/:user_id/ban", groupHandler.BanMember)
-		protected.PATCH("/groups/:id/members/:userId/role", groupHandler.ChangeRole)
-		protected.POST("/groups/:id/transfer-admin", groupHandler.TransferAdmin)
-		protected.POST("/groups/:id/leave", groupHandler.LeaveGroup)
+		groupHandler.RegisterRoutes(protected)
+		viewH.RegisterRoutes(protected) // payloads de vistas (2_3_14 y 2_3_15)
 
 		protected.POST("/groups/:id/todo", todoH.CreateTodo)
 		protected.GET("/groups/:id/todo", todoH.ListTodos)
@@ -174,6 +174,7 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 		protected.POST("/sprint-sheet/:taskId/hours", hoursH.LogHours)
 		protected.GET("/sprint-sheet/:taskId/hours", hoursH.ListHours)
 		protected.POST("/groups/:id/meetings", meetingH.CreateMeeting)
+		protected.PUT("/groups/:id/discord-config", discordH.PutConfig)
 	}
 
 	addr := ":" + cfg.Port

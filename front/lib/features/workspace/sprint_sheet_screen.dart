@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../core/common_widgets.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/neobrutalism.dart';
 
 class SprintSheetScreen extends StatefulWidget {
   const SprintSheetScreen({super.key});
@@ -111,15 +113,15 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
   Color _statusColor(String s) {
     switch (s) {
       case 'En proceso':
-        return const Color(0xFFFFD700);
+        return AppColors.accentYellow;
       case 'Sin empezar':
-        return const Color(0xFFB5FF00);
+        return AppColors.pendingLight;
       case 'Listo':
-        return const Color(0xFF00FF00);
+        return AppColors.success;
       case 'Pendiente':
-        return const Color(0xFFFF5500);
+        return AppColors.subjectPeach;
       default:
-        return AppColors.bg;
+        return AppColors.surfaceLow;
     }
   }
 
@@ -127,11 +129,15 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     final ctrl = TextEditingController();
     showDialog(
       context: context,
+      barrierColor: AppColors.scrim,
       builder: (_) => AlertDialog(
         backgroundColor: AppColors.surface,
         shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.zero,
-          side: BorderSide(color: Colors.black, width: 2),
+          side: BorderSide(
+            color: AppColors.border,
+            width: AppDimens.borderWidthThick,
+          ),
         ),
         title: Text(
           'NUEVA TAREA • $member',
@@ -143,36 +149,23 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
         ),
         content: TextField(
           controller: ctrl,
-          decoration: const InputDecoration(
-            hintText: 'Título',
-            filled: true,
-            fillColor: AppColors.bg,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.zero,
-              borderSide: BorderSide(color: Colors.black, width: 2),
-            ),
+          style: const TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 13,
+            color: AppColors.text,
           ),
+          decoration: appInputDecoration('Título'),
         ),
         actions: [
-          TextButton(
+          NeobrutalistButton(
+            label: 'Cancelar',
+            variant: NeobrutalistButtonVariant.secondary,
             onPressed: () => Navigator.pop(context),
-            child: const Text(
-              'CANCELAR',
-              style: TextStyle(
-                color: AppColors.text,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
           ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.black,
-              foregroundColor: Colors.white,
-              shape: const RoundedRectangleBorder(
-                borderRadius: BorderRadius.zero,
-              ),
-              side: const BorderSide(color: Colors.black, width: 2),
-            ),
+          NeobrutalistButton(
+            label: 'Agregar',
+            icon: Icons.add_rounded,
+            variant: NeobrutalistButtonVariant.accent,
             onPressed: () {
               if (ctrl.text.trim().isEmpty) return;
               setState(() {
@@ -187,10 +180,6 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
               });
               Navigator.pop(context);
             },
-            child: const Text(
-              'AGREGAR',
-              style: TextStyle(fontWeight: FontWeight.w900),
-            ),
           ),
         ],
       ),
@@ -214,12 +203,6 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                 fontWeight: FontWeight.w900,
                 color: AppColors.text,
                 letterSpacing: -0.5,
-                shadows: [
-                  Shadow(
-                    offset: Offset(1, 1),
-                    color: Colors.black.withValues(alpha: 0.0),
-                  ),
-                ],
               ),
             ),
             const SizedBox(height: 12),
@@ -244,25 +227,62 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
 
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(),
       child: Container(
         height: 100,
         constraints: const BoxConstraints(minWidth: 520),
         decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border.all(color: Colors.black, width: 2),
-          boxShadow: const [BoxShadow(color: Colors.black, offset: Offset(4, 4))],
+          color: AppColors.surface,
+          border: Border.all(color: AppColors.border, width: 2),
+          boxShadow: AppShadows.card,
         ),
         child: Row(
           children: [
             SizedBox(width: 170, child: _buildDateCell(fmt(now), fmt(end))),
-            const VerticalDivider(width: 2, thickness: 2, color: Colors.black),
-            _buildMetricCell('TOTAL HORAS', '${totalEst.toStringAsFixed(1)}h', const Color(0xFFE6F4EA), width: 90),
-            const VerticalDivider(width: 2, thickness: 2, color: Colors.black),
-            _buildMetricCell('DÍAS TOTALES', '$totalDays', const Color(0xFFE6F4EA), width: 85),
-            const VerticalDivider(width: 2, thickness: 2, color: Colors.black),
-            _buildMetricCell('HORAS USADAS', '${totalUsed.toStringAsFixed(1)}h', const Color(0xFFE6F4EA), width: 90),
-            const VerticalDivider(width: 2, thickness: 2, color: Colors.black),
-            _buildMetricCell('HORAS RESTANTES', '${totalRemaining.toStringAsFixed(1)}h', const Color(0xFFFFD700), width: 95),
+            const VerticalDivider(
+              width: 2,
+              thickness: 2,
+              color: AppColors.border,
+            ),
+            _buildMetricCell(
+              'TOTAL HORAS',
+              '${totalEst.toStringAsFixed(1)}h',
+              AppColors.surfaceLow,
+              width: 90,
+            ),
+            const VerticalDivider(
+              width: 2,
+              thickness: 2,
+              color: AppColors.border,
+            ),
+            _buildMetricCell(
+              'DÍAS TOTALES',
+              '$totalDays',
+              AppColors.surfaceLow,
+              width: 85,
+            ),
+            const VerticalDivider(
+              width: 2,
+              thickness: 2,
+              color: AppColors.border,
+            ),
+            _buildMetricCell(
+              'HORAS USADAS',
+              '${totalUsed.toStringAsFixed(1)}h',
+              AppColors.surfaceLow,
+              width: 90,
+            ),
+            const VerticalDivider(
+              width: 2,
+              thickness: 2,
+              color: AppColors.border,
+            ),
+            _buildMetricCell(
+              'HORAS RESTANTES',
+              '${totalRemaining.toStringAsFixed(1)}h',
+              AppColors.accentYellow,
+              width: 95,
+            ),
           ],
         ),
       ),
@@ -276,14 +296,18 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
             const SizedBox(height: 2),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(color: AppColors.bg, border: Border.all(color: Colors.black, width: 1)),
+              decoration: BoxDecoration(
+                color: AppColors.bg,
+                border: Border.all(color: AppColors.border, width: 1),
+                boxShadow: AppShadows.badge,
+              ),
               child: Text(date, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: AppColors.text)),
             ),
           ],
         );
     return Container(
       width: 170,
-      color: const Color(0xFFF3F3F4),
+      color: AppColors.surfaceLow,
       padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -313,9 +337,20 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Text(label, textAlign: TextAlign.center, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: AppColors.muted, letterSpacing: 0.4)),
-          const SizedBox(height: 4),
-          Text(value, textAlign: TextAlign.center, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: AppColors.text)),
+          Flexible(
+            child: Text(
+              label,
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: AppColors.muted, letterSpacing: 0.4, height: 1.1),
+            ),
+          ),
+          const SizedBox(height: AppDimens.spaceXs),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(value, textAlign: TextAlign.center, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: AppColors.text)),
+          ),
         ],
       ),
     );
@@ -325,18 +360,18 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
       decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: Colors.black, width: 2),
-        boxShadow: const [BoxShadow(color: Colors.black, offset: Offset(4, 4))],
+        color: AppColors.surface,
+        border: Border.all(color: AppColors.border, width: 2),
+        boxShadow: AppShadows.card,
       ),
       child: Wrap(
         spacing: 10,
         runSpacing: 6,
-        children: const [
-          _LegendChip(color: Color(0xFFFFD700), label: 'En proceso'),
-          _LegendChip(color: Color(0xFFB5FF00), label: 'Sin empezar'),
-          _LegendChip(color: Color(0xFF00FF00), label: 'Listo'),
-          _LegendChip(color: Color(0xFFFF5500), label: 'Pendiente'),
+        children: [
+          _LegendChip(color: _statusColor('En proceso'), label: 'En proceso'),
+          _LegendChip(color: _statusColor('Sin empezar'), label: 'Sin empezar'),
+          _LegendChip(color: _statusColor('Listo'), label: 'Listo'),
+          _LegendChip(color: _statusColor('Pendiente'), label: 'Pendiente'),
         ],
       ),
     );
@@ -350,12 +385,12 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
 
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: Colors.black, width: 2),
-        boxShadow: const [BoxShadow(color: Colors.black, offset: Offset(4, 4))],
+        color: AppColors.surface,
+        border: Border.all(color: AppColors.border, width: 2),
+        boxShadow: AppShadows.card,
       ),
       child: Table(
-        border: TableBorder.all(color: Colors.black, width: 2),
+        border: TableBorder.all(color: AppColors.border, width: 2),
         columnWidths: const {
           0: FixedColumnWidth(220),
           1: FixedColumnWidth(90),
@@ -369,23 +404,36 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
           9: FixedColumnWidth(90),
         },
         children: [
-          // Header fila 1: Tareas/Prioridad/Estado amarillo, Horas blanco, Fechas gris
+          // Header fila 1: Tareas/Prioridad/Estado/Horas en amarillo técnico.
           TableRow(
             children: [
-              _HeaderCellFixed('TAREAS', 220, bg: const Color(0xFFFFD700)),
-              _HeaderCellFixed('PRIORIDAD', 90, bg: const Color(0xFFFFD700)),
-              _HeaderCellFixed('ESTADO', 110, bg: const Color(0xFFFFD700)),
-              _HeaderCellFixed('HORAS ASIG.', 110, bg: Colors.white),
-              _HeaderCellFixed('HORAS USADAS', 100, bg: Colors.white),
-              _HeaderCellFixed('HORAS REST.', 110, bg: Colors.white),
+              _HeaderCellFixed('TAREAS', 220, bg: AppColors.accentYellow),
+              _HeaderCellFixed('PRIORIDAD', 90, bg: AppColors.accentYellow),
+              _HeaderCellFixed('ESTADO', 110, bg: AppColors.accentYellow),
+              _HeaderCellFixed(
+                'HORAS ASIG.',
+                110,
+                bg: AppColors.accentYellow,
+              ),
+              _HeaderCellFixed(
+                'HORAS USADAS',
+                100,
+                bg: AppColors.accentYellow,
+              ),
+              _HeaderCellFixed(
+                'HORAS REST.',
+                110,
+                bg: AppColors.accentYellow,
+              ),
               for (int i = 0; i < _days.length; i++)
                 Container(
                   height: 28,
-                  color: const Color(0xFFE2E8F0),
+                  color: AppColors.surfaceLow,
                   alignment: Alignment.center,
                   child: Text(
                     _dayDates[i],
                     style: const TextStyle(
+                      fontFamily: 'monospace',
                       fontSize: 10,
                       fontWeight: FontWeight.w900,
                       color: AppColors.text,
@@ -394,26 +442,26 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                 ),
             ],
           ),
-          // Header fila 2: días en negro
+          // Header fila 2: días en tinta con texto blanco.
           TableRow(
             children: [
-              Container(height: 26, color: const Color(0xFFFFD700)),
-              Container(height: 26, color: const Color(0xFFFFD700)),
-              Container(height: 26, color: const Color(0xFFFFD700)),
-              Container(height: 26, color: Colors.white),
-              Container(height: 26, color: Colors.white),
-              Container(height: 26, color: Colors.white),
+              Container(height: 26, color: AppColors.accentYellow),
+              Container(height: 26, color: AppColors.accentYellow),
+              Container(height: 26, color: AppColors.accentYellow),
+              Container(height: 26, color: AppColors.accentYellow),
+              Container(height: 26, color: AppColors.accentYellow),
+              Container(height: 26, color: AppColors.accentYellow),
               for (final d in _days)
                 Container(
                   height: 26,
-                  color: Colors.black,
+                  color: AppColors.border,
                   alignment: Alignment.center,
                   child: Text(
                     d.toUpperCase(),
                     style: const TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.w900,
-                      color: Colors.white,
+                      color: AppColors.surface,
                     ),
                   ),
                 ),
@@ -422,7 +470,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
           // Filas por integrante
           for (final member in _members) ...[
             TableRow(
-              decoration: const BoxDecoration(color: Color(0xFFF3F3F4)),
+              decoration: const BoxDecoration(color: AppColors.surfaceLow),
               children: [
                 Padding(
                   padding: const EdgeInsets.symmetric(
@@ -441,20 +489,27 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                           ),
                         ),
                       ),
-                      InkWell(
-                        onTap: () => _addTaskForMember(member),
-                        child: Container(
-                          width: 22,
-                          height: 22,
-                          alignment: Alignment.center,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFFD700),
-                            border: Border.all(color: Colors.black, width: 2),
-                          ),
-                          child: const Icon(
-                            Icons.add_rounded,
-                            size: 14,
-                            color: AppColors.text,
+                      ClickCursor(
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () => _addTaskForMember(member),
+                          child: Container(
+                            width: 22,
+                            height: 22,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: AppColors.accentYellow,
+                              border: Border.all(
+                                color: AppColors.border,
+                                width: 2,
+                              ),
+                              boxShadow: AppShadows.badge,
+                            ),
+                            child: const Icon(
+                              Icons.add_rounded,
+                              size: 14,
+                              color: AppColors.text,
+                            ),
                           ),
                         ),
                       ),
@@ -519,7 +574,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                         fontWeight: FontWeight.w800,
                         fontSize: 10,
                         color: _remaining(t) == 0
-                            ? Color(0xFF22C55E)
+                            ? AppColors.successDeep
                             : AppColors.text,
                       ),
                     ),
@@ -531,9 +586,12 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                       decoration: BoxDecoration(
                         color:
                             (((t['days'] as Map<String, double>)[d] ?? 0) > 0)
-                            ? const Color(0xFFFFD700)
-                            : Colors.white,
-                        border: Border.all(color: Colors.black, width: 1.5),
+                            ? AppColors.accentYellow
+                            : AppColors.surface,
+                        border: Border.all(
+                          color: AppColors.border,
+                          width: 1.5,
+                        ),
                       ),
                       child: Text(
                         '${((t['days'] as Map<String, double>)[d] ?? 0).toStringAsFixed(1)}h',
@@ -578,7 +636,7 @@ class _DateCell extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
           decoration: BoxDecoration(
             color: AppColors.bg,
-            border: Border.all(color: Colors.black, width: 1),
+            border: Border.all(color: AppColors.border, width: 1),
           ),
           child: Text(
             date,
@@ -598,7 +656,7 @@ class _HeaderCellFixed extends StatelessWidget {
   final String text;
   final double width;
   final Color bg;
-  const _HeaderCellFixed(this.text, this.width, {this.bg = Colors.white});
+  const _HeaderCellFixed(this.text, this.width, {this.bg = AppColors.surface});
 
   @override
   Widget build(BuildContext context) {
@@ -606,8 +664,20 @@ class _HeaderCellFixed extends StatelessWidget {
       width: width,
       height: 28,
       alignment: Alignment.center,
-      decoration: BoxDecoration(color: bg, border: Border.all(color: Colors.black, width: 1.5)),
-      child: Text(text, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 9, color: AppColors.text)),
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      decoration: BoxDecoration(color: bg),
+      child: Text(
+        text,
+        textAlign: TextAlign.center,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(
+          fontWeight: FontWeight.w900,
+          fontSize: 9,
+          letterSpacing: 0.4,
+          color: AppColors.text,
+        ),
+      ),
     );
   }
 }
@@ -623,7 +693,9 @@ class _LegendChip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: color,
-        border: Border.all(color: Colors.black, width: 1.5),
+        border: Border.all(color: AppColors.border, width: 1.5),
+        borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+        boxShadow: AppShadows.badge,
       ),
       child: Text(
         label,
@@ -647,22 +719,24 @@ class _PriorityChip extends StatelessWidget {
     Color fg;
     switch (priority) {
       case 'alta':
-        bg = const Color(0xFFFF5500);
-        fg = Colors.white;
+        bg = AppColors.errorDeep;
+        fg = AppColors.surface;
         break;
       case 'media':
-        bg = const Color(0xFFFFD700);
+        bg = AppColors.accentYellow;
         fg = AppColors.text;
         break;
       default:
-        bg = const Color(0xFFE2E8F0);
+        bg = AppColors.surfaceLow;
         fg = AppColors.text;
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
       decoration: BoxDecoration(
         color: bg,
-        border: Border.all(color: Colors.black, width: 1.5),
+        border: Border.all(color: AppColors.border, width: 1.5),
+        borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+        boxShadow: AppShadows.badge,
       ),
       child: Text(
         priority.toUpperCase(),
@@ -684,7 +758,9 @@ class _StatusChip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
       decoration: BoxDecoration(
         color: color,
-        border: Border.all(color: Colors.black, width: 1.5),
+        border: Border.all(color: AppColors.border, width: 1.5),
+        borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+        boxShadow: AppShadows.badge,
       ),
       child: Text(
         status.toUpperCase(),

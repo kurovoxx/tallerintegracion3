@@ -242,7 +242,42 @@ func (r *GroupRepository) ListMembers(ctx context.Context, groupID string) ([]*m
 	return members, nil
 }
 
-// KickMember elimina a un usuario del grupo si el solicitante es admin
+// requireAdminTx valida dentro de la transacción que userID sea admin del grupo.
+// Devuelve "forbidden" si no es miembro o no es admin.
+func requireAdminTx(ctx context.Context, tx pgx.Tx, groupID, userID string) error {
+	var role string
+	err := tx.QueryRow(ctx, `SELECT role FROM social.group_memberships WHERE group_id = $1 AND user_id = $2`, groupID, userID).Scan(&role)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return errors.New("forbidden")
+		}
+		return err
+	}
+	if role != model.RoleAdmin {
+		return errors.New("forbidden")
+	}
+	return nil
+}
+
+// requireRemovableTargetTx valida que el objetivo sea miembro y no admin.
+// Devuelve "target_not_found" o "target_is_admin".
+func requireRemovableTargetTx(ctx context.Context, tx pgx.Tx, groupID, targetUserID string) error {
+	var role string
+	err := tx.QueryRow(ctx, `SELECT role FROM social.group_memberships WHERE group_id = $1 AND user_id = $2`, groupID, targetUserID).Scan(&role)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return errors.New("target_not_found")
+		}
+		return err
+	}
+	if role == model.RoleAdmin {
+		return errors.New("target_is_admin")
+	}
+	return nil
+}
+
+// KickMember elimina a un usuario del grupo si el solicitante es admin.
+// No se puede expulsar a uno mismo ni a otro admin.
 func (r *GroupRepository) KickMember(ctx context.Context, groupID, adminID, targetUserID string) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -250,37 +285,25 @@ func (r *GroupRepository) KickMember(ctx context.Context, groupID, adminID, targ
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// 1. Validar que el solicitante sea admin
-	var adminRole string
-	err = tx.QueryRow(ctx, `SELECT role FROM social.group_memberships WHERE group_id = $1 AND user_id = $2`, groupID, adminID).Scan(&adminRole)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return errors.New("forbidden")
-		}
+	if err := requireAdminTx(ctx, tx, groupID, adminID); err != nil {
 		return err
 	}
-	if adminRole != "admin" {
-		return errors.New("forbidden")
-	}
-
-	// 2. Prevenir auto-expulsión
 	if adminID == targetUserID {
 		return errors.New("cannot_modify_self")
 	}
-
-	// 3. Eliminar membresía (protegiendo a otros admins)
-	res, err := tx.Exec(ctx, `DELETE FROM social.group_memberships WHERE group_id = $1 AND user_id = $2 AND role != 'admin'`, groupID, targetUserID)
-	if err != nil {
+	if err := requireRemovableTargetTx(ctx, tx, groupID, targetUserID); err != nil {
 		return err
 	}
-	if res.RowsAffected() == 0 {
-		return errors.New("target_not_found_or_is_admin")
-	}
 
+	if _, err := tx.Exec(ctx, `DELETE FROM social.group_memberships WHERE group_id = $1 AND user_id = $2`, groupID, targetUserID); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
-// BanMember elimina y bloquea a un usuario si el solicitante es admin
+// BanMember elimina y bloquea a un usuario si el solicitante es admin.
+// Mismas reglas que KickMember, más el registro en banned_users
+// (banned_by_user_id es NOT NULL en el schema).
 func (r *GroupRepository) BanMember(ctx context.Context, groupID, adminID, targetUserID string) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -288,68 +311,47 @@ func (r *GroupRepository) BanMember(ctx context.Context, groupID, adminID, targe
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// 1. Validar que el solicitante sea admin
-	var adminRole string
-	err = tx.QueryRow(ctx, `SELECT role FROM social.group_memberships WHERE group_id = $1 AND user_id = $2`, groupID, adminID).Scan(&adminRole)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return errors.New("forbidden")
-		}
+	if err := requireAdminTx(ctx, tx, groupID, adminID); err != nil {
 		return err
 	}
-	if adminRole != "admin" {
-		return errors.New("forbidden")
-	}
-
 	if adminID == targetUserID {
 		return errors.New("cannot_modify_self")
 	}
-
-	// 2. Eliminar membresía
-	_, err = tx.Exec(ctx, `DELETE FROM social.group_memberships WHERE group_id = $1 AND user_id = $2 AND role != 'admin'`, groupID, targetUserID)
-	if err != nil {
+	if err := requireRemovableTargetTx(ctx, tx, groupID, targetUserID); err != nil {
 		return err
 	}
 
-	// 3. Registrar baneo
+	if _, err := tx.Exec(ctx, `DELETE FROM social.group_memberships WHERE group_id = $1 AND user_id = $2`, groupID, targetUserID); err != nil {
+		return err
+	}
 	_, err = tx.Exec(ctx, `
-		INSERT INTO social.banned_users (group_id, user_id) 
-		VALUES ($1, $2) 
-		ON CONFLICT DO NOTHING
-	`, groupID, targetUserID)
+		INSERT INTO social.banned_users (group_id, user_id, banned_by_user_id)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (group_id, user_id) DO NOTHING
+	`, groupID, targetUserID, adminID)
 	if err != nil {
 		return err
 	}
-
 	return tx.Commit(ctx)
 }
 
 // ChangeMemberRole actualiza el rol de un miembro (solo admin puede hacerlo)
 func (r *GroupRepository) ChangeMemberRole(ctx context.Context, groupID, adminID, targetUserID, newRole string) error {
-	if newRole != "admin" && newRole != "member" {
-		return errors.New("invalid_role")
-	}
-	if adminID == targetUserID {
-		return errors.New("cannot_modify_self")
-	}
-
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// Validar que quien pide el cambio sea admin
-	var role string
-	err = tx.QueryRow(ctx, `SELECT role FROM social.group_memberships WHERE group_id = $1 AND user_id = $2`, groupID, adminID).Scan(&role)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return errors.New("forbidden")
-		}
+	// Primero la autorización: un no-admin nunca debe distinguir 400 de 403
+	if err := requireAdminTx(ctx, tx, groupID, adminID); err != nil {
 		return err
 	}
-	if role != "admin" {
-		return errors.New("forbidden")
+	if newRole != model.RoleAdmin && newRole != model.RoleMember {
+		return errors.New("invalid_role")
+	}
+	if adminID == targetUserID {
+		return errors.New("cannot_modify_self")
 	}
 
 	// Ejecutar el cambio
@@ -366,27 +368,17 @@ func (r *GroupRepository) ChangeMemberRole(ctx context.Context, groupID, adminID
 
 // TransferAdmin cede la administración a otro miembro y degrada al admin actual
 func (r *GroupRepository) TransferAdmin(ctx context.Context, groupID, currentAdminID, newAdminID string) error {
-	if currentAdminID == newAdminID {
-		return errors.New("cannot_modify_self")
-	}
-
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// Validar que quien transfiere sea admin
-	var role string
-	err = tx.QueryRow(ctx, `SELECT role FROM social.group_memberships WHERE group_id = $1 AND user_id = $2`, groupID, currentAdminID).Scan(&role)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return errors.New("forbidden")
-		}
+	if err := requireAdminTx(ctx, tx, groupID, currentAdminID); err != nil {
 		return err
 	}
-	if role != "admin" {
-		return errors.New("forbidden")
+	if currentAdminID == newAdminID {
+		return errors.New("cannot_modify_self")
 	}
 
 	// Validar que el destinatario realmente sea miembro del grupo
@@ -443,4 +435,158 @@ func (r *GroupRepository) RemoveMember(ctx context.Context, groupID, userID stri
 		return errors.New("target_not_found")
 	}
 	return nil
+}
+// ListMyGroupsDetailed devuelve los grupos del usuario con descripción,
+// fecha de ingreso y cantidad de miembros (vista principal, tarea 2_3_14).
+func (r *GroupRepository) ListMyGroupsDetailed(ctx context.Context, userID string) ([]*model.GroupCard, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT g.id, g.name, g.description, m.role, m.joined_at,
+		       (SELECT count(*) FROM social.group_memberships x WHERE x.group_id = g.id) AS member_count
+		FROM social.groups g
+		JOIN social.group_memberships m ON m.group_id = g.id
+		WHERE m.user_id = $1
+		ORDER BY g.created_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	cards := []*model.GroupCard{}
+	for rows.Next() {
+		var c model.GroupCard
+		if err := rows.Scan(&c.GroupID, &c.Name, &c.Description, &c.Role, &c.JoinedAt, &c.MemberCount); err != nil {
+			return nil, err
+		}
+		cards = append(cards, &c)
+	}
+	return cards, rows.Err()
+}
+
+// DeleteGroup elimina el grupo; membresías, baneos, tableros, hojas y
+// reuniones caen por ON DELETE CASCADE.
+func (r *GroupRepository) DeleteGroup(ctx context.Context, groupID string) error {
+	tag, err := r.pool.Exec(ctx, `DELETE FROM social.groups WHERE id = $1`, groupID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errors.New("group_not_found")
+	}
+	return nil
+}
+
+// HandleAccountDeletion saca al usuario de todos sus grupos con sucesión
+// automática de admin y borra sus baneos. Cada grupo se procesa en su propia
+// transacción, así que un fallo a medias se corrige reintentando (idempotente).
+func (r *GroupRepository) HandleAccountDeletion(ctx context.Context, userID string) ([]model.SuccessionResult, error) {
+	rows, err := r.pool.Query(ctx, `SELECT group_id FROM social.group_memberships WHERE user_id = $1 ORDER BY joined_at`, userID)
+	if err != nil {
+		return nil, err
+	}
+	var groupIDs []string
+	for rows.Next() {
+		var gid string
+		if err := rows.Scan(&gid); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		groupIDs = append(groupIDs, gid)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	results := make([]model.SuccessionResult, 0, len(groupIDs))
+	for _, gid := range groupIDs {
+		res, err := r.removeUserFromGroup(ctx, gid, userID)
+		if err != nil {
+			return results, err
+		}
+		results = append(results, res)
+	}
+
+	if _, err := r.pool.Exec(ctx, `DELETE FROM social.banned_users WHERE user_id = $1`, userID); err != nil {
+		return results, err
+	}
+	return results, nil
+}
+
+// removeUserFromGroup quita la membresía y aplica la sucesión de admin.
+// Bloquea la fila del grupo (FOR UPDATE) para que dos admins que eliminan su
+// cuenta a la vez no dejen el grupo sin administrador.
+func (r *GroupRepository) removeUserFromGroup(ctx context.Context, groupID, userID string) (model.SuccessionResult, error) {
+	res := model.SuccessionResult{GroupID: groupID}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return res, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var locked int
+	if err := tx.QueryRow(ctx, `SELECT 1 FROM social.groups WHERE id = $1 FOR UPDATE`, groupID).Scan(&locked); err != nil {
+		if err == pgx.ErrNoRows {
+			return res, nil // el grupo ya no existe
+		}
+		return res, err
+	}
+
+	var role string
+	err = tx.QueryRow(ctx, `SELECT role FROM social.group_memberships WHERE group_id = $1 AND user_id = $2`, groupID, userID).Scan(&role)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return res, nil // otro proceso ya lo sacó
+		}
+		return res, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM social.group_memberships WHERE group_id = $1 AND user_id = $2`, groupID, userID); err != nil {
+		return res, err
+	}
+
+	if role == model.RoleAdmin {
+		var admins int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM social.group_memberships WHERE group_id = $1 AND role = 'admin'`, groupID).Scan(&admins); err != nil {
+			return res, err
+		}
+		if admins == 0 {
+			// Sucesión: el miembro más antiguo pasa a admin (usa idx_group_memberships_succession)
+			var successor string
+			err := tx.QueryRow(ctx, `
+				SELECT user_id FROM social.group_memberships
+				WHERE group_id = $1
+				ORDER BY joined_at ASC, id ASC
+				LIMIT 1`, groupID).Scan(&successor)
+			if err == pgx.ErrNoRows {
+				// era el último miembro: el grupo se elimina
+				if _, err := tx.Exec(ctx, `DELETE FROM social.groups WHERE id = $1`, groupID); err != nil {
+					return res, err
+				}
+				res.GroupDeleted = true
+				return res, tx.Commit(ctx)
+			}
+			if err != nil {
+				return res, err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE social.group_memberships SET role = 'admin' WHERE group_id = $1 AND user_id = $2`, groupID, successor); err != nil {
+				return res, err
+			}
+			res.PromotedUserID = &successor
+		}
+	}
+
+	// Si el usuario era el dueño, el dueño pasa al admin más antiguo restante
+	if _, err := tx.Exec(ctx, `
+		UPDATE social.groups g SET owner_user_id = a.user_id
+		FROM (
+			SELECT user_id FROM social.group_memberships
+			WHERE group_id = $1 AND role = 'admin'
+			ORDER BY joined_at ASC, id ASC
+			LIMIT 1
+		) a
+		WHERE g.id = $1 AND g.owner_user_id = $2`, groupID, userID); err != nil {
+		return res, err
+	}
+
+	return res, tx.Commit(ctx)
 }

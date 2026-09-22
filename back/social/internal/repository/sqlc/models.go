@@ -79,3 +79,14 @@ type SocialMeetingNotification struct {
 	ReadAt    pgtype.Timestamptz
 	CreatedAt pgtype.Timestamptz
 }
+
+type SocialDiscordIntegration struct {
+	ID         pgtype.UUID
+	GroupID    pgtype.UUID
+	ServerName pgtype.Text
+	InviteUrl  pgtype.Text
+	WebhookUrl pgtype.Text
+	CategoryID pgtype.Text
+	ChannelID  pgtype.Text
+	CreatedAt  pgtype.Timestamptz
+}

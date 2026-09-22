@@ -11,7 +11,17 @@ import '../../features/groups/groups_screen.dart';
 import '../../features/notes/all_notes_screen.dart';
 import '../services/session_manager.dart';
 import '../theme/app_theme.dart';
+import 'neobrutalism.dart';
 
+/// Shell global neobrutalista y responsivo:
+/// - expandido (> 1024 dp): sidebar 280/72 dp + canvas centrado.
+/// - medio (600-1024 dp): rail colapsado de 72 dp + canvas centrado.
+/// - compacto (< 600 dp): drawer + bottom navigation + FAB contextual.
+///
+/// La creación de notas es estrictamente contextual a la pantalla de Notas:
+/// en desktop vive en la cabecera de AllNotesScreen y en mobile la aporta el
+/// FAB, visible solo cuando la pestaña activa es Notas. El shell no intercepta
+/// atajos de teclado: Ctrl+N (Cmd+N) lo gestiona AllNotesScreen localmente.
 class MainShell extends StatefulWidget {
   const MainShell({super.key, this.initialIndex = 5, this.userData});
 
@@ -23,9 +33,13 @@ class MainShell extends StatefulWidget {
 }
 
 class _MainShellState extends State<MainShell> {
+  static const int _notesIndex = 5;
+
   late int _selectedIndex;
   bool _isCollapsed = false;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final GlobalKey<AllNotesScreenState> _notesKey =
+      GlobalKey<AllNotesScreenState>();
 
   @override
   void initState() {
@@ -33,241 +47,426 @@ class _MainShellState extends State<MainShell> {
     _selectedIndex = widget.initialIndex;
   }
 
-  // Pantallas del shell global: 5 académicas + 3 de espacio general
-  List<Widget> get _pages => [
+  // Pantallas del shell global: 5 académicas + 3 de espacio general.
+  List<Widget> get _pages => <Widget>[
         const CurriculumScreen(),
         const CoursesScreen(),
         const ScheduleScreen(),
         const AttendanceScreen(),
         const GradeCalculatorScreen(),
-        const AllNotesScreen(),
+        AllNotesScreen(key: _notesKey),
         const GroupsScreen(),
         ProfileScreen(userData: widget.userData),
       ];
 
-  List<_NavItem> get _navItems => [
-        _NavItem(icon: Icons.account_tree_rounded, label: 'Malla Curricular', section: 'MÓDULO ACADÉMICO'),
-        _NavItem(icon: Icons.menu_book_rounded, label: 'Cursos', section: 'MÓDULO ACADÉMICO'),
-        _NavItem(icon: Icons.calendar_month_rounded, label: 'Horarios', section: 'MÓDULO ACADÉMICO'),
-        _NavItem(icon: Icons.fact_check_rounded, label: 'Asistencia', section: 'MÓDULO ACADÉMICO'),
-        _NavItem(icon: Icons.calculate_rounded, label: 'Calculadora de Notas', section: 'MÓDULO ACADÉMICO'),
-        _NavItem(icon: Icons.description_rounded, label: 'Todas las Notas', section: 'ESPACIO DE TRABAJO GENERAL'),
-        _NavItem(icon: Icons.groups_rounded, label: 'Grupos Académicos', section: 'ESPACIO DE TRABAJO GENERAL'),
-        _NavItem(icon: Icons.person_rounded, label: 'Perfil de Usuario', section: 'ESPACIO DE TRABAJO GENERAL'),
+  List<_NavItem> get _navItems => const <_NavItem>[
+        _NavItem(
+          icon: Icons.account_tree_rounded,
+          label: 'Malla Curricular',
+          short: 'Malla',
+          section: 'MÓDULO ACADÉMICO',
+        ),
+        _NavItem(
+          icon: Icons.menu_book_rounded,
+          label: 'Cursos',
+          short: 'Cursos',
+          section: 'MÓDULO ACADÉMICO',
+        ),
+        _NavItem(
+          icon: Icons.calendar_month_rounded,
+          label: 'Horarios',
+          short: 'Horarios',
+          section: 'MÓDULO ACADÉMICO',
+        ),
+        _NavItem(
+          icon: Icons.fact_check_rounded,
+          label: 'Asistencia',
+          section: 'MÓDULO ACADÉMICO',
+        ),
+        _NavItem(
+          icon: Icons.calculate_rounded,
+          label: 'Calculadora de Notas',
+          section: 'MÓDULO ACADÉMICO',
+        ),
+        _NavItem(
+          icon: Icons.description_rounded,
+          label: 'Todas las Notas',
+          short: 'Notas',
+          section: 'ESPACIO DE TRABAJO GENERAL',
+        ),
+        _NavItem(
+          icon: Icons.groups_rounded,
+          label: 'Grupos Académicos',
+          section: 'ESPACIO DE TRABAJO GENERAL',
+        ),
+        _NavItem(
+          icon: Icons.person_rounded,
+          label: 'Perfil de Usuario',
+          section: 'ESPACIO DE TRABAJO GENERAL',
+        ),
       ];
 
+  /// Selecciona una sección y cierra el drawer si está abierto.
   void _onSelectPage(int index) {
-    // 1. Si es pantalla móvil / drawer abierto, cerrarlo automáticamente
-    // Usa GlobalKey para encontrar Scaffold correctamente incluso desde el State context
-    final isDrawerOpen = _scaffoldKey.currentState?.isDrawerOpen ?? false;
-    final isMobile = MediaQuery.of(context).size.width < 768;
-    if (isDrawerOpen || isMobile) {
-      // Intentar cerrar drawer si está abierto (pop seguro)
-      try {
-        if (isDrawerOpen) {
-          Navigator.of(context).pop();
-        } else if (isMobile) {
-          // Fallback: si no podemos detectar isDrawerOpen pero es móvil, intentar pop
-          Navigator.of(context).maybePop();
-        }
-      } catch (_) {}
+    final scaffold = _scaffoldKey.currentState;
+    if (scaffold != null && scaffold.isDrawerOpen) {
+      Navigator.of(context).pop();
     }
-
-    // 2. Cambiar la vista activa
-    setState(() {
-      _selectedIndex = index;
-    });
+    setState(() => _selectedIndex = index);
   }
 
-  void _onSelect(int index) => _onSelectPage(index);
+  /// Acción contextual "Nueva Nota" (solo pestaña de Notas): delega el diálogo
+  /// de creación a la pantalla de Notas mediante su GlobalKey.
+  void _openNoteDialog() {
+    _notesKey.currentState?.openCreateDialog();
+  }
+
+  void _openMore() => _scaffoldKey.currentState?.openDrawer();
 
   @override
   Widget build(BuildContext context) {
-    final isDesktop = MediaQuery.of(context).size.width > AppDimens.breakpointDesktop;
+    final breakpoint = context.breakpoint;
+    final isDesktop = breakpoint == AppBreakpoint.expanded;
+    final isCompact = breakpoint == AppBreakpoint.compact;
 
     return Scaffold(
       key: _scaffoldKey,
       backgroundColor: AppColors.bg,
-      appBar: AppBar(
-        backgroundColor: AppColors.surface,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        shape: const Border(bottom: BorderSide(color: AppColors.border, width: AppDimens.borderWidth)),
-        leading: Builder(
-          builder: (context) => IconButton(
-            icon: Icon(_isCollapsed ? Icons.menu_rounded : Icons.menu_open_rounded, color: AppColors.text),
-            tooltip: _isCollapsed ? 'Expandir menú' : 'Colapsar menú',
-            onPressed: () {
-              final isDesktop = MediaQuery.of(context).size.width >= 768;
-              if (isDesktop) {
-                setState(() => _isCollapsed = !_isCollapsed);
-              } else {
-                Scaffold.of(context).openDrawer();
-              }
-            },
-          ),
-        ),
-        title: Row(
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: AppColors.accentYellow,
-                border: Border.all(color: AppColors.border, width: 2),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: const Center(child: Text('S', style: TextStyle(fontWeight: FontWeight.w900, color: AppColors.text))),
-            ),
-            const SizedBox(width: 10),
-            const Text('SIGMA ACADEMY', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: AppColors.text, letterSpacing: -0.5)),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout_rounded, color: AppColors.text),
-            tooltip: 'Cerrar sesión',
-            onPressed: () {
-              SessionManager.clear();
-              Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(builder: (_) => const LoginScreen()),
-                (r) => false,
-              );
-            },
-          ),
-          const SizedBox(width: 8),
-        ],
-      ),
+      appBar: _buildAppBar(isDesktop: isDesktop),
       drawer: isDesktop ? null : _buildDrawer(),
-      body: isDesktop ? _buildDesktopBody() : _buildMobileBody(),
+      bottomNavigationBar: isCompact ? _buildBottomNav() : null,
+      // El FAB de creación es contextual: solo en la pestaña de Notas.
+      floatingActionButton: isCompact && _selectedIndex == _notesIndex
+          ? NeobrutalistFab(
+              tooltip: 'Nueva Nota',
+              onPressed: _openNoteDialog,
+            )
+          : null,
+      body: _buildBody(
+        isDesktop: isDesktop,
+        showRail: breakpoint == AppBreakpoint.medium,
+      ),
     );
   }
 
-  Widget _buildDesktopBody() {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        AnimatedContainer(
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeInOut,
-          width: _isCollapsed ? 72 : 280,
-          decoration: const BoxDecoration(
-            color: AppColors.surface,
-            border: Border(right: BorderSide(color: AppColors.border, width: AppDimens.borderWidth)),
-          ),
-          child: _buildSidebarContent(isCollapsed: _isCollapsed),
+  PreferredSizeWidget _buildAppBar({required bool isDesktop}) {
+    return AppBar(
+      backgroundColor: AppColors.surface,
+      elevation: 0,
+      scrolledUnderElevation: 0,
+      shape: const Border(
+        bottom: BorderSide(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
         ),
-        Expanded(
-          child: Container(
-            color: AppColors.bg,
-            child: _pages[_selectedIndex],
+      ),
+      leading: Builder(
+        builder: (BuildContext innerContext) => IconButton(
+          icon: Icon(
+            isDesktop
+                ? (_isCollapsed ? Icons.menu_rounded : Icons.menu_open_rounded)
+                : Icons.menu_rounded,
+            color: AppColors.text,
           ),
+          tooltip: isDesktop
+              ? (_isCollapsed ? 'Expandir menú' : 'Colapsar menú')
+              : 'Abrir menú',
+          onPressed: () {
+            if (isDesktop) {
+              setState(() => _isCollapsed = !_isCollapsed);
+            } else {
+              Scaffold.of(innerContext).openDrawer();
+            }
+          },
         ),
+      ),
+      title: Row(
+        children: <Widget>[
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: AppColors.accentYellow,
+              border: Border.all(
+                color: AppColors.border,
+                width: AppDimens.borderWidth,
+              ),
+              borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
+            ),
+            child: const Center(
+              child: Text(
+                'S',
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  color: AppColors.text,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: AppDimens.spaceSm),
+          const Flexible(
+            child: Text(
+              'SIGMA ACADEMY',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                fontSize: 16,
+                color: AppColors.text,
+                letterSpacing: -0.5,
+              ),
+            ),
+          ),
+        ],
+      ),
+      actions: <Widget>[
+        IconButton(
+          icon: const Icon(Icons.logout_rounded, color: AppColors.text),
+          tooltip: 'Cerrar sesión',
+          onPressed: () {
+            SessionManager.clear();
+            Navigator.of(context).pushAndRemoveUntil(
+              MaterialPageRoute<void>(builder: (_) => const LoginScreen()),
+              (Route<dynamic> route) => false,
+            );
+          },
+        ),
+        const SizedBox(width: AppDimens.spaceSm),
       ],
     );
   }
 
-  Widget _buildMobileBody() {
-    return Container(
-      color: AppColors.bg,
+  Widget _buildBody({required bool isDesktop, required bool showRail}) {
+    if (!isDesktop && !showRail) return _buildCanvas();
+
+    final collapsed = isDesktop ? _isCollapsed : true;
+    final width = collapsed
+        ? AppDimens.sidebarCollapsed
+        : AppDimens.sidebarExpanded;
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        AnimatedContainer(
+          duration: AppMotion.expand,
+          curve: AppMotion.shell,
+          width: width,
+          decoration: const BoxDecoration(
+            color: AppColors.surface,
+            border: Border(
+              right: BorderSide(
+                color: AppColors.border,
+                width: AppDimens.borderWidth,
+              ),
+            ),
+            // Hard-edge sin blur: el borde de tinta proyecta sombra sólida.
+            boxShadow: <BoxShadow>[AppShadows.hardRight],
+          ),
+          child: _buildSidebarContent(isCollapsed: collapsed),
+        ),
+        Expanded(child: _buildCanvas()),
+      ],
+    );
+  }
+
+  Widget _buildCanvas() {
+    return MaxWidthContainer(
+      padding: EdgeInsets.zero,
       child: _pages[_selectedIndex],
     );
   }
 
   Widget _buildDrawer() {
     return Drawer(
+      elevation: 0,
       backgroundColor: AppColors.surface,
       shape: const RoundedRectangleBorder(
-        side: BorderSide(color: AppColors.border, width: AppDimens.borderWidth),
+        side: BorderSide(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
       ),
-      child: SafeArea(child: _buildSidebarContent(isCollapsed: false, isDrawer: true)),
+      child: SafeArea(
+        child: _buildSidebarContent(isCollapsed: false),
+      ),
     );
   }
 
-  Widget _buildSidebarContent({required bool isCollapsed, bool isDrawer = false}) {
+  Widget _buildSidebarContent({required bool isCollapsed}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Divider(color: AppColors.border, thickness: AppDimens.borderWidth, height: 1),
+      children: <Widget>[
         Expanded(
           child: ListView.builder(
-            padding: const EdgeInsets.symmetric(vertical: 8),
+            padding: const EdgeInsets.symmetric(vertical: AppDimens.spaceSm),
             itemCount: _navItems.length,
-            itemBuilder: (context, index) {
+            itemBuilder: (BuildContext context, int index) {
               final item = _navItems[index];
               final isSelected = index == _selectedIndex;
-              final showSectionHeader = index == 0 || _navItems[index].section != _navItems[index - 1].section;
+              final showSectionHeader =
+                  index == 0 || item.section != _navItems[index - 1].section;
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
+                children: <Widget>[
                   if (showSectionHeader && !isCollapsed)
                     Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 6),
-                      child: Text(item.section,
-                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: AppColors.muted, letterSpacing: 0.8)),
+                      padding: const EdgeInsets.fromLTRB(
+                        AppDimens.spaceLg,
+                        AppDimens.spaceLg,
+                        AppDimens.spaceLg,
+                        6,
+                      ),
+                      child: Text(
+                        item.section,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w900,
+                          color: AppColors.muted,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
                     ),
                   _SidebarTile(
                     icon: item.icon,
                     label: item.label,
                     isSelected: isSelected,
                     isCollapsed: isCollapsed,
-                    onTap: () => _onSelect(index),
+                    onTap: () => _onSelectPage(index),
                   ),
                 ],
               );
             },
           ),
         ),
-        const Divider(color: AppColors.border, thickness: AppDimens.borderWidth, height: 1),
-        Padding(
-          padding: EdgeInsets.all(isCollapsed ? 8 : 12),
-          child: Row(
-            children: [
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: AppColors.accentYellow,
-                  border: Border.all(color: AppColors.border, width: 2),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: const Icon(Icons.person_rounded, size: 18, color: AppColors.text),
+        const Divider(
+          color: AppColors.border,
+          thickness: AppDimens.borderWidth,
+          height: 1,
+        ),
+        _buildProfileFooter(isCollapsed: isCollapsed),
+      ],
+    );
+  }
+
+  Widget _buildProfileFooter({required bool isCollapsed}) {
+    return Padding(
+      padding: EdgeInsets.all(
+        isCollapsed ? AppDimens.spaceSm : AppDimens.spaceMd,
+      ),
+      child: Row(
+        children: <Widget>[
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: AppColors.accentYellow,
+              border: Border.all(
+                color: AppColors.border,
+                width: AppDimens.borderWidth,
               ),
-              if (!isCollapsed) ...[
-                const SizedBox(width: 10),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Estudiante', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.text)),
-                      Text('Sigma', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 11, color: AppColors.muted)),
-                    ],
+              borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
+            ),
+            child: const Icon(
+              Icons.person_rounded,
+              size: 18,
+              color: AppColors.text,
+            ),
+          ),
+          if (!isCollapsed) ...<Widget>[
+            const SizedBox(width: AppDimens.spaceSm),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    'Estudiante',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: 12,
+                      color: AppColors.text,
+                    ),
+                  ),
+                  Text(
+                    'Sigma',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 11,
+                      color: AppColors.muted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBottomNav() {
+    final primaryIndexes = <int>[
+      for (int i = 0; i < _navItems.length; i++)
+        if (_navItems[i].short != null) i,
+    ];
+    final moreSelected = !primaryIndexes.contains(_selectedIndex);
+
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.surface,
+        border: Border(
+          top: BorderSide(
+            color: AppColors.border,
+            width: AppDimens.borderWidth,
+          ),
+        ),
+      ),
+      child: SafeArea(
+        top: false,
+        child: SizedBox(
+          height: 62,
+          child: Row(
+            children: <Widget>[
+              for (final int index in primaryIndexes)
+                Expanded(
+                  child: _BottomNavTile(
+                    icon: _navItems[index].icon,
+                    label: _navItems[index].short!,
+                    isSelected: _selectedIndex == index,
+                    onTap: () => _onSelectPage(index),
                   ),
                 ),
-              ],
+              Expanded(
+                child: _BottomNavTile(
+                  icon: Icons.more_horiz_rounded,
+                  label: 'Más',
+                  isSelected: moreSelected,
+                  onTap: _openMore,
+                ),
+              ),
             ],
           ),
         ),
-      ],
+      ),
     );
   }
 }
 
 class _NavItem {
+  const _NavItem({
+    required this.icon,
+    required this.label,
+    required this.section,
+    this.short,
+  });
+
   final IconData icon;
   final String label;
+  final String? short;
   final String section;
-  const _NavItem({required this.icon, required this.label, required this.section});
 }
 
 class _SidebarTile extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final bool isSelected;
-  final bool isCollapsed;
-  final VoidCallback onTap;
-
   const _SidebarTile({
     required this.icon,
     required this.label,
@@ -276,34 +475,54 @@ class _SidebarTile extends StatelessWidget {
     required this.onTap,
   });
 
+  final IconData icon;
+  final String label;
+  final bool isSelected;
+  final bool isCollapsed;
+  final VoidCallback onTap;
+
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      child: InkWell(
+    final tile = ClickCursor(
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
         onTap: onTap,
-        borderRadius: BorderRadius.circular(6),
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          padding: EdgeInsets.symmetric(horizontal: isCollapsed ? 0 : 12, vertical: 10),
+          duration: AppMotion.medium,
+          curve: AppMotion.standard,
+          padding: EdgeInsets.symmetric(
+            horizontal: isCollapsed ? 0 : AppDimens.spaceMd,
+            vertical: 10,
+          ),
           decoration: BoxDecoration(
             color: isSelected ? AppColors.accentYellow : Colors.transparent,
-            border: Border.all(color: isSelected ? AppColors.border : Colors.transparent, width: 2),
-            borderRadius: BorderRadius.circular(6),
-            boxShadow: isSelected ? const [BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0)] : null,
+            border: Border.all(
+              color: isSelected ? AppColors.border : Colors.transparent,
+              width: AppDimens.borderWidth,
+            ),
+            borderRadius: BorderRadius.circular(AppDimens.radius),
+            boxShadow: isSelected ? AppShadows.badge : null,
           ),
           child: Row(
-            mainAxisAlignment: isCollapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
-            children: [
+            mainAxisAlignment: isCollapsed
+                ? MainAxisAlignment.center
+                : MainAxisAlignment.start,
+            children: <Widget>[
               Icon(icon, size: 20, color: AppColors.text),
-              if (!isCollapsed) ...[
-                const SizedBox(width: 10),
+              if (!isCollapsed) ...<Widget>[
+                const SizedBox(width: AppDimens.spaceSm),
                 Expanded(
-                  child: Text(label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          fontSize: 12.5, fontWeight: isSelected ? FontWeight.w900 : FontWeight.w700, color: AppColors.text)),
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight:
+                          isSelected ? FontWeight.w900 : FontWeight.w700,
+                      color: AppColors.text,
+                    ),
+                  ),
                 ),
               ],
             ],
@@ -311,7 +530,72 @@ class _SidebarTile extends StatelessWidget {
         ),
       ),
     );
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppDimens.spaceSm,
+        vertical: 3,
+      ),
+      child: isCollapsed ? Tooltip(message: label, child: tile) : tile,
+    );
   }
 }
 
+class _BottomNavTile extends StatelessWidget {
+  const _BottomNavTile({
+    required this.icon,
+    required this.label,
+    required this.isSelected,
+    required this.onTap,
+  });
 
+  final IconData icon;
+  final String label;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClickCursor(
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: AppMotion.fast,
+          curve: AppMotion.standard,
+          margin: const EdgeInsets.symmetric(
+            horizontal: AppDimens.spaceXs,
+            vertical: 6,
+          ),
+          decoration: BoxDecoration(
+            color: isSelected ? AppColors.accentYellow : Colors.transparent,
+            border: Border.all(
+              color: isSelected ? AppColors.border : Colors.transparent,
+              width: AppDimens.borderWidth,
+            ),
+            borderRadius: BorderRadius.circular(AppDimens.radius),
+            boxShadow: isSelected ? AppShadows.badge : null,
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: <Widget>[
+              Icon(icon, size: 20, color: AppColors.text),
+              const SizedBox(height: 2),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.2,
+                  color: AppColors.text,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

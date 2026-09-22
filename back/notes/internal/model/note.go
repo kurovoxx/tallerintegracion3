@@ -11,6 +11,7 @@ type Note struct {
 	Visibility      string     `json:"visibility"` // public | private
 	LikesCount      int        `json:"likes_count"`
 	ForkedFromNoteID *string   `json:"forked_from_note_id,omitempty"`
+	SyncStatus      string     `json:"sync_status,omitempty"` // synced | failed_sync
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
 	// Content se descarga de Drive, no está en PG. Solo para respuestas GET.

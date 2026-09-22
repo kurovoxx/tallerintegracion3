@@ -22,14 +22,18 @@ type MemoryNoteStore struct {
 func NewMemoryNoteStore() *MemoryNoteStore {
 	return &MemoryNoteStore{notes: make(map[string]*model.Note)}
 }
-func (m *MemoryNoteStore) Create(ctx context.Context, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string) (*model.Note, error) {
+func (m *MemoryNoteStore) Create(ctx context.Context, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string, syncStatus string) (*model.Note, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if syncStatus == "" {
+		syncStatus = "pending_drive"
+	}
 	id := uuid.NewString()
 	n := &model.Note{
 		ID: id, UserID: userID, SubjectID: subjectID, Title: title,
 		ExternalFileID: externalFileID, Visibility: visibility, LikesCount: 0,
-		ForkedFromNoteID: forkedFrom, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		ForkedFromNoteID: forkedFrom, SyncStatus: syncStatus,
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 	}
 	m.notes[id] = n
 	cop := *n
@@ -133,6 +137,7 @@ func (m *MemoryNoteStore) UpdateExternalFileID(ctx context.Context, noteID, file
 		return fmt.Errorf("not_found")
 	}
 	n.ExternalFileID = &fileID
+	n.SyncStatus = "synced"
 	n.UpdatedAt = time.Now().UTC()
 	return nil
 }
@@ -237,7 +242,7 @@ func (m *MemorySavedStore) Delete(ctx context.Context, userID, noteID string) er
 type MemoryLikeStore struct {
 	mu    sync.Mutex
 	likes map[string]*model.NoteLike // key noteID:userID
-	notes *MemoryNoteStore            // referencia para LikeAtomic (incremento atómico)
+	notes *MemoryNoteStore           // referencia para LikeAtomic (incremento atómico)
 }
 
 func NewMemoryLikeStore() *MemoryLikeStore {
@@ -494,9 +499,9 @@ var _ = strings.Contains
 
 // MemorySocialResolver para tests
 type MemorySocialResolver struct {
-	mu       sync.RWMutex
-	members  map[string]bool // key userID:groupID
-	admins   map[string]bool
+	mu        sync.RWMutex
+	members   map[string]bool // key userID:groupID
+	admins    map[string]bool
 	followers map[string]int
 }
 
@@ -537,4 +542,69 @@ func (r *MemorySocialResolver) GetFollowersCount(ctx context.Context, userID str
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.followers[userID], nil
+}
+
+// MemoryMemberDirectory mock de GroupMemberDirectory para tests.
+type MemoryMemberDirectory struct {
+	mu     sync.RWMutex
+	emails map[string][]string // groupID -> correos crudos
+	err    error
+}
+
+func NewMemoryMemberDirectory() *MemoryMemberDirectory {
+	return &MemoryMemberDirectory{emails: make(map[string][]string)}
+}
+
+// SetEmails fija los correos crudos de un grupo (pueden incluir duplicados,
+// vacíos o mayúsculas para ejercitar la normalización).
+func (m *MemoryMemberDirectory) SetEmails(groupID string, emails []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.emails[groupID] = emails
+}
+
+// SetError inyecta un fallo al obtener miembros (nil lo limpia).
+func (m *MemoryMemberDirectory) SetError(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.err = err
+}
+
+func (m *MemoryMemberDirectory) ListMemberEmails(ctx context.Context, groupID string) ([]string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.emails[groupID], nil
+}
+
+func (m *MemoryNoteStore) InsertDeadLetter(ctx context.Context, fileID, reason string) error { return nil }
+
+func (m *MemoryNoteStore) UpdateSyncStatus(ctx context.Context, noteID, syncStatus string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n, ok := m.notes[noteID]
+	if !ok {
+		return fmt.Errorf("not_found")
+	}
+	n.SyncStatus = syncStatus
+	n.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
+// GetPendingSyncNotes replica la consulta del repositorio PG: devuelve las
+// notas pendientes de reconciliación (pending_drive y failed_sync). El filtro
+// de estado/antigüedad aplica en la capa de servicio.
+func (m *MemoryNoteStore) GetPendingSyncNotes(ctx context.Context) ([]*model.Note, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []*model.Note
+	for _, n := range m.notes {
+		if n.SyncStatus == "pending_drive" || n.SyncStatus == "failed_sync" {
+			cop := *n
+			out = append(out, &cop)
+		}
+	}
+	return out, nil
 }
