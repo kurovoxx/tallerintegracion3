@@ -25,15 +25,18 @@ services:
       dockerfile: Dockerfile
     container_name: ti3-auth
     ports:
-      - "8081:8080" # host 8080 ocupado por WordPress/nginx -> mapea 8081
+      - "8085:8080" # host 8081 reservado para callback OAuth local de Drive -> auth en 8085
     environment:
-      DATABASE_URL: postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable
-      DIRECT_URL: postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable
-      JWT_SECRET: 5987f6ae236ec37e229aaf3bcbd488b0ca3aa8c1c980a3a699ac47e42402e41f
-      JWT: 961e9b2e-0333-4ec9-aadb-72e95ca06e4d
+      DATABASE_URL: ${DOCKER_DATABASE_URL}
+      DIRECT_URL: ${DOCKER_DATABASE_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT: ${JWT}
       PORT: 8080
-      SUPABASE_URL: https://cdzzcawgcbfdkwqyatex.supabase.co
-      DISCOVERY_URL: https://cdzzcawgcbfdkwqyatex.supabase.co/auth/v1/.well-known/jwks.json
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI}
+      SUPABASE_URL: ${SUPABASE_URL}
+      DISCOVERY_URL: ${DISCOVERY_URL}
     depends_on:
       postgres:
         condition: service_healthy
@@ -49,13 +52,15 @@ services:
     ports:
       - "8082:8082"
     environment:
-      DATABASE_URL: postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable
-      DIRECT_URL: postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable
-      JWT_SECRET: 5987f6ae236ec37e229aaf3bcbd488b0ca3aa8c1c980a3a699ac47e42402e41f
-      JWT: 961e9b2e-0333-4ec9-aadb-72e95ca06e4d
+      DATABASE_URL: ${DOCKER_DATABASE_URL}
+      DIRECT_URL: ${DOCKER_DATABASE_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT: ${JWT}
       PORT: 8082
       NOTES_PORT: 8082
-      STORAGE_MODE: mock
+      STORAGE_MODE: drive
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
     depends_on:
       postgres:
         condition: service_healthy
@@ -90,10 +95,10 @@ services:
       context: ./front
       dockerfile: Dockerfile
       args:
-        BASE_URL: http://localhost:8081
+        BASE_URL: http://localhost:8085
     container_name: ti3-front
     ports:
-      - "8085:80"
+      - "8086:80"
     depends_on:
       - auth
       - notes

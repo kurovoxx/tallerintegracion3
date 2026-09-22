@@ -19,6 +19,9 @@ type Config struct {
 	AccessTTL    int
 	RefreshTTL   int
 	StorageMode  string // "mock" | "drive"
+	// GoogleClientID/Secret permiten renovar el access_token de Drive cuando expiró.
+	GoogleClientID     string
+	GoogleClientSecret string
 }
 
 func Load() *Config {
@@ -49,6 +52,8 @@ func Load() *Config {
 		JWTSecret:   os.Getenv("JWT_SECRET"),
 		Port:        os.Getenv("NOTES_PORT"),
 		StorageMode: os.Getenv("STORAGE_MODE"),
+		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
+		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
 	}
 	if cfg.Port == "" {
 		cfg.Port = os.Getenv("PORT")

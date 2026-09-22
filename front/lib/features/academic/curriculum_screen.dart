@@ -3,11 +3,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../core/common_widgets.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/neobrutalism.dart';
 
 const String kSubjectApproved = 'approved';
 const String kSubjectInProgress = 'in_progress';
 const String kSubjectFailed = 'failed';
 const String kSubjectPending = 'pending';
+
+/// Ancho de cada columna de semestre en la fila horizontal única.
+const double _kSemesterColumnWidth = 350;
 
 class CurriculumScreen extends StatefulWidget {
   const CurriculumScreen({super.key});
@@ -48,29 +52,128 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       await Future.delayed(const Duration(milliseconds: 620));
       _semesters = {
         1: [
-          {'id': 'info1001', 'code': 'INFO1001', 'name': 'Programación I', 'credits': 6, 'status': kSubjectApproved, 'requisite': null},
-          {'id': 'mat1001', 'code': 'MAT1001', 'name': 'Matemática I', 'credits': 6, 'status': kSubjectApproved, 'requisite': null},
-          {'id': 'fis1000', 'code': 'FIS1000', 'name': 'Física General I', 'credits': 5, 'status': kSubjectApproved, 'requisite': null},
-          {'id': 'com1000', 'code': 'COM1000', 'name': 'Comunicación Efectiva', 'credits': 3, 'status': kSubjectApproved, 'requisite': null},
+          {
+            'id': 'info1001',
+            'code': 'INFO1001',
+            'name': 'Programación I',
+            'credits': 6,
+            'status': kSubjectApproved,
+            'requisite': null,
+          },
+          {
+            'id': 'mat1001',
+            'code': 'MAT1001',
+            'name': 'Matemática I',
+            'credits': 6,
+            'status': kSubjectApproved,
+            'requisite': null,
+          },
+          {
+            'id': 'fis1000',
+            'code': 'FIS1000',
+            'name': 'Física General I',
+            'credits': 5,
+            'status': kSubjectApproved,
+            'requisite': null,
+          },
+          {
+            'id': 'com1000',
+            'code': 'COM1000',
+            'name': 'Comunicación Efectiva',
+            'credits': 3,
+            'status': kSubjectApproved,
+            'requisite': null,
+          },
         ],
         2: [
-          {'id': 'info1002', 'code': 'CC1001', 'name': 'Programación II', 'credits': 6, 'status': kSubjectPending, 'requisite': 'CC1001', 'requisite_label': 'Req: CC1001'},
-          {'id': 'mat1002', 'code': 'MAT1002', 'name': 'Matemática II', 'credits': 6, 'status': kSubjectInProgress, 'requisite': 'MAT1001'},
-          {'id': 'taller1', 'code': 'INFO1005', 'name': 'Taller de Integración 1', 'credits': 4, 'status': kSubjectFailed, 'requisite': 'MA1101'},
+          {
+            'id': 'info1002',
+            'code': 'CC1001',
+            'name': 'Programación II',
+            'credits': 6,
+            'status': kSubjectPending,
+            'requisite': 'CC1001',
+            'requisite_label': 'Req: CC1001',
+          },
+          {
+            'id': 'mat1002',
+            'code': 'MAT1002',
+            'name': 'Matemática II',
+            'credits': 6,
+            'status': kSubjectInProgress,
+            'requisite': 'MAT1001',
+          },
+          {
+            'id': 'taller1',
+            'code': 'INFO1005',
+            'name': 'Taller de Integración 1',
+            'credits': 4,
+            'status': kSubjectFailed,
+            'requisite': 'MA1101',
+          },
         ],
         3: [
-          {'id': 'info2001', 'code': 'INFO2001', 'name': 'Estructuras de Datos', 'credits': 6, 'status': kSubjectInProgress, 'requisite': 'CC1001'},
-          {'id': 'arq2001', 'code': 'INF210', 'name': 'Arquitectura de Hardware', 'credits': 5, 'status': kSubjectPending, 'requisite': null},
+          {
+            'id': 'info2001',
+            'code': 'INFO2001',
+            'name': 'Estructuras de Datos',
+            'credits': 6,
+            'status': kSubjectInProgress,
+            'requisite': 'CC1001',
+          },
+          {
+            'id': 'arq2001',
+            'code': 'INF210',
+            'name': 'Arquitectura de Hardware',
+            'credits': 5,
+            'status': kSubjectPending,
+            'requisite': null,
+          },
         ],
         4: [
-          {'id': 'bd2001', 'code': 'INF220', 'name': 'Bases de Datos', 'credits': 5, 'status': kSubjectPending, 'requisite': 'INFO2001'},
+          {
+            'id': 'bd2001',
+            'code': 'INF220',
+            'name': 'Bases de Datos',
+            'credits': 5,
+            'status': kSubjectPending,
+            'requisite': 'INFO2001',
+          },
         ],
         5: [],
         6: [
-          {'id': 'calc3', 'code': 'INF-1111', 'name': 'Cálculo III', 'credits': 5, 'status': kSubjectInProgress, 'requisite': 'MA1101'},
-          {'id': 'taller3', 'code': 'INF-360', 'name': 'Taller de Integración III', 'credits': 4, 'status': kSubjectPending, 'requisite': 'INF-200'},
-          {'id': 'seginf', 'code': 'INF-350', 'name': 'Seguridad Informática', 'credits': 4, 'status': kSubjectFailed, 'requisite': 'INF-330'},
-          {'id': 'redes', 'code': 'INF-330', 'name': 'Redes de Computadores', 'credits': 5, 'status': kSubjectApproved, 'requisite': 'INF-100'},
+          {
+            'id': 'calc3',
+            'code': 'INF-1111',
+            'name': 'Cálculo III',
+            'credits': 5,
+            'status': kSubjectInProgress,
+            'requisite': 'MA1101',
+          },
+          {
+            'id': 'taller3',
+            'code': 'INF-360',
+            'name': 'Taller de Integración III',
+            'credits': 4,
+            'status': kSubjectPending,
+            'requisite': 'INF-200',
+          },
+          {
+            'id': 'seginf',
+            'code': 'INF-350',
+            'name': 'Seguridad Informática',
+            'credits': 4,
+            'status': kSubjectFailed,
+            'requisite': 'INF-330',
+          },
+          {
+            'id': 'redes',
+            'code': 'INF-330',
+            'name': 'Redes de Computadores',
+            'credits': 5,
+            'status': kSubjectApproved,
+            'requisite': 'INF-100',
+          },
         ],
       };
       // snapshot deep copy
@@ -86,7 +189,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     }
   }
 
-  Map<int, List<Map<String, dynamic>>> _deepCopy(Map<int, List<Map<String, dynamic>>> src) {
+  Map<int, List<Map<String, dynamic>>> _deepCopy(
+    Map<int, List<Map<String, dynamic>>> src,
+  ) {
     final out = <int, List<Map<String, dynamic>>>{};
     src.forEach((k, v) {
       out[k] = v.map((e) => Map<String, dynamic>.from(e)).toList();
@@ -112,7 +217,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   int get _totalCreditsAll {
     int total = 0;
     _semesters.forEach((_, list) {
-      for (final r in list) total += r['credits'] as int;
+      for (final r in list) {
+        total += r['credits'] as int;
+      }
     });
     return total;
   }
@@ -122,15 +229,36 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.surface,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppDimens.radius), side: const BorderSide(color: AppColors.border, width: 3)),
-        title: const Text('LIMPIAR MALLA', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: AppColors.text)),
-        content: const Text('¿Seguro que quieres limpiar todos los ramos? Esta acción dejará los semestres vacíos.', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.muted)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppDimens.radius),
+          side: const BorderSide(color: AppColors.border, width: 3),
+        ),
+        title: const Text(
+          'LIMPIAR MALLA',
+          style: TextStyle(
+            fontWeight: FontWeight.w900,
+            fontSize: 16,
+            color: AppColors.text,
+          ),
+        ),
+        content: const Text(
+          '¿Seguro que quieres limpiar todos los ramos? Esta acción dejará los semestres vacíos.',
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 13,
+            color: AppColors.muted,
+          ),
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('CANCELAR', style: TextStyle(fontWeight: FontWeight.w800, color: AppColors.muted))),
-          ElevatedButton(
+          NeobrutalistButton(
+            label: 'Cancelar',
+            variant: NeobrutalistButtonVariant.secondary,
+            onPressed: () => Navigator.of(ctx).pop(false),
+          ),
+          NeobrutalistButton(
+            label: 'Limpiar todo',
+            variant: NeobrutalistButtonVariant.danger,
             onPressed: () => Navigator.of(ctx).pop(true),
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.error, foregroundColor: Colors.white, side: const BorderSide(color: AppColors.border, width: 2), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppDimens.radius))),
-            child: const Text('LIMPIAR TODO', style: TextStyle(fontWeight: FontWeight.w900)),
           ),
         ],
       ),
@@ -142,19 +270,34 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         }
       });
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Malla limpiada'), backgroundColor: AppColors.border));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Malla limpiada'),
+          backgroundColor: AppColors.border,
+        ),
+      );
     }
   }
 
   void _handleRestoreSnapshot() {
     if (_snapshot == null) return;
     setState(() => _semesters = _deepCopy(_snapshot!));
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Malla restaurada'), backgroundColor: AppColors.border));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Malla restaurada'),
+        backgroundColor: AppColors.border,
+      ),
+    );
   }
 
   void _handleSave() {
     _snapshot = _deepCopy(_semesters);
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Malla guardada correctamente'), backgroundColor: AppColors.border));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Malla guardada correctamente'),
+        backgroundColor: AppColors.border,
+      ),
+    );
   }
 
   Future<void> _showAddSubjectDialog(int semester) async {
@@ -177,13 +320,29 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         _semesters[semester] = list;
       });
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ramo "${result['name']}" añadido a Semestre $semester'), backgroundColor: AppColors.border));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Ramo "${result['name']}" añadido a Semestre $semester',
+          ),
+          backgroundColor: AppColors.border,
+        ),
+      );
     }
   }
 
   void _removeSubject(int semester, String id) {
-    setState(() => _semesters[semester] = (_semesters[semester] ?? []).where((r) => r['id'] != id).toList());
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ramo eliminado'), backgroundColor: AppColors.border));
+    setState(
+      () => _semesters[semester] = (_semesters[semester] ?? [])
+          .where((r) => r['id'] != id)
+          .toList(),
+    );
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Ramo eliminado'),
+        backgroundColor: AppColors.border,
+      ),
+    );
   }
 
   void _cycleStatus(int semester, String id) {
@@ -213,7 +372,8 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isDesktop = MediaQuery.of(context).size.width > AppDimens.breakpointDesktop;
+    final isDesktop =
+        MediaQuery.of(context).size.width > AppDimens.breakpointDesktop;
     final canPop = Navigator.of(context).canPop();
 
     return Scaffold(
@@ -221,22 +381,26 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       body: SafeArea(
         child: _hasError
             ? _buildErrorState()
-            : SingleChildScrollView(
-                padding: EdgeInsets.symmetric(horizontal: isDesktop ? 32 : 16, vertical: 20),
-                child: Center(
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: isDesktop ? 1400 : 640),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        _buildHeader(canPop, isDesktop),
-                        const SizedBox(height: 18),
-                        if (_isLoading)
-                          _buildLoadingCard()
-                        else
-                          _buildMallaContent(isDesktop),
-                      ],
-                    ),
+            : MaxWidthContainer(
+                maxWidth: AppDimens.contentMaxWidth,
+                padding: EdgeInsets.fromLTRB(
+                  isDesktop ? AppDimens.spaceXl : AppDimens.spaceLg,
+                  AppDimens.spaceXl,
+                  isDesktop ? AppDimens.spaceXl : AppDimens.spaceLg,
+                  AppDimens.spaceXxl,
+                ),
+                child: SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _buildHeader(canPop, isDesktop),
+                      const SizedBox(height: 18),
+                      if (_isLoading)
+                        _buildLoadingCard()
+                      else
+                        _buildMallaContent(isDesktop),
+                    ],
                   ),
                 ),
               ),
@@ -245,38 +409,95 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   }
 
   Widget _buildHeader(bool canPop, bool isDesktop) {
-    final titleBlock = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text('MI MALLA CURRICULAR', style: TextStyle(color: AppColors.text, fontWeight: FontWeight.w900, fontSize: isDesktop ? 28 : 22, letterSpacing: -0.6)),
-      const SizedBox(height: 4),
-      const Text('Planifica y visualiza tu progreso académico.', style: TextStyle(color: AppColors.muted, fontWeight: FontWeight.w700, fontSize: 13)),
-      const SizedBox(height: 6),
-      Wrap(spacing: 8, runSpacing: 6, children: [
-        Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: AppColors.accentYellow, border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(4)), child: Text('CRÉDITOS APROBADOS: $_totalCreditsApproved', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: AppColors.text))),
-        Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(4)), child: Text('TOTAL MALLA: $_totalCreditsAll créditos', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 11, color: AppColors.muted))),
-      ]),
-    ]);
+    final titleBlock = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'MI MALLA CURRICULAR',
+          style: TextStyle(
+            color: AppColors.text,
+            fontWeight: FontWeight.w900,
+            fontSize: isDesktop ? 28 : 22,
+            letterSpacing: -0.6,
+          ),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Planifica y visualiza tu progreso académico.',
+          style: TextStyle(
+            color: AppColors.muted,
+            fontWeight: FontWeight.w700,
+            fontSize: 13,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 8,
+          runSpacing: 6,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppColors.accentYellow,
+                border: Border.all(color: AppColors.border, width: 1.5),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                'CRÉDITOS APROBADOS: $_totalCreditsApproved',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 11,
+                  color: AppColors.text,
+                ),
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                border: Border.all(color: AppColors.border, width: 1.5),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                'TOTAL MALLA: $_totalCreditsAll créditos',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 11,
+                  color: AppColors.muted,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
 
     final actions = Wrap(
-      spacing: 10,
-      runSpacing: 10,
+      spacing: AppDimens.spaceSm,
+      runSpacing: AppDimens.spaceSm,
       children: [
-        OutlinedButton.icon(
+        NeobrutalistButton(
+          label: 'Limpiar todo',
+          icon: Icons.delete_sweep_rounded,
+          variant: NeobrutalistButtonVariant.secondary,
           onPressed: _handleClearAll,
-          style: OutlinedButton.styleFrom(side: const BorderSide(color: AppColors.border, width: 2), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppDimens.radius)), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12), backgroundColor: AppColors.surface),
-          icon: const Icon(Icons.delete_sweep_rounded, size: 18, color: AppColors.text),
-          label: const Text('LIMPIAR TODO', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.text)),
         ),
-        ElevatedButton.icon(
+        NeobrutalistButton(
+          label: 'Guardar malla',
+          icon: Icons.save_rounded,
+          variant: NeobrutalistButtonVariant.primary,
           onPressed: _handleSave,
-          style: ElevatedButton.styleFrom(backgroundColor: AppColors.border, foregroundColor: Colors.white, side: const BorderSide(color: AppColors.border, width: 2), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppDimens.radius)), elevation: 0, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12)),
-          icon: const Icon(Icons.save_rounded, size: 18),
-          label: const Text('GUARDAR MALLA', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12)),
         ),
         if (_snapshot != null)
-          InkWell(
-            onTap: _handleRestoreSnapshot,
-            borderRadius: BorderRadius.circular(AppDimens.radius),
-            child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8), decoration: BoxDecoration(border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(AppDimens.radius)), child: const Text('RESTAURAR', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 11, color: AppColors.muted))),
+          NeobrutalistButton(
+            label: 'Restaurar',
+            icon: Icons.restore_rounded,
+            variant: NeobrutalistButtonVariant.secondary,
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppDimens.spaceMd,
+              vertical: 10,
+            ),
+            onPressed: _handleRestoreSnapshot,
           ),
       ],
     );
@@ -285,33 +506,67 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            if (canPop) ...[
-              _SquareIconButton(icon: Icons.arrow_back_rounded, tooltip: 'Volver', onPressed: () => Navigator.of(context).pop()),
-              const SizedBox(width: 12),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (canPop) ...[
+                NeobrutalistIconButton(
+                  icon: Icons.arrow_back_rounded,
+                  tooltip: 'Volver',
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+                const SizedBox(width: 12),
+              ],
+              Expanded(child: titleBlock),
+              const SizedBox(width: 16),
+              actions,
             ],
-            Expanded(child: titleBlock),
-            const SizedBox(width: 16),
-            actions,
-          ]),
+          ),
           const SizedBox(height: 14),
-          Container(height: 4, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2))),
+          Container(
+            height: 4,
+            decoration: BoxDecoration(
+              color: AppColors.border,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
         ],
       );
     }
 
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        if (canPop) _SquareIconButton(icon: Icons.arrow_back_rounded, tooltip: 'Volver', onPressed: () => Navigator.of(context).pop()),
-        if (canPop) const SizedBox(width: 10),
-        Expanded(child: titleBlock),
-        _SquareIconButton(icon: Icons.refresh_rounded, tooltip: 'Recargar', onPressed: _loadCurriculum),
-      ]),
-      const SizedBox(height: 14),
-      actions,
-      const SizedBox(height: 14),
-      Container(height: 4, decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2))),
-    ]);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (canPop)
+              NeobrutalistIconButton(
+                icon: Icons.arrow_back_rounded,
+                tooltip: 'Volver',
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            if (canPop) const SizedBox(width: 10),
+            Expanded(child: titleBlock),
+            NeobrutalistIconButton(
+              icon: Icons.refresh_rounded,
+              tooltip: 'Recargar',
+              onPressed: _loadCurriculum,
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        actions,
+        const SizedBox(height: 14),
+        Container(
+          height: 4,
+          decoration: BoxDecoration(
+            color: AppColors.border,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+      ],
+    );
   }
 
   Widget _buildMallaContent(bool isDesktop) {
@@ -324,12 +579,25 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     }
     semesterKeys.sort();
 
-    final isMobile = MediaQuery.of(context).size.width < 700;
+    final isMobile =
+        MediaQuery.of(context).size.width < AppDimens.breakpointCompact;
+    final columnHeight = isMobile ? 480.0 : 520.0;
+
+    // Fila horizontal única con desplazamiento lateral: las columnas conservan
+    // presencia técnica (350 dp) en lugar de comprimirse en dos filas.
+    final columns = <Widget>[
+      for (final semester in semesterKeys)
+        SizedBox(
+          width: _kSemesterColumnWidth,
+          child: _buildSemesterColumn(semester),
+        ),
+    ];
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         SizedBox(
-          height: isMobile ? 480 : 520,
+          height: columnHeight,
           child: Scrollbar(
             controller: _horizontalScrollController,
             thumbVisibility: true,
@@ -341,53 +609,138 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                   PointerDeviceKind.trackpad,
                 },
               ),
-              child: ListView.separated(
-                controller: _horizontalScrollController,
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.only(bottom: 12, top: 4, right: 4),
-                itemCount: semesterKeys.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 16),
-                itemBuilder: (context, idx) {
-                  final sem = semesterKeys[idx];
-                  final ramos = _semesters[sem] ?? [];
-                  return _SemesterColumn(
-                    semester: sem,
-                    credits: _creditsForSemester(sem),
-                    ramos: ramos,
-                    onAdd: () => _showAddSubjectDialog(sem),
-                    onRemove: (id) => _removeSubject(sem, id),
-                    onCycleStatus: (id) => _cycleStatus(sem, id),
-                  );
-                },
-              ),
+              child: isDesktop
+                  ? SingleChildScrollView(
+                      controller: _horizontalScrollController,
+                      scrollDirection: Axis.horizontal,
+                      physics: const BouncingScrollPhysics(),
+                      padding: const EdgeInsets.only(
+                        bottom: 12,
+                        top: 4,
+                        right: 4,
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          for (var i = 0; i < columns.length; i++) ...[
+                            columns[i],
+                            if (i != columns.length - 1)
+                              const SizedBox(width: AppDimens.spaceLg),
+                          ],
+                        ],
+                      ),
+                    )
+                  : ListView.separated(
+                      controller: _horizontalScrollController,
+                      scrollDirection: Axis.horizontal,
+                      physics: const BouncingScrollPhysics(),
+                      padding: const EdgeInsets.only(
+                        bottom: 12,
+                        top: 4,
+                        right: 4,
+                      ),
+                      itemCount: columns.length,
+                      separatorBuilder: (_, _) =>
+                          const SizedBox(width: AppDimens.spaceLg),
+                      itemBuilder: (context, idx) => columns[idx],
+                    ),
             ),
           ),
         ),
         const SizedBox(height: 10),
         Container(
           padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius)),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            border: Border.all(color: AppColors.border, width: 2),
+            borderRadius: BorderRadius.circular(AppDimens.radius),
+          ),
           child: Wrap(
             spacing: 14,
             runSpacing: 8,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Row(mainAxisSize: MainAxisSize.min, children: [
-                Container(width: 10, height: 10, decoration: const BoxDecoration(color: AppColors.accentYellow, shape: BoxShape.circle, border: Border.fromBorderSide(BorderSide(color: AppColors.border, width: 1)))),
-                const SizedBox(width: 8),
-                const Text('Aprobado', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 11, color: AppColors.text)),
-              ]),
-              Row(mainAxisSize: MainAxisSize.min, children: [
-                Container(width: 10, height: 10, decoration: BoxDecoration(color: AppColors.bg, border: Border.all(color: AppColors.border, width: 1), shape: BoxShape.circle)),
-                const SizedBox(width: 8),
-                const Text('En Curso / Pendiente', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 11, color: AppColors.text)),
-              ]),
-              Row(mainAxisSize: MainAxisSize.min, children: [
-                Container(width: 10, height: 10, decoration: const BoxDecoration(color: Color(0xFFFFDAD6), shape: BoxShape.circle, border: Border.fromBorderSide(BorderSide(color: AppColors.border, width: 1)))),
-                const SizedBox(width: 8),
-                const Text('Reprobado', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 11, color: AppColors.text)),
-              ]),
-              const Text('Tap en ícono para cambiar estado', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 10, color: AppColors.muted)),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 10,
+                    height: 10,
+                    decoration: const BoxDecoration(
+                      color: AppColors.accentYellow,
+                      shape: BoxShape.circle,
+                      border: Border.fromBorderSide(
+                        BorderSide(color: AppColors.border, width: 1),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'Aprobado',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 11,
+                      color: AppColors.text,
+                    ),
+                  ),
+                ],
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      color: AppColors.bg,
+                      border: Border.all(color: AppColors.border, width: 1),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'En Curso / Pendiente',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 11,
+                      color: AppColors.text,
+                    ),
+                  ),
+                ],
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 10,
+                    height: 10,
+                    decoration: const BoxDecoration(
+                      color: AppColors.subjectCoral,
+                      shape: BoxShape.circle,
+                      border: Border.fromBorderSide(
+                        BorderSide(color: AppColors.border, width: 1),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'Reprobado',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 11,
+                      color: AppColors.text,
+                    ),
+                  ),
+                ],
+              ),
+              const Text(
+                'Tap en ícono para cambiar estado',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 10,
+                  color: AppColors.muted,
+                ),
+              ),
             ],
           ),
         ),
@@ -395,23 +748,82 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     );
   }
 
+  Widget _buildSemesterColumn(int semester) {
+    return _SemesterColumn(
+      semester: semester,
+      credits: _creditsForSemester(semester),
+      ramos: _semesters[semester] ?? [],
+      onAdd: () => _showAddSubjectDialog(semester),
+      onRemove: (id) => _removeSubject(semester, id),
+      onCycleStatus: (id) => _cycleStatus(semester, id),
+    );
+  }
+
   Widget _buildLoadingCard() {
-    return Container(height: 420, decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(4, 4), blurRadius: 0)]), child: const Center(child: CircularProgressIndicator(color: AppColors.text)));
+    return Container(
+      height: 420,
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+        boxShadow: const [
+          BoxShadow(
+            color: AppColors.border,
+            offset: Offset(4, 4),
+            blurRadius: 0,
+          ),
+        ],
+      ),
+      child: const Center(
+        child: CircularProgressIndicator(color: AppColors.text),
+      ),
+    );
   }
 
   Widget _buildErrorState() {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.error_outline_rounded, size: 48, color: AppColors.text),
-          const SizedBox(height: 12),
-          const Text('NO SE PUDO CARGAR LA MALLA', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: AppColors.text)),
-          const SizedBox(height: 8),
-          const Text('Verifica tu conexión e intenta nuevamente.', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.muted)),
-          const SizedBox(height: 18),
-          SizedBox(width: 200, child: SubmitButton(text: 'REINTENTAR', onPressed: _loadCurriculum)),
-        ]),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.error_outline_rounded,
+              size: 48,
+              color: AppColors.text,
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'NO SE PUDO CARGAR LA MALLA',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                fontSize: 16,
+                color: AppColors.text,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Verifica tu conexión e intenta nuevamente.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+                color: AppColors.muted,
+              ),
+            ),
+            const SizedBox(height: 18),
+            NeobrutalistButton(
+              label: 'Reintentar',
+              icon: Icons.refresh_rounded,
+              variant: NeobrutalistButtonVariant.accent,
+              onPressed: _loadCurriculum,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -462,8 +874,18 @@ class _AddSubjectDialogState extends State<_AddSubjectDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       backgroundColor: AppColors.surface,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppDimens.radius), side: const BorderSide(color: AppColors.border, width: 3)),
-      title: Text('AÑADIR RAMO · SEMESTRE ${widget.semester}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: AppColors.text)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+        side: const BorderSide(color: AppColors.border, width: 3),
+      ),
+      title: Text(
+        'AÑADIR RAMO · SEMESTRE ${widget.semester}',
+        style: const TextStyle(
+          fontWeight: FontWeight.w900,
+          fontSize: 14,
+          color: AppColors.text,
+        ),
+      ),
       content: SingleChildScrollView(
         child: Form(
           key: _formKey,
@@ -475,7 +897,11 @@ class _AddSubjectDialogState extends State<_AddSubjectDialog> {
               const SizedBox(height: 6),
               TextFormField(
                 controller: _nameCtrl,
-                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text),
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                  color: AppColors.text,
+                ),
                 decoration: appInputDecoration('Ej. Programación III'),
                 validator: (v) {
                   if (v == null || v.trim().isEmpty) return 'Requerido';
@@ -484,60 +910,103 @@ class _AddSubjectDialogState extends State<_AddSubjectDialog> {
                 },
               ),
               const SizedBox(height: 12),
-              Row(children: [
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    const AppFieldLabel('CÓDIGO'),
-                    const SizedBox(height: 6),
-                    TextFormField(
-                      controller: _codeCtrl,
-                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text),
-                      decoration: appInputDecoration('INFO1001'),
-                      inputFormatters: [LengthLimitingTextInputFormatter(20)],
-                      validator: (v) {
-                        if (v == null || v.trim().isEmpty) return 'Requerido';
-                        return null;
-                      },
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const AppFieldLabel('CÓDIGO'),
+                        const SizedBox(height: 6),
+                        TextFormField(
+                          controller: _codeCtrl,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13,
+                            color: AppColors.text,
+                          ),
+                          decoration: appInputDecoration('INFO1001'),
+                          inputFormatters: [
+                            LengthLimitingTextInputFormatter(20),
+                          ],
+                          validator: (v) {
+                            if (v == null || v.trim().isEmpty) {
+                              return 'Requerido';
+                            }
+                            return null;
+                          },
+                        ),
+                      ],
                     ),
-                  ]),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    const AppFieldLabel('CRÉDITOS'),
-                    const SizedBox(height: 6),
-                    TextFormField(
-                      controller: _creditsCtrl,
-                      keyboardType: TextInputType.number,
-                      inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(2)],
-                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text),
-                      decoration: appInputDecoration('5'),
-                      validator: (v) {
-                        final n = int.tryParse(v ?? '');
-                        if (n == null) return 'Requerido';
-                        if (n < 1 || n > 10) return '1-10';
-                        return null;
-                      },
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const AppFieldLabel('CRÉDITOS'),
+                        const SizedBox(height: 6),
+                        TextFormField(
+                          controller: _creditsCtrl,
+                          keyboardType: TextInputType.number,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly,
+                            LengthLimitingTextInputFormatter(2),
+                          ],
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13,
+                            color: AppColors.text,
+                          ),
+                          decoration: appInputDecoration('5'),
+                          validator: (v) {
+                            final n = int.tryParse(v ?? '');
+                            if (n == null) return 'Requerido';
+                            if (n < 1 || n > 10) return '1-10';
+                            return null;
+                          },
+                        ),
+                      ],
                     ),
-                  ]),
-                ),
-              ]),
+                  ),
+                ],
+              ),
               const SizedBox(height: 12),
               const AppFieldLabel('ESTADO'),
               const SizedBox(height: 6),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10),
-                decoration: BoxDecoration(color: AppColors.bg, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius)),
+                decoration: BoxDecoration(
+                  color: AppColors.bg,
+                  border: Border.all(color: AppColors.border, width: 2),
+                  borderRadius: BorderRadius.circular(AppDimens.radius),
+                ),
                 child: DropdownButtonHideUnderline(
                   child: DropdownButton<String>(
                     value: _status,
                     isExpanded: true,
-                    style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppColors.text),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 13,
+                      color: AppColors.text,
+                    ),
                     items: const [
-                      DropdownMenuItem(value: kSubjectApproved, child: Text('Aprobado')),
-                      DropdownMenuItem(value: kSubjectInProgress, child: Text('En Curso')),
-                      DropdownMenuItem(value: kSubjectPending, child: Text('Pendiente')),
-                      DropdownMenuItem(value: kSubjectFailed, child: Text('Reprobado')),
+                      DropdownMenuItem(
+                        value: kSubjectApproved,
+                        child: Text('Aprobado'),
+                      ),
+                      DropdownMenuItem(
+                        value: kSubjectInProgress,
+                        child: Text('En Curso'),
+                      ),
+                      DropdownMenuItem(
+                        value: kSubjectPending,
+                        child: Text('Pendiente'),
+                      ),
+                      DropdownMenuItem(
+                        value: kSubjectFailed,
+                        child: Text('Reprobado'),
+                      ),
                     ],
                     onChanged: (v) {
                       if (v != null) setState(() => _status = v);
@@ -550,11 +1019,16 @@ class _AddSubjectDialogState extends State<_AddSubjectDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('CANCELAR', style: TextStyle(fontWeight: FontWeight.w800, color: AppColors.muted))),
-        ElevatedButton(
+        NeobrutalistButton(
+          label: 'Cancelar',
+          variant: NeobrutalistButtonVariant.secondary,
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        NeobrutalistButton(
+          label: 'Añadir',
+          icon: Icons.add_rounded,
+          variant: NeobrutalistButtonVariant.accent,
           onPressed: _submit,
-          style: ElevatedButton.styleFrom(backgroundColor: AppColors.accentYellow, foregroundColor: AppColors.text, side: const BorderSide(color: AppColors.border, width: 2), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppDimens.radius))),
-          child: const Text('AÑADIR', style: TextStyle(fontWeight: FontWeight.w900)),
         ),
       ],
     );
@@ -569,18 +1043,31 @@ class _SemesterColumn extends StatelessWidget {
   final ValueChanged<String> onRemove;
   final ValueChanged<String> onCycleStatus;
 
-  const _SemesterColumn({required this.semester, required this.credits, required this.ramos, required this.onAdd, required this.onRemove, required this.onCycleStatus});
+  const _SemesterColumn({
+    required this.semester,
+    required this.credits,
+    required this.ramos,
+    required this.onAdd,
+    required this.onRemove,
+    required this.onCycleStatus,
+  });
 
   @override
   Widget build(BuildContext context) {
     final isEmpty = ramos.isEmpty;
     return Container(
-      width: 300,
       decoration: BoxDecoration(
-        color: isEmpty ? AppColors.bg.withOpacity(0.6) : AppColors.surface,
-        border: Border.all(color: AppColors.border, width: isEmpty ? 3 : 4, style: isEmpty ? BorderStyle.solid : BorderStyle.solid),
+        color: isEmpty
+            ? AppColors.bg.withValues(alpha: 0.6)
+            : AppColors.surface,
+        border: Border.all(
+          color: AppColors.border,
+          width: isEmpty
+              ? AppDimens.borderWidthThick
+              : AppDimens.borderWidth + 2,
+        ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
-        boxShadow: isEmpty ? null : const [BoxShadow(color: AppColors.border, offset: Offset(6, 6), blurRadius: 0)],
+        boxShadow: isEmpty ? null : AppShadows.dialog,
       ),
       padding: const EdgeInsets.all(12),
       child: Column(
@@ -589,15 +1076,52 @@ class _SemesterColumn extends StatelessWidget {
           // Header
           Container(
             padding: const EdgeInsets.only(bottom: 10),
-            decoration: BoxDecoration(border: Border(bottom: BorderSide(color: AppColors.border, width: isEmpty ? 3 : 4, style: isEmpty ? BorderStyle.solid : BorderStyle.solid))),
-            child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              Text('SEMESTRE $semester', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppColors.text, letterSpacing: 0.3)),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(color: AppColors.border, border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(4)),
-                child: Text('$credits créditos', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 10, color: Colors.white)),
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(
+                  color: AppColors.border,
+                  width: isEmpty ? 3 : 4,
+                  style: isEmpty ? BorderStyle.solid : BorderStyle.solid,
+                ),
               ),
-            ]),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'SEMESTRE $semester',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: 13,
+                      color: AppColors.text,
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: AppDimens.spaceXs + 2),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.border,
+                    border: Border.all(color: AppColors.border, width: 1.5),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    '$credits créditos',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: 10,
+                      color: AppColors.surface,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 12),
           Expanded(
@@ -605,17 +1129,46 @@ class _SemesterColumn extends StatelessWidget {
                 ? Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Container(width: 56, height: 56, decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: 2, style: BorderStyle.solid), borderRadius: BorderRadius.circular(AppDimens.radius)), child: const Icon(Icons.drag_indicator_rounded, size: 28, color: AppColors.muted)),
+                      Container(
+                        width: 56,
+                        height: 56,
+                        decoration: BoxDecoration(
+                          color: AppColors.surface,
+                          border: Border.all(
+                            color: AppColors.border,
+                            width: 2,
+                            style: BorderStyle.solid,
+                          ),
+                          borderRadius: BorderRadius.circular(AppDimens.radius),
+                        ),
+                        child: const Icon(
+                          Icons.drag_indicator_rounded,
+                          size: 28,
+                          color: AppColors.muted,
+                        ),
+                      ),
                       const SizedBox(height: 12),
-                      const Text('Arrastra ramos aquí o añade nuevos.', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 11, color: AppColors.muted)),
+                      const Text(
+                        'Arrastra ramos aquí o añade nuevos.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 11,
+                          color: AppColors.muted,
+                        ),
+                      ),
                     ],
                   )
                 : ListView.separated(
                     itemCount: ramos.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    separatorBuilder: (_, _) => const SizedBox(height: 10),
                     itemBuilder: (context, i) {
                       final r = ramos[i];
-                      return _CurriculumCard(ramo: r, onRemove: () => onRemove(r['id'] as String), onCycle: () => onCycleStatus(r['id'] as String));
+                      return _CurriculumCard(
+                        ramo: r,
+                        onRemove: () => onRemove(r['id'] as String),
+                        onCycle: () => onCycleStatus(r['id'] as String),
+                      );
                     },
                   ),
           ),
@@ -625,8 +1178,30 @@ class _SemesterColumn extends StatelessWidget {
             borderRadius: BorderRadius.circular(AppDimens.radius),
             child: Container(
               padding: const EdgeInsets.symmetric(vertical: 10),
-              decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: 2, style: BorderStyle.solid), borderRadius: BorderRadius.circular(AppDimens.radius)),
-              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: const [Icon(Icons.add_rounded, size: 16, color: AppColors.text), SizedBox(width: 6), Text('AÑADIR RAMO', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.text))]),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                border: Border.all(
+                  color: AppColors.border,
+                  width: 2,
+                  style: BorderStyle.solid,
+                ),
+                borderRadius: BorderRadius.circular(AppDimens.radius),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: const [
+                  Icon(Icons.add_rounded, size: 16, color: AppColors.text),
+                  SizedBox(width: 6),
+                  Text(
+                    'AÑADIR RAMO',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: 12,
+                      color: AppColors.text,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
@@ -639,7 +1214,11 @@ class _CurriculumCard extends StatelessWidget {
   final Map<String, dynamic> ramo;
   final VoidCallback onRemove;
   final VoidCallback onCycle;
-  const _CurriculumCard({required this.ramo, required this.onRemove, required this.onCycle});
+  const _CurriculumCard({
+    required this.ramo,
+    required this.onRemove,
+    required this.onCycle,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -652,12 +1231,12 @@ class _CurriculumCard extends StatelessWidget {
     Color cardBg;
     if (isFailed) {
       topColor = AppColors.error;
-      cardBg = const Color(0xFFFFDAD6);
+      cardBg = AppColors.subjectCoral;
     } else if (isApproved) {
       topColor = AppColors.accentYellow;
       cardBg = AppColors.surface;
     } else {
-      topColor = AppColors.muted.withOpacity(0.6);
+      topColor = AppColors.muted.withValues(alpha: 0.6);
       cardBg = AppColors.surface;
     }
 
@@ -683,70 +1262,216 @@ class _CurriculumCard extends StatelessWidget {
     }
 
     final requisite = ramo['requisite'] as String?;
-    final requisiteLabel = ramo['requisite_label'] as String? ?? (requisite != null ? 'Req: $requisite' : null);
+    final requisiteLabel =
+        ramo['requisite_label'] as String? ??
+        (requisite != null ? 'Req: $requisite' : null);
 
     return Container(
-      decoration: BoxDecoration(color: cardBg, border: Border.all(color: AppColors.border, width: isFailed ? 3 : 2), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0)]),
+      decoration: BoxDecoration(
+        color: cardBg,
+        border: Border.all(color: AppColors.border, width: isFailed ? 3 : 2),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+        boxShadow: const [
+          BoxShadow(
+            color: AppColors.border,
+            offset: Offset(2, 2),
+            blurRadius: 0,
+          ),
+        ],
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Container(height: 6, decoration: BoxDecoration(color: topColor, borderRadius: const BorderRadius.vertical(top: Radius.circular(AppDimens.radius - 1)), border: const Border(bottom: BorderSide(color: AppColors.border, width: 1)))),
+          Container(
+            height: 6,
+            decoration: BoxDecoration(
+              color: topColor,
+              border: const Border(
+                bottom: BorderSide(color: AppColors.border, width: 1),
+              ),
+            ),
+          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(ramo['name'] as String, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12.5, color: isFailed ? AppColors.error : AppColors.text, height: 1.1)),
-                    const SizedBox(height: 6),
-                    Row(children: [
-                      Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3), decoration: BoxDecoration(color: AppColors.bg, border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(4)), child: Row(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.sell_rounded, size: 10, color: AppColors.text), const SizedBox(width: 4), Text(ramo['code'] as String, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 10, color: AppColors.text))])),
-                      const SizedBox(width: 6),
-                      Text('${ramo['credits']} cr.', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 10, color: AppColors.muted)),
-                    ]),
-                    if (isPending && requisiteLabel != null) ...[
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        ramo['name'] as String,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          fontSize: 12.5,
+                          color: isFailed ? AppColors.error : AppColors.text,
+                          height: 1.1,
+                        ),
+                      ),
                       const SizedBox(height: 6),
-                      Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3), decoration: BoxDecoration(color: AppColors.accentBlue, border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(4)), child: Row(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.link_rounded, size: 10, color: Colors.white), const SizedBox(width: 4), Text(requisiteLabel, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 9, color: Colors.white))])),
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.bg,
+                              border: Border.all(
+                                color: AppColors.border,
+                                width: 1.5,
+                              ),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(
+                                  Icons.sell_rounded,
+                                  size: 10,
+                                  color: AppColors.text,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  ramo['code'] as String,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w900,
+                                    fontSize: 10,
+                                    color: AppColors.text,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            '${ramo['credits']} cr.',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 10,
+                              color: AppColors.muted,
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (isPending && requisiteLabel != null) ...[
+                        const SizedBox(height: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppColors.accentBlue,
+                            border: Border.all(
+                              color: AppColors.border,
+                              width: 1.5,
+                            ),
+                            borderRadius: BorderRadius.circular(
+                              AppDimens.radiusChip,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.link_rounded,
+                                size: 10,
+                                color: AppColors.surface,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                requisiteLabel,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 9,
+                                  color: AppColors.surface,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                      if (isFailed && requisiteLabel != null) ...[
+                        const SizedBox(height: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppColors.accentBlue,
+                            border: Border.all(
+                              color: AppColors.border,
+                              width: 1.5,
+                            ),
+                            borderRadius: BorderRadius.circular(
+                              AppDimens.radiusChip,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.link_rounded,
+                                size: 10,
+                                color: AppColors.surface,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                requisiteLabel,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 9,
+                                  color: AppColors.surface,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ],
-                    if (isFailed && requisiteLabel != null) ...[
-                      const SizedBox(height: 6),
-                      Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3), decoration: BoxDecoration(color: AppColors.accentBlue, border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(4)), child: Row(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.link_rounded, size: 10, color: Colors.white), const SizedBox(width: 4), Text(requisiteLabel, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 9, color: Colors.white))])),
-                    ],
-                  ]),
+                  ),
                 ),
                 const SizedBox(width: 8),
-                Column(children: [
-                  InkWell(onTap: onCycle, borderRadius: BorderRadius.circular(4), child: Icon(statusIcon, size: 22, color: statusIconColor)),
-                  const SizedBox(height: 6),
-                  InkWell(
-                    onTap: onRemove,
-                    borderRadius: BorderRadius.circular(4),
-                    child: Container(padding: const EdgeInsets.all(4), decoration: BoxDecoration(border: Border.all(color: AppColors.border.withOpacity(0.5), width: 1), borderRadius: BorderRadius.circular(4)), child: const Icon(Icons.close_rounded, size: 12, color: AppColors.muted)),
-                  ),
-                ]),
+                Column(
+                  children: [
+                    InkWell(
+                      onTap: onCycle,
+                      borderRadius: BorderRadius.circular(4),
+                      child: Icon(statusIcon, size: 22, color: statusIconColor),
+                    ),
+                    const SizedBox(height: 6),
+                    InkWell(
+                      onTap: onRemove,
+                      borderRadius: BorderRadius.circular(4),
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          border: Border.all(
+                            color: AppColors.border.withValues(alpha: 0.5),
+                            width: 1,
+                          ),
+                          borderRadius: BorderRadius.circular(
+                            AppDimens.radiusChip,
+                          ),
+                        ),
+                        child: const Icon(
+                          Icons.close_rounded,
+                          size: 12,
+                          color: AppColors.muted,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
         ],
       ),
     );
-  }
-}
-
-class _SquareIconButton extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onPressed;
-  final String? tooltip;
-  const _SquareIconButton({required this.icon, required this.onPressed, this.tooltip});
-
-  @override
-  Widget build(BuildContext context) {
-    final btn = InkWell(
-      borderRadius: BorderRadius.circular(AppDimens.radius),
-      onTap: onPressed,
-      child: Container(width: 42, height: 42, alignment: Alignment.center, decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0)]), child: Icon(icon, size: 18, color: AppColors.text)),
-    );
-    return tooltip != null ? Tooltip(message: tooltip!, child: btn) : btn;
   }
 }

@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -24,11 +25,12 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	driveClient := drive.NewMockClient()
-
 	if cfg.DatabaseURL == "" {
 		log.Println("notes: DATABASE_URL vacío — levantando con stores en memoria (modo mock)")
-		runServerMemory(driveClient, cfg)
+		if strings.EqualFold(strings.TrimSpace(cfg.StorageMode), "drive") {
+			log.Println("notes: ADVERTENCIA STORAGE_MODE=drive sin DATABASE_URL — sin identity.oauth_connections no hay tokens, se usa mock")
+		}
+		runServerMemory(drive.NewMockClient(), cfg)
 		return
 	}
 
@@ -44,7 +46,22 @@ func main() {
 	} else {
 		log.Printf("DB check: notes.notes count=%d", cnt)
 	}
-	runServer(p, driveClient, cfg)
+	runServer(p, selectDriveClient(p, cfg), cfg)
+}
+
+// selectDriveClient elige el cliente Drive según STORAGE_MODE.
+// Con "drive" usa la API oficial (tokens por usuario desde identity.oauth_connections);
+// en cualquier otro caso (o sin BD) usa el mock en memoria.
+func selectDriveClient(p *pgxpool.Pool, cfg *config.Config) drive.Client {
+	if !strings.EqualFold(strings.TrimSpace(cfg.StorageMode), "drive") {
+		log.Printf("notes: Drive mock activado (STORAGE_MODE=%s)", cfg.StorageMode)
+		return drive.NewMockClient()
+	}
+	if cfg.GoogleClientID == "" || cfg.GoogleClientSecret == "" {
+		log.Println("notes: STORAGE_MODE=drive con GOOGLE_CLIENT_ID/SECRET vacíos — el refresh de tokens queda deshabilitado")
+	}
+	log.Println("notes: Drive real activado (STORAGE_MODE=drive, drive/v3, tokens desde identity.oauth_connections)")
+	return drive.NewRealDriveClient(drive.NewPGOAuthTokenStore(p, cfg.GoogleClientID, cfg.GoogleClientSecret))
 }
 
 func runServer(pool *pgxpool.Pool, driveClient drive.Client, cfg *config.Config) {
@@ -63,6 +80,9 @@ func runServer(pool *pgxpool.Pool, driveClient drive.Client, cfg *config.Config)
 		log.Println("notes: semilla de desarrollo cargada para SocialResolver")
 	}
 	svc := service.NewNoteService(noteStore, attStore, savedStore, likeStore, sharedStore, driveClient, social)
+	// Directorio de correos para share restricted: noop por ahora. El adaptador
+	// real (gRPC a Social/Identity) se inyectará aquí vía SetMemberDirectory.
+	svc.SetMemberDirectory(service.NewNoopMemberDirectory())
 	startGin(svc, cfg)
 }
 
@@ -76,6 +96,8 @@ func runServerMemory(driveClient drive.Client, cfg *config.Config) {
 	social := service.NewMemorySocialResolver()
 
 	svc := service.NewNoteService(noteStore, attStore, savedStore, likeStore, sharedStore, driveClient, social)
+	// Mismo seam que runServer: el adaptador gRPC real irá aquí.
+	svc.SetMemberDirectory(service.NewNoopMemberDirectory())
 	startGin(svc, cfg)
 }
 
