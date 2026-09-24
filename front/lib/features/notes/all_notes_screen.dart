@@ -12,6 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/database/app_database.dart';
 import '../../core/database/local_notes_repository.dart';
+import '../../core/services/api_config.dart';
 import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
@@ -22,7 +23,7 @@ String get notesBaseUrl {
   if (!kIsWeb && Platform.isAndroid) {
     return 'http://10.0.2.2:8082';
   }
-  return 'http://localhost:8082';
+  return notesApiBaseUrl;
 }
 
 /// Cliente HTTP inyectable para pruebas de subida/vinculación de adjuntos.

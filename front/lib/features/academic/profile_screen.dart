@@ -1,6 +1,7 @@
 ﻿
 import 'package:flutter/material.dart';
 import '../../core/common_widgets.dart';
+import '../../core/services/api_config.dart';
 import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
@@ -225,7 +226,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 messenger.showSnackBar(const SnackBar(content: Text('No hay sesión')));
                 return;
               }
-              const driveBackendBaseUrl = 'http://localhost:8085';
+              final driveBackendBaseUrl = authApiBaseUrl;
               debugPrint('[FRONT DEBUG] Drive callback: usuario logueado=${_profile['email']}, endpoint auth=$driveBackendBaseUrl/auth/google-drive/connect');
               final ok = await GoogleDriveService().connectDrive(
                 backendBaseUrl: driveBackendBaseUrl,
