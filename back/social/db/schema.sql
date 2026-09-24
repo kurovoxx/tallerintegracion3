@@ -126,3 +126,13 @@ CREATE TABLE IF NOT EXISTS social.discord_integrations (
   constraint discord_integrations_group_id_key unique (group_id),
   constraint discord_integrations_group_id_fkey foreign KEY (group_id) references social.groups (id) on delete CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS social.stream_channels (
+  id uuid not null default gen_random_uuid (),
+  group_id uuid not null,
+  channel_id character varying(255) not null,
+  created_at timestamp with time zone not null default now(),
+  constraint stream_channels_pkey primary key (id),
+  constraint stream_channels_group_id_key unique (group_id),
+  constraint stream_channels_group_id_fkey foreign KEY (group_id) references social.groups (id) on delete CASCADE
+);

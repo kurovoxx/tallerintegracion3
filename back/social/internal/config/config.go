@@ -18,6 +18,9 @@ type Config struct {
 	AuthBaseURL  string // base del servicio Auth para el gateway interno de Calendar
 	InternalKey  string // secreto X-Internal-Key compartido con Auth
 	CalendarMode string // "mock" (default, sin Google) o "real"
+	StreamAPIKey string // API key de Stream (solo backend, jamás al front)
+	StreamSecret string // API secret de Stream para firmar tokens server-side
+	StreamMode   string // "mock" (default, sin Stream) o "real"
 }
 
 func Load() *Config {
@@ -52,6 +55,9 @@ func Load() *Config {
 		AuthBaseURL:  os.Getenv("AUTH_BASE_URL"),
 		InternalKey:  os.Getenv("INTERNAL_API_KEY"),
 		CalendarMode: os.Getenv("CALENDAR_MODE"),
+		StreamAPIKey: os.Getenv("STREAM_API_KEY"),
+		StreamSecret: os.Getenv("STREAM_API_SECRET"),
+		StreamMode:   os.Getenv("STREAM_MODE"),
 	}
 	if cfg.Port == "" {
 		cfg.Port = os.Getenv("PORT")
@@ -71,6 +77,9 @@ func Load() *Config {
 	}
 	if cfg.CalendarMode == "" {
 		cfg.CalendarMode = "mock"
+	}
+	if cfg.StreamMode == "" {
+		cfg.StreamMode = "mock"
 	}
 	return cfg
 }
