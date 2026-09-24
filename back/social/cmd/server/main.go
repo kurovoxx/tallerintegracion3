@@ -17,6 +17,7 @@ import (
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/middleware"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/service"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/stream"
 )
 
 func corsMiddleware() gin.HandlerFunc {
@@ -62,10 +63,8 @@ func main() {
 
 func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	groupRepo := repository.NewGroupRepository(pool)
-	// TODO(martín, 2_5_14): reemplazar por un notifier real que cree el canal
-	// de Stream al crear el grupo. Mientras tanto no-op — ver comentario en
-	// service.GroupCreatedNotifier.
-	groupSvc := service.NewGroupService(groupRepo, nil)
+	streamRepo := repository.NewStreamRepository(pool)
+	groupSvc := service.NewGroupService(groupRepo, streamNotifierFor(cfg, streamRepo))
 
 	todoRepo := repository.NewTodoRepository(pool)
 	todoSvc := service.NewTodoService(todoRepo)
@@ -116,6 +115,20 @@ func calendarNotifierFor(cfg *config.Config, meetingRepo *repository.MeetingRepo
 	)
 }
 
+func streamNotifierFor(cfg *config.Config, streamRepo *repository.StreamRepository) service.GroupCreatedNotifier {
+	// STREAM_MODE=mock (default): canal simulado, sin llamar a Stream.
+	// Persiste un channel_id falso para verificar el cableado E2E.
+	if strings.ToLower(strings.TrimSpace(cfg.StreamMode)) != "real" {
+		log.Printf("stream sync: modo mock (STREAM_MODE=%s)", cfg.StreamMode)
+		return service.NewStreamChannelNotifier(streamRepo, stream.NewMockClient())
+	}
+	// STREAM_MODE=real: creación vía API de Stream Chat con API key/secret.
+	log.Printf("stream sync: modo real")
+	return service.NewStreamChannelNotifier(
+		streamRepo,
+		stream.NewRESTClient(cfg.StreamAPIKey, cfg.StreamSecret),
+	)
+}
 
 func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, meetingH *httpHandler.MeetingHandler, discordH *httpHandler.DiscordHandler, viewH *httpHandler.ViewHandler, pool *pgxpool.Pool, cfg *config.Config) {
 	validator := &middleware.SimpleHS256Validator{
