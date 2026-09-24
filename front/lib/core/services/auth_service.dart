@@ -59,6 +59,11 @@ class AuthService {
       return LoginResult.failure(
         'No se pudo conectar con el servidor. Revisa la URL ($baseUrl), el puerto y que Gin esté ejecutándose.',
       );
+    } catch (e) {
+      // Captura también Error (ej. file:///api-auth en nativo con relativo mal configurado)
+      return LoginResult.failure(
+        'No se pudo conectar con el servidor. Revisa la URL ($baseUrl), el puerto y que Gin esté ejecutándose. ($e)',
+      );
     }
   }
 
@@ -116,6 +121,10 @@ class AuthService {
     } on Exception {
       return RegisterResult.failure(
         'No se pudo conectar con el servidor. Revisa la URL ($baseUrl), el puerto y que Gin esté ejecutándose.',
+      );
+    } catch (e) {
+      return RegisterResult.failure(
+        'No se pudo conectar con el servidor. Revisa la URL ($baseUrl), el puerto y que Gin esté ejecutándose. ($e)',
       );
     }
   }

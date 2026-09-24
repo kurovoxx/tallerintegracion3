@@ -102,9 +102,9 @@ services:
       context: ./front
       dockerfile: Dockerfile
       args:
-        BASE_URL: https://dotted-unaudited-liking.ngrok-free.dev/api-auth
-        NOTES_BASE_URL: https://dotted-unaudited-liking.ngrok-free.dev/api-notes
-        SOCIAL_BASE_URL: https://dotted-unaudited-liking.ngrok-free.dev/api-social
+        BASE_URL: ${API_BASE_URL:-http://localhost:8085}
+        NOTES_BASE_URL: ${NOTES_BASE_URL:-http://localhost:8082}
+        SOCIAL_BASE_URL: ${SOCIAL_BASE_URL:-http://localhost:8083}
     container_name: ti3-front
     ports:
       - "8086:80"
