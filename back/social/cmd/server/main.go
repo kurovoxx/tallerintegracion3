@@ -86,6 +86,7 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 		service.NewMultiMeetingNotifier(
 			calendarNotifierFor(cfg, meetingRepo),
 			service.NewDiscordMeetingNotifier(discordRepo, discord.NewWebhookClient()),
+			service.NewStreamMessageNotifier(streamRepo, streamClientFor(cfg)),
 		))
 	meetingH := httpHandler.NewMeetingHandler(meetingSvc)
 
@@ -115,18 +116,26 @@ func calendarNotifierFor(cfg *config.Config, meetingRepo *repository.MeetingRepo
 	)
 }
 
+func streamClientFor(cfg *config.Config) stream.Client {
+	// STREAM_MODE=mock (default): sin llamar a Stream.
+	if strings.ToLower(strings.TrimSpace(cfg.StreamMode)) != "real" {
+		return stream.NewMockClient()
+	}
+	return stream.NewRESTClient(cfg.StreamAPIKey, cfg.StreamSecret)
+}
+
 func streamNotifierFor(cfg *config.Config, streamRepo *repository.StreamRepository) service.GroupCreatedNotifier {
 	// STREAM_MODE=mock (default): canal simulado, sin llamar a Stream.
 	// Persiste un channel_id falso para verificar el cableado E2E.
 	if strings.ToLower(strings.TrimSpace(cfg.StreamMode)) != "real" {
 		log.Printf("stream sync: modo mock (STREAM_MODE=%s)", cfg.StreamMode)
-		return service.NewStreamChannelNotifier(streamRepo, stream.NewMockClient())
+		return service.NewStreamChannelNotifier(streamRepo, streamClientFor(cfg))
 	}
 	// STREAM_MODE=real: creación vía API de Stream Chat con API key/secret.
 	log.Printf("stream sync: modo real")
 	return service.NewStreamChannelNotifier(
 		streamRepo,
-		stream.NewRESTClient(cfg.StreamAPIKey, cfg.StreamSecret),
+		streamClientFor(cfg),
 	)
 }
 
