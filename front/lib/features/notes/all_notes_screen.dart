@@ -891,11 +891,16 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      useSafeArea: true,
       backgroundColor: Colors.transparent,
+      // En desktop/web el modal por defecto se limita a 640px; sin tope la
+      // hoja de detalle ocupa todo el ancho disponible junto al sidebar.
+      constraints: const BoxConstraints(maxWidth: double.infinity),
       builder: (_) => DraggableScrollableSheet(
-        initialChildSize: 0.75,
+        initialChildSize: 0.95,
         minChildSize: 0.5,
-        maxChildSize: 0.95,
+        maxChildSize: 1.0,
+        expand: false,
         builder: (context, scroll) => _NoteDetailSheet(
           scrollController: scroll,
           note: note,
@@ -2340,6 +2345,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
   @override
   Widget build(BuildContext context) {
     return Container(
+      width: double.infinity,
       decoration: const BoxDecoration(
         color: Colors.white,
         border: Border(
@@ -2390,25 +2396,32 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF5F0E8),
-                        border: Border.all(color: Colors.black, width: 1.5),
-                      ),
-                      child: Text(
-                        widget.tag,
-                        style: const TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                          color: Colors.black,
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF5F0E8),
+                            border: Border.all(color: Colors.black, width: 1.5),
+                          ),
+                          child: Text(
+                            widget.tag,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.black,
+                            ),
+                          ),
                         ),
                       ),
                     ),
-                    const Spacer(),
+                    const SizedBox(width: 8),
                     Text(
                       _fmtDate(widget.note.updatedAt),
                       style: const TextStyle(
@@ -4283,7 +4296,8 @@ class _ResourceViewerDialog extends StatelessWidget {
         child: isImage
             ? Container(
                 width: double.infinity,
-                height: 300,
+                height: 480,
+                constraints: const BoxConstraints(maxWidth: 900),
                 clipBehavior: Clip.hardEdge,
                 decoration: BoxDecoration(
                   color: AppColors.surfaceLow,
@@ -4712,102 +4726,127 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
   Widget _blockImage(String alt, String url) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: GestureDetector(
-          onTap: () => onOpenResource({
-            'type': 'image',
-            'name': alt.isEmpty ? url : alt,
-            'url': url,
-            'size': 'Adjunto',
-          }),
-          child: Container(
-            width: double.infinity,
-            constraints: const BoxConstraints(maxHeight: 220),
-            clipBehavior: Clip.hardEdge,
-            decoration: BoxDecoration(
-              color: AppColors.surfaceLow,
-              border: Border.all(color: AppColors.border, width: 2),
-              borderRadius: BorderRadius.circular(AppDimens.radius),
-              boxShadow: AppShadows.badge,
-            ),
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: _buildResourceImage(
-                    url: url,
-                    fit: BoxFit.contain,
-                    fallback: () => Container(
-                      color: AppColors.surfaceLow,
-                      alignment: Alignment.center,
-                      child: const Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.broken_image_rounded, size: 36, color: AppColors.muted),
-                          SizedBox(height: 6),
-                          Text(
-                            'IMAGEN NO DISPONIBLE',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w900,
-                              color: AppColors.muted,
+      child: Align(
+        alignment: Alignment.center,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(
+            minHeight: 250,
+            maxHeight: 520,
+            maxWidth: 850,
+          ),
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () => onOpenResource({
+                'type': 'image',
+                'name': alt.isEmpty ? url : alt,
+                'url': url,
+                'size': 'Adjunto',
+              }),
+              child: Container(
+                clipBehavior: Clip.hardEdge,
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceLow,
+                  border: Border.all(color: AppColors.border, width: 2),
+                  borderRadius: BorderRadius.circular(AppDimens.radius),
+                  boxShadow: AppShadows.badge,
+                ),
+                child: Stack(
+                  children: [
+                    _buildResourceImage(
+                      url: url,
+                      fit: BoxFit.contain,
+                      fallback: () => Container(
+                        width: 420,
+                        height: 260,
+                        color: AppColors.surfaceLow,
+                        alignment: Alignment.center,
+                        child: const Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.broken_image_rounded, size: 36, color: AppColors.muted),
+                            SizedBox(height: 6),
+                            Text(
+                              'IMAGEN NO DISPONIBLE',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w900,
+                                color: AppColors.muted,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      loadingBuilder: (context, child, progress) {
+                        if (progress == null) return child;
+                        return Container(
+                          width: 420,
+                          height: 260,
+                          color: AppColors.surfaceLow,
+                          alignment: Alignment.center,
+                          child: const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              color: AppColors.border,
                             ),
                           ),
-                        ],
+                        );
+                      },
+                    ),
+                    Positioned(
+                      bottom: 6,
+                      right: 6,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: AppColors.accentYellow,
+                          border: Border.all(color: AppColors.border, width: 1.5),
+                          borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+                          boxShadow: AppShadows.badge,
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.zoom_in_rounded, size: 13, color: AppColors.text),
+                            SizedBox(width: 4),
+                            Text(
+                              'AMPLIAR',
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w900,
+                                color: AppColors.text,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                ),
-                Positioned(
-                  bottom: 6,
-                  right: 6,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: AppColors.accentYellow,
-                      border: Border.all(color: AppColors.border, width: 1.5),
-                      borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-                      boxShadow: AppShadows.badge,
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.zoom_in_rounded, size: 13, color: AppColors.text),
-                        SizedBox(width: 4),
-                        Text(
-                          'AMPLIAR',
-                          style: TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.w900,
-                            color: AppColors.text,
+                    if (alt.isNotEmpty)
+                      Positioned(
+                        top: 6,
+                        left: 6,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: AppColors.surface,
+                            border: Border.all(color: AppColors.border, width: 1.5),
+                            borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+                          ),
+                          child: Text(
+                            alt,
+                            style: const TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w900,
+                              color: AppColors.text,
+                            ),
                           ),
                         ),
-                      ],
-                    ),
-                  ),
+                      ),
+                  ],
                 ),
-                if (alt.isNotEmpty)
-                  Positioned(
-                    top: 6,
-                    left: 6,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: AppColors.surface,
-                        border: Border.all(color: AppColors.border, width: 1.5),
-                        borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-                      ),
-                      child: Text(
-                        alt,
-                        style: const TextStyle(
-                          fontSize: 9,
-                          fontWeight: FontWeight.w900,
-                          color: AppColors.text,
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
+              ),
             ),
           ),
         ),
