@@ -1,9 +1,9 @@
 # Front Flutter - build web y sirve con nginx
 # Etapa 1: build web con Flutter
 FROM ghcr.io/cirruslabs/flutter:stable AS builder
-ARG BASE_URL=https://gcc-too-virgin-rhode.trycloudflare.com/api-auth
-ARG NOTES_BASE_URL=https://gcc-too-virgin-rhode.trycloudflare.com/api-notes
-ARG SOCIAL_BASE_URL=https://gcc-too-virgin-rhode.trycloudflare.com/api-social
+ARG BASE_URL=https://dotted-unaudited-liking.ngrok-free.dev/api-auth
+ARG NOTES_BASE_URL=https://dotted-unaudited-liking.ngrok-free.dev/api-notes
+ARG SOCIAL_BASE_URL=https://dotted-unaudited-liking.ngrok-free.dev/api-social
 WORKDIR /app
 COPY pubspec.yaml pubspec.lock ./
 RUN flutter pub get
@@ -20,7 +20,7 @@ RUN if [ ! -f web/drift_worker.js ]; then \
       find /home -name drift_worker.js -path "*drift*drift_worker.js" -exec cp {} web/drift_worker.js \; 2>/dev/null || true; \
       ls -lh web/drift_worker.js || echo "drift_worker.js opcional para WasmDatabase.open"; \
     fi
-# Estático para test login vía túnel público actual (si cambia la URL trycloudflare, actualizar ARGs y rebuild).
+# Estático: dominio fijo de ngrok en pillan (si cambia el dominio, actualizar los ARG y rebuild).
 RUN flutter build web --release \
     --dart-define=API_BASE_URL=$BASE_URL \
     --dart-define=NOTES_BASE_URL=$NOTES_BASE_URL \
