@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../core/common_widgets.dart';
+import '../../core/services/courses_service.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/neobrutalism.dart';
 import 'attendance_screen.dart';
 
 const String kSubjectApproved = 'approved';
@@ -13,6 +15,19 @@ String _formatGrade(num raw) {
   final v = raw >= 10 ? raw / 10 : raw.toDouble();
   return v.toStringAsFixed(1);
 }
+
+const List<String> _kWeekDays = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+
+const List<List<String>> _kScheduleBlocks = [
+  ['08:15', '09:45'],
+  ['10:00', '11:30'],
+  ['11:45', '13:15'],
+  ['14:00', '15:30'],
+  ['15:45', '17:15'],
+  ['17:30', '19:00'],
+];
+
+String _blockLabel(List<String> block) => '${block[0]}–${block[1]}';
 
 enum _CourseDetailTab { unidades, materiales, evaluaciones }
 
@@ -32,12 +47,23 @@ class _CoursesScreenState extends State<CoursesScreen> {
   String? _selectedCourseId;
   _CourseDetailTab _detailTab = _CourseDetailTab.unidades;
 
-  List<Map<String, dynamic>> _courses = [];
+  List<Map<String, dynamic>> get _courses => CoursesService.instance.courses;
 
   @override
   void initState() {
     super.initState();
+    CoursesService.instance.addListener(_handleCoursesChanged);
     _loadCourses();
+  }
+
+  void _handleCoursesChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    CoursesService.instance.removeListener(_handleCoursesChanged);
+    super.dispose();
   }
 
   Future<void> _loadCourses() async {
@@ -47,169 +73,6 @@ class _CoursesScreenState extends State<CoursesScreen> {
     });
     try {
       await Future.delayed(const Duration(milliseconds: 620));
-      _courses = [
-        {
-          'id': 'calc-3',
-          'code': 'INF-1111',
-          'name': 'Cálculo III',
-          'credits': 5,
-          'status': kSubjectInProgress,
-          'professor': 'Prof. 1',
-          'schedule': 'Lun / Mié · 10:00–11:30',
-          'room': 'CJP11-204',
-          'requisite': 'REQ: MA1101',
-          'requisite_alert': false,
-          'progress': 68,
-          'semester': 'Semestre 6',
-          'icon': Icons.menu_book_rounded,
-          'units': [
-            {
-              'title': 'Unidad 1: Funciones de Varias Variables y Derivadas Parciales',
-              'badge': 'completado',
-              'items': [
-                {'title': 'Dominio, Rango y Graficación de Funciones de Varias Variables', 'checked': true, 'tag': 'Clase 1 – 4'},
-                {'title': 'Límites y Continuidad en Rⁿ', 'checked': true, 'tag': 'Clase 5 – 7'},
-              ]
-            },
-            {
-              'title': 'Unidad 2: Integrales Múltiples y Cambio de Variables',
-              'badge': 'en curso',
-              'items': [
-                {'title': 'Integrales Dobles sobre Regiones Generales', 'checked': true, 'tag': 'Clase 11 – 13'},
-                {'title': 'Transformación a Coordenadas Polares, Cilíndricas y Esféricas', 'checked': false, 'tag': 'Clase 14 – 17'},
-              ]
-            },
-            {
-              'title': 'Unidad 3: Cálculo Vectorial y Teoremas Fundamentales',
-              'badge': 'próximo',
-              'items': [
-                {'title': 'Campos Vectoriales, Divergencia y Rotacional', 'checked': false, 'tag': 'Clase 21 – 24'},
-              ]
-            },
-          ],
-          'materials': [
-            {'name': 'Guía 1 - Derivadas Parciales.pdf', 'meta': 'PDF · 2.4 MB', 'icon': Icons.picture_as_pdf_rounded},
-            {'name': 'Diapositivas - Integrales Dobles.pdf', 'meta': 'PDF · 5.1 MB', 'icon': Icons.picture_as_pdf_rounded},
-            {'name': 'Solucionario Certamen 1 2025.pdf', 'meta': 'PDF · 1.8 MB', 'icon': Icons.picture_as_pdf_rounded},
-          ],
-          'grades': [
-            {'name': 'Certamen 1 (25%) · Unidad 1', 'weight': 0.25, 'score': 62, 'status': 'graded'},
-            {'name': 'Certamen 2 (35%) · Unidad 2', 'weight': 0.35, 'score': null, 'status': 'pending', 'date': '15 nov'},
-            {'name': 'Tareas Prácticas y Talleres (40%)', 'weight': 0.40, 'score': 68, 'status': 'graded'},
-          ],
-        },
-        {
-          'id': 'taller-3',
-          'code': 'INF-360',
-          'name': 'Taller de Integración III',
-          'credits': 4,
-          'status': kSubjectPending,
-          'professor': 'Prof. 2',
-          'schedule': 'Mar / Jue · 08:30–10:00',
-          'room': 'CJP11-102',
-          'requisite': 'REQ: INF-200',
-          'requisite_alert': false,
-          'progress': 42,
-          'semester': 'Semestre 6',
-          'icon': Icons.computer_rounded,
-          'units': [
-            {
-              'title': 'Unidad 1: Levantamiento de Requerimientos',
-              'badge': 'en curso',
-              'items': [
-                {'title': 'Entrevistas y especificación funcional', 'checked': true, 'tag': 'Clase 1 – 3'},
-                {'title': 'Historias de usuario y criterios de aceptación', 'checked': false, 'tag': 'Clase 4 – 6'},
-              ]
-            },
-            {
-              'title': 'Unidad 2: Diseño y Prototipado',
-              'badge': 'próximo',
-              'items': [
-                {'title': 'Wireframes y PMN en Tailwind', 'checked': false, 'tag': 'Clase 7 – 10'},
-              ]
-            },
-          ],
-          'materials': [
-            {'name': 'PMN - Especificación Sigma Academy.pdf', 'meta': 'PDF · 3.2 MB', 'icon': Icons.description_rounded},
-            {'name': 'Guía Flutter Neo-Brutalismo.pdf', 'meta': 'PDF · 1.1 MB', 'icon': Icons.description_rounded},
-          ],
-          'grades': [
-            {'name': 'Avance 1 - PMN (20%)', 'weight': 0.20, 'score': 58, 'status': 'graded'},
-            {'name': 'Sprint 1 (30%)', 'weight': 0.30, 'score': null, 'status': 'pending'},
-            {'name': 'Entrega Final (50%)', 'weight': 0.50, 'score': null, 'status': 'pending'},
-          ],
-        },
-        {
-          'id': 'seg-inf',
-          'code': 'INF-350',
-          'name': 'Seguridad Informática',
-          'credits': 4,
-          'status': kSubjectFailed,
-          'professor': 'Prof. de la Vega',
-          'schedule': 'Vie · 14:00–17:00',
-          'room': 'CJP11-102',
-          'requisite': 'REQ: INF-330',
-          'requisite_alert': true,
-          'progress': 25,
-          'semester': 'Semestre 6',
-          'icon': Icons.lock_rounded,
-          'units': [
-            {
-              'title': 'Unidad 1: Criptografía',
-              'badge': 'próximo',
-              'items': [
-                {'title': 'Cifrado simétrico y asimétrico', 'checked': false, 'tag': 'Clase 1 – 5'},
-              ]
-            },
-          ],
-          'materials': [
-            {'name': 'Apunte Criptografía.pdf', 'meta': 'PDF · 4.0 MB', 'icon': Icons.picture_as_pdf_rounded},
-          ],
-          'grades': [
-            {'name': 'Certamen 1 (40%)', 'weight': 0.40, 'score': 35, 'status': 'graded'},
-            {'name': 'Laboratorio (60%)', 'weight': 0.60, 'score': null, 'status': 'pending'},
-          ],
-        },
-        {
-          'id': 'redes',
-          'code': 'INF-330',
-          'name': 'Redes de Computadores',
-          'credits': 5,
-          'status': kSubjectApproved,
-          'professor': 'Profesora Morales',
-          'schedule': 'Lun / Jue · 11:30–13:00',
-          'room': 'CJP11-101',
-          'requisite': 'REQ: INF-100',
-          'requisite_alert': false,
-          'progress': 75,
-          'semester': 'Semestre 6',
-          'icon': Icons.public_rounded,
-          'units': [
-            {
-              'title': 'Unidad 1: Modelo OSI y TCP/IP',
-              'badge': 'completado',
-              'items': [
-                {'title': 'Capas y encapsulamiento', 'checked': true, 'tag': 'Clase 1 – 4'},
-              ]
-            },
-            {
-              'title': 'Unidad 2: Enrutamiento',
-              'badge': 'completado',
-              'items': [
-                {'title': 'Algoritmos de enrutamiento', 'checked': true, 'tag': 'Clase 5 – 8'},
-              ]
-            },
-          ],
-          'materials': [
-            {'name': 'Guía Laboratorio Redes.pdf', 'meta': 'PDF · 2.0 MB', 'icon': Icons.description_rounded},
-          ],
-          'grades': [
-            {'name': 'Certamen 1 (30%)', 'weight': 0.30, 'score': 55, 'status': 'graded'},
-            {'name': 'Certamen 2 (30%)', 'weight': 0.30, 'score': 60, 'status': 'graded'},
-            {'name': 'Proyecto (40%)', 'weight': 0.40, 'score': 62, 'status': 'graded'},
-          ],
-        },
-      ];
       if (!mounted) return;
       setState(() => _isLoading = false);
     } catch (_) {
@@ -260,197 +123,50 @@ class _CoursesScreenState extends State<CoursesScreen> {
   }
 
   Future<void> _showCreateCourseDialog() async {
-    final formKey = GlobalKey<FormState>();
-    final nameCtrl = TextEditingController();
-    final codeCtrl = TextEditingController();
-    final creditsCtrl = TextEditingController(text: '5');
-    final professorCtrl = TextEditingController();
-    final scheduleCtrl = TextEditingController();
-    final roomCtrl = TextEditingController();
-    String status = kSubjectInProgress;
-
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (ctx) {
-        return StatefulBuilder(builder: (ctx2, setD) {
-          return AlertDialog(
-            backgroundColor: AppColors.surface,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppDimens.radius), side: const BorderSide(color: AppColors.border, width: 3)),
-            title: const Text('CREAR NUEVO CURSO', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: AppColors.text)),
-            content: SingleChildScrollView(
-              child: Form(
-                key: formKey,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const AppFieldLabel('NOMBRE DEL RAMO'),
-                    const SizedBox(height: 6),
-                    TextFormField(
-                      controller: nameCtrl,
-                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: AppColors.text),
-                      decoration: appInputDecoration('Sistemas Inteligentes'),
-                      validator: (v) {
-                        if (v == null || v.trim().isEmpty) return 'Requerido';
-                        if (v.trim().length < 3) return 'Mínimo 3 caracteres';
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                    Row(children: [
-                      Expanded(
-                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          const AppFieldLabel('CÓDIGO'),
-                          const SizedBox(height: 6),
-                          TextFormField(
-                            controller: codeCtrl,
-                            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text),
-                            decoration: appInputDecoration('INFO-301'),
-                            inputFormatters: [LengthLimitingTextInputFormatter(20)],
-                            validator: (v) {
-                              if (v == null || v.trim().isEmpty) return 'Requerido';
-                              if (!RegExp(r'^[A-Z]{2,5}[- ]?\d{3,4}$').hasMatch(v.trim().toUpperCase())) return 'Ej. INF-301';
-                              return null;
-                            },
-                          ),
-                        ]),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          const AppFieldLabel('CRÉDITOS'),
-                          const SizedBox(height: 6),
-                          TextFormField(
-                            controller: creditsCtrl,
-                            keyboardType: TextInputType.number,
-                            inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(2)],
-                            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text),
-                            decoration: appInputDecoration('5'),
-                            validator: (v) {
-                              final n = int.tryParse(v ?? '');
-                              if (n == null) return 'Requerido';
-                              if (n < 1 || n > 12) return '1-12';
-                              return null;
-                            },
-                          ),
-                        ]),
-                      ),
-                    ]),
-                    const SizedBox(height: 12),
-                    const AppFieldLabel('PROFESOR'),
-                    const SizedBox(height: 6),
-                    TextFormField(controller: professorCtrl, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text), decoration: appInputDecoration('Prof. Apellido')),
-                    const SizedBox(height: 12),
-                    Row(children: [
-                      Expanded(
-                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          const AppFieldLabel('HORARIO'),
-                          const SizedBox(height: 6),
-                          TextFormField(controller: scheduleCtrl, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text), decoration: appInputDecoration('Lun / Mié · 10:00')),
-                        ]),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          const AppFieldLabel('SALA'),
-                          const SizedBox(height: 6),
-                          TextFormField(controller: roomCtrl, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text), decoration: appInputDecoration('CJP11-204')),
-                        ]),
-                      ),
-                    ]),
-                    const SizedBox(height: 12),
-                    const AppFieldLabel('ESTADO'),
-                    const SizedBox(height: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      decoration: BoxDecoration(color: AppColors.bg, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius)),
-                      child: DropdownButtonHideUnderline(
-                        child: DropdownButton<String>(
-                          value: status,
-                          isExpanded: true,
-                          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppColors.text),
-                          items: const [
-                            DropdownMenuItem(value: kSubjectInProgress, child: Text('Cursando')),
-                            DropdownMenuItem(value: kSubjectPending, child: Text('Pendiente')),
-                            DropdownMenuItem(value: kSubjectApproved, child: Text('Finalizado · Aprobado')),
-                            DropdownMenuItem(value: kSubjectFailed, child: Text('Finalizado · Reprobado')),
-                          ],
-                          onChanged: (v) {
-                            if (v != null) setD(() => status = v);
-                          },
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            actions: [
-              TextButton(onPressed: () => Navigator.of(ctx2).pop(), child: const Text('CANCELAR', style: TextStyle(fontWeight: FontWeight.w800, color: AppColors.muted))),
-              ElevatedButton(
-                onPressed: () {
-                  if (!formKey.currentState!.validate()) return;
-                  Navigator.of(ctx2).pop({
-                    'name': nameCtrl.text.trim(),
-                    'code': codeCtrl.text.trim().toUpperCase(),
-                    'credits': int.tryParse(creditsCtrl.text) ?? 5,
-                    'status': status,
-                    'professor': professorCtrl.text.trim().isEmpty ? 'Por asignar' : professorCtrl.text.trim(),
-                    'schedule': scheduleCtrl.text.trim().isEmpty ? 'Por definir' : scheduleCtrl.text.trim(),
-                    'room': roomCtrl.text.trim().isEmpty ? 'Por asignar' : roomCtrl.text.trim(),
-                  });
-                },
-                style: ElevatedButton.styleFrom(backgroundColor: AppColors.accentYellow, foregroundColor: AppColors.text, side: const BorderSide(color: AppColors.border, width: 2), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppDimens.radius))),
-                child: const Text('CREAR RAMO', style: TextStyle(fontWeight: FontWeight.w900)),
-              ),
-            ],
-          );
-        });
-      },
+      builder: (_) => const _CreateCourseDialog(),
     );
 
-    nameCtrl.dispose();
-    codeCtrl.dispose();
-    creditsCtrl.dispose();
-    professorCtrl.dispose();
-    scheduleCtrl.dispose();
-    roomCtrl.dispose();
+    if (result == null || !mounted) return;
 
-    if (result != null) {
-      setState(() {
-        _courses.insert(0, {
-          'id': 'course-${DateTime.now().microsecondsSinceEpoch}',
-          'code': result['code'],
-          'name': result['name'],
-          'credits': result['credits'],
-          'status': result['status'],
-          'professor': result['professor'],
-          'schedule': result['schedule'],
-          'room': result['room'],
-          'requisite': 'REQ: —',
-          'requisite_alert': false,
-          'progress': result['status'] == kSubjectPending ? 0 : 15,
-          'icon': Icons.book_rounded,
-          'units': [
-            {
-              'title': 'Unidad 1: Introducción',
-              'badge': 'próximo',
-              'items': [
-                {'title': 'Contenido inicial por definir', 'checked': false, 'tag': 'Clase 1 – 2'},
-              ]
-            },
-          ],
-          'materials': [
-            {'name': 'Sin materiales aún', 'meta': 'Añade PDFs desde el detalle', 'icon': Icons.description_rounded},
-          ],
-          'grades': [
-            {'name': 'Evaluación 1 (100%)', 'weight': 1.0, 'score': null, 'status': 'pending'},
-          ],
-        });
-      });
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Curso creado correctamente'), backgroundColor: AppColors.border));
-    }
+    CoursesService.instance.addCourse({
+      'id': 'course-${DateTime.now().microsecondsSinceEpoch}',
+      'code': result['code'],
+      'name': result['name'],
+      'credits': result['credits'],
+      'status': result['status'],
+      'professor': result['professor'],
+      'schedule': result['schedule'],
+      'room': result['room'],
+      'requisite': 'REQ: —',
+      'requisite_alert': false,
+      'progress': result['status'] == kSubjectPending ? 0 : 15,
+      'semester': 'Semestre 6',
+      'icon': Icons.book_rounded,
+      'units': [
+        {
+          'title': 'Unidad 1: Introducción',
+          'badge': 'próximo',
+          'items': [
+            {'title': 'Contenido inicial por definir', 'checked': false, 'tag': 'Clase 1 – 2'},
+          ]
+        },
+      ],
+      'materials': [
+        {'name': 'Sin materiales aún', 'meta': 'Añade PDFs desde el detalle', 'icon': Icons.description_rounded},
+      ],
+      'grades': [
+        {'name': 'Evaluación 1 (100%)', 'weight': 1.0, 'score': null, 'status': 'pending'},
+      ],
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Curso creado correctamente'),
+        backgroundColor: AppColors.border,
+      ),
+    );
   }
 
   @override
@@ -998,18 +714,16 @@ class _CourseCard extends StatelessWidget {
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(color: cardBg, border: Border.all(color: AppColors.border, width: 4), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(4, 4), blurRadius: 0)]),
+        decoration: BoxDecoration(color: cardBg, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(4, 4), blurRadius: 0)]),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Container(width: 44, height: 44, alignment: Alignment.center, decoration: BoxDecoration(color: isAlert ? Colors.white : AppColors.accentYellow, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius)), child: Icon(course['icon'] as IconData, size: 20, color: isAlert ? AppColors.error : AppColors.text)),
-              const SizedBox(width: 10),
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text((course['name'] as String).toUpperCase(), style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13.5, color: isAlert ? AppColors.error : AppColors.text, height: 1.1)),
-                  const SizedBox(height: 2),
-                  Text('${course['code']} · ${course['credits']} créditos', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 11, color: isAlert ? AppColors.error.withOpacity(0.85) : AppColors.muted)),
+                  Text((course['name'] as String).toUpperCase(), style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: isAlert ? AppColors.error : AppColors.text, height: 1.15)),
+                  const SizedBox(height: 3),
+                  Text('${course['code']} · ${course['credits']} créditos', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 11, color: isAlert ? AppColors.error.withValues(alpha: 0.85) : AppColors.muted)),
                 ]),
               ),
               const SizedBox(width: 8),
@@ -1092,6 +806,295 @@ class _CourseTabButton extends StatelessWidget {
   }
 }
 
+/// Diálogo "CREAR NUEVO CURSO" como StatefulWidget dedicado. Los
+/// TextEditingController viven en su State (initState) y se liberan en
+/// dispose(), momento en que la ruta del diálogo ya desmontó sus widgets.
+/// Esto evita el assert de ChangeNotifier '_dependents.isEmpty' que ocurría
+/// al disponer los controladores justo después del pop del showDialog.
+class _CreateCourseDialog extends StatefulWidget {
+  const _CreateCourseDialog();
+
+  @override
+  State<_CreateCourseDialog> createState() => _CreateCourseDialogState();
+}
+
+class _CreateCourseDialogState extends State<_CreateCourseDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _codeCtrl;
+  late final TextEditingController _creditsCtrl;
+  late final TextEditingController _professorCtrl;
+  late final TextEditingController _scheduleCtrl;
+  late final TextEditingController _roomCtrl;
+  String _status = kSubjectInProgress;
+  // Bloques de horario añadidos, p.ej. 'Lun / Mié · 10:00–11:30'.
+  final List<String> _scheduleEntries = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _nameCtrl = TextEditingController();
+    _codeCtrl = TextEditingController();
+    _creditsCtrl = TextEditingController(text: '5');
+    _professorCtrl = TextEditingController();
+    _scheduleCtrl = TextEditingController();
+    _roomCtrl = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _codeCtrl.dispose();
+    _creditsCtrl.dispose();
+    _professorCtrl.dispose();
+    _scheduleCtrl.dispose();
+    _roomCtrl.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (!_formKey.currentState!.validate()) return;
+    Navigator.of(context).pop({
+      'name': _nameCtrl.text.trim(),
+      'code': _codeCtrl.text.trim().toUpperCase(),
+      'credits': int.tryParse(_creditsCtrl.text) ?? 5,
+      'status': _status,
+      'professor': _professorCtrl.text.trim().isEmpty ? 'Por asignar' : _professorCtrl.text.trim(),
+      'schedule': _scheduleCtrl.text.trim().isEmpty ? 'Por definir' : _scheduleCtrl.text.trim(),
+      'room': _roomCtrl.text.trim().isEmpty ? 'Por asignar' : _roomCtrl.text.trim(),
+    });
+  }
+
+  /// Sincroniza el campo HORARIO con los bloques añadidos.
+  void _syncScheduleText() {
+    _scheduleCtrl.text = _scheduleEntries.join(' · ');
+  }
+
+  void _removeScheduleEntry(int index) {
+    setState(() {
+      _scheduleEntries.removeAt(index);
+      _syncScheduleText();
+    });
+  }
+
+  /// Abre el popup compacto de horario (días + bloque) que devuelve la
+  /// lista final de entradas añadidas.
+  Future<void> _openSchedulePicker() async {
+    final result = await showDialog<List<String>>(
+      context: context,
+      builder: (_) => _SchedulePickerDialog(
+        initialEntries: List<String>.of(_scheduleEntries),
+      ),
+    );
+    if (result == null) return;
+    setState(() {
+      _scheduleEntries
+        ..clear()
+        ..addAll(result);
+      _syncScheduleText();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      type: MaterialType.transparency,
+      child: AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppDimens.radius),
+          side: const BorderSide(color: AppColors.border, width: 3),
+        ),
+        title: const Text(
+          'CREAR NUEVO CURSO',
+          style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: AppColors.text),
+        ),
+        content: SingleChildScrollView(
+          child: Form(
+            key: _formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const AppFieldLabel('NOMBRE DEL RAMO'),
+                const SizedBox(height: 6),
+                TextFormField(
+                  controller: _nameCtrl,
+                  style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: AppColors.text),
+                  decoration: appInputDecoration('Sistemas Inteligentes'),
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) return 'Requerido';
+                    if (v.trim().length < 3) return 'Mínimo 3 caracteres';
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 12),
+                Row(children: [
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      const AppFieldLabel('CÓDIGO'),
+                      const SizedBox(height: 6),
+                      TextFormField(
+                        controller: _codeCtrl,
+                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text),
+                        decoration: appInputDecoration('INFO-301'),
+                        inputFormatters: [LengthLimitingTextInputFormatter(20)],
+                        validator: (v) {
+                          if (v == null || v.trim().isEmpty) return 'Requerido';
+                          if (!RegExp(r'^[A-Z]{2,5}[- ]?\d{3,4}$').hasMatch(v.trim().toUpperCase())) return 'Ej. INF-301';
+                          return null;
+                        },
+                      ),
+                    ]),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      const AppFieldLabel('CRÉDITOS'),
+                      const SizedBox(height: 6),
+                      TextFormField(
+                        controller: _creditsCtrl,
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(2)],
+                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text),
+                        decoration: appInputDecoration('5'),
+                        validator: (v) {
+                          final n = int.tryParse(v ?? '');
+                          if (n == null) return 'Requerido';
+                          if (n < 1 || n > 12) return '1-12';
+                          return null;
+                        },
+                      ),
+                    ]),
+                  ),
+                ]),
+                const SizedBox(height: 12),
+                const AppFieldLabel('PROFESOR'),
+                const SizedBox(height: 6),
+                TextFormField(
+                  controller: _professorCtrl,
+                  style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text),
+                  decoration: appInputDecoration('Prof. Apellido'),
+                ),
+                const SizedBox(height: 12),
+                // Selector compacto: un botón abre el popup de horario
+                // (días + bloque), agregando entradas tipo 'Lun / Mié · 10:00–11:30'
+                // que se sincronizan con el campo HORARIO (sigue siendo editable).
+                Row(children: [
+                  const Text('HORARIO SEMANAL', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: AppColors.text, letterSpacing: 0.5)),
+                  const Spacer(),
+                  if (_scheduleEntries.isNotEmpty)
+                    InkWell(
+                      onTap: () {
+                        setState(() {
+                          _scheduleEntries.clear();
+                          _syncScheduleText();
+                        });
+                      },
+                      child: const Text('LIMPIAR', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10, color: AppColors.error)),
+                    ),
+                ]),
+                const SizedBox(height: 6),
+                NeobrutalistButton(
+                  label: 'SELECCIONAR HORARIO',
+                  icon: Icons.calendar_month_rounded,
+                  variant: NeobrutalistButtonVariant.secondary,
+                  expand: true,
+                  onPressed: _openSchedulePicker,
+                ),
+                const SizedBox(height: 8),
+                if (_scheduleEntries.isEmpty)
+                  const Text('Elige días y franjas en el popup para armar el horario.', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 10, color: AppColors.muted))
+                else
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      for (var i = 0; i < _scheduleEntries.length; i++)
+                        _ScheduleEntryChip(
+                          label: _scheduleEntries[i],
+                          onDelete: () => _removeScheduleEntry(i),
+                        ),
+                    ],
+                  ),
+                const SizedBox(height: 10),
+                Row(children: [
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      const AppFieldLabel('HORARIO'),
+                      const SizedBox(height: 6),
+                      TextFormField(
+                        controller: _scheduleCtrl,
+                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text),
+                        decoration: appInputDecoration('Lun / Mié · 10:00'),
+                      ),
+                    ]),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      const AppFieldLabel('SALA'),
+                      const SizedBox(height: 6),
+                      TextFormField(
+                        controller: _roomCtrl,
+                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text),
+                        decoration: appInputDecoration('CJP11-204'),
+                      ),
+                    ]),
+                  ),
+                ]),
+                const SizedBox(height: 12),
+                const AppFieldLabel('ESTADO'),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  decoration: BoxDecoration(
+                    color: AppColors.bg,
+                    border: Border.all(color: AppColors.border, width: 2),
+                    borderRadius: BorderRadius.circular(AppDimens.radius),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: _status,
+                      isExpanded: true,
+                      style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppColors.text),
+                      items: const [
+                        DropdownMenuItem(value: kSubjectInProgress, child: Text('Cursando')),
+                        DropdownMenuItem(value: kSubjectPending, child: Text('Pendiente')),
+                        DropdownMenuItem(value: kSubjectApproved, child: Text('Finalizado · Aprobado')),
+                        DropdownMenuItem(value: kSubjectFailed, child: Text('Finalizado · Reprobado')),
+                      ],
+                      onChanged: (v) {
+                        if (v != null) setState(() => _status = v);
+                      },
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('CANCELAR', style: TextStyle(fontWeight: FontWeight.w800, color: AppColors.muted)),
+          ),
+          ElevatedButton(
+            onPressed: _submit,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.accentYellow,
+              foregroundColor: AppColors.text,
+              side: const BorderSide(color: AppColors.border, width: 2),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppDimens.radius)),
+            ),
+            child: const Text('CREAR RAMO', style: TextStyle(fontWeight: FontWeight.w900)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _SquareIconButton extends StatelessWidget {
   final IconData icon;
   final VoidCallback onPressed;
@@ -1106,5 +1109,238 @@ class _SquareIconButton extends StatelessWidget {
       child: Container(width: 42, height: 42, alignment: Alignment.center, decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0)]), child: Icon(icon, size: 18, color: AppColors.text)),
     );
     return tooltip != null ? Tooltip(message: tooltip!, child: btn) : btn;
+  }
+}
+
+/// Popup compacto para armar el horario al crear un curso (estilo Agendar
+/// Reunión): chips de días (multi-selección), chips de bloque/hora común,
+/// botón 'AÑADIR BLOQUE' y la lista de bloques ya añadidos. Devuelve la
+/// lista final de entradas cuando se confirma con 'LISTO'.
+class _SchedulePickerDialog extends StatefulWidget {
+  final List<String> initialEntries;
+  const _SchedulePickerDialog({required this.initialEntries});
+
+  @override
+  State<_SchedulePickerDialog> createState() => _SchedulePickerDialogState();
+}
+
+class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
+  late final List<String> _added;
+  final Set<String> _selectedDays = <String>{};
+  String? _selectedBlock;
+
+  @override
+  void initState() {
+    super.initState();
+    _added = List<String>.of(widget.initialEntries);
+  }
+
+  /// Vista previa de la entrada en construcción, p.ej. 'Lun / Mié · 10:00–11:30'.
+  String get _preview {
+    final days = _selectedDays.toList()
+      ..sort((a, b) => _kWeekDays.indexOf(a).compareTo(_kWeekDays.indexOf(b)));
+    if (days.isEmpty || _selectedBlock == null) return '';
+    return '${days.join(' / ')} · $_selectedBlock';
+  }
+
+  void _addBlock() {
+    final preview = _preview;
+    if (preview.isEmpty) return;
+    setState(() {
+      _added.add(preview);
+      _selectedDays.clear();
+      _selectedBlock = null;
+    });
+  }
+
+  void _removeAt(int index) {
+    setState(() => _added.removeAt(index));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      type: MaterialType.transparency,
+      child: AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppDimens.radius),
+          side: const BorderSide(color: AppColors.border, width: 3),
+        ),
+        title: const Text(
+          'SELECCIONAR HORARIO',
+          style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: AppColors.text),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text('DÍAS', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10, color: AppColors.muted, letterSpacing: 0.5)),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final day in _kWeekDays)
+                    _ScheduleDayChip(
+                      label: day,
+                      selected: _selectedDays.contains(day),
+                      onTap: () {
+                        setState(() {
+                          if (_selectedDays.contains(day)) {
+                            _selectedDays.remove(day);
+                          } else {
+                            _selectedDays.add(day);
+                          }
+                        });
+                      },
+                    ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              const Text('BLOQUE / HORA', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10, color: AppColors.muted, letterSpacing: 0.5)),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final block in _kScheduleBlocks)
+                    _ScheduleDayChip(
+                      label: _blockLabel(block),
+                      selected: _selectedBlock == _blockLabel(block),
+                      onTap: () => setState(() => _selectedBlock = _blockLabel(block)),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              if (_preview.isNotEmpty) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.accentYellow,
+                    border: Border.all(color: AppColors.border, width: 2),
+                    borderRadius: BorderRadius.circular(AppDimens.radius),
+                  ),
+                  child: Text(_preview, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: AppColors.text)),
+                ),
+                const SizedBox(height: 8),
+              ],
+              NeobrutalistButton(
+                label: 'AÑADIR BLOQUE',
+                icon: Icons.add_rounded,
+                variant: NeobrutalistButtonVariant.accent,
+                expand: true,
+                onPressed: _preview.isEmpty ? null : _addBlock,
+              ),
+              if (_added.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                const Text('BLOQUES AÑADIDOS', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10, color: AppColors.muted, letterSpacing: 0.5)),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (var i = 0; i < _added.length; i++)
+                      _ScheduleEntryChip(label: _added[i], onDelete: () => _removeAt(i)),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('CANCELAR', style: TextStyle(fontWeight: FontWeight.w800, color: AppColors.muted)),
+          ),
+          NeobrutalistButton(
+            label: 'LISTO',
+            icon: Icons.check_rounded,
+            variant: NeobrutalistButtonVariant.primary,
+            onPressed: () => Navigator.of(context).pop(List<String>.of(_added)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Chip con la entrada de horario añadida (p.ej. 'Lun / Mié · 10:00–11:30')
+/// y una 'X' para eliminarla.
+class _ScheduleEntryChip extends StatelessWidget {
+  final String label;
+  final VoidCallback onDelete;
+  const _ScheduleEntryChip({required this.label, required this.onDelete});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.only(left: 10, right: 4, top: 6, bottom: 6),
+      decoration: BoxDecoration(
+        color: AppColors.accentYellow,
+        border: Border.all(color: AppColors.border, width: 1.5),
+        borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(label, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 10, color: AppColors.text)),
+          const SizedBox(width: 4),
+          InkWell(
+            onTap: onDelete,
+            borderRadius: BorderRadius.circular(4),
+            child: const Padding(
+              padding: EdgeInsets.all(2),
+              child: Icon(Icons.close_rounded, size: 14, color: AppColors.text),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Chip sticker de día en el selector semanal: resaltador invertido al
+/// seleccionarse, hundimiento mecánico al presionar.
+class _ScheduleDayChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  const _ScheduleDayChip({required this.label, required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: AppMotion.press,
+          curve: AppMotion.standard,
+          transform: Matrix4.translationValues(
+            selected ? AppShadows.offsetBadge.dx : 0,
+            selected ? AppShadows.offsetBadge.dy : 0,
+            0,
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: selected ? AppColors.accentYellow : AppColors.surface,
+            border: Border.all(color: AppColors.border, width: 1.5),
+            borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+            boxShadow: selected ? null : AppShadows.badge,
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+              fontSize: 10,
+              color: selected ? AppColors.text : AppColors.muted,
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }

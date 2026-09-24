@@ -2,6 +2,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../core/common_widgets.dart';
+import '../../core/services/courses_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 
@@ -12,6 +13,10 @@ const String kSubjectPending = 'pending';
 
 /// Ancho de cada columna de semestre en la fila horizontal única.
 const double _kSemesterColumnWidth = 350;
+
+/// Semestre en el que se insertan los cursos creados en Mis Cursos que no
+/// existen aún en la malla.
+const int _kCoursesInsertSemester = 6;
 
 class CurriculumScreen extends StatefulWidget {
   const CurriculumScreen({super.key});
@@ -34,11 +39,18 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   @override
   void initState() {
     super.initState();
+    CoursesService.instance.addListener(_onCoursesChanged);
     _loadCurriculum();
+  }
+
+  void _onCoursesChanged() {
+    if (!mounted) return;
+    setState(_syncWithCoursesService);
   }
 
   @override
   void dispose() {
+    CoursesService.instance.removeListener(_onCoursesChanged);
     _horizontalScrollController.dispose();
     super.dispose();
   }
@@ -176,6 +188,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           },
         ],
       };
+      _syncWithCoursesService();
       // snapshot deep copy
       _snapshot = _deepCopy(_semesters);
       if (!mounted) return;
@@ -197,6 +210,59 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       out[k] = v.map((e) => Map<String, dynamic>.from(e)).toList();
     });
     return out;
+  }
+
+  /// Refleja en la malla el estado de los cursos registrados en Mis Cursos:
+  /// los cursos que ya existen (por código o id) sincronizan su estado y
+  /// créditos; los nuevos se insertan en el semestre en curso (6to).
+  void _syncWithCoursesService() {
+    final courses = CoursesService.instance.courses;
+    if (courses.isEmpty) return;
+    for (final course in courses) {
+      final code = (course['code'] as String?)?.trim().toUpperCase() ?? '';
+      final id = course['id'] as String?;
+      Map<String, dynamic>? match;
+      for (final entry in _semesters.entries) {
+        for (final r in entry.value) {
+          final rCode = (r['code'] as String?)?.trim().toUpperCase() ?? '';
+          final rId = r['id'] as String?;
+          if ((code.isNotEmpty && rCode == code) || (id != null && id == rId)) {
+            match = r;
+            break;
+          }
+        }
+        if (match != null) break;
+      }
+      if (match != null) {
+        if (course['status'] is String) match['status'] = course['status'];
+        if (course['credits'] is int) match['credits'] = course['credits'];
+        continue;
+      }
+      final semester = _semesterFromCourse(course);
+      final list = _semesters[semester] ??= [];
+      list.add({
+        'id': id ?? 'ramo-${DateTime.now().microsecondsSinceEpoch}',
+        'code': course['code'] ?? '',
+        'name': course['name'] ?? 'Nuevo ramo',
+        'credits': course['credits'] is int ? course['credits'] : 5,
+        'status':
+            course['status'] is String ? course['status'] : kSubjectPending,
+        'requisite': null,
+      });
+    }
+  }
+
+  int _semesterFromCourse(Map<String, dynamic> course) {
+    final raw = course['semester'];
+    if (raw is String) {
+      final match = RegExp(r'(\d+)').firstMatch(raw);
+      final n = int.tryParse(match?.group(1) ?? '');
+      if (n != null) {
+        if (n >= 1 && n <= 8) return n;
+        if (n > 8) return 8;
+      }
+    }
+    return _kCoursesInsertSemester;
   }
 
   int _creditsForSemester(int sem) {
@@ -222,6 +288,15 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       }
     });
     return total;
+  }
+
+  /// Porcentaje de avance de la carrera en base a los créditos aprobados
+  /// sobre el total cargado en la malla (dinámica: se recalcula al agregar,
+  /// remover o cambiar estado de ramos).
+  int get _careerProgressPercent {
+    final total = _totalCreditsAll;
+    if (total == 0) return 0;
+    return (_totalCreditsApproved * 100 / total).round();
   }
 
   void _handleClearAll() async {
@@ -467,7 +542,97 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                 ),
               ),
             ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppColors.success,
+                border: Border.all(color: AppColors.border, width: 1.5),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                'PROGRESO CARRERA: $_careerProgressPercent%',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 11,
+                  color: AppColors.text,
+                ),
+              ),
+            ),
           ],
+        ),
+        const SizedBox(height: 12),
+        // Progreso dinámico de la carrera: se recalcula según los créditos
+        // aprobados de las asignaturas realmente registradas en la malla.
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            border: Border.all(color: AppColors.border, width: 2),
+            borderRadius: BorderRadius.circular(AppDimens.radius),
+            boxShadow: AppShadows.badge,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.trending_up_rounded, size: 16, color: AppColors.text),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'AVANCE DE TU CARRERA',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 11,
+                        color: AppColors.text,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    '$_careerProgressPercent%',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: 11,
+                      color: AppColors.text,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Container(
+                height: 12,
+                decoration: BoxDecoration(
+                  border: Border.all(color: AppColors.border, width: 2),
+                  color: AppColors.bg,
+                ),
+                child: FractionallySizedBox(
+                  alignment: Alignment.centerLeft,
+                  widthFactor: _careerProgressPercent / 100,
+                  child: Container(color: AppColors.success),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  const Icon(Icons.sync_rounded, size: 13, color: AppColors.muted),
+                  const SizedBox(width: 6),
+                  const Expanded(
+                    child: Text(
+                      'Sincronizado con tus cursos registrados en Mis Cursos',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 10.5,
+                        color: AppColors.muted,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ],
     );

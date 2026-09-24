@@ -1095,9 +1095,10 @@ func (s *NoteService) AddAttachment(ctx context.Context, userID string, noteID s
 	if strings.TrimSpace(fileName) == "" {
 		fileName = "attachment"
 	}
-	if strings.TrimSpace(fileType) == "" {
-		fileType = "application/octet-stream"
-	}
+	// Preserva el MIME específico que declare el cliente; si viene vacío o
+	// genérico (application/octet-stream) lo resuelve por extensión y sniffing
+	// del binario, en paridad con RealDriveClient/MockClient.
+	fileType = drive.DetectMimeType(fileName, fileType, data)
 	uploadCtx, cancelUpload := withDriveTimeout(ctx)
 	var extID, url string
 	err = retryDriveOperation(uploadCtx, driveRetryMaxAttempts, func() error {
@@ -1212,8 +1213,10 @@ func (s *NoteService) AddAttachmentExternal(ctx context.Context, userID string, 
 		return nil, ErrDriveUnavailable
 	}
 
-	if strings.TrimSpace(fileType) == "" {
-		fileType = "application/octet-stream"
+	if strings.TrimSpace(fileType) == "" || fileType == "application/octet-stream" {
+		// Sin binario disponible solo se puede inferir por extensión; si es
+		// desconocida se conserva el genérico.
+		fileType = drive.DetectMimeType(fileName, fileType, nil)
 	}
 	fileURL := fmt.Sprintf("https://drive.google.com/file/d/%s/view", externalFileID)
 	var fnPtr *string
@@ -1221,6 +1224,58 @@ func (s *NoteService) AddAttachmentExternal(ctx context.Context, userID string, 
 		fnPtr = &fileName
 	}
 	return s.attachments.Create(ctx, noteID, externalFileID, fileURL, fileType, fnPtr, fileSize, isInline)
+}
+
+// DriveUpload describe el resultado de subir un binario directo al Drive del
+// usuario autenticado, antes de vincularlo a una nota.
+type DriveUpload struct {
+	ExternalFileID string
+	FileURL        string
+	FileName       string
+	FileType       string
+	FileSizeBytes  int
+}
+
+// UploadToDrive sube un archivo al Drive del usuario autenticado sin exigir
+// todavía una nota destino. El cliente puede luego vincularlo con
+// AddAttachmentExternal y el external_file_id devuelto. Mismas validaciones de
+// tamaño/tipo y compensaciones que AddAttachment, pero sin persistir metadata.
+func (s *NoteService) UploadToDrive(ctx context.Context, userID string, fileName string, fileType string, data []byte) (*DriveUpload, error) {
+	if strings.TrimSpace(fileName) == "" {
+		fileName = "attachment"
+	}
+	if len(data) == 0 {
+		return nil, newServiceErrorMsg(utils.ErrBadRequest, "archivo vacío")
+	}
+	if len(data) > 10*1024*1024 {
+		return nil, newServiceError(utils.ErrFileTooLarge)
+	}
+	fileType = drive.DetectMimeType(fileName, fileType, data)
+	uploadCtx, cancelUpload := withDriveTimeout(ctx)
+	var extID, url string
+	err := retryDriveOperation(uploadCtx, driveRetryMaxAttempts, func() error {
+		var opErr error
+		extID, url, opErr = s.drive.UploadAttachment(uploadCtx, userID, "", fileName, fileType, data, false)
+		return opErr
+	})
+	cancelUpload()
+	if err != nil {
+		if drive.IsOAuthError(err) {
+			return nil, newServiceErrorMsg(utils.ErrForbidden, "Conecte o renueve su Google Drive")
+		}
+		var de *drive.DriveError
+		if errors.As(err, &de) && de.Code == 413 {
+			return nil, newServiceError(utils.ErrFileTooLarge)
+		}
+		return nil, ErrDriveUnavailable
+	}
+	return &DriveUpload{
+		ExternalFileID: extID,
+		FileURL:        url,
+		FileName:       fileName,
+		FileType:       fileType,
+		FileSizeBytes:  len(data),
+	}, nil
 }
 
 // Save: bookmark sin clonar

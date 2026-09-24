@@ -24,25 +24,29 @@ int toRawScore(double uiScore) {
 
 double fromRawScore(int rawScore) => rawScore / 10;
 
-/// Los niveles 1/2/3 vienen del comportamiento de la calculadora de
-/// referencia. Estos factores son locales hasta conectar el endpoint real.
-double confidenceFactor(int confidence) {
-  switch (confidence) {
-    case 1:
-      return 0.60;
-    case 2:
-      return 0.80;
-    case 3:
-      return 1.00;
-    default:
-      return 0.80;
-  }
-}
-
 double? _parseNumber(String raw) {
   final normalized = raw.trim().replaceAll(',', '.');
   if (normalized.isEmpty) return null;
   return double.tryParse(normalized);
+}
+
+/// Nota del padre calculada como promedio ponderado de sus subnotas:
+/// nota_padre = sum(subnota_i * subpeso_i) / sum(subpeso_i).
+double? _computedParentNote(_GradeItem parent) {
+  var sumScore = 0.0;
+  var sumWeight = 0.0;
+  for (final child in parent.children) {
+    final score = _parseNumber(child.scoreController.text);
+    final weight = (_parseNumber(child.weightController.text) ?? 0)
+        .clamp(0.0, 100.0)
+        .toDouble();
+    if (score != null) {
+      sumScore += score * weight;
+      sumWeight += weight;
+    }
+  }
+  if (sumWeight == 0) return null;
+  return sumScore / sumWeight;
 }
 
 final RegExp _numberRegex = RegExp(r'^\d{0,3}([.,]\d{0,2})?$');
@@ -50,7 +54,6 @@ final RegExp _numberRegex = RegExp(r'^\d{0,3}([.,]\d{0,2})?$');
 class _GradeItem {
   _GradeItem({
     required this.id,
-    this.confidence = 2,
   })  : scoreController = TextEditingController(),
         weightController = TextEditingController(),
         children = [];
@@ -58,7 +61,6 @@ class _GradeItem {
   final String id;
   final TextEditingController scoreController;
   final TextEditingController weightController;
-  int confidence;
   List<_GradeItem> children;
 
   bool get isSubdivided => children.isNotEmpty;
@@ -77,13 +79,11 @@ class _CalcEntry {
     required this.label,
     required this.score,
     required this.weight,
-    required this.confidence,
   });
 
   final String label;
   final double? score;
   final double weight;
-  final int confidence;
 }
 
 class GradeCalculatorScreen extends StatefulWidget {
@@ -171,8 +171,8 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       if (_finalExamMode) {
         _finalGrade?.dispose();
         _exam?.dispose();
-        _finalGrade = _newItem('final', confidence: 2, weight: 70);
-        _exam = _newItem('exam', confidence: 1, weight: 30);
+        _finalGrade = _newItem('final', weight: 70);
+        _exam = _newItem('exam', weight: 30);
       } else {
         _initializeNormalGrades();
       }
@@ -181,10 +181,9 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
 
   _GradeItem _newItem(
     String id, {
-    int confidence = 2,
     double? weight,
   }) {
-    final item = _GradeItem(id: id, confidence: confidence);
+    final item = _GradeItem(id: id);
     if (weight != null) {
       item.weightController.text = _formatWeight(weight);
     }
@@ -207,8 +206,8 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         _finalGrade?.dispose();
         _exam?.dispose();
 
-        _finalGrade = _newItem('final', confidence: 2, weight: 70);
-        _exam = _newItem('exam', confidence: 1, weight: 30);
+        _finalGrade = _newItem('final', weight: 70);
+        _exam = _newItem('exam', weight: 30);
       } else {
         _finalGrade?.dispose();
         _exam?.dispose();
@@ -411,18 +410,14 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     setState(() {
       final firstChild = _newItem(
         '${parent.id}-child-1',
-        confidence: parent.confidence,
         weight: 50,
       );
       final secondChild = _newItem(
         '${parent.id}-child-2',
-        confidence: parent.confidence,
         weight: 50,
       );
 
       parent.children = [firstChild, secondChild];
-      parent.scoreController.clear();
-      parent.weightController.clear();
       _resetResult();
     });
   }
@@ -434,7 +429,6 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       parent.children.add(
         _newItem(
           '${parent.id}-child-${DateTime.now().microsecondsSinceEpoch}',
-          confidence: parent.confidence,
         ),
       );
 
@@ -457,8 +451,6 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       if (parent.children.length == 1) {
         final survivor = parent.children.single;
         parent.scoreController.text = survivor.scoreController.text;
-        parent.weightController.text = survivor.weightController.text;
-        parent.confidence = survivor.confidence;
         survivor.dispose();
         parent.children = [];
       } else {
@@ -485,15 +477,23 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       double globalWeight,
     ) {
       if (item.isSubdivided) {
-        for (var index = 0; index < item.children.length; index++) {
-          final child = item.children[index];
-          final childFraction = _readWeight(child) / 100;
-          flatten(
-            child,
-            '$label.${index + 1}',
-            globalWeight * childFraction,
-          );
+        var sumScore = 0.0;
+        var sumWeight = 0.0;
+        for (final child in item.children) {
+          final childScore = _parseNumber(child.scoreController.text);
+          final childWeight = _readWeight(child);
+          if (childScore != null) {
+            sumScore += childScore * childWeight;
+            sumWeight += childWeight;
+          }
         }
+        entries.add(
+          _CalcEntry(
+            label: label,
+            score: sumWeight > 0 ? sumScore / sumWeight : null,
+            weight: globalWeight,
+          ),
+        );
         return;
       }
 
@@ -502,7 +502,6 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
           label: label,
           score: _parseNumber(item.scoreController.text),
           weight: globalWeight,
-          confidence: item.confidence,
         ),
       );
     }
@@ -550,9 +549,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
 
     double weightedKnown = 0;
     for (final entry in knownEntries) {
-      weightedKnown += entry.score! *
-          entry.weight *
-          confidenceFactor(entry.confidence);
+      weightedKnown += entry.score! * entry.weight;
     }
 
     final pendingWeight = pendingEntries.fold<double>(
@@ -731,24 +728,12 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
           item: finalItem,
           onScoreChanged: () => setState(_resetResult),
           onWeightChanged: _changeFinalWeight,
-          onConfidenceChanged: (confidence) {
-            setState(() {
-              finalItem.confidence = confidence;
-              _resetResult();
-            });
-          },
         ),
         const SizedBox(height: 12),
         _ExamCard(
           item: examItem,
           onScoreChanged: () => setState(_resetResult),
           onWeightChanged: _changeExamWeight,
-          onConfidenceChanged: (confidence) {
-            setState(() {
-              examItem.confidence = confidence;
-              _resetResult();
-            });
-          },
         ),
       ],
     );
@@ -799,12 +784,6 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
                     label: 'NOTA ${index + 1}',
                     onScoreChanged: () => setState(_resetResult),
                     onWeightChanged: () => _changeNormalWeight(item),
-                    onConfidenceChanged: (confidence) {
-                      setState(() {
-                        item.confidence = confidence;
-                        _resetResult();
-                      });
-                    },
                     onSubdivide: () => _subdivideNormalGrade(item),
                     onChildScoreChanged: () => setState(_resetResult),
                     onChildWeightChanged: (child) =>
@@ -1030,7 +1009,7 @@ class _ModeSwitchCard extends StatelessWidget {
           ),
           Switch(
             value: enabled,
-            activeColor: AppColors.text,
+            activeThumbColor: AppColors.text,
             onChanged: onChanged,
           ),
         ],
@@ -1046,13 +1025,11 @@ class _FinalGradeCard extends StatelessWidget {
     required this.item,
     required this.onScoreChanged,
     required this.onWeightChanged,
-    required this.onConfidenceChanged,
   });
 
   final _GradeItem item;
   final VoidCallback onScoreChanged;
   final VoidCallback onWeightChanged;
-  final ValueChanged<int> onConfidenceChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -1080,11 +1057,6 @@ class _FinalGradeCard extends StatelessWidget {
             onScoreChanged: onScoreChanged,
             onWeightChanged: onWeightChanged,
           ),
-          const SizedBox(height: 8),
-          _ConfidenceSelector(
-            value: item.confidence,
-            onChanged: onConfidenceChanged,
-          ),
         ],
       ),
     );
@@ -1096,13 +1068,11 @@ class _ExamCard extends StatelessWidget {
     required this.item,
     required this.onScoreChanged,
     required this.onWeightChanged,
-    required this.onConfidenceChanged,
   });
 
   final _GradeItem item;
   final VoidCallback onScoreChanged;
   final VoidCallback onWeightChanged;
-  final ValueChanged<int> onConfidenceChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -1130,11 +1100,6 @@ class _ExamCard extends StatelessWidget {
             onScoreChanged: onScoreChanged,
             onWeightChanged: onWeightChanged,
           ),
-          const SizedBox(height: 8),
-          _ConfidenceSelector(
-            value: item.confidence,
-            onChanged: onConfidenceChanged,
-          ),
         ],
       ),
     );
@@ -1148,7 +1113,6 @@ class _NormalGradeCard extends StatelessWidget {
     required this.label,
     required this.onScoreChanged,
     required this.onWeightChanged,
-    required this.onConfidenceChanged,
     required this.onSubdivide,
     required this.onChildScoreChanged,
     required this.onChildWeightChanged,
@@ -1160,7 +1124,6 @@ class _NormalGradeCard extends StatelessWidget {
   final String label;
   final VoidCallback onScoreChanged;
   final VoidCallback onWeightChanged;
-  final ValueChanged<int> onConfidenceChanged;
   final VoidCallback onSubdivide;
   final VoidCallback onChildScoreChanged;
   final ValueChanged<_GradeItem> onChildWeightChanged;
@@ -1169,6 +1132,8 @@ class _NormalGradeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final parentNote = item.isSubdivided ? _computedParentNote(item) : null;
+
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: _cardDecoration(
@@ -1213,11 +1178,6 @@ class _NormalGradeCard extends StatelessWidget {
               onWeightChanged: onWeightChanged,
             ),
             const SizedBox(height: 8),
-            _ConfidenceSelector(
-              value: item.confidence,
-              onChanged: onConfidenceChanged,
-            ),
-            const SizedBox(height: 8),
             Align(
               alignment: Alignment.centerLeft,
               child: _MiniActionButton(
@@ -1227,6 +1187,55 @@ class _NormalGradeCard extends StatelessWidget {
               ),
             ),
           ] else ...[
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'PESO EN EL RAMO',
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w900,
+                      color: AppColors.muted,
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 68,
+                  child: _NumericInput(
+                    controller: item.weightController,
+                    hint: '%',
+                    integer: true,
+                    onChanged: onWeightChanged,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'NOTA PADRE (AUTO)',
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w900,
+                      color: AppColors.muted,
+                    ),
+                  ),
+                ),
+                Text(
+                  parentNote == null
+                      ? '—'
+                      : roundHalfUp(parentNote, 1).toStringAsFixed(1),
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                    color: AppColors.accentBlue,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
             for (var index = 0; index < item.children.length; index++) ...[
               if (index != 0) const SizedBox(height: 6),
               _ChildGradeRow(
@@ -1383,59 +1392,6 @@ class _NumericInput extends StatelessWidget {
       ),
       decoration: appInputDecoration(hint),
       onChanged: (_) => onChanged(),
-    );
-  }
-}
-
-class _ConfidenceSelector extends StatelessWidget {
-  const _ConfidenceSelector({
-    required this.value,
-    required this.onChanged,
-  });
-
-  final int value;
-  final ValueChanged<int> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        const Text(
-          'CONFIANZA',
-          style: TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.w900,
-            color: AppColors.muted,
-          ),
-        ),
-        const SizedBox(width: 8),
-        for (final level in [1, 2, 3]) ...[
-          if (level != 1) const SizedBox(width: 4),
-          GestureDetector(
-            onTap: () => onChanged(level),
-            child: Container(
-              width: 28,
-              height: 25,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: value == level
-                    ? AppColors.accentBlue
-                    : AppColors.bg,
-                border: Border.all(color: AppColors.border, width: 1.5),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                '$level',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w900,
-                  color: value == level ? Colors.white : AppColors.text,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ],
     );
   }
 }

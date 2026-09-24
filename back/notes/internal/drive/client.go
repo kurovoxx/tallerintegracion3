@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -63,6 +64,9 @@ type Client interface {
 	// DeleteFile elimina archivo en Drive.
 	DeleteFile(ctx context.Context, userID string, driveFileID string) error
 	// UploadAttachment sube binario a carpeta del apunte, retorna externalFileID y fileURL.
+	// Preserva el MIME declarado cuando es específico (image/jpeg, image/png,
+	// application/pdf, text/markdown); si viene vacío o application/octet-stream
+	// lo resuelve por extensión y sniffing del contenido.
 	UploadAttachment(ctx context.Context, userID string, noteID string, fileName string, fileType string, data []byte, isInline bool) (string, string, error)
 	// DeleteAttachment elimina adjunto en Drive.
 	DeleteAttachment(ctx context.Context, userID string, externalFileID string) error
@@ -105,11 +109,12 @@ type MockClient struct {
 }
 
 type mockFile struct {
-	ID      string
-	OwnerID string
-	Title   string
-	Content string
-	Folder  string // noteID o "root"
+	ID       string
+	OwnerID  string
+	Title    string
+	Content  string
+	MimeType string
+	Folder   string // noteID o "root"
 }
 
 func NewMockClient() *MockClient {
@@ -157,7 +162,7 @@ func (m *MockClient) CreateFile(ctx context.Context, userID string, title string
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	id := "drive_" + uuid.NewString()
-	m.files[id] = &mockFile{ID: id, OwnerID: userID, Title: title, Content: content}
+	m.files[id] = &mockFile{ID: id, OwnerID: userID, Title: title, Content: content, MimeType: MimeMarkdown}
 	return id, nil
 }
 
@@ -252,9 +257,15 @@ func (m *MockClient) UploadAttachment(ctx context.Context, userID string, noteID
 	if len(data) > 10*1024*1024 {
 		return "", "", &DriveError{Code: 413, Message: "Archivo muy grande"}
 	}
+	if strings.TrimSpace(fileName) == "" {
+		fileName = "attachment"
+	}
+	// Paridad con RealDriveClient: preserva el MIME declarado si es específico
+	// y lo resuelve por extensión/sniffing cuando viene vacío o genérico.
+	fileType = DetectMimeType(fileName, fileType, data)
 	id := "att_" + uuid.NewString()
 	url := fmt.Sprintf("https://drive.google.com/file/d/%s/view", id)
-	m.files[id] = &mockFile{ID: id, OwnerID: userID, Title: fileName, Content: string(data), Folder: noteID}
+	m.files[id] = &mockFile{ID: id, OwnerID: userID, Title: fileName, Content: string(data), MimeType: fileType, Folder: noteID}
 	return id, url, nil
 }
 
@@ -374,6 +385,17 @@ func (m *MockClient) HasFile(fileID string) bool {
 	defer m.mu.RUnlock()
 	_, ok := m.files[fileID]
 	return ok
+}
+
+// FileMimeType expone el MIME con el que se almacenó un archivo (solo tests).
+func (m *MockClient) FileMimeType(fileID string) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	f, ok := m.files[fileID]
+	if !ok {
+		return "", false
+	}
+	return f.MimeType, true
 }
 
 // Ensure interface compliance

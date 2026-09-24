@@ -28,12 +28,39 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
   final List<String> _members = ['Sofía', 'Matías', 'Ana', 'Tú'];
   final Set<String> _selectedMembers = {'Sofía', 'Tú'};
 
+  // Estado simulado del flujo OAuth de Google Calendar.
+  bool _linkingCalendar = false;
+  bool _calendarLinked = false;
+  String? _calendarAccount;
+  bool _syncingEvent = false;
+  bool _eventSynced = false;
+
   @override
   void dispose() {
     _titleCtrl.dispose();
     _linkCtrl.dispose();
     _descCtrl.dispose();
     super.dispose();
+  }
+
+  /// Simula el flujo OAuth de Google Calendar: un pequeño delay de
+  /// "autorización" y luego queda vinculada la cuenta del usuario.
+  Future<void> _linkGoogleCalendar() async {
+    if (_linkingCalendar || _calendarLinked) return;
+    setState(() => _linkingCalendar = true);
+    await Future<void>.delayed(const Duration(milliseconds: 900));
+    if (!mounted) return;
+    setState(() {
+      _linkingCalendar = false;
+      _calendarLinked = true;
+      _calendarAccount = 'tu_cuenta@gmail.com';
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Google Calendar vinculado correctamente'),
+        backgroundColor: AppColors.successDeep,
+      ),
+    );
   }
 
   Future<void> _pickDate() async {
@@ -66,7 +93,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
     if (t != null) setState(() => _selectedTime = t);
   }
 
-  void _submit() {
+  Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     if (_selectedMembers.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -77,12 +104,26 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
       );
       return;
     }
+    // Si Google Calendar está vinculado se simula la sincronización del evento.
+    if (_calendarLinked) setState(() => _syncingEvent = true);
+    await Future<void>.delayed(
+      _calendarLinked ? const Duration(milliseconds: 700) : Duration.zero,
+    );
+    if (!mounted) return;
+    if (_calendarLinked) {
+      setState(() {
+        _syncingEvent = false;
+        _eventSynced = true;
+      });
+    }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          'Reunión "${_titleCtrl.text.trim()}" agendada para '
-          '${_selectedDate.day}/${_selectedDate.month} a las '
-          '${_selectedTime.format(context)}',
+          _calendarLinked
+              ? 'Reunión "${_titleCtrl.text.trim()}" agendada y sincronizada con Google Calendar ($_calendarAccount)'
+              : 'Reunión "${_titleCtrl.text.trim()}" agendada para '
+                    '${_selectedDate.day}/${_selectedDate.month} a las '
+                    '${_selectedTime.format(context)}',
         ),
         backgroundColor: AppColors.border,
       ),
@@ -203,6 +244,115 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                               ),
                             ),
                           ),
+                          const SizedBox(height: AppDimens.spaceMd),
+                          const AppFieldLabel('GOOGLE CALENDAR'),
+                          const SizedBox(height: AppDimens.spaceSm),
+                          if (!_calendarLinked) ...[
+                            SizedBox(
+                              child: NeobrutalistButton(
+                                label: _linkingCalendar
+                                    ? 'Vinculando…'
+                                    : 'Vincular con Google Calendar',
+                                icon: _linkingCalendar
+                                    ? Icons.sync_rounded
+                                    : Icons.calendar_today_rounded,
+                                variant: NeobrutalistButtonVariant.info,
+                                expand: true,
+                                borderWidth: AppDimens.borderWidthAction,
+                                onPressed: _linkingCalendar
+                                    ? null
+                                    : _linkGoogleCalendar,
+                              ),
+                            ),
+                            if (_linkingCalendar) ...[
+                              const SizedBox(height: AppDimens.spaceSm),
+                              const LinearProgressIndicator(
+                                color: AppColors.accentBlueDeep,
+                                backgroundColor: AppColors.bg,
+                              ),
+                            ],
+                            const SizedBox(height: AppDimens.spaceXs),
+                            const Text(
+                              'Se abrirá un flujo OAuth simulado para conectar tu cuenta.',
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.muted,
+                              ),
+                            ),
+                          ] else ...[
+                            Container(
+                              padding: const EdgeInsets.all(AppDimens.spaceMd),
+                              decoration: BoxDecoration(
+                                color: AppColors.surface,
+                                border: Border.all(
+                                  color: AppColors.border,
+                                  width: AppDimens.borderWidth,
+                                ),
+                                borderRadius: BorderRadius.circular(
+                                  AppDimens.radius,
+                                ),
+                                boxShadow: AppShadows.badge,
+                              ),
+                              child: Row(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    _syncingEvent
+                                        ? Icons.sync_rounded
+                                        : Icons.check_circle_rounded,
+                                    size: 22,
+                                    color: _syncingEvent
+                                        ? AppColors.accentBlueDeep
+                                        : AppColors.successDeep,
+                                  ),
+                                  const SizedBox(
+                                    width: AppDimens.spaceSm,
+                                  ),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        const Text(
+                                          'GOOGLE CALENDAR',
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w900,
+                                            letterSpacing: 0.5,
+                                            color: AppColors.muted,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          _syncingEvent
+                                              ? 'Sincronizando evento…'
+                                              : 'Vinculado con Google Calendar: '
+                                                    '$_calendarAccount',
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w900,
+                                            color: AppColors.text,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  if (_eventSynced) ...[
+                                    const SizedBox(
+                                      width: AppDimens.spaceSm,
+                                    ),
+                                    NeobrutalistBadge(
+                                      label: 'Evento sincronizado',
+                                      tone: NeobrutalistTone.success,
+                                      compact: true,
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: AppDimens.spaceMd),
                           const AppFieldLabel('MIEMBROS INVITADOS'),
                           const SizedBox(height: AppDimens.spaceSm),

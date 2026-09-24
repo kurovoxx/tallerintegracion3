@@ -6,10 +6,8 @@ import '../../features/academic/curriculum_screen.dart';
 import '../../features/academic/grade_calculator_screen.dart';
 import '../../features/academic/profile_screen.dart';
 import '../../features/academic/schedule_screen.dart';
-import '../../features/auth/login_screen.dart';
 import '../../features/groups/groups_screen.dart';
 import '../../features/notes/all_notes_screen.dart';
-import '../services/session_manager.dart';
 import '../theme/app_theme.dart';
 import 'neobrutalism.dart';
 
@@ -219,20 +217,7 @@ class _MainShellState extends State<MainShell> {
           ),
         ],
       ),
-      actions: <Widget>[
-        IconButton(
-          icon: const Icon(Icons.logout_rounded, color: AppColors.text),
-          tooltip: 'Cerrar sesión',
-          onPressed: () {
-            SessionManager.clear();
-            Navigator.of(context).pushAndRemoveUntil(
-              MaterialPageRoute<void>(builder: (_) => const LoginScreen()),
-              (Route<dynamic> route) => false,
-            );
-          },
-        ),
-        const SizedBox(width: AppDimens.spaceSm),
-      ],
+      actions: const <Widget>[SizedBox(width: AppDimens.spaceSm)],
     );
   }
 
@@ -354,51 +339,56 @@ class _MainShellState extends State<MainShell> {
       padding: EdgeInsets.all(
         isCollapsed ? AppDimens.spaceSm : AppDimens.spaceMd,
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: AppColors.accentYellow,
-              border: Border.all(
-                color: AppColors.border,
-                width: AppDimens.borderWidth,
+          Row(
+            children: <Widget>[
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: AppColors.accentYellow,
+                  border: Border.all(
+                    color: AppColors.border,
+                    width: AppDimens.borderWidth,
+                  ),
+                  borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
+                ),
+                child: const Icon(
+                  Icons.person_rounded,
+                  size: 18,
+                  color: AppColors.text,
+                ),
               ),
-              borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
-            ),
-            child: const Icon(
-              Icons.person_rounded,
-              size: 18,
-              color: AppColors.text,
-            ),
+              if (!isCollapsed) ...<Widget>[
+                const SizedBox(width: AppDimens.spaceSm),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        'Estudiante',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          fontSize: 12,
+                          color: AppColors.text,
+                        ),
+                      ),
+                      Text(
+                        'Sigma',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 11,
+                          color: AppColors.muted,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
           ),
-          if (!isCollapsed) ...<Widget>[
-            const SizedBox(width: AppDimens.spaceSm),
-            const Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    'Estudiante',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w900,
-                      fontSize: 12,
-                      color: AppColors.text,
-                    ),
-                  ),
-                  Text(
-                    'Sigma',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 11,
-                      color: AppColors.muted,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
         ],
       ),
     );

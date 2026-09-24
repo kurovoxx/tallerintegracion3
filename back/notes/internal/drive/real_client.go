@@ -15,8 +15,6 @@ import (
 	"google.golang.org/api/option"
 )
 
-const markdownMimeType = "text/markdown"
-
 // RealDriveClient opera contra la API oficial de Google Drive (drive/v3)
 // usando el access_token del usuario dueño del archivo, resuelto vía TokenProvider
 // desde identity.oauth_connections. Se activa con STORAGE_MODE=drive.
@@ -91,7 +89,7 @@ func (r *RealDriveClient) CreateFile(ctx context.Context, userID string, title s
 	if err != nil {
 		return "", err
 	}
-	f, err := srv.Files.Create(&drive.File{Name: title, MimeType: markdownMimeType}).
+	f, err := srv.Files.Create(&drive.File{Name: title, MimeType: MimeMarkdown}).
 		Media(strings.NewReader(content)).
 		Fields("id").
 		Context(ctx).
@@ -160,9 +158,11 @@ func (r *RealDriveClient) UploadAttachment(ctx context.Context, userID string, n
 	if strings.TrimSpace(fileName) == "" {
 		fileName = "attachment"
 	}
-	if strings.TrimSpace(fileType) == "" {
-		fileType = "application/octet-stream"
-	}
+	// Preserva el MIME declarado cuando es específico; si viene vacío o
+	// genérico (application/octet-stream) lo resuelve por extensión y, como
+	// último recurso, por sniffing del binario. Así Drive guarda
+	// image/jpeg, image/png, application/pdf o text/markdown correctos.
+	fileType = DetectMimeType(fileName, fileType, data)
 	srv, err := r.serviceFor(ctx, userID)
 	if err != nil {
 		return "", "", err
@@ -213,7 +213,7 @@ func (r *RealDriveClient) CopyFile(ctx context.Context, srcUserID string, srcFil
 		}
 		data = dataFallback
 	}
-	f, err := dstSrv.Files.Create(&drive.File{Name: newTitle, MimeType: markdownMimeType}).
+	f, err := dstSrv.Files.Create(&drive.File{Name: newTitle, MimeType: MimeMarkdown}).
 		Media(bytes.NewReader(data)).
 		Fields("id").
 		Context(ctx).
