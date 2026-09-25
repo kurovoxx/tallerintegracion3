@@ -18,34 +18,48 @@ import (
 type MemoryMeetingStore struct {
 	mu         sync.Mutex
 	groups     map[string]bool
-	members    map[string]map[string]bool // grupo -> conjunto de usuarios
+	members    map[string]map[string]bool   // grupo -> conjunto de usuarios
+	roles      map[string]map[string]string // grupo -> usuario -> rol
 	meetings   map[string]sqlc.SocialMeeting
 	byGroup    map[string][]string // grupo -> ids de reuniones en orden
 	notifySeen map[string]int      // meeting_id -> notificaciones generadas
 	calEvents  map[string]string   // meeting_id -> google_calendar_event_id persistido
+	discordCfg map[string]sqlc.SocialDiscordIntegration
+	streamChan map[string]string // grupo -> channel_id de Stream registrado
 }
 
 func NewMemoryMeetingStore() *MemoryMeetingStore {
 	return &MemoryMeetingStore{
 		groups:     map[string]bool{},
 		members:    map[string]map[string]bool{},
+		roles:      map[string]map[string]string{},
 		meetings:   map[string]sqlc.SocialMeeting{},
 		byGroup:    map[string][]string{},
 		notifySeen: map[string]int{},
 		calEvents:  map[string]string{},
+		discordCfg: map[string]sqlc.SocialDiscordIntegration{},
+		streamChan: map[string]string{},
 	}
 }
 
 // AddGroup registra un grupo con sus miembros para armar escenarios.
+// El primer miembro queda como admin, el resto como member.
 func (m *MemoryMeetingStore) AddGroup(groupID string, memberIDs ...string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.groups[groupID] = true
 	set := map[string]bool{}
-	for _, u := range memberIDs {
+	roles := map[string]string{}
+	for i, u := range memberIDs {
 		set[u] = true
+		if i == 0 {
+			roles[u] = "admin"
+		} else {
+			roles[u] = "member"
+		}
 	}
 	m.members[groupID] = set
+	m.roles[groupID] = roles
 }
 
 // NotificationsFor cuenta las notificaciones generadas para una reunión.
@@ -169,3 +183,79 @@ func (m *MemoryMeetingStore) ListMeetingsByGroup(_ context.Context, groupID pgty
 }
 
 var _ MeetingRepo = (*MemoryMeetingStore)(nil)
+
+// GetMemberRole responde el rol o pgx.ErrNoRows si no es miembro (para DiscordRepo).
+func (m *MemoryMeetingStore) GetMemberRole(_ context.Context, groupID, userID pgtype.UUID) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	gid, err1 := uuid.FromBytes(groupID.Bytes[:])
+	uid, err2 := uuid.FromBytes(userID.Bytes[:])
+	if err1 != nil || err2 != nil {
+		return "", pgx.ErrNoRows
+	}
+	role, ok := m.roles[gid.String()][uid.String()]
+	if !ok {
+		return "", pgx.ErrNoRows
+	}
+	return role, nil
+}
+
+// UpsertConfig crea o reemplaza la config de Discord del grupo.
+func (m *MemoryMeetingStore) UpsertConfig(_ context.Context, arg sqlc.UpsertDiscordConfigParams) (sqlc.SocialDiscordIntegration, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	gid, err := uuid.FromBytes(arg.GroupID.Bytes[:])
+	if err != nil || !arg.GroupID.Valid {
+		return sqlc.SocialDiscordIntegration{}, pgx.ErrNoRows
+	}
+	cfg := sqlc.SocialDiscordIntegration{
+		GroupID:    arg.GroupID,
+		ServerName: arg.ServerName,
+		InviteUrl:  arg.InviteUrl,
+		WebhookUrl: arg.WebhookUrl,
+	}
+	m.discordCfg[gid.String()] = cfg
+	return cfg, nil
+}
+
+// GetConfigByGroup responde la config o pgx.ErrNoRows (para MeetingDiscordStore).
+func (m *MemoryMeetingStore) GetConfigByGroup(_ context.Context, groupID pgtype.UUID) (sqlc.SocialDiscordIntegration, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	gid, err := uuid.FromBytes(groupID.Bytes[:])
+	if err != nil || !groupID.Valid {
+		return sqlc.SocialDiscordIntegration{}, pgx.ErrNoRows
+	}
+	cfg, ok := m.discordCfg[gid.String()]
+	if !ok {
+		return sqlc.SocialDiscordIntegration{}, pgx.ErrNoRows
+	}
+	return cfg, nil
+}
+
+var _ DiscordRepo = (*MemoryMeetingStore)(nil)
+var _ MeetingDiscordStore = (*MemoryMeetingStore)(nil)
+
+// SetStreamChannel registra el canal de Stream del grupo (setup de tests).
+func (m *MemoryMeetingStore) SetStreamChannel(groupID, channelID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.streamChan[groupID] = channelID
+}
+
+// GetChannelByGroup responde el canal o pgx.ErrNoRows (para StreamMessageStore).
+func (m *MemoryMeetingStore) GetChannelByGroup(_ context.Context, groupID pgtype.UUID) (sqlc.SocialStreamChannel, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	gid, err := uuid.FromBytes(groupID.Bytes[:])
+	if err != nil || !groupID.Valid {
+		return sqlc.SocialStreamChannel{}, pgx.ErrNoRows
+	}
+	ch, ok := m.streamChan[gid.String()]
+	if !ok || ch == "" {
+		return sqlc.SocialStreamChannel{}, pgx.ErrNoRows
+	}
+	return sqlc.SocialStreamChannel{GroupID: groupID, ChannelID: ch}, nil
+}
+
+var _ StreamMessageStore = (*MemoryMeetingStore)(nil)

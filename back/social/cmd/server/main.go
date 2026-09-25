@@ -196,7 +196,7 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 		protected.POST("/sprint-sheet/:taskId/hours", hoursH.LogHours)
 		protected.GET("/sprint-sheet/:taskId/hours", hoursH.ListHours)
 		protected.POST("/groups/:id/meetings", meetingH.CreateMeeting)
-		protected.PUT("/groups/:id/discord-config", discordH.PutConfig)
+		discordH.RegisterRoutes(protected)
 	}
 
 	addr := ":" + cfg.Port
