@@ -20,7 +20,7 @@ spec:
       imagePullSecrets: [{name: ghcr-cred}]
       containers:
         - name: auth
-          image: ghcr.io/pvcdf/tallerintegracion3-auth:latest
+          image: ghcr.io/kurovoxx/tallerintegracion3-auth:latest
           ports: [{containerPort: 8080}]
           resources:
             requests: {cpu: 50m, memory: 64Mi}
@@ -54,7 +54,7 @@ spec:
       imagePullSecrets: [{name: ghcr-cred}]
       containers:
         - name: notes
-          image: ghcr.io/pvcdf/tallerintegracion3-notes:latest
+          image: ghcr.io/kurovoxx/tallerintegracion3-notes:latest
           ports: [{containerPort: 8082}]
           resources:
             requests: {cpu: 50m, memory: 64Mi}
@@ -90,7 +90,7 @@ spec:
       imagePullSecrets: [{name: ghcr-cred}]
       containers:
         - name: social
-          image: ghcr.io/pvcdf/tallerintegracion3-social:latest
+          image: ghcr.io/kurovoxx/tallerintegracion3-social:latest
           ports: [{containerPort: 8083}]
           resources:
             requests: {cpu: 50m, memory: 64Mi}
@@ -127,7 +127,7 @@ spec:
       imagePullSecrets: [{name: ghcr-cred}]
       containers:
         - name: front
-          image: ghcr.io/pvcdf/tallerintegracion3-front:latest
+          image: ghcr.io/kurovoxx/tallerintegracion3-front:latest
           ports: [{containerPort: 80}]
           resources:
             requests: {cpu: 25m, memory: 64Mi}
