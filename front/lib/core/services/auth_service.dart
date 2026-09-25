@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import 'api_config.dart';
+
 class AuthService {
   AuthService({http.Client? client}) : _client = client ?? http.Client();
 
@@ -12,7 +14,7 @@ class AuthService {
   // Host directo (go run): PORT=8082 -> http://localhost:8082
   // Rutas reales: POST /auth/register y POST /auth/login (sin /api)
   // Ver back/auth/cmd/server/main.go:73 y agentApiContract.md:22 y docker-compose.yml:28
-  static const String baseUrl = 'http://localhost:8085';
+  static String get baseUrl => authApiBaseUrl;
   static const String loginPath = '/auth/login';
   static const String registerPath = '/auth/register';
 
@@ -56,6 +58,11 @@ class AuthService {
     } on Exception {
       return LoginResult.failure(
         'No se pudo conectar con el servidor. Revisa la URL ($baseUrl), el puerto y que Gin esté ejecutándose.',
+      );
+    } catch (e) {
+      // Captura también Error (ej. file:///api-auth en nativo con relativo mal configurado)
+      return LoginResult.failure(
+        'No se pudo conectar con el servidor. Revisa la URL ($baseUrl), el puerto y que Gin esté ejecutándose. ($e)',
       );
     }
   }
@@ -114,6 +121,10 @@ class AuthService {
     } on Exception {
       return RegisterResult.failure(
         'No se pudo conectar con el servidor. Revisa la URL ($baseUrl), el puerto y que Gin esté ejecutándose.',
+      );
+    } catch (e) {
+      return RegisterResult.failure(
+        'No se pudo conectar con el servidor. Revisa la URL ($baseUrl), el puerto y que Gin esté ejecutándose. ($e)',
       );
     }
   }

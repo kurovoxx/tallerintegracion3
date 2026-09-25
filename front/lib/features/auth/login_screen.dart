@@ -36,8 +36,10 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _obscureRegPassword = true;
   bool _isSubmittingRegister = false;
 
-  // RF-01 / RN-1.3: rol elegido en el registro, inmutable luego.
-  String _selectedRole = 'student'; // 'student' | 'teacher'
+  // RN-1.3 / RF-01: el registro crea exclusivamente cuentas de estudiante.
+  // El rol queda fijado de manera definitiva e inmutable; no se expone ningún
+  // selector ni vuelve a ser editable desde el perfil.
+  static const String _selectedRole = 'student';
 
   @override
   void dispose() {
@@ -115,7 +117,7 @@ class _LoginScreenState extends State<LoginScreen> {
         password: _regPasswordController.text,
         displayName: _regNameController.text.trim(),
         institution: _regInstitutionController.text.trim(),
-        role: _selectedRole, // RF-01: 'student' o 'teacher' según selección del usuario
+        role: _selectedRole, // RF-01: cuenta de estudiante, inmutable
       );
 
       if (!mounted) return;
@@ -475,16 +477,6 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
           const SizedBox(height: 16),
 
-          // RF-01 / RN-1.3: el rol se define aquí y ya no será editable
-          // desde ProfileScreen. identity.users.role acepta 'student' | 'teacher'.
-          const AppFieldLabel('TIPO DE CUENTA'),
-          const SizedBox(height: 6),
-          _RoleSelector(
-            selectedRole: _selectedRole,
-            onChanged: (role) => setState(() => _selectedRole = role),
-          ),
-          const SizedBox(height: 16),
-
           const AppFieldLabel('CORREO INSTITUCIONAL'),
           const SizedBox(height: 6),
           TextFormField(
@@ -628,74 +620,6 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-/// Selector neo-brutalista de rol (Estudiante / Docente) para el registro.
-/// RN-1.3: una vez creada la cuenta, el rol no vuelve a mostrarse editable
-/// en ninguna otra pantalla (ver profile_screen.dart).
-class _RoleSelector extends StatelessWidget {
-  final String selectedRole;
-  final ValueChanged<String> onChanged;
-
-  const _RoleSelector({required this.selectedRole, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: _RoleOption(
-            label: 'ESTUDIANTE',
-            icon: Icons.school_rounded,
-            active: selectedRole == 'student',
-            onTap: () => onChanged('student'),
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _RoleOption(
-            label: 'DOCENTE',
-            icon: Icons.person_pin_rounded,
-            active: selectedRole == 'teacher',
-            onTap: () => onChanged('teacher'),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _RoleOption extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final bool active;
-  final VoidCallback onTap;
-
-  const _RoleOption({required this.label, required this.icon, required this.active, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(
-          color: active ? AppColors.accentYellow : AppColors.bg,
-          border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
-          borderRadius: BorderRadius.circular(AppDimens.radius),
-          boxShadow: active ? const [BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0)] : null,
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 16, color: AppColors.text),
-            const SizedBox(width: 6),
-            Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: AppColors.text)),
-          ],
-        ),
       ),
     );
   }

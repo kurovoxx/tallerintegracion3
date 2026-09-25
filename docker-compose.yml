@@ -86,6 +86,9 @@ services:
       AUTH_BASE_URL: http://auth:8080
       INTERNAL_API_KEY: dev-internal-key-change-me
       CALENDAR_MODE: mock
+      STREAM_API_KEY: ${STREAM_API_KEY}
+      STREAM_API_SECRET: ${STREAM_API_SECRET:-dev-stream-secret-change-me}
+      STREAM_MODE: mock
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,13 +96,15 @@ services:
       - ti3-net
     restart: unless-stopped
 
-  # Frontend Flutter Web (nginx) - para linux/windows nativo usa scripts/run-front.sh
+  # Frontend Flutter Web (nginx) - estatico, apunta a los endpoints publicos de pillan (dominio ngrok)
   front:
     build:
       context: ./front
       dockerfile: Dockerfile
       args:
-        BASE_URL: http://localhost:8085
+        BASE_URL: ${API_BASE_URL:-http://localhost:8085}
+        NOTES_BASE_URL: ${NOTES_BASE_URL:-http://localhost:8082}
+        SOCIAL_BASE_URL: ${SOCIAL_BASE_URL:-http://localhost:8083}
     container_name: ti3-front
     ports:
       - "8086:80"

@@ -400,7 +400,7 @@ func (h *NoteHandler) UploadAttachment(c *gin.Context) {
 				handleServiceError(c, err)
 				return
 			}
-			c.JSON(http.StatusCreated, gin.H{"attachment_id": att.ID, "is_inline": att.IsInline, "file_url": att.FileURL})
+			c.JSON(http.StatusCreated, gin.H{"attachment_id": att.ID, "is_inline": att.IsInline, "file_url": att.FileURL, "external_file_id": att.ExternalFileID})
 			return
 		}
 	}
@@ -440,7 +440,55 @@ func (h *NoteHandler) UploadAttachment(c *gin.Context) {
 		handleServiceError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"attachment_id": att.ID, "is_inline": att.IsInline, "file_url": att.FileURL})
+	c.JSON(http.StatusCreated, gin.H{"attachment_id": att.ID, "is_inline": att.IsInline, "file_url": att.FileURL, "external_file_id": att.ExternalFileID})
+}
+
+// POST /notes/upload
+// Sube un archivo directo al Drive del usuario autenticado (OAuth) sin
+// vincularlo todavía a una nota. Devuelve el Drive File ID y su enlace web;
+// el cliente puede luego registrarlo con POST /notes/{id}/attachments enviando
+// {external_file_id}. Acepta multipart/form-data con el campo binario 'file'.
+func (h *NoteHandler) UploadFile(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		return
+	}
+	// Límite anti-DoS 11MB (10MB archivo + overhead multipart).
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 11*1024*1024)
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		if isPayloadTooLarge(err) {
+			utils.RespondError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
+			return
+		}
+		utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "file requerido (multipart field 'file')")
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(file)
+	if err != nil {
+		utils.RespondError(c, http.StatusInternalServerError, utils.ErrInternal, "error leyendo archivo")
+		return
+	}
+	if header.Size > 10*1024*1024 || int64(len(data)) > 10*1024*1024 {
+		utils.RespondError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
+		return
+	}
+	fileType := header.Header.Get("Content-Type")
+	up, err := h.svc.UploadToDrive(c.Request.Context(), userID, header.Filename, fileType, data)
+	if err != nil {
+		handleServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{
+		"external_file_id": up.ExternalFileID,
+		"file_url":         up.FileURL,
+		"file_name":        up.FileName,
+		"file_type":        up.FileType,
+		"file_size_bytes":  up.FileSizeBytes,
+		"is_inline":        false,
+	})
 }
 
 // DELETE /notes/{id}/attachments/{attachmentId}

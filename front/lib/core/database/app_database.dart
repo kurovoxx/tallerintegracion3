@@ -1,10 +1,8 @@
-import 'dart:io';
-
 import 'package:drift/drift.dart';
-import 'package:drift/native.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
-import 'package:sqlite3_flutter_libs/sqlite3_flutter_libs.dart';
+
+import 'connection/stub.dart'
+    if (dart.library.io) 'connection/native.dart'
+    if (dart.library.html) 'connection/web.dart' as connection;
 
 part 'app_database.g.dart';
 
@@ -149,22 +147,6 @@ END
     }
   }
 
-  // Wrapper para asegurar que sqlite3_flutter_libs se inicialice (Android/iOS/Windows)
-  // Con try/catch explícito para no congelar en Windows si falta sqlite3.dll
-  static LazyDatabase _openConnection() {
-    return LazyDatabase(() async {
-      try {
-        if (Platform.isAndroid || Platform.isIOS) {
-          await applyWorkaroundToOpenSqlite3OnOldAndroidVersions();
-        }
-        final dbFolder = await getApplicationDocumentsDirectory();
-        final file = File(p.join(dbFolder.path, 'sigma_academy.db'));
-        return NativeDatabase.createInBackground(file, logStatements: false);
-      } catch (e) {
-        // Fallback en memoria si la inicialización nativa falla en Windows Desktop
-        // Evita spinner infinito y permite búsqueda básica en memoria
-        return NativeDatabase.memory(logStatements: false);
-      }
-    });
-  }
+  // Delega a implementación por plataforma (native.dart / web.dart / stub.dart)
+  static QueryExecutor _openConnection() => connection.openConnection();
 }

@@ -1,8 +1,10 @@
 ﻿
 import 'package:flutter/material.dart';
 import '../../core/common_widgets.dart';
+import '../../core/services/api_config.dart';
 import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/neobrutalism.dart';
 import '../auth/login_screen.dart';
 import '../auth/google_drive_service.dart';
 
@@ -212,36 +214,31 @@ class _ProfileScreenState extends State<ProfileScreen> {
           icon: Icons.cloud_done_rounded,
           tooltip: 'Conectar Drive (prueba real)',
           onPressed: () async {
+            final messenger = ScaffoldMessenger.of(context);
             try {
               final code = await GoogleDriveService().getServerAuthCode();
               if (code == null) {
-                if (!context.mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cancelado')));
+                messenger.showSnackBar(const SnackBar(content: Text('Cancelado')));
                 return;
               }
               final token = SessionManager.token;
               if (token == null) {
-                if (!context.mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No hay sesión')));
+                messenger.showSnackBar(const SnackBar(content: Text('No hay sesión')));
                 return;
               }
-              const driveBackendBaseUrl = 'http://localhost:8085';
+              final driveBackendBaseUrl = authApiBaseUrl;
               debugPrint('[FRONT DEBUG] Drive callback: usuario logueado=${_profile['email']}, endpoint auth=$driveBackendBaseUrl/auth/google-drive/connect');
               final ok = await GoogleDriveService().connectDrive(
                 backendBaseUrl: driveBackendBaseUrl,
                 appAccessToken: token,
                 oauthCode: code,
               );
-              if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(ok ? 'Drive conectado (200)' : 'Falló')));
+              messenger.showSnackBar(SnackBar(content: Text(ok ? 'Drive conectado (200)' : 'Falló')));
             } catch (e) {
-              if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+              messenger.showSnackBar(SnackBar(content: Text('Error: $e')));
             }
           },
         ),
-        const SizedBox(width: 8),
-        _SquareIconButton(icon: Icons.logout_rounded, tooltip: 'Cerrar sesión', onPressed: _handleLogout),
       ],
     );
 
@@ -317,9 +314,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ],
           ),
           const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: SubmitButton(text: 'CERRAR SESIÓN', onPressed: _handleLogout),
+          NeobrutalistButton(
+            label: 'Cerrar sesión',
+            icon: Icons.logout_rounded,
+            variant: NeobrutalistButtonVariant.danger,
+            expand: true,
+            onPressed: _handleLogout,
           ),
         ],
       ),
@@ -446,7 +446,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget _buildStatsGridMobile() {
     final stats = _statBlocks();
 
-    Widget divider() => Container(width: 1.5, color: AppColors.border.withOpacity(0.4));
+    Widget divider() => Container(width: 1.5, color: AppColors.border.withValues(alpha: 0.4));
 
     return Column(
       children: [
@@ -796,7 +796,7 @@ class _Avatar extends StatelessWidget {
         boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(3, 3), blurRadius: 0)],
       ),
       child: photoUrl.isNotEmpty
-          ? Image.network(photoUrl, fit: BoxFit.cover, width: size, height: size, errorBuilder: (_, __, ___) => fallback)
+          ? Image.network(photoUrl, fit: BoxFit.cover, width: size, height: size, errorBuilder: (_, _, _) => fallback)
           : fallback,
     );
   }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"log"
+	"strconv"
+	"sync"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -69,9 +71,10 @@ func (n *DiscordMeetingNotifier) OnMeetingCreated(ctx context.Context, meeting s
 	log.Printf("discord sync: reunión notificada al webhook del grupo")
 }
 
-// MultiMeetingNotifier hace fan-out a varios notifiers (ej. Calendar + Discord).
-// Cada uno es best-effort e independiente: el fallo de uno no afecta a los demás.
-// Existe para la unión futura con la rama de Calendar sin tocar MeetingService.
+// MultiMeetingNotifier hace fan-out a varios notifiers (Calendar + Discord + Stream).
+// Cada uno corre en su propia goroutine con timeout y recover propios:
+// uno lento o en panic no retrasa ni tumba a los demás ni al servidor.
+// El llamador (MeetingService) ya corre esto en background vía GoBestEffort.
 type MultiMeetingNotifier struct {
 	notifiers []MeetingCreatedNotifier
 }
@@ -81,10 +84,19 @@ func NewMultiMeetingNotifier(notifiers ...MeetingCreatedNotifier) *MultiMeetingN
 }
 
 func (m *MultiMeetingNotifier) OnMeetingCreated(ctx context.Context, meeting sqlc.SocialMeeting) {
-	for _, n := range m.notifiers {
+	var wg sync.WaitGroup
+	for i, n := range m.notifiers {
 		if n == nil {
 			continue
 		}
-		n.OnMeetingCreated(ctx, meeting)
+		wg.Add(1)
+		go func(idx int, child MeetingCreatedNotifier) {
+			defer wg.Done()
+			name := "meetings[" + strconv.Itoa(idx) + "]"
+			RunBestEffortChild(name, ctx, func(childCtx context.Context) {
+				child.OnMeetingCreated(childCtx, meeting)
+			})
+		}(i, n)
 	}
+	wg.Wait()
 }

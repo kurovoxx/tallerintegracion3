@@ -160,7 +160,9 @@ func (s *MeetingService) CreateMeeting(ctx context.Context, groupID, userID, tit
 		return sqlc.SocialMeeting{}, err
 	}
 
-	go s.notifier.OnMeetingCreated(context.Background(), meeting)
+	GoBestEffort("meetings", func(ctx context.Context) {
+		s.notifier.OnMeetingCreated(ctx, meeting)
+	})
 
 	return meeting, nil
 }
