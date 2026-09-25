@@ -1,5 +1,5 @@
 # Deploy en namespace student-brojas (cluster pillan).
-# DB real = Supabase (ver .env), no hay pod postgres acá.
+# DB = Postgres propio del cluster (k8s/postgres.yaml, service "postgres:5432"). Supabase ya no es la DB de pillan.
 # Secret "ti3-secrets" NO va acá (no se versiona). Ver k8s/create-secrets.sh.
 # Imagenes privadas en GHCR necesitan pull secret "ghcr-cred" (ver mismo script).
 
