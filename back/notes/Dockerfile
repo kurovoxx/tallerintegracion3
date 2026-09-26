@@ -1,10 +1,11 @@
 # Notes microservicio - back/notes
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 ENV GOTOOLCHAIN=auto
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+RUN go mod tidy
 RUN CGO_ENABLED=0 GOOS=linux go build -o /notes-server ./cmd/server
 
 FROM alpine:3.19

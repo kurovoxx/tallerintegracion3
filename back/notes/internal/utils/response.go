@@ -44,12 +44,13 @@ const (
 	ErrNoteUnavailable    = "note_unavailable"
 	ErrFileTooLarge       = "file_too_large"
 	ErrInvalidAccessMode  = "invalid_access_mode"
+	ErrRateLimited        = "rate_limited"
 )
 
 func MessageForCode(code string) string {
 	switch code {
 	case ErrInvalidTitle:
-		return "Título requerido (1-300 caracteres)"
+		return "Título requerido (1-255 caracteres)"
 	case ErrInvalidVisibility:
 		return "Visibilidad debe ser public o private"
 	case ErrInvalidSubjectID:
@@ -72,6 +73,8 @@ func MessageForCode(code string) string {
 		return "Nota no disponible en almacenamiento remoto"
 	case ErrFileTooLarge:
 		return "Archivo muy grande"
+	case ErrRateLimited:
+		return "Demasiadas solicitudes"
 	default:
 		return "Error"
 	}
@@ -91,6 +94,8 @@ func StatusForCode(code string) int {
 		return http.StatusConflict
 	case ErrFileTooLarge, ErrPayloadTooLarge:
 		return http.StatusRequestEntityTooLarge
+	case ErrRateLimited:
+		return http.StatusTooManyRequests
 	default:
 		return http.StatusInternalServerError
 	}

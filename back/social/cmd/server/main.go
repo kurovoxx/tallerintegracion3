@@ -10,11 +10,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/calendar"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/config"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/discord"
 	httpHandler "github.com/kurovoxx/tallerintegracion3/back/social/internal/handler/http"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/middleware"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/service"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/stream"
 )
 
 func corsMiddleware() gin.HandlerFunc {
@@ -60,10 +63,8 @@ func main() {
 
 func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	groupRepo := repository.NewGroupRepository(pool)
-	// TODO(martín, 2_5_14): reemplazar por un notifier real que cree el canal
-	// de Stream al crear el grupo. Mientras tanto no-op — ver comentario en
-	// service.GroupCreatedNotifier.
-	groupSvc := service.NewGroupService(groupRepo, nil)
+	streamRepo := repository.NewStreamRepository(pool)
+	groupSvc := service.NewGroupService(groupRepo, streamNotifierFor(cfg, streamRepo))
 
 	todoRepo := repository.NewTodoRepository(pool)
 	todoSvc := service.NewTodoService(todoRepo)
@@ -73,10 +74,72 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	sprintSvc := service.NewSprintService(sprintRepo)
 	sprintH := httpHandler.NewSprintHandler(sprintSvc)
 
-	startGin(groupSvc, todoH, sprintH, pool, cfg)
+	hoursRepo := repository.NewHoursRepository(pool)
+	hoursSvc := service.NewHoursService(hoursRepo)
+	hoursH := httpHandler.NewHoursHandler(hoursSvc)
+
+	meetingRepo := repository.NewMeetingRepository(pool)
+	discordRepo := repository.NewDiscordRepository(pool)
+	discordSvc := service.NewDiscordService(discordRepo)
+	discordH := httpHandler.NewDiscordHandler(discordSvc)
+	meetingSvc := service.NewMeetingService(meetingRepo,
+		service.NewMultiMeetingNotifier(
+			calendarNotifierFor(cfg, meetingRepo),
+			service.NewDiscordMeetingNotifier(discordRepo, discord.NewWebhookClient()),
+			service.NewStreamMessageNotifier(streamRepo, streamClientFor(cfg)),
+		))
+	meetingH := httpHandler.NewMeetingHandler(meetingSvc)
+
+	viewSvc := service.NewViewService(groupSvc, todoSvc, sprintSvc, meetingSvc)
+	viewH := httpHandler.NewViewHandler(groupSvc, viewSvc)
+
+	startGin(groupSvc, todoH, sprintH, hoursH, meetingH, discordH, viewH, pool, cfg)
 }
 
-func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, pool *pgxpool.Pool, cfg *config.Config) {
+func calendarNotifierFor(cfg *config.Config, meetingRepo *repository.MeetingRepository) service.MeetingCreatedNotifier {
+	// CALENDAR_MODE=mock (default): sync simulado, sin llamar a Google ni a Auth.
+	// Persiste un google_calendar_event_id falso para verificar el cableado E2E.
+	if strings.ToLower(strings.TrimSpace(cfg.CalendarMode)) != "real" {
+		log.Printf("calendar sync: modo mock (CALENDAR_MODE=%s)", cfg.CalendarMode)
+		return service.NewCalendarMeetingNotifier(
+			&service.StubCalendarGateway{},
+			calendar.NewMockClient(),
+			meetingRepo,
+		)
+	}
+	// CALENDAR_MODE=real: token vía Auth interno + API REST de Google.
+	log.Printf("calendar sync: modo real contra Auth %s", cfg.AuthBaseURL)
+	return service.NewCalendarMeetingNotifier(
+		&service.AuthCalendarGateway{BaseURL: cfg.AuthBaseURL, InternalKey: cfg.InternalKey},
+		calendar.NewRESTClient(),
+		meetingRepo,
+	)
+}
+
+func streamClientFor(cfg *config.Config) stream.Client {
+	// STREAM_MODE=mock (default): sin llamar a Stream.
+	if strings.ToLower(strings.TrimSpace(cfg.StreamMode)) != "real" {
+		return stream.NewMockClient()
+	}
+	return stream.NewRESTClient(cfg.StreamAPIKey, cfg.StreamSecret)
+}
+
+func streamNotifierFor(cfg *config.Config, streamRepo *repository.StreamRepository) service.GroupCreatedNotifier {
+	// STREAM_MODE=mock (default): canal simulado, sin llamar a Stream.
+	// Persiste un channel_id falso para verificar el cableado E2E.
+	if strings.ToLower(strings.TrimSpace(cfg.StreamMode)) != "real" {
+		log.Printf("stream sync: modo mock (STREAM_MODE=%s)", cfg.StreamMode)
+		return service.NewStreamChannelNotifier(streamRepo, streamClientFor(cfg))
+	}
+	// STREAM_MODE=real: creación vía API de Stream Chat con API key/secret.
+	log.Printf("stream sync: modo real")
+	return service.NewStreamChannelNotifier(
+		streamRepo,
+		streamClientFor(cfg),
+	)
+}
+
+func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, meetingH *httpHandler.MeetingHandler, discordH *httpHandler.DiscordHandler, viewH *httpHandler.ViewHandler, pool *pgxpool.Pool, cfg *config.Config) {
 	validator := &middleware.SimpleHS256Validator{
 		Secret:   []byte(cfg.JWTSecret),
 		Issuer:   "apuntes-auth",
@@ -98,7 +161,7 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 		if err := pool.Ping(ctx); err != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"status": "DOWN",
-				"error": gin.H{"code": "db_unreachable", "message": err.Error()},
+				"error":  gin.H{"code": "db_unreachable", "message": err.Error()},
 			})
 			return
 		}
@@ -119,20 +182,8 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 	protected := r.Group("")
 	protected.Use(authMw.RequireAuth())
 	{
-		protected.POST("/groups", groupHandler.Create)
-		// Próximas tareas del backlog de Benjamín (2_3_2 en adelante) se
-		// registran acá a medida que se implementan:
-		protected.GET("/groups/me", groupHandler.ListMy)
-		protected.GET("/groups/:id", groupHandler.Get)
-		protected.POST("/groups/:id/join", groupHandler.Join)
-		protected.POST("/groups/:id/invite/regenerate", groupHandler.RegenerateInvite)
-		protected.GET("/groups/:id/members", groupHandler.ListMembers)
-
-		protected.POST("/groups/:id/members/:user_id/kick", groupHandler.KickMember)
-		protected.POST("/groups/:id/members/:user_id/ban", groupHandler.BanMember)
-		protected.PATCH("/groups/:id/members/:userId/role", groupHandler.ChangeRole)
-		protected.POST("/groups/:id/transfer-admin", groupHandler.TransferAdmin)
-		protected.POST("/groups/:id/leave", groupHandler.LeaveGroup)
+		groupHandler.RegisterRoutes(protected)
+		viewH.RegisterRoutes(protected) // payloads de vistas (2_3_14 y 2_3_15)
 
 		protected.POST("/groups/:id/todo", todoH.CreateTodo)
 		protected.GET("/groups/:id/todo", todoH.ListTodos)
@@ -142,6 +193,10 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 		protected.GET("/groups/:id/sprint-sheet", sprintH.ListSprintTasks)
 		protected.PATCH("/groups/:id/sprint-sheet", sprintH.UpdateSprintTask)
 		protected.DELETE("/groups/:id/sprint-sheet", sprintH.DeleteSprintTask)
+		protected.POST("/sprint-sheet/:taskId/hours", hoursH.LogHours)
+		protected.GET("/sprint-sheet/:taskId/hours", hoursH.ListHours)
+		protected.POST("/groups/:id/meetings", meetingH.CreateMeeting)
+		discordH.RegisterRoutes(protected)
 	}
 
 	addr := ":" + cfg.Port

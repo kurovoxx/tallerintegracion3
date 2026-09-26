@@ -18,8 +18,8 @@ type PGNoteStore struct {
 func NewPGNoteStore(pool *pgxpool.Pool) *PGNoteStore {
 	return &PGNoteStore{repo: repository.NewNoteRepository(pool), pool: pool}
 }
-func (p *PGNoteStore) Create(ctx context.Context, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string) (*model.Note, error) {
-	return p.repo.Create(ctx, nil, userID, subjectID, title, externalFileID, visibility, forkedFrom)
+func (p *PGNoteStore) Create(ctx context.Context, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string, syncStatus string) (*model.Note, error) {
+	return p.repo.Create(ctx, nil, userID, subjectID, title, externalFileID, visibility, forkedFrom, syncStatus)
 }
 func (p *PGNoteStore) GetByID(ctx context.Context, id string) (*model.Note, error) {
 	return p.repo.GetByID(ctx, nil, id)
@@ -38,6 +38,13 @@ func (p *PGNoteStore) IncrementLikes(ctx context.Context, noteID string, delta i
 }
 func (p *PGNoteStore) UpdateExternalFileID(ctx context.Context, noteID, fileID string) error {
 	return p.repo.UpdateExternalFileID(ctx, nil, noteID, fileID)
+}
+
+// GetPendingSyncNotes expone la consulta de notas pendientes (pending_drive /
+// failed_sync) para el reconciliador. El filtro anti-race por estado y
+// antigüedad se aplica en ReconcilePendingNotes.
+func (p *PGNoteStore) GetPendingSyncNotes(ctx context.Context) ([]*model.Note, error) {
+	return p.repo.GetPendingSyncNotes(ctx, nil)
 }
 
 type PGAttachmentStore struct {
@@ -134,3 +141,7 @@ func (p *PGSharedStore) HasAccess(ctx context.Context, noteID, groupID string) (
 func (p *PGSharedStore) HasAnyShare(ctx context.Context, noteID string) (bool, error) {
 	return p.repo.HasAnyShare(ctx, nil, noteID)
 }
+
+func (s *PGNoteStore) InsertDeadLetter(ctx context.Context, fileID, reason string) error { return s.repo.InsertDeadLetter(ctx, nil, fileID, reason) }
+
+func (p *PGNoteStore) UpdateSyncStatus(ctx context.Context, noteID, syncStatus string) error { return p.repo.UpdateSyncStatus(ctx, nil, noteID, syncStatus) }

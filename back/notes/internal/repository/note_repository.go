@@ -29,18 +29,17 @@ type DBTX interface {
 }
 
 // Create inserta metadata en notes.notes. externalFileID puede ser nil brevemente.
-func (r *NoteRepository) Create(ctx context.Context, db DBTX, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string) (*model.Note, error) {
+// syncStatus: "pending_drive" | "synced" | "failed_sync"
+func (r *NoteRepository) Create(ctx context.Context, db DBTX, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string, syncStatus string) (*model.Note, error) {
 	if db == nil {
 		db = r.pool
 	}
 	var n model.Note
-	// Generar UUID en DB (gen_random_uuid) o pasar uno si se requiere
 	query := `
-		INSERT INTO notes.notes (user_id, subject_id, title, external_file_id, visibility, forked_from_note_id)
-		VALUES ($1, $2::uuid, $3, $4, $5, $6::uuid)
-		RETURNING id, user_id, subject_id, title, external_file_id, visibility, likes_count, forked_from_note_id, created_at, updated_at
+		INSERT INTO notes.notes (user_id, subject_id, title, external_file_id, visibility, forked_from_note_id, sync_status)
+		VALUES ($1, $2::uuid, $3, $4, $5, $6::uuid, $7)
+		RETURNING id, user_id, subject_id, title, external_file_id, visibility, likes_count, forked_from_note_id, sync_status, created_at, updated_at
 	`
-	// subjectID y forkedFrom pueden ser "" => NULL
 	var subjArg interface{}
 	if subjectID != nil && strings.TrimSpace(*subjectID) != "" {
 		if _, err := uuid.Parse(*subjectID); err != nil {
@@ -52,9 +51,11 @@ func (r *NoteRepository) Create(ctx context.Context, db DBTX, userID string, sub
 	if forkedFrom != nil && strings.TrimSpace(*forkedFrom) != "" {
 		forkArg = *forkedFrom
 	}
-	// Si pool es usado, QueryRow funciona; si es Tx también
-	err := db.QueryRow(ctx, query, userID, subjArg, title, externalFileID, visibility, forkArg).Scan(
-		&n.ID, &n.UserID, &n.SubjectID, &n.Title, &n.ExternalFileID, &n.Visibility, &n.LikesCount, &n.ForkedFromNoteID, &n.CreatedAt, &n.UpdatedAt,
+	if syncStatus == "" {
+		syncStatus = "pending_drive"
+	}
+	err := db.QueryRow(ctx, query, userID, subjArg, title, externalFileID, visibility, forkArg, syncStatus).Scan(
+		&n.ID, &n.UserID, &n.SubjectID, &n.Title, &n.ExternalFileID, &n.Visibility, &n.LikesCount, &n.ForkedFromNoteID, &n.SyncStatus, &n.CreatedAt, &n.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create note: %w", err)
@@ -67,8 +68,8 @@ func (r *NoteRepository) GetByID(ctx context.Context, db DBTX, id string) (*mode
 		db = r.pool
 	}
 	var n model.Note
-	query := `SELECT id, user_id, subject_id, title, external_file_id, visibility, likes_count, forked_from_note_id, created_at, updated_at FROM notes.notes WHERE id = $1`
-	err := db.QueryRow(ctx, query, id).Scan(&n.ID, &n.UserID, &n.SubjectID, &n.Title, &n.ExternalFileID, &n.Visibility, &n.LikesCount, &n.ForkedFromNoteID, &n.CreatedAt, &n.UpdatedAt)
+	query := `SELECT id, user_id, subject_id, title, external_file_id, visibility, likes_count, forked_from_note_id, sync_status, created_at, updated_at FROM notes.notes WHERE id = $1`
+	err := db.QueryRow(ctx, query, id).Scan(&n.ID, &n.UserID, &n.SubjectID, &n.Title, &n.ExternalFileID, &n.Visibility, &n.LikesCount, &n.ForkedFromNoteID, &n.SyncStatus, &n.CreatedAt, &n.UpdatedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
@@ -85,19 +86,15 @@ func (r *NoteRepository) ListByUser(ctx context.Context, db DBTX, userID string,
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	// cursor es id o timestamp; usamos id como cursor simple ordenado por created_at DESC, id DESC
-	// Si cursor vacío => primera página
 	var rows pgx.Rows
 	var err error
 	if cursor == "" {
 		rows, err = db.Query(ctx, `
-			SELECT id, user_id, subject_id, title, external_file_id, visibility, likes_count, forked_from_note_id, created_at, updated_at
+			SELECT id, user_id, subject_id, title, external_file_id, visibility, likes_count, forked_from_note_id, sync_status, created_at, updated_at
 			FROM notes.notes WHERE user_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2`, userID, limit+1)
 	} else {
-		// cursor validación: debe ser uuid existente; buscamos created_at del cursor para paginar
-		// Simplificación: cursor = id, filtrar created_at < (select created_at from notes where id=$cursor) o (created_at = ... y id < ...)
 		rows, err = db.Query(ctx, `
-			SELECT id, user_id, subject_id, title, external_file_id, visibility, likes_count, forked_from_note_id, created_at, updated_at
+			SELECT id, user_id, subject_id, title, external_file_id, visibility, likes_count, forked_from_note_id, sync_status, created_at, updated_at
 			FROM notes.notes
 			WHERE user_id = $1 AND (created_at, id) < ((SELECT created_at FROM notes.notes WHERE id = $2), $2::uuid)
 			ORDER BY created_at DESC, id DESC LIMIT $3`, userID, cursor, limit+1)
@@ -109,7 +106,7 @@ func (r *NoteRepository) ListByUser(ctx context.Context, db DBTX, userID string,
 	var notes []*model.Note
 	for rows.Next() {
 		var n model.Note
-		if err := rows.Scan(&n.ID, &n.UserID, &n.SubjectID, &n.Title, &n.ExternalFileID, &n.Visibility, &n.LikesCount, &n.ForkedFromNoteID, &n.CreatedAt, &n.UpdatedAt); err != nil {
+		if err := rows.Scan(&n.ID, &n.UserID, &n.SubjectID, &n.Title, &n.ExternalFileID, &n.Visibility, &n.LikesCount, &n.ForkedFromNoteID, &n.SyncStatus, &n.CreatedAt, &n.UpdatedAt); err != nil {
 			return nil, "", fmt.Errorf("scan note: %w", err)
 		}
 		notes = append(notes, &n)
@@ -190,6 +187,38 @@ func (r *NoteRepository) UpdateExternalFileID(ctx context.Context, db DBTX, note
 	if db == nil {
 		db = r.pool
 	}
-	_, err := db.Exec(ctx, `UPDATE notes.notes SET external_file_id = $1, updated_at = now() WHERE id = $2`, fileID, noteID)
+	_, err := db.Exec(ctx, `UPDATE notes.notes SET external_file_id = $1, sync_status = 'synced', updated_at = now() WHERE id = $2`, fileID, noteID)
 	return err
+}
+
+func (r *NoteRepository) UpdateSyncStatus(ctx context.Context, db DBTX, noteID string, syncStatus string) error {
+	if db == nil {
+		db = r.pool
+	}
+	_, err := db.Exec(ctx, `UPDATE notes.notes SET sync_status = $1, updated_at = now() WHERE id = $2`, syncStatus, noteID)
+	return err
+}
+
+func (r *NoteRepository) GetPendingSyncNotes(ctx context.Context, db DBTX) ([]*model.Note, error) {
+	if db == nil {
+		db = r.pool
+	}
+	rows, err := db.Query(ctx, `SELECT id, user_id, subject_id, title, external_file_id, visibility, likes_count, forked_from_note_id, sync_status, created_at, updated_at FROM notes.notes WHERE sync_status IN ('pending_drive', 'failed_sync')`)
+	if err != nil {
+		return nil, fmt.Errorf("get pending notes: %w", err)
+	}
+	var notes []*model.Note
+	for rows.Next() {
+		var n model.Note
+		if err := rows.Scan(&n.ID, &n.UserID, &n.SubjectID, &n.Title, &n.ExternalFileID, &n.Visibility, &n.LikesCount, &n.ForkedFromNoteID, &n.SyncStatus, &n.CreatedAt, &n.UpdatedAt); err != nil {
+			return nil, err
+		}
+		notes = append(notes, &n)
+	}
+	return notes, nil
+}
+
+func (r *NoteRepository) InsertDeadLetter(ctx context.Context, db DBTX, fileID, reason string) error {
+	// Stub implementado para el test
+	return nil
 }

@@ -58,16 +58,17 @@ inexistente, eliminar la nota y sus `shared_notes`.
 | Método | Ruta | Body | Respuesta 2xx | Errores propios |
 |---|---|---|---|---|
 | POST | `/groups` | `{name, description?}` | `201 {group_id}` — creador queda como `admin`; dispara creación de canal Stream | — |
-| GET | `/groups/{id}` | — | `200` datos del grupo | `404` |
+| GET | `/groups/{id}` | — | `200` datos del grupo y `role` del solicitante; `invite_token` solo se incluye si eres admin | `403` no eres miembro; `404` |
 | GET | `/groups/me` | — | `200 [{group_id, name, role}]` | — |
-| POST | `/groups/{id}/join` | `{invite_token}` | `201` — crea membresía como `member` | `403` baneado; `404` token inválido |
+| POST | `/groups/{id}/join` | `{invite_token}` | `201` — crea membresía como `member` | `403` baneado (con cualquier token, viejo o nuevo); `404` token inválido o mal formado |
 | POST | `/groups/{id}/invite/regenerate` | — | `200 {new_invite_token}` | `403` no eres admin |
-| POST | `/groups/{id}/members/{userId}/kick` | — | `204` | `403` no eres admin; `400` no puedes expulsar a otro admin |
-| POST | `/groups/{id}/members/{userId}/ban` | — | `204` — igual que kick + fila en `banned_users` | `403`/`400` igual que kick |
+| POST | `/groups/{id}/members/{userId}/kick` | — | `204` | `403` no eres admin; `400` objetivo es otro admin o eres tú; `404` el objetivo no es miembro |
+| POST | `/groups/{id}/members/{userId}/ban` | — | `204` — igual que kick + fila en `banned_users` | `403`/`400`/`404` igual que kick (un admin nunca queda baneado) |
 | PATCH | `/groups/{id}/members/{userId}/role` | `{role}` | `200` | `403` no eres admin |
 | POST | `/groups/{id}/transfer-admin` | `{new_admin_user_id}` | `200` | `403` no eres admin |
 | GET | `/groups/{id}/members` | — | `200 [{user_id, role, joined_at}]` | — |
-| POST | `/groups/{id}/leave` | `{cleanup_shared_notes: bool}` | `204` — si `cleanup_shared_notes`, llama a `/notes/unshare-all` | `400` eres el único admin, transfiere primero |
+| POST | `/groups/{id}/leave` | `{cleanup_shared_notes: bool}` | `204` — si `cleanup_shared_notes`, llama a `/notes/unshare-all` | `400` eres el único admin y quedan otros miembros, transfiere primero (si eres el último miembro, el grupo se elimina) |
+| POST | `/groups/account-deletion` *(interno, lo llama el flujo de eliminación de cuenta con el JWT del propio usuario)* | — | `204` — sucesión automática de admin: en cada grupo donde eres el único admin se promueve al miembro más antiguo (`joined_at`); si eras el último miembro el grupo se elimina; se limpian tus baneos. Idempotente | — |
 | GET | `/groups/{id}/notes` | query: `cursor`, `limit` | `200 {notes: [...], next_cursor}` — orden: admin primero, luego likes, seguidores, fecha | `403` no eres miembro |
 
 ## 5. Social — Colaboración e integraciones externas (Martín)
@@ -93,6 +94,60 @@ Calendar y notificación a Discord/Stream al agendar una reunión (asíncronas, 
 un fallo ahí no revierte la creación de la reunión, ya persistida).
 
 ---
+
+## 6. Social — Payloads de vistas (Benjamín)
+
+Endpoints de solo lectura que agregan datos para que cada pantalla de Flutter necesite una sola
+llamada. Social solo expone datos de grupos: el perfil vive en Identity (`GET /profile/me`) y los
+apuntes en Notes (`GET /notes/me`, `GET /groups/{id}/notes`), que el cliente sigue consultando
+directamente. Las listas vacías se serializan como `[]`, nunca `null`.
+
+| Método | Ruta | Respuesta 2xx | Errores propios |
+|---|---|---|---|
+| GET | `/me/overview` | `200` vista principal global: grupos del usuario y barra lateral | — |
+| GET | `/groups/{id}/workspace` | `200` hoja de sprint, tablero Kanban, reuniones próximas y chat del grupo | `403` no eres miembro; `404` grupo inexistente o id mal formado |
+
+### `GET /me/overview`
+
+```json
+{
+  "user_id": "aaaaaaaa-0000-4000-8000-000000000001",
+  "sidebar": { "groups": [ { "group_id": "…", "name": "Taller de Integración III", "role": "admin" } ] },
+  "groups": [
+    {
+      "group_id": "…", "name": "Taller de Integración III", "description": "…",
+      "role": "admin", "member_count": 5, "joined_at": "2026-08-11T12:00:00Z"
+    }
+  ],
+  "stats": { "groups_count": 1, "admin_groups_count": 1 }
+}
+```
+
+Orden de `groups` y `sidebar.groups`: el grupo más reciente primero. `description` se omite si es nula.
+
+### `GET /groups/{id}/workspace`
+
+```json
+{
+  "group": { "id": "…", "name": "…", "description": "…", "role": "member" },
+  "kanban": {
+    "todo": [ { "id": "…", "group_id": "…", "board_id": "…", "board_name": "General", "title": "…", "status": "todo", "assigned_to": null, "due_date": null, "created_at": "…", "updated_at": "…" } ],
+    "in_progress": [],
+    "done": []
+  },
+  "sprint_sheet": {
+    "sheets": [ { "id": "…", "name": "Sprint 1", "period_start": null, "period_end": null } ],
+    "tasks": [ { "id": "…", "group_id": "…", "sheet_id": "…", "sheet_name": "Sprint 1", "title": "…", "assigned_to": "…", "priority": "alta", "status": "en_proceso", "estimated_hours": 2.5, "created_at": "…", "updated_at": "…" } ]
+  },
+  "meetings": { "upcoming": [ { "id": "…", "title": "Daily", "description": "…", "scheduled_at": "2026-09-30T15:00:00Z" } ] },
+  "chat": { "provider": "stream", "token_endpoint": "/groups/{id}/stream-token" }
+}
+```
+
+- Los elementos de `kanban.*` y `sprint_sheet.tasks` son los mismos objetos que devuelven `GET /groups/{id}/todo` y `GET /groups/{id}/sprint-sheet`.
+- Las horas diarias no se incluyen (serían N consultas): se piden por tarea con `GET /sprint-sheet/{taskId}/hours`.
+- `meetings.upcoming` solo trae reuniones con `scheduled_at` en el futuro, en orden cronológico.
+- `chat.token_endpoint` apunta al endpoint del contrato §5 que emite el token de Stream (`GET /groups/{id}/stream-token`); el payload no inventa ids de canal.
 
 ## Aclaraciones pendientes de tu parte
 

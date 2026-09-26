@@ -168,6 +168,7 @@ CREATE TABLE notes.notes (
     visibility varchar(20) NOT NULL DEFAULT 'private' CHECK (visibility IN ('public', 'private')),
     likes_count int NOT NULL DEFAULT 0,
     forked_from_note_id uuid REFERENCES notes.notes(id) ON DELETE SET NULL,
+    sync_status varchar(30) NOT NULL DEFAULT 'synced',
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
 );

@@ -59,3 +59,41 @@ type SocialSprintSheetDailyHour struct {
 	LogDate pgtype.Date
 	Hours   pgtype.Numeric
 }
+
+type SocialMeeting struct {
+	ID                    pgtype.UUID
+	GroupID               pgtype.UUID
+	Title                 string
+	Description           pgtype.Text
+	ScheduledAt           pgtype.Timestamptz
+	CreatedByUserID       pgtype.UUID
+	NotifyDiscord         bool
+	GoogleCalendarEventID pgtype.Text
+	CreatedAt             pgtype.Timestamptz
+}
+
+type SocialMeetingNotification struct {
+	ID        pgtype.UUID
+	MeetingID pgtype.UUID
+	UserID    pgtype.UUID
+	ReadAt    pgtype.Timestamptz
+	CreatedAt pgtype.Timestamptz
+}
+
+type SocialDiscordIntegration struct {
+	ID         pgtype.UUID
+	GroupID    pgtype.UUID
+	ServerName pgtype.Text
+	InviteUrl  pgtype.Text
+	WebhookUrl pgtype.Text
+	CategoryID pgtype.Text
+	ChannelID  pgtype.Text
+	CreatedAt  pgtype.Timestamptz
+}
+
+type SocialStreamChannel struct {
+	ID        pgtype.UUID
+	GroupID   pgtype.UUID
+	ChannelID string
+	CreatedAt pgtype.Timestamptz
+}

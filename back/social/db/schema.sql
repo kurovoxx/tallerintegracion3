@@ -84,3 +84,55 @@ CREATE TABLE IF NOT EXISTS social.sprint_sheet_daily_hours (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sprint_sheet_daily_hours_task_id on social.sprint_sheet_daily_hours using btree (task_id);
+
+CREATE TABLE IF NOT EXISTS social.meetings (
+  id uuid not null default gen_random_uuid (),
+  group_id uuid not null,
+  title character varying(300) not null,
+  description text null,
+  scheduled_at timestamp with time zone not null,
+  created_by_user_id uuid not null,
+  notify_discord boolean not null default true,
+  google_calendar_event_id character varying(255) null,
+  created_at timestamp with time zone not null default now(),
+  constraint meetings_pkey primary key (id),
+  constraint meetings_group_id_fkey foreign KEY (group_id) references social.groups (id) on delete CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_meetings_group_id on social.meetings using btree (group_id);
+
+CREATE TABLE IF NOT EXISTS social.meeting_notifications (
+  id uuid not null default gen_random_uuid (),
+  meeting_id uuid not null,
+  user_id uuid not null,
+  read_at timestamp with time zone null,
+  created_at timestamp with time zone not null default now(),
+  constraint meeting_notifications_pkey primary key (id),
+  constraint meeting_notifications_meeting_id_fkey foreign KEY (meeting_id) references social.meetings (id) on delete CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_meeting_notifications_user_id on social.meeting_notifications using btree (user_id);
+
+CREATE TABLE IF NOT EXISTS social.discord_integrations (
+  id uuid not null default gen_random_uuid (),
+  group_id uuid not null,
+  server_name character varying(200) null,
+  invite_url character varying(500) null,
+  webhook_url character varying(500) null,
+  category_id character varying(50) null,
+  channel_id character varying(50) null,
+  created_at timestamp with time zone not null default now(),
+  constraint discord_integrations_pkey primary key (id),
+  constraint discord_integrations_group_id_key unique (group_id),
+  constraint discord_integrations_group_id_fkey foreign KEY (group_id) references social.groups (id) on delete CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS social.stream_channels (
+  id uuid not null default gen_random_uuid (),
+  group_id uuid not null,
+  channel_id character varying(255) not null,
+  created_at timestamp with time zone not null default now(),
+  constraint stream_channels_pkey primary key (id),
+  constraint stream_channels_group_id_key unique (group_id),
+  constraint stream_channels_group_id_fkey foreign KEY (group_id) references social.groups (id) on delete CASCADE
+);

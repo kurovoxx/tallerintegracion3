@@ -1,5 +1,5 @@
 # Auth microservicio - back/auth
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 ENV GOTOOLCHAIN=auto
 WORKDIR /app
 # deps

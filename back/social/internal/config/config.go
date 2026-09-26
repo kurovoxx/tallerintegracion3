@@ -9,12 +9,18 @@ import (
 )
 
 type Config struct {
-	DatabaseURL string
-	DirectURL   string
-	SupabaseURL string
-	SupabaseKey string
-	JWTSecret   string
-	Port        string
+	DatabaseURL  string
+	DirectURL    string
+	SupabaseURL  string
+	SupabaseKey  string
+	JWTSecret    string
+	Port         string
+	AuthBaseURL  string // base del servicio Auth para el gateway interno de Calendar
+	InternalKey  string // secreto X-Internal-Key compartido con Auth
+	CalendarMode string // "mock" (default, sin Google) o "real"
+	StreamAPIKey string // API key de Stream (solo backend, jamás al front)
+	StreamSecret string // API secret de Stream para firmar tokens server-side
+	StreamMode   string // "mock" (default, sin Stream) o "real"
 }
 
 func Load() *Config {
@@ -40,12 +46,18 @@ func Load() *Config {
 	_ = godotenv.Load()
 
 	cfg := &Config{
-		DatabaseURL: os.Getenv("DATABASE_URL"),
-		DirectURL:   os.Getenv("DIRECT_URL"),
-		SupabaseURL: os.Getenv("SUPABASE_URL"),
-		SupabaseKey: os.Getenv("SQL_API_KEY"),
-		JWTSecret:   os.Getenv("JWT_SECRET"),
-		Port:        os.Getenv("SOCIAL_PORT"),
+		DatabaseURL:  os.Getenv("DATABASE_URL"),
+		DirectURL:    os.Getenv("DIRECT_URL"),
+		SupabaseURL:  os.Getenv("SUPABASE_URL"),
+		SupabaseKey:  os.Getenv("SQL_API_KEY"),
+		JWTSecret:    os.Getenv("JWT_SECRET"),
+		Port:         os.Getenv("SOCIAL_PORT"),
+		AuthBaseURL:  os.Getenv("AUTH_BASE_URL"),
+		InternalKey:  os.Getenv("INTERNAL_API_KEY"),
+		CalendarMode: os.Getenv("CALENDAR_MODE"),
+		StreamAPIKey: os.Getenv("STREAM_API_KEY"),
+		StreamSecret: os.Getenv("STREAM_API_SECRET"),
+		StreamMode:   os.Getenv("STREAM_MODE"),
 	}
 	if cfg.Port == "" {
 		cfg.Port = os.Getenv("PORT")
@@ -59,6 +71,15 @@ func Load() *Config {
 			cfg.JWTSecret = "dev-jwt-secret-change-me"
 		}
 		log.Printf("config social: JWT_SECRET fallback usado (no prod)")
+	}
+	if cfg.AuthBaseURL == "" {
+		cfg.AuthBaseURL = "http://localhost:8080"
+	}
+	if cfg.CalendarMode == "" {
+		cfg.CalendarMode = "mock"
+	}
+	if cfg.StreamMode == "" {
+		cfg.StreamMode = "mock"
 	}
 	return cfg
 }

@@ -1,13 +1,14 @@
 ﻿
 import 'package:flutter/material.dart';
 import '../../core/common_widgets.dart';
+import '../../core/models/profile_models.dart';
+import '../../core/services/api_config.dart';
+import '../../core/services/profile_service.dart';
+import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/neobrutalism.dart';
 import '../auth/login_screen.dart';
-import 'attendance_screen.dart';
-import 'courses_screen.dart';
-import 'curriculum_screen.dart';
-import 'grade_calculator_screen.dart';
-import 'schedule_screen.dart';
+import '../auth/google_drive_service.dart';
 
 const String kSubjectApproved = 'approved';
 const String kSubjectInProgress = 'in_progress';
@@ -38,7 +39,10 @@ double? computeAttendance({required int? totalClasses, required int unjustifiedA
 class ProfileScreen extends StatefulWidget {
   final Map<String, dynamic>? userData;
 
-  const ProfileScreen({super.key, this.userData});
+  const ProfileScreen({super.key, this.userData, ProfileService? service})
+      : _serviceOverride = service;
+
+  final ProfileService? _serviceOverride;
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -48,73 +52,85 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _isLoading = true;
   bool _isSaving = false;
   bool _hasError = false;
+  String? _errorMessage;
 
-  late Map<String, dynamic> _profile;
+  UserProfile? _profile;
+  late final ProfileService _service;
 
   @override
   void initState() {
     super.initState();
+    _service = widget._serviceOverride ?? ProfileService();
     _loadProfile();
   }
 
+  @override
+  void dispose() {
+    if (widget._serviceOverride == null) _service.dispose();
+    super.dispose();
+  }
+
+  // Contrato real: GET /profile/me (Auth).
+  // Ver back/auth/cmd/server/main.go:107 y profile_handler.go:46.
   Future<void> _loadProfile() async {
     setState(() {
       _isLoading = true;
       _hasError = false;
+      _errorMessage = null;
     });
 
     try {
-      await Future.delayed(const Duration(milliseconds: 500));
-
-      _profile = {
-        'email': widget.userData?['email'] ?? 'miguel.fernandez@uniorg.cl',
-        'role': widget.userData?['role'] ?? 'student',
-        'display_name': widget.userData?['display_name'] ?? 'Miguel Fernández',
-        'photo_url': widget.userData?['photo_url'] ?? '',
-        'phone': widget.userData?['phone'] ?? '',
-        'institution': widget.userData?['institution'] ?? 'Universidad Católica de Temuco',
-        'description': widget.userData?['description'] ??
-            'Enfocado en infraestructura, redes y desarrollo full-stack. '
-                'Construyendo esta misma app como proyecto de capstone.',
-        'visibility': widget.userData?['visibility'] ?? 'public',
-        'followers_count': widget.userData?['followers_count'] ?? 128,
-        'following_count': widget.userData?['following_count'] ?? 54,
-        'average_raw': widget.userData?['average_raw'] ?? 58,
-        'total_classes': widget.userData?['total_classes'] ?? 120,
-        'unjustified_absences': widget.userData?['unjustified_absences'] ?? 10,
-      };
-
+      final p = await _service.getProfile();
       if (!mounted) return;
-      setState(() => _isLoading = false);
-    } catch (_) {
+      setState(() {
+        _profile = p;
+        _isLoading = false;
+      });
+    } on ProfileApiException catch (e) {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
         _hasError = true;
+        _errorMessage = e.toString();
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _hasError = true;
+        _errorMessage = 'No se pudo cargar tu perfil: $e';
       });
     }
   }
 
+  // Contrato real: PATCH /profile/me (parcial).
   Future<void> _handleSave(Map<String, dynamic> payload) async {
+    if (_profile == null) return;
     setState(() => _isSaving = true);
     try {
-      await Future.delayed(const Duration(milliseconds: 600));
-
+      final patch = <String, dynamic>{
+        'display_name': payload['display_name'],
+        'description': payload['description'],
+        'institution': payload['institution'],
+        'visibility': payload['visibility'],
+      };
+      final updated = await _service.patchProfile(patch);
       if (!mounted) return;
-      setState(() {
-        _profile = {
-          ..._profile,
-          'display_name': payload['display_name'],
-          'description': payload['description'],
-          'institution': payload['institution'],
-          'visibility': payload['visibility'],
-        };
-      });
+      setState(() => _profile = updated);
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Cambios guardados correctamente', style: TextStyle(fontWeight: FontWeight.w700)),
+          content: Text('Cambios guardados en backend (real)',
+              style: TextStyle(fontWeight: FontWeight.w700)),
           backgroundColor: AppColors.border,
+        ),
+      );
+    } on ProfileApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('No se pudo guardar: $e'),
+          backgroundColor: AppColors.error,
         ),
       );
     } finally {
@@ -129,6 +145,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   void _handleLogout() {
+    SessionManager.clear();
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginScreen()),
       (route) => false,
@@ -136,17 +153,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _openEditSheet() async {
-    if (_isLoading) return;
+    if (_isLoading || _profile == null) return;
 
     final payload = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => _EditProfileSheet(
-        initialDisplayName: _profile['display_name'] as String,
-        initialDescription: _profile['description'] as String,
-        initialInstitution: _profile['institution'] as String,
-        initialVisibility: _profile['visibility'] as String,
+        initialDisplayName: _profile!.displayName,
+        initialDescription: _profile!.description ?? '',
+        initialInstitution: _profile!.institution ?? '',
+        initialVisibility: _profile!.visibility,
       ),
     );
 
@@ -177,7 +194,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         const SizedBox(height: 18),
                         _isLoading ? _buildLoadingCard() : _buildIdentityCard(isDesktop),
                         const SizedBox(height: 16),
-                        if (!_isLoading) _buildQuickAccessSection(isDesktop),
+                        if (!_isLoading) _buildPersonalSummary(isDesktop),
                       ],
                     ),
                   ),
@@ -210,7 +227,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
       children: [
         _SquareIconButton(icon: Icons.share_rounded, tooltip: 'Compartir perfil', onPressed: _handleShare),
         const SizedBox(width: 8),
-        _SquareIconButton(icon: Icons.logout_rounded, tooltip: 'Cerrar sesión', onPressed: _handleLogout),
+        _SquareIconButton(
+          icon: Icons.cloud_done_rounded,
+          tooltip: 'Conectar Drive (prueba real)',
+          onPressed: () async {
+            final messenger = ScaffoldMessenger.of(context);
+            try {
+              final code = await GoogleDriveService().getServerAuthCode();
+              if (code == null) {
+                messenger.showSnackBar(const SnackBar(content: Text('Cancelado')));
+                return;
+              }
+              final token = SessionManager.token;
+              if (token == null) {
+                messenger.showSnackBar(const SnackBar(content: Text('No hay sesión')));
+                return;
+              }
+              final driveBackendBaseUrl = authApiBaseUrl;
+              debugPrint('[FRONT DEBUG] Drive callback: endpoint auth=$driveBackendBaseUrl/auth/google-drive/connect');
+              final ok = await GoogleDriveService().connectDrive(
+                backendBaseUrl: driveBackendBaseUrl,
+                appAccessToken: token,
+                oauthCode: code,
+              );
+              messenger.showSnackBar(SnackBar(content: Text(ok ? 'Drive conectado (200)' : 'Falló')));
+            } catch (e) {
+              messenger.showSnackBar(SnackBar(content: Text('Error: $e')));
+            }
+          },
+        ),
       ],
     );
 
@@ -249,60 +294,66 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // ACCESOS DIRECTOS — banner neo-brutalista (pmn.html)
   // 5 tarjetas con borde 4px, sombra dura Offset(4,4) y chevron
   // ---------------------------------------------------------------------
-  Widget _buildQuickAccessSection(bool isDesktop) {
-    final items = [
-      (
-        Icons.account_tree_rounded,
-        'MI MALLA CURRICULAR',
-        'Visualizar ramos aprobados y prerrequisitos',
-        () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CurriculumScreen()))
+  Widget _buildPersonalSummary(bool isDesktop) {
+    final p = _profile;
+    if (p == null) return const SizedBox.shrink();
+    final institution = (p.institution == null || p.institution!.trim().isEmpty)
+        ? 'No informada (real)'
+        : p.institution!.trim();
+    final phone = (p.phone == null || p.phone!.trim().isEmpty)
+        ? 'No informado (real)'
+        : p.phone!.trim();
+    return Container(
+      padding: EdgeInsets.all(isDesktop ? 20 : 16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+        boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(3, 3), blurRadius: 0)],
       ),
-      (
-        Icons.calendar_month_rounded,
-        'HORARIO SEMANAL',
-        'Consultar bloques de clases y salas',
-        () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ScheduleScreen()))
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('FICHA PERSONAL (REAL: GET /profile/me)',
+              style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.muted, letterSpacing: 0.6)),
+          const SizedBox(height: 12),
+          _SummaryRow(icon: Icons.apartment_rounded, label: 'INSTITUCIÓN', value: institution),
+          const SizedBox(height: 10),
+          _SummaryRow(icon: Icons.phone_rounded, label: 'TELÉFONO', value: phone),
+          const SizedBox(height: 10),
+          const _SummaryRow(
+              icon: Icons.email_rounded,
+              label: 'CORREO INSTITUCIONAL',
+              value: 'No entregado por /profile/me'),
+          const SizedBox(height: 14),
+          const Divider(color: AppColors.border, thickness: 2, height: 1),
+          const SizedBox(height: 14),
+          const Text('RESUMEN DE ACTIVIDAD',
+              style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: AppColors.muted, letterSpacing: 0.5)),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppColors.bg,
+              border: Border.all(color: AppColors.border, width: 1.5),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Text(
+              'Notas, grupos, tareas, promedios, asistencia y seguidores no disponibles en GET /profile/me. '
+              'El backend solo entrega display_name, photo_url, phone, institution, description y visibility.',
+              style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: AppColors.mutedStrong, height: 1.35),
+            ),
+          ),
+          const SizedBox(height: 16),
+          NeobrutalistButton(
+            label: 'Cerrar sesión',
+            icon: Icons.logout_rounded,
+            variant: NeobrutalistButtonVariant.danger,
+            expand: true,
+            onPressed: _handleLogout,
+          ),
+        ],
       ),
-      (
-        Icons.calculate_rounded,
-        'CALCULAR Y SIMULAR NOTAS',
-        'Predecir nota necesaria para aprobar ramos',
-        () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const GradeCalculatorScreen()))
-      ),
-      (
-        Icons.fact_check_rounded,
-        'CONTROL DE ASISTENCIA',
-        'Revisar inasistencias y límite permitido',
-        () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AttendanceScreen()))
-      ),
-      (
-        Icons.menu_book_rounded,
-        'MIS CURSOS Y PROGRAMAS',
-        'Contenidos, evaluaciones y avance por materia',
-        () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CoursesScreen()))
-      ),
-    ];
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text('ACCESOS DIRECTOS', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.muted, letterSpacing: 0.4)),
-        const SizedBox(height: 10),
-        LayoutBuilder(builder: (context, constraints) {
-          final cols = isDesktop ? 2 : 1;
-          final cardWidth = cols == 1 ? constraints.maxWidth : (constraints.maxWidth - 14) / 2;
-          return Wrap(
-            spacing: 14,
-            runSpacing: 14,
-            children: items
-                .map((item) => SizedBox(
-                      width: cardWidth,
-                      child: _QuickAccessCard(icon: item.$1, title: item.$2, subtitle: item.$3, onTap: item.$4),
-                    ))
-                .toList(),
-          );
-        }),
-      ],
     );
   }
 
@@ -345,26 +396,31 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildIdentityInfo(bool isDesktop) {
-    final name = _profile['display_name'] as String;
-    final role = _profile['role'] as String;
-    final institution = _profile['institution'] as String;
-    final email = _profile['email'] as String;
-    final description = _profile['description'] as String;
-    final visibility = _profile['visibility'] as String;
-    final photoUrl = (_profile['photo_url'] as String?) ?? '';
+    final p = _profile;
+    if (p == null) return const SizedBox.shrink();
+    final name =
+        p.displayName.trim().isEmpty ? 'Sin nombre (real)' : p.displayName.trim();
+    final institution = (p.institution == null || p.institution!.trim().isEmpty)
+        ? 'Institución no informada (real)'
+        : p.institution!.trim();
+    final description = (p.description == null || p.description!.trim().isEmpty)
+        ? 'Sin descripción (real)'
+        : p.description!.trim();
+    final visibility = p.visibility;
+    final photoUrl = p.photoUrl ?? '';
 
     final avatar = _Avatar(name: name, photoUrl: photoUrl, size: isDesktop ? 100 : 80);
     final crossAlign = isDesktop ? CrossAxisAlignment.start : CrossAxisAlignment.center;
     final textAlign = isDesktop ? TextAlign.start : TextAlign.center;
 
-    final nameAndRole = isDesktop
+    Widget nameRow(String label) => isDesktop
         ? Wrap(
             crossAxisAlignment: WrapCrossAlignment.center,
             spacing: 10,
             runSpacing: 6,
             children: [
               Text(name, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: AppColors.text)),
-              _RoleBadge(label: formatRole(role).toUpperCase()),
+              _RoleBadge(label: label),
             ],
           )
         : Column(
@@ -377,9 +433,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: AppColors.text),
               ),
               const SizedBox(height: 6),
-              _RoleBadge(label: formatRole(role).toUpperCase()),
+              _RoleBadge(label: label),
             ],
           );
+
+    final nameAndRole = nameRow('PERFIL REAL');
 
     final content = Column(
       crossAxisAlignment: crossAlign,
@@ -388,7 +446,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
         const SizedBox(height: 8),
         Text(institution, textAlign: textAlign, style: TextStyle(fontSize: isDesktop ? 14 : 12.5, fontWeight: FontWeight.w700, color: AppColors.text)),
         const SizedBox(height: 2),
-        Text(email, textAlign: textAlign, style: TextStyle(fontSize: isDesktop ? 13 : 11.5, fontWeight: FontWeight.w600, color: AppColors.muted)),
+        const Text('Correo y rol no entregados por /profile/me',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: AppColors.muted)),
         const SizedBox(height: 12),
         Text(description, textAlign: textAlign, style: TextStyle(fontSize: isDesktop ? 14.5 : 12.5, fontWeight: FontWeight.w600, color: AppColors.text, height: 1.4)),
         const SizedBox(height: 12),
@@ -426,7 +486,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget _buildStatsGridMobile() {
     final stats = _statBlocks();
 
-    Widget divider() => Container(width: 1.5, color: AppColors.border.withOpacity(0.4));
+    Widget divider() => Container(width: 1.5, color: AppColors.border.withValues(alpha: 0.4));
 
     return Column(
       children: [
@@ -458,25 +518,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   List<Widget> _statBlocks() {
-    final averageRaw = (_profile['average_raw'] as num?) ?? 0;
-    final totalClasses = _profile['total_classes'] as int?;
-    final unjustified = (_profile['unjustified_absences'] as int?) ?? 0;
-    final followers = (_profile['followers_count'] as num?) ?? 0;
-    final following = (_profile['following_count'] as num?) ?? 0;
-
-    final attendancePct = computeAttendance(totalClasses: totalClasses, unjustifiedAbsences: unjustified);
-    final attendanceLabel = attendancePct == null ? 'No config.' : '${attendancePct.round()}%';
-
-    return [
-      _StatBlock(value: formatGrade(averageRaw), label: 'PROMEDIO', color: AppColors.text),
-      _StatBlock(
-        value: attendanceLabel,
-        label: 'ASISTENCIA',
-        color: attendancePct == null ? AppColors.muted : AppColors.accentBlue,
-        valueFontSize: attendancePct == null ? 13 : 24,
-      ),
-      _StatBlock(value: '$followers', label: 'SEGUIDORES', color: AppColors.text),
-      _StatBlock(value: '$following', label: 'SIGUIENDO', color: AppColors.text),
+    // El contrato GET /profile/me no entrega promedios, asistencia ni
+    // seguidores. No se muestran valores demo como reales.
+    return const [
+      _StatBlock(value: '—', label: 'PROMEDIO (no disponible)', color: AppColors.muted),
+      _StatBlock(value: '—', label: 'ASISTENCIA (no disponible)', color: AppColors.muted),
+      _StatBlock(value: '—', label: 'SEGUIDORES (no disponible)', color: AppColors.muted),
+      _StatBlock(value: '—', label: 'SIGUIENDO (no disponible)', color: AppColors.muted),
     ];
   }
 
@@ -505,7 +553,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
           children: [
             const Icon(Icons.error_outline_rounded, size: 48, color: AppColors.text),
             const SizedBox(height: 12),
-            const Text('NO SE PUDO CARGAR TU PERFIL', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: AppColors.text)),
+            const Text('NO SE PUDO CARGAR TU PERFIL (REAL)',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: AppColors.text)),
+            if (_errorMessage != null) ...[
+              const SizedBox(height: 8),
+              Text(_errorMessage!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: AppColors.mutedStrong)),
+            ],
             const SizedBox(height: 16),
             SizedBox(width: 200, child: SubmitButton(text: 'REINTENTAR', onPressed: _loadProfile)),
           ],
@@ -698,6 +754,7 @@ class _VisibilityOption extends StatelessWidget {
 // WIDGETS AUXILIARES PRIVADOS
 // ---------------------------------------------------------------------
 
+// ignore: unused_element - mantenido para referencia visual, navegación ahora en MainShell
 class _QuickAccessCard extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -775,7 +832,7 @@ class _Avatar extends StatelessWidget {
         boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(3, 3), blurRadius: 0)],
       ),
       child: photoUrl.isNotEmpty
-          ? Image.network(photoUrl, fit: BoxFit.cover, width: size, height: size, errorBuilder: (_, __, ___) => fallback)
+          ? Image.network(photoUrl, fit: BoxFit.cover, width: size, height: size, errorBuilder: (_, _, _) => fallback)
           : fallback,
     );
   }
@@ -872,6 +929,71 @@ class _SquareIconButton extends StatelessWidget {
       ),
     );
     return tooltip != null ? Tooltip(message: tooltip!, child: button) : button;
+  }
+}
+
+class _SummaryRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  const _SummaryRow({required this.icon, required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 30,
+          height: 30,
+          decoration: BoxDecoration(
+            color: AppColors.bg,
+            border: Border.all(color: AppColors.border, width: 1.5),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Icon(icon, size: 16, color: AppColors.text),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: AppColors.muted, letterSpacing: 0.5)),
+              const SizedBox(height: 2),
+              Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.text)),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MiniStat extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  const _MiniStat({required this.icon, required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+      decoration: BoxDecoration(
+        color: AppColors.bg,
+        border: Border.all(color: AppColors.border, width: 1.5),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, size: 18, color: AppColors.text),
+          const SizedBox(height: 6),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: AppColors.text)),
+          const SizedBox(height: 2),
+          Text(label, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 10, color: AppColors.muted, letterSpacing: 0.4)),
+        ],
+      ),
+    );
   }
 }
 
