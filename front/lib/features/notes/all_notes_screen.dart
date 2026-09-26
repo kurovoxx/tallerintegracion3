@@ -1436,114 +1436,137 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       final isSearching =
           _searchController.text.trim().isNotEmpty || _selectedFilter != 'all';
       if (isSearching) {
-        return Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  border: Border.all(color: Colors.black, width: 2),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Colors.black,
-                      offset: Offset(3, 3),
-                      blurRadius: 0,
-                    ),
-                  ],
-                ),
-                child: const Icon(
-                  Icons.search_off_rounded,
-                  size: 36,
-                  color: Color(0xFF555555),
+        return LayoutBuilder(
+          builder: (context, constraints) => SingleChildScrollView(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(18),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          border: Border.all(color: Colors.black, width: 2),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Colors.black,
+                              offset: Offset(3, 3),
+                              blurRadius: 0,
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.search_off_rounded,
+                          size: 36,
+                          color: Color(0xFF555555),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      const Text(
+                        'SIN RESULTADOS',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          color: Colors.black,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'Prueba con otra palabra clave o prefijo (ej: prog*)',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF555555),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-              const SizedBox(height: 14),
-              const Text(
-                'SIN RESULTADOS',
-                style: TextStyle(
-                  fontWeight: FontWeight.w900,
-                  color: Colors.black,
-                ),
-              ),
-              const SizedBox(height: 6),
-              const Text(
-                'Prueba con otra palabra clave o prefijo (ej: prog*)',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF555555),
-                  fontSize: 12,
-                ),
-              ),
-            ],
+            ),
           ),
         );
       }
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                border: Border.all(color: Colors.black, width: 2),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Colors.black,
-                    offset: Offset(3, 3),
-                    blurRadius: 0,
-                  ),
-                ],
-              ),
-              child: const Icon(
-                Icons.note_add_rounded,
-                size: 36,
-                color: Colors.black,
-              ),
-            ),
-            const SizedBox(height: 14),
-            const Text(
-              'NO TIENES NOTAS CREADAS TODAVÍA',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                color: Colors.black,
-                fontSize: 14,
-              ),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Crea tu primera nota y aparecerá aquí',
-              style: TextStyle(
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF555555),
-                fontSize: 12,
-              ),
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.black,
-                foregroundColor: Colors.white,
-                shape: const RoundedRectangleBorder(
-                  borderRadius: BorderRadius.zero,
+      return LayoutBuilder(
+        builder: (context, constraints) => SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        border: Border.all(color: Colors.black, width: 2),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Colors.black,
+                            offset: Offset(3, 3),
+                            blurRadius: 0,
+                          ),
+                        ],
+                      ),
+                      child: const Icon(
+                        Icons.note_add_rounded,
+                        size: 36,
+                        color: Colors.black,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'NO TIENES NOTAS CREADAS TODAVÍA',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        color: Colors.black,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Crea tu primera nota y aparecerá aquí',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF555555),
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.black,
+                        foregroundColor: Colors.white,
+                        shape: const RoundedRectangleBorder(
+                          borderRadius: BorderRadius.zero,
+                        ),
+                        side: const BorderSide(color: Colors.black, width: 2),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 12,
+                        ),
+                      ),
+                      onPressed: _showCreateDialog,
+                      icon: const Icon(Icons.add_rounded, size: 18),
+                      label: const Text(
+                        'CREAR PRIMERA NOTA',
+                        style: TextStyle(
+                            fontWeight: FontWeight.w900, fontSize: 12),
+                      ),
+                    ),
+                  ],
                 ),
-                side: const BorderSide(color: Colors.black, width: 2),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: 12,
-                ),
-              ),
-              onPressed: _showCreateDialog,
-              icon: const Icon(Icons.add_rounded, size: 18),
-              label: const Text(
-                'CREAR PRIMERA NOTA',
-                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12),
               ),
             ),
-          ],
+          ),
         ),
       );
     }

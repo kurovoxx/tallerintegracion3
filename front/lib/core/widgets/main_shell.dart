@@ -16,7 +16,7 @@ import 'neobrutalism.dart';
 /// Shell global neobrutalista y responsivo:
 /// - expandido (> 1024 dp): sidebar 280/72 dp + canvas centrado.
 /// - medio (600-1024 dp): rail colapsado de 72 dp + canvas centrado.
-/// - compacto (< 600 dp): drawer + bottom navigation + FAB contextual.
+/// - compacto (< 600 dp): drawer + FAB contextual.
 ///
 /// La creación de notas es estrictamente contextual a la pantalla de Notas:
 /// en desktop vive en la cabecera de AllNotesScreen y en mobile la aporta el
@@ -166,8 +166,6 @@ class _MainShellState extends State<MainShell> {
     _notesKey.currentState?.openCreateDialog();
   }
 
-  void _openMore() => _scaffoldKey.currentState?.openDrawer();
-
   @override
   Widget build(BuildContext context) {
     final breakpoint = context.breakpoint;
@@ -179,7 +177,6 @@ class _MainShellState extends State<MainShell> {
       backgroundColor: AppColors.bg,
       appBar: _buildAppBar(isDesktop: isDesktop),
       drawer: isDesktop ? null : _buildDrawer(),
-      bottomNavigationBar: isCompact ? _buildBottomNav() : null,
       // El FAB de creación es contextual: solo en la pestaña de Notas.
       floatingActionButton: isCompact && _selectedIndex == _notesIndex
           ? NeobrutalistFab(
@@ -569,52 +566,6 @@ class _MainShellState extends State<MainShell> {
     );
   }
 
-  Widget _buildBottomNav() {
-    final primaryIndexes = <int>[
-      for (int i = 0; i < _navItems.length; i++)
-        if (_navItems[i].short != null) i,
-    ];
-    final moreSelected = !primaryIndexes.contains(_selectedIndex);
-
-    return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.surface,
-        border: Border(
-          top: BorderSide(
-            color: AppColors.border,
-            width: AppDimens.borderWidth,
-          ),
-        ),
-      ),
-      child: SafeArea(
-        top: false,
-        child: SizedBox(
-          height: 62,
-          child: Row(
-            children: <Widget>[
-              for (final int index in primaryIndexes)
-                Expanded(
-                  child: _BottomNavTile(
-                    icon: _navItems[index].icon,
-                    label: _navItems[index].short!,
-                    isSelected: _selectedIndex == index,
-                    onTap: () => _onSelectPage(index),
-                  ),
-                ),
-              Expanded(
-                child: _BottomNavTile(
-                  icon: Icons.more_horiz_rounded,
-                  label: 'Más',
-                  isSelected: moreSelected,
-                  onTap: _openMore,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 class _NavItem {
@@ -702,65 +653,6 @@ class _SidebarTile extends StatelessWidget {
         vertical: 3,
       ),
       child: isCollapsed ? Tooltip(message: label, child: tile) : tile,
-    );
-  }
-}
-
-class _BottomNavTile extends StatelessWidget {
-  const _BottomNavTile({
-    required this.icon,
-    required this.label,
-    required this.isSelected,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final bool isSelected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return ClickCursor(
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: AppMotion.fast,
-          curve: AppMotion.standard,
-          margin: const EdgeInsets.symmetric(
-            horizontal: AppDimens.spaceXs,
-            vertical: 6,
-          ),
-          decoration: BoxDecoration(
-            color: isSelected ? AppColors.accentYellow : Colors.transparent,
-            border: Border.all(
-              color: isSelected ? AppColors.border : Colors.transparent,
-              width: AppDimens.borderWidth,
-            ),
-            borderRadius: BorderRadius.circular(AppDimens.radius),
-            boxShadow: isSelected ? AppShadows.badge : null,
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: <Widget>[
-              Icon(icon, size: 20, color: AppColors.text),
-              const SizedBox(height: 2),
-              Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.2,
-                  color: AppColors.text,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }
