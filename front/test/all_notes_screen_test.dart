@@ -248,10 +248,12 @@ void main() {
 
     expect(find.textContaining('Subido a Google Drive'), findsOneWidget);
     expect(find.textContaining('ADJUNTOS VINCULADOS'), findsOneWidget);
-    expect(requests, hasLength(1));
-    final upload = requests.single;
-    expect(upload.method, 'POST');
-    expect(upload.url.path, '/notes/upload');
+    // GET /notes/me (sync real) + POST /notes/upload usan el mismo override.
+    final uploads = requests
+        .where((r) => r.method == 'POST' && r.url.path == '/notes/upload')
+        .toList();
+    expect(uploads, hasLength(1));
+    final upload = uploads.single;
     expect(upload.headers['Authorization'], 'Bearer jwt-stage2-test');
     expect(upload.body, contains('name="file"'));
     expect(upload.body, contains('filename="prueba.pdf"'));
@@ -319,7 +321,10 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('ADJUNTOS VINCULADOS'), findsOneWidget);
-    expect(requests, hasLength(1));
+    final uploads = requests
+        .where((r) => r.method == 'POST' && r.url.path == '/notes/upload')
+        .toList();
+    expect(uploads, hasLength(1));
     expect(tester.takeException(), isNull);
   });
 }

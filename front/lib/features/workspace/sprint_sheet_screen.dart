@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/common_widgets.dart';
+import '../../core/models/social_models.dart';
+import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 
@@ -67,13 +69,159 @@ class _Sprint {
 }
 
 class SprintSheetScreen extends StatefulWidget {
-  const SprintSheetScreen({super.key});
+  const SprintSheetScreen({super.key, this.groupId, SocialService? service})
+      : _serviceOverride = service;
+
+  final String? groupId;
+  final SocialService? _serviceOverride;
 
   @override
   State<SprintSheetScreen> createState() => _SprintSheetScreenState();
 }
 
 class _SprintSheetScreenState extends State<SprintSheetScreen> {
+  late final SocialService _social;
+  bool _loadingReal = false;
+  String? _realError;
+  List<SprintTask> _realTasks = const [];
+  List<SprintSheetInfo> _realSheets = const [];
+  bool _creatingReal = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _social = widget._serviceOverride ?? SocialService();
+    if (_isRealGroup) _loadReal();
+  }
+
+  @override
+  void dispose() {
+    if (widget._serviceOverride == null) _social.dispose();
+    super.dispose();
+  }
+
+  bool get _isRealGroup {
+    final id = widget.groupId?.trim() ?? '';
+    final uuid = RegExp(
+        r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$');
+    return id.isNotEmpty && uuid.hasMatch(id);
+  }
+
+  // Lectura real: GET /groups/:id/workspace (sprint_sheet) con fallback a
+  // GET /groups/:id/sprint-sheet. Ver view_handler.go:73-76 y sprint_handler.go:104.
+  Future<void> _loadReal() async {
+    if (!_isRealGroup) return;
+    if (!mounted) return;
+    setState(() {
+      _loadingReal = true;
+      _realError = null;
+    });
+    try {
+      final ws = await _social.getWorkspace(widget.groupId!.trim());
+      if (!mounted) return;
+      setState(() {
+        _realSheets = ws.sprintTasks.isEmpty ? ws.sheets : ws.sheets;
+        _realTasks = ws.sprintTasks;
+        _loadingReal = false;
+      });
+    } on SocialApiException catch (e) {
+      // Fallback a endpoint directo para diagnóstico preciso.
+      try {
+        final tasks =
+            await _social.listSprintTasks(widget.groupId!.trim());
+        if (!mounted) return;
+        setState(() {
+          _realTasks = tasks;
+          _loadingReal = false;
+        });
+      } catch (_) {
+        if (!mounted) return;
+        setState(() {
+          _realError = e.toString();
+          _loadingReal = false;
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _realError = 'No se pudo cargar la hoja real: $e';
+        _loadingReal = false;
+      });
+    }
+  }
+
+  Future<void> _createRealTask() async {
+    if (!_isRealGroup || _creatingReal) return;
+    final titleCtrl = TextEditingController();
+    final assigneeCtrl = TextEditingController();
+    String priority = 'media';
+    String status = 'sin_empezar';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('NUEVA TAREA REAL',
+            style: TextStyle(fontWeight: FontWeight.w900)),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                  controller: titleCtrl,
+                  decoration:
+                      const InputDecoration(labelText: 'Título (requerido)')),
+              TextField(
+                  controller: assigneeCtrl,
+                  decoration: const InputDecoration(
+                      labelText: 'assigned_to UUID (requerido por backend)')),
+              const SizedBox(height: 8),
+              const Text(
+                  'priority: alta|media|baja · status: sin_empezar|en_proceso|listo',
+                  style: TextStyle(fontSize: 11)),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancelar')),
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Crear (POST real)')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final title = titleCtrl.text.trim();
+    final assignee = assigneeCtrl.text.trim();
+    if (title.isEmpty || assignee.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Título y assigned_to UUID son requeridos.'),
+          backgroundColor: AppColors.error));
+      return;
+    }
+    setState(() => _creatingReal = true);
+    try {
+      final created = await _social.createSprintTask(
+        groupId: widget.groupId!.trim(),
+        title: title,
+        assignedTo: assignee,
+        priority: priority,
+        status: status,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Tarea creada: ${created.id} (real)'),
+          backgroundColor: AppColors.border));
+      await _loadReal();
+    } on SocialApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('No se pudo crear: $e'),
+          backgroundColor: AppColors.error));
+    } finally {
+      if (mounted) setState(() => _creatingReal = false);
+    }
+  }
   static const List<String> _members = [
     'Sofía • MAT1002',
     'Matías • INF220',
@@ -325,20 +473,175 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildHeader(),
-            const SizedBox(height: 12),
-            _buildSprintSelector(),
-            const SizedBox(height: 16),
-            _buildMetricsBar(),
-            const SizedBox(height: 12),
-            _buildLegendBar(),
-            const SizedBox(height: 16),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: SizedBox(width: 1200, child: _buildSprintTable()),
-            ),
+            _buildRealPanel(),
+            // Con grupo real solo se muestran datos reales (carga/vacío/error).
+            // La preview mock queda reservada a modo sin grupo.
+            if (!_isRealGroup) ...[
+              const SizedBox(height: 12),
+              _buildHeader(),
+              const SizedBox(height: 12),
+              _buildSprintSelector(),
+              const SizedBox(height: 16),
+              _buildMetricsBar(),
+              const SizedBox(height: 12),
+              _buildLegendBar(),
+              const SizedBox(height: 8),
+              const Text(
+                'Vista previa local (sin grupo real): datos mock, cambios no persistidos en backend.',
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.mutedStrong),
+              ),
+              const SizedBox(height: 8),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SizedBox(width: 1200, child: _buildSprintTable()),
+              ),
+            ] else ...[
+              const SizedBox(height: 12),
+              const Text(
+                'HOJA DE SPRINT (título): debajo solo datos reales del grupo. Sin tabla mock.',
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.mutedStrong),
+              ),
+            ],
           ],
         ),
+      ),
+    );
+  }
+
+  // Panel real (lectura + creación). Edición/borrado/horas NO se presentan
+  // como persistidos: PATCH/DELETE /groups/:id/sprint-sheet leen c.Param("id")
+  // como taskID sin :taskId en la ruta (main.go:194-195 vs
+  // sprint_handler.go:163-171,223-231). Documentado como bloqueo.
+  Widget _buildRealPanel() {
+    if (!_isRealGroup) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          border: Border.all(
+              color: AppColors.border, width: AppDimens.borderWidth),
+          borderRadius: BorderRadius.circular(AppDimens.radius),
+        ),
+        child: const Text(
+          'HOJA REAL: selecciona un grupo real (UUID) para GET /groups/:id/workspace y POST /groups/:id/sprint-sheet. '
+          'Sin grupo no hay lectura ni creación reales.',
+          style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: AppColors.mutedStrong),
+        ),
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border:
+            Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+        boxShadow: AppShadows.card,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text('HOJA REAL (GET workspace / POST sprint-sheet)',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 12,
+                        color: AppColors.text)),
+              ),
+              NeobrutalistButton(
+                label: _creatingReal ? 'Creando...' : 'Nueva real',
+                icon: Icons.add_rounded,
+                variant: NeobrutalistButtonVariant.accent,
+                onPressed: _creatingReal ? null : _createRealTask,
+              ),
+              const SizedBox(width: 8),
+              NeobrutalistButton(
+                label: 'Recargar',
+                icon: Icons.refresh_rounded,
+                variant: NeobrutalistButtonVariant.secondary,
+                onPressed: _loadingReal ? null : _loadReal,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (_loadingReal)
+            const Center(
+                child: SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(strokeWidth: 2)))
+          else if (_realError != null)
+            Text(_realError!,
+                style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.error))
+          else if (_realTasks.isEmpty)
+            Text(
+                _realSheets.isEmpty
+                    ? 'Sin tareas reales. Crea la primera con POST real.'
+                    : 'Sin tareas reales en ${_realSheets.length} hoja(s). Crea la primera con POST real.',
+                style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.mutedStrong))
+          else
+            Column(
+              children: [
+                for (final t in _realTasks.take(10))
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text('${t.title} · ${t.status} · ${t.priority} · ${t.estimatedHours}h',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.text)),
+                        ),
+                        Text(t.assignedTo.isEmpty ? 'sin asignar' : t.assignedTo.length > 8
+                            ? '${t.assignedTo.substring(0, 8)}…'
+                            : t.assignedTo,
+                            style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.mutedStrong)),
+                      ],
+                    ),
+                  ),
+                if (_realTasks.length > 10)
+                  Text('… y ${_realTasks.length - 10} más (real)',
+                      style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.mutedStrong)),
+              ],
+            ),
+          const SizedBox(height: 8),
+          const Text(
+            'Bloqueado (backend, sin corregir): PATCH/DELETE /groups/:id/sprint-sheet sin :taskId en ruta; '
+            'el handler lee :id como taskID (sprint_handler.go:164,224 vs main.go:194-195). '
+            'Edición, borrado y horas diarias por tarea no se presentan como persistidos.',
+            style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: AppColors.mutedStrong),
+          ),
+        ],
       ),
     );
   }

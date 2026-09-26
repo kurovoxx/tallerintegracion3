@@ -65,7 +65,26 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   String? _error;
   bool _useMemoryFallback = false;
   bool _isSyncingBackend = false;
+  String? _backendError;
+  bool _showingLocalExample = false;
+  int _hiddenDemoCount = 0;
   String _currentQuery = '';
+
+  // Identificación verificable de ejemplos sembrados (sin borrar nada).
+  // Demo solo existe con id '1'..'7' Y título exacto de _demoNotes().
+  // Las notas reales usan UUID (36 con guiones) y las locales del usuario
+  // usan timestamp (13 dígitos): ninguna colisiona con este par id+título.
+  static const Map<String, String> _kDemoTitles = <String, String>{
+    '1': 'Cálculo - Límites y derivadas',
+    '2': 'Estructuras de Datos - Árboles',
+    '3': 'Bases de Datos - SQL Joins',
+    '4': 'Redes - Modelo OSI',
+    '5': 'Frontend - NestJS MVC',
+    '6': 'Cálculo - Integrales dobles',
+    '7': 'Nota con Adjuntos de Prueba (Conejita y PDF)',
+  };
+
+  bool _isKnownDemo(LocalNote n) => _kDemoTitles[n.id] == n.title;
   // Ids de notas del backend que pertenecen al usuario (GET /notes/me + POST 201).
   // El modelo local no guarda autor: un id con formato UUID no listado aquí se
   // trata como ajeno (solo lectura); los ids locales (dígitos) son del dispositivo.
@@ -177,6 +196,19 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         await _repo!.getAllNotes();
       } catch (e) {
         debugPrint('Drift init falló, fallback a memoria: $e');
+        final token = SessionManager.token;
+        final hasSession = token != null && token.isNotEmpty;
+        if (hasSession) {
+          // Con sesión no se siembran demos nuevas: error real.
+          if (mounted) {
+            setState(() {
+              _error = 'No se pudo abrir la base local: $e';
+              _backendError = _error;
+              _isLoading = false;
+            });
+          }
+          return _filtered;
+        }
         _useMemoryFallback = true;
         _memoryFallback = _demoNotes();
         for (final n in _memoryFallback) {
@@ -189,18 +221,31 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           _currentQuery,
           _selectedFilter,
         );
-        if (mounted) setState(() => _isLoading = false);
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _showingLocalExample = true;
+          });
+        }
         return _filtered;
       }
 
       final existing = await _repo!.getAllNotes();
       if (existing.isEmpty) {
-        final demo = _demoNotes();
-        for (final n in demo) {
-          await _repo!.upsertNote(n);
-          _likesCount[n.id] = (int.tryParse(n.id) ?? 1) * 2;
+        final token = SessionManager.token;
+        final hasSession = token != null && token.isNotEmpty;
+        if (hasSession) {
+          // Con sesión no se siembran demos nuevas: se intenta backend y,
+          // si falla, se muestra vacío/error real (nunca ejemplos).
+          await _syncFromBackend();
+        } else {
+          final demo = _demoNotes();
+          for (final n in demo) {
+            await _repo!.upsertNote(n);
+            _likesCount[n.id] = (int.tryParse(n.id) ?? 1) * 2;
+          }
+          await _syncFromBackend();
         }
-        await _syncFromBackend();
       } else {
         for (final n in existing) {
           _likesCount.putIfAbsent(n.id, () => 0);
@@ -216,10 +261,15 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     } catch (e) {
       debugPrint('AllNotes init error: $e');
       if (mounted) {
+        final token = SessionManager.token;
+        final hasSession = token != null && token.isNotEmpty;
         setState(() {
-          _error = e.toString();
           _isLoading = false;
-          if (_filtered.isEmpty && _memoryFallback.isEmpty) {
+          if (hasSession) {
+            // Con sesión: error real, no se oculta tras demo.
+            _error = 'No se pudo cargar tus notas: $e';
+            _backendError = _error;
+          } else if (_filtered.isEmpty && _memoryFallback.isEmpty) {
             _useMemoryFallback = true;
             _memoryFallback = _demoNotes();
             _filtered = _applyFilters(
@@ -228,6 +278,9 @@ class AllNotesScreenState extends State<AllNotesScreen> {
               _selectedFilter,
             );
             _error = null;
+            _showingLocalExample = true;
+          } else {
+            _error = e.toString();
           }
         });
       }
@@ -235,19 +288,42 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     }
   }
 
+  // Sincroniza GET /notes/me (real). Si hay sesión y falla, guarda
+  // _backendError real en vez de ocultar el fallo tras datos demo.
+  // Ver back/notes/cmd/server/main.go:130 y note_handler.go:241 ListMy.
   Future<void> _syncFromBackend() async {
     if (_useMemoryFallback || _repo == null) return;
-    if (mounted) setState(() => _isSyncingBackend = true);
+    if (mounted) {
+      setState(() {
+        _isSyncingBackend = true;
+        _backendError = null;
+      });
+    }
     try {
       final token = SessionManager.token;
-      final headers = <String, String>{'Content-Type': 'application/json'};
-      if (token != null && token.isNotEmpty) {
-        headers['Authorization'] = 'Bearer $token';
+      if (token == null || token.isEmpty) {
+        // Sin sesión (tests/modo local): no se exige backend. Se marca como
+        // ejemplo local para no presentar _demoNotes como notas del usuario.
+        if (mounted) setState(() => _showingLocalExample = true);
+        return;
       }
-      final res = await http
-          .get(Uri.parse('$notesBaseUrl/notes/me?limit=50'), headers: headers)
-          .timeout(const Duration(seconds: 5));
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      };
+      final res = await _withNotesClient(
+        (client) => client
+            .get(Uri.parse('$notesBaseUrl/notes/me?limit=50'),
+                headers: headers)
+            .timeout(const Duration(seconds: 5)),
+      );
       if (res.statusCode == 200) {
+        if (mounted) {
+          setState(() {
+            _backendError = null;
+            _showingLocalExample = false;
+          });
+        }
         final data = jsonDecode(utf8.decode(res.bodyBytes));
         final List notes = data['notes'] ?? [];
         for (final n in notes) {
@@ -270,9 +346,32 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             );
           } catch (_) {}
         }
+      } else {
+        String detail = 'HTTP ${res.statusCode}';
+        try {
+          final body = jsonDecode(utf8.decode(res.bodyBytes));
+          if (body is Map && body['error'] is Map) {
+            detail =
+                '${body['error']['code'] ?? 'error'}: ${body['error']['message'] ?? detail}';
+          }
+        } catch (_) {}
+        if (mounted) {
+          setState(() => _backendError =
+              'No se pudo cargar tus notas (GET /notes/me): $detail');
+        }
+        debugPrint('Backend sync error real: $detail');
       }
     } catch (e) {
       debugPrint('Backend sync falló (offline): $e');
+      if (mounted) {
+        final token = SessionManager.token;
+        if (token != null && token.isNotEmpty) {
+          setState(() => _backendError =
+              'No se pudo cargar tus notas (GET /notes/me): $e');
+        } else {
+          setState(() => _showingLocalExample = true);
+        }
+      }
     } finally {
       if (mounted) setState(() => _isSyncingBackend = false);
     }
@@ -685,6 +784,17 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     String filter,
   ) {
     var res = notes;
+    // Con sesión y fallo de backend, se ocultan (sin borrar) solo los
+    // ejemplos verificables id+título. Nunca se presentan como reales.
+    final token = SessionManager.token;
+    final hasSession = token != null && token.isNotEmpty;
+    if (hasSession && _backendError != null && res.isNotEmpty) {
+      final before = res.length;
+      res = res.where((n) => !_isKnownDemo(n)).toList();
+      _hiddenDemoCount = before - res.length;
+    } else {
+      _hiddenDemoCount = 0;
+    }
     // Filtro de chips
     if (filter == 'public') {
       res = res.where((n) => n.visibility == 'public').toList();
@@ -960,6 +1070,41 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                     const LinearProgressIndicator(
                       color: AppColors.border,
                       backgroundColor: AppColors.bg,
+                    ),
+                  ],
+                  if (_backendError != null) ...<Widget>[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFDE8E8),
+                        border: Border.all(color: Colors.black, width: 2),
+                      ),
+                      child: Text(
+                          _hiddenDemoCount > 0
+                              ? '${_backendError!} Se ocultaron $_hiddenDemoCount ejemplos locales; no se muestran como reales.'
+                              : _backendError!,
+                          style: const TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.black)),
+                    ),
+                  ],
+                  if (_backendError == null &&
+                      _showingLocalExample) ...<Widget>[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF3CD),
+                        border: Border.all(color: Colors.black, width: 2),
+                      ),
+                      child: const Text(
+                          'Modo local sin sesión: se muestran datos de ejemplo, no son tus notas reales. Inicia sesión para GET /notes/me.',
+                          style: TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.black)),
                     ),
                   ],
                   const SizedBox(height: 12),
