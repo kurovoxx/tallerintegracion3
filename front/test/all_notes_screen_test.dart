@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taller_integracion_front/core/services/session_manager.dart';
 import 'package:taller_integracion_front/core/widgets/neobrutalism.dart';
 import 'package:taller_integracion_front/features/notes/all_notes_screen.dart';
@@ -14,6 +15,10 @@ void main() {
   // raíz del paquete aunque el archivo no venga en el checkout.
   final pdfFixture = File('prueba.pdf');
   var createdPdfFixture = false;
+
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
 
   setUpAll(() {
     if (!pdfFixture.existsSync()) {
@@ -325,7 +330,7 @@ void main() {
   testWidgets('adjunto con JWT sube los bytes reales a /notes/upload y usa la URL de Drive', (
     tester,
   ) async {
-    SessionManager.saveSession('jwt-stage2-test', {'id': 'u-stage2'});
+    await SessionManager.saveSession('jwt-stage2-test', {'id': 'u-stage2'});
     final requests = <http.Request>[];
     notesHttpClientOverride = MockClient((request) async {
       requests.add(request);
@@ -345,9 +350,9 @@ void main() {
       }
       return http.Response('{}', 404);
     });
-    addTearDown(() {
+    addTearDown(() async {
       notesHttpClientOverride = null;
-      SessionManager.clear();
+      await SessionManager.clear();
     });
 
     await pumpNotes(tester, const Size(1440, 900));
@@ -373,15 +378,15 @@ void main() {
   testWidgets('adjunto sin sesión conserva la referencia local con advertencia amigable', (
     tester,
   ) async {
-    SessionManager.clear();
+    await SessionManager.clear();
     var httpCalls = 0;
     notesHttpClientOverride = MockClient((request) async {
       httpCalls++;
       return http.Response('{}', 500);
     });
-    addTearDown(() {
+    addTearDown(() async {
       notesHttpClientOverride = null;
-      SessionManager.clear();
+      await SessionManager.clear();
     });
 
     await pumpNotes(tester, const Size(1440, 900));
@@ -399,7 +404,7 @@ void main() {
   testWidgets('adjunto con fallo de Drive mantiene fallback local sin crashear', (
     tester,
   ) async {
-    SessionManager.saveSession('jwt-stage2-fail', {'id': 'u-stage2'});
+    await SessionManager.saveSession('jwt-stage2-fail', {'id': 'u-stage2'});
     final requests = <http.Request>[];
     notesHttpClientOverride = MockClient((request) async {
       requests.add(request);
@@ -414,9 +419,9 @@ void main() {
         headers: {'content-type': 'application/json'},
       );
     });
-    addTearDown(() {
+    addTearDown(() async {
       notesHttpClientOverride = null;
-      SessionManager.clear();
+      await SessionManager.clear();
     });
 
     await pumpNotes(tester, const Size(1440, 900));

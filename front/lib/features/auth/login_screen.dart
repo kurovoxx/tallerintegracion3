@@ -71,8 +71,13 @@ class _LoginScreenState extends State<LoginScreen> {
         // Guardar sesión para carga híbrida de notas (backend + local)
         final token = (result.data?['access_token'] as String?) ?? (result.data?['token'] as String?) ?? '';
         if (token.isNotEmpty) {
-          SessionManager.saveSession(token, result.data);
+          await SessionManager.saveSession(
+            token,
+            result.data,
+            rememberMe: _rememberMe,
+          );
         }
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('INGRESO CORRECTO', style: TextStyle(fontWeight: FontWeight.w800, color: Colors.white)),
