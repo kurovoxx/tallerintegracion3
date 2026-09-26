@@ -20,9 +20,13 @@ void main() {
     expect(find.text('TÍTULO DE LA REUNIÓN'), findsOneWidget);
     expect(find.text('FECHA'), findsOneWidget);
     expect(find.text('HORA'), findsOneWidget);
-    expect(find.text('MIEMBROS INVITADOS'), findsOneWidget);
-    expect(find.text('AGENDAR REUNIÓN'), findsNWidgets(2));
+    expect(find.text('MIEMBROS INVITADOS (LOCAL)'), findsOneWidget);
+    expect(find.text('AGENDAR REUNIÓN'), findsOneWidget);
+    expect(find.textContaining('AGENDAR'), findsWidgets);
     expect(find.text('SOFÍA'), findsOneWidget);
+    // Sin vinculación simulada: el backend sincroniza en background.
+    expect(find.textContaining('Sin vinculación simulada'), findsOneWidget);
+    expect(find.text('Vincular con Google Calendar'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -32,8 +36,8 @@ void main() {
     await pumpMeeting(tester, const Size(320, 800));
 
     expect(find.text('AGENDAR REUNIÓN'), findsWidgets);
-    expect(find.text('ENLACE / SALA'), findsOneWidget);
-    expect(find.text('MIEMBROS INVITADOS'), findsOneWidget);
+    expect(find.textContaining('ENLACE / SALA'), findsOneWidget);
+    expect(find.text('MIEMBROS INVITADOS (LOCAL)'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

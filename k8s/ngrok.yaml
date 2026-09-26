@@ -1,0 +1,27 @@
+# Tunel ngrok con dominio estatico gratis hacia el front (reemplaza a tunnel.yaml).
+# Requiere el secret: kubectl create secret generic ngrok-auth --from-literal=NGROK_AUTHTOKEN="<token>"
+# Strategy Recreate: un dominio estatico no admite dos agentes conectados a la vez.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ngrok
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: ngrok}
+  template:
+    metadata:
+      labels: {app: ngrok}
+    spec:
+      containers:
+        - name: ngrok
+          image: ngrok/ngrok:latest
+          args: ["http", "front:80", "--url=dotted-unaudited-liking.ngrok-free.dev"]
+          env:
+            - name: NGROK_AUTHTOKEN
+              valueFrom: {secretKeyRef: {name: ngrok-auth, key: NGROK_AUTHTOKEN}}
+          resources:
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {cpu: 100m, memory: 128Mi}

@@ -90,3 +90,10 @@ type SocialDiscordIntegration struct {
 	ChannelID  pgtype.Text
 	CreatedAt  pgtype.Timestamptz
 }
+
+type SocialStreamChannel struct {
+	ID        pgtype.UUID
+	GroupID   pgtype.UUID
+	ChannelID string
+	CreatedAt pgtype.Timestamptz
+}

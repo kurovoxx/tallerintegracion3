@@ -8,6 +8,8 @@ import '../../features/academic/profile_screen.dart';
 import '../../features/academic/schedule_screen.dart';
 import '../../features/groups/groups_screen.dart';
 import '../../features/notes/all_notes_screen.dart';
+import '../models/social_models.dart';
+import '../services/social_service.dart';
 import '../theme/app_theme.dart';
 import 'neobrutalism.dart';
 
@@ -21,10 +23,13 @@ import 'neobrutalism.dart';
 /// FAB, visible solo cuando la pestaña activa es Notas. El shell no intercepta
 /// atajos de teclado: Ctrl+N (Cmd+N) lo gestiona AllNotesScreen localmente.
 class MainShell extends StatefulWidget {
-  const MainShell({super.key, this.initialIndex = 5, this.userData});
+  const MainShell(
+      {super.key, this.initialIndex = 5, this.userData, SocialService? service})
+      : _serviceOverride = service;
 
   final int initialIndex;
   final Map<String, dynamic>? userData;
+  final SocialService? _serviceOverride;
 
   @override
   State<MainShell> createState() => _MainShellState();
@@ -32,6 +37,7 @@ class MainShell extends StatefulWidget {
 
 class _MainShellState extends State<MainShell> {
   static const int _notesIndex = 5;
+  static const int _groupsIndex = 6;
 
   late int _selectedIndex;
   bool _isCollapsed = false;
@@ -39,10 +45,51 @@ class _MainShellState extends State<MainShell> {
   final GlobalKey<AllNotesScreenState> _notesKey =
       GlobalKey<AllNotesScreenState>();
 
+  late final SocialService _social;
+  Overview? _overview;
+  String? _sidebarError;
+  bool _loadingSidebar = false;
+
   @override
   void initState() {
     super.initState();
     _selectedIndex = widget.initialIndex;
+    _social = widget._serviceOverride ?? SocialService();
+    _loadSidebar();
+  }
+
+  @override
+  void dispose() {
+    if (widget._serviceOverride == null) _social.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadSidebar() async {
+    if (!mounted) return;
+    setState(() {
+      _loadingSidebar = true;
+      _sidebarError = null;
+    });
+    try {
+      final ov = await _social.getOverview();
+      if (!mounted) return;
+      setState(() {
+        _overview = ov;
+        _loadingSidebar = false;
+      });
+    } on SocialApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _sidebarError = e.toString();
+        _loadingSidebar = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _sidebarError = 'Sin conexión: $e';
+        _loadingSidebar = false;
+      });
+    }
   }
 
   // Pantallas del shell global: 5 académicas + 3 de espacio general.
@@ -324,6 +371,7 @@ class _MainShellState extends State<MainShell> {
             },
           ),
         ),
+        _buildGroupsFooter(isCollapsed: isCollapsed),
         const Divider(
           color: AppColors.border,
           thickness: AppDimens.borderWidth,
@@ -331,6 +379,133 @@ class _MainShellState extends State<MainShell> {
         ),
         _buildProfileFooter(isCollapsed: isCollapsed),
       ],
+    );
+  }
+
+  // Barra lateral global real: GET /me/overview.sidebar.groups.
+  // Ver back/social/internal/handler/http/view_handler.go:29 y model/views.go.
+  Widget _buildGroupsFooter({required bool isCollapsed}) {
+    if (isCollapsed) {
+      final count = _overview?.groupsCount;
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Center(
+          child: _loadingSidebar
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : InkWell(
+                  onTap: () => _onSelectPage(_groupsIndex),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: AppColors.accentYellow,
+                      border: Border.all(
+                          color: AppColors.border,
+                          width: AppDimens.borderWidth),
+                      borderRadius:
+                          BorderRadius.circular(AppDimens.radiusChip),
+                    ),
+                    child: Text('${count ?? '·'}',
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w900, fontSize: 11)),
+                  ),
+                ),
+        ),
+      );
+    }
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: AppColors.bg,
+        border:
+            Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text('MIS GRUPOS (REAL)',
+                    style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.6,
+                        color: AppColors.muted)),
+              ),
+              InkWell(
+                onTap: _loadingSidebar ? null : _loadSidebar,
+                child: const Icon(Icons.refresh_rounded,
+                    size: 14, color: AppColors.text),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          if (_loadingSidebar)
+            const Center(
+                child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2)))
+          else if (_sidebarError != null)
+            Text(_sidebarError!,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.mutedStrong))
+          else if (_overview == null || _overview!.sidebarGroups.isEmpty)
+            const Text('Sin grupos. Crea uno en Grupos.',
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.mutedStrong))
+          else ...[
+            Text(
+                '${_overview!.groupsCount} grupos · ${_overview!.adminGroupsCount} admin (real)',
+                style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.text)),
+            const SizedBox(height: 6),
+            for (final g in _overview!.sidebarGroups.take(5))
+              InkWell(
+                onTap: () => _onSelectPage(_groupsIndex),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.groups_rounded,
+                          size: 13, color: AppColors.text),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(g.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.text)),
+                      ),
+                      Text(g.role,
+                          style: const TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.mutedStrong)),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ],
+      ),
     );
   }
 

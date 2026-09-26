@@ -1,0 +1,142 @@
+# Deploy en namespace student-brojas (cluster pillan).
+# DB = Postgres propio del cluster (k8s/postgres.yaml, service "postgres:5432"). Supabase ya no es la DB de pillan.
+# Secret "ti3-secrets" NO va acá (no se versiona). Ver k8s/create-secrets.sh.
+# Imagenes privadas en GHCR necesitan pull secret "ghcr-cred" (ver mismo script).
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: auth}
+  template:
+    metadata:
+      labels: {app: auth}
+    spec:
+      imagePullSecrets: [{name: ghcr-cred}]
+      containers:
+        - name: auth
+          image: ghcr.io/kurovoxx/tallerintegracion3-auth:latest
+          ports: [{containerPort: 8080}]
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 256Mi}
+          envFrom: [{secretRef: {name: ti3-secrets}}]
+          env:
+            - {name: PORT, value: "8080"}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth
+spec:
+  selector: {app: auth}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notes
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: notes}
+  template:
+    metadata:
+      labels: {app: notes}
+    spec:
+      imagePullSecrets: [{name: ghcr-cred}]
+      containers:
+        - name: notes
+          image: ghcr.io/kurovoxx/tallerintegracion3-notes:latest
+          ports: [{containerPort: 8082}]
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 256Mi}
+          envFrom: [{secretRef: {name: ti3-secrets}}]
+          env:
+            - {name: PORT, value: "8082"}
+            - {name: NOTES_PORT, value: "8082"}
+            - {name: STORAGE_MODE, value: drive}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notes
+spec:
+  selector: {app: notes}
+  ports: [{port: 8082, targetPort: 8082}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: social
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: social}
+  template:
+    metadata:
+      labels: {app: social}
+    spec:
+      imagePullSecrets: [{name: ghcr-cred}]
+      containers:
+        - name: social
+          image: ghcr.io/kurovoxx/tallerintegracion3-social:latest
+          ports: [{containerPort: 8083}]
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 256Mi}
+          envFrom: [{secretRef: {name: ti3-secrets}}]
+          env:
+            - {name: PORT, value: "8083"}
+            - {name: SOCIAL_PORT, value: "8083"}
+            - {name: AUTH_BASE_URL, value: "http://auth:8080"}
+            - {name: CALENDAR_MODE, value: mock}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: social
+spec:
+  selector: {app: social}
+  ports: [{port: 8083, targetPort: 8083}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: front
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: front}
+  template:
+    metadata:
+      labels: {app: front}
+    spec:
+      imagePullSecrets: [{name: ghcr-cred}]
+      containers:
+        - name: front
+          image: ghcr.io/kurovoxx/tallerintegracion3-front:latest
+          ports: [{containerPort: 80}]
+          resources:
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {cpu: 100m, memory: 128Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: front
+spec:
+  selector: {app: front}
+  ports: [{port: 80, targetPort: 80}]

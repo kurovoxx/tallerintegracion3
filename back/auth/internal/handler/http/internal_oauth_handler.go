@@ -78,5 +78,6 @@ func (h *InternalOAuthHandler) ReportCalendarRevoked(c *gin.Context) {
 		return
 	}
 	_ = h.svc.ReportCalendarPermissionDenied(c.Request.Context(), strings.TrimSpace(req.UserID))
-	c.Status(http.StatusNoContent)
+	// AbortWithStatus (igual que logout): vuelca el 204 también sin engine en tests.
+	c.AbortWithStatus(http.StatusNoContent)
 }

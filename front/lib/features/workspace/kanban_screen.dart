@@ -7,6 +7,8 @@
 import 'package:flutter/material.dart';
 
 import '../../core/common_widgets.dart';
+import '../../core/models/social_models.dart';
+import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 
@@ -87,15 +89,129 @@ _ColumnPlateStyle _plateStyleFor(String title) {
 }
 
 class KanbanScreen extends StatefulWidget {
-  const KanbanScreen({super.key});
+  const KanbanScreen({super.key, this.groupId, SocialService? service})
+      : _serviceOverride = service;
+
+  final String? groupId;
+  final SocialService? _serviceOverride;
 
   @override
   State<KanbanScreen> createState() => _KanbanScreenState();
 }
 
 class _KanbanScreenState extends State<KanbanScreen> {
+  late final SocialService _social;
+  bool _loadingReal = false;
+  String? _realError;
+  List<TodoTask> _realTodo = const [];
+  List<TodoTask> _realDoing = const [];
+  List<TodoTask> _realDone = const [];
+  bool _creatingReal = false;
+
   final PageController _pageController = PageController();
   int _selectedColumn = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _social = widget._serviceOverride ?? SocialService();
+    if (_isRealGroup) _loadReal();
+  }
+
+  bool get _isRealGroup {
+    final id = widget.groupId?.trim() ?? '';
+    final uuid = RegExp(
+        r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$');
+    return id.isNotEmpty && uuid.hasMatch(id);
+  }
+
+  // Lectura real: GET /groups/:id/workspace.kanban (todo/in_progress/done).
+  // Ver view_handler.go:84-94 y todo_handler.go:107 ListTodos.
+  Future<void> _loadReal() async {
+    if (!_isRealGroup) return;
+    if (!mounted) return;
+    setState(() {
+      _loadingReal = true;
+      _realError = null;
+    });
+    try {
+      final ws = await _social.getWorkspace(widget.groupId!.trim());
+      if (!mounted) return;
+      setState(() {
+        _realTodo = ws.todo;
+        _realDoing = ws.inProgress;
+        _realDone = ws.done;
+        _loadingReal = false;
+      });
+    } on SocialApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _realError = e.toString();
+        _loadingReal = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _realError = 'No se pudo cargar el tablero real: $e';
+        _loadingReal = false;
+      });
+    }
+  }
+
+  Future<void> _createRealTodo(String status) async {
+    if (!_isRealGroup || _creatingReal) return;
+    final ctrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('NUEVA TAREA REAL',
+            style: TextStyle(fontWeight: FontWeight.w900)),
+        content: TextField(
+            controller: ctrl,
+            decoration:
+                const InputDecoration(labelText: 'Título (requerido)')),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancelar')),
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Crear (POST real)')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final title = ctrl.text.trim();
+    if (title.isEmpty) return;
+    setState(() => _creatingReal = true);
+    try {
+      final created = await _social.createTodo(
+        groupId: widget.groupId!.trim(),
+        title: title,
+        status: status,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Tarea creada: ${created.id} (real)'),
+          backgroundColor: AppColors.border));
+      await _loadReal();
+    } on SocialApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('No se pudo crear: $e'),
+          backgroundColor: AppColors.error));
+    } finally {
+      if (mounted) setState(() => _creatingReal = false);
+    }
+  }
+
+  void _blockedMoveNotice() {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text(
+            'Movimiento no persistido: PATCH /groups/:id/todo sin :taskId en ruta '
+            '(main.go:190 vs todo_handler.go:162). Solo lectura y creación están conectadas.'),
+        backgroundColor: AppColors.error));
+  }
 
   final List<_KanbanColumnData> _columns = [
     _KanbanColumnData(
@@ -149,6 +265,7 @@ class _KanbanScreenState extends State<KanbanScreen> {
   @override
   void dispose() {
     _pageController.dispose();
+    if (widget._serviceOverride == null) _social.dispose();
     super.dispose();
   }
 
@@ -161,6 +278,13 @@ class _KanbanScreenState extends State<KanbanScreen> {
     _KanbanColumnData to,
   ) {
     if (identical(from, to)) return;
+    // Con grupo real no se finge persistencia: el PATCH está bloqueado
+    // (ver _blockedMoveNotice). Solo se permite movimiento local en vista
+    // previa sin grupo.
+    if (_isRealGroup) {
+      _blockedMoveNotice();
+      return;
+    }
     setState(() {
       from.tasks.remove(task);
       to.tasks.add(task);
@@ -186,9 +310,213 @@ class _KanbanScreenState extends State<KanbanScreen> {
     return Scaffold(
       backgroundColor: AppColors.bg,
       body: SafeArea(
-        child: breakpoint == AppBreakpoint.compact
-            ? _buildCompactBoard()
-            : _buildWideBoard(expanded: breakpoint == AppBreakpoint.expanded),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _buildRealPanel(),
+            if (!_isRealGroup)
+              Expanded(
+                child: breakpoint == AppBreakpoint.compact
+                    ? _buildCompactBoard()
+                    : _buildWideBoard(
+                        expanded: breakpoint == AppBreakpoint.expanded),
+              )
+            else
+              Expanded(child: _buildRealLists()),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Solo datos reales con grupo UUID. Sin preview mock debajo.
+  Widget _buildRealLists() {
+    if (_loadingReal) {
+      return const Center(
+          child: SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(strokeWidth: 2)));
+    }
+    if (_realError != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('NO SE PUDO CARGAR EL TABLERO REAL',
+                  style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: 13,
+                      color: AppColors.text)),
+              const SizedBox(height: 8),
+              Text(_realError!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.mutedStrong)),
+              const SizedBox(height: 12),
+              NeobrutalistButton(
+                label: 'Reintentar',
+                icon: Icons.refresh_rounded,
+                variant: NeobrutalistButtonVariant.accent,
+                onPressed: _loadReal,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (_realTodo.isEmpty && _realDoing.isEmpty && _realDone.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: Text('Sin tareas reales. Crea la primera con + Nueva real.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.mutedStrong)),
+        ),
+      );
+    }
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _RealListSection(title: 'POR HACER (REAL)', tasks: _realTodo),
+          const SizedBox(height: 10),
+          _RealListSection(
+              title: 'EN PROGRESO (REAL)', tasks: _realDoing),
+          const SizedBox(height: 10),
+          _RealListSection(title: 'FINALIZADO (REAL)', tasks: _realDone),
+          const SizedBox(height: 8),
+          const Text(
+            'Mover/editar/borrar bloqueado: PATCH/DELETE /groups/:id/todo sin :taskId (main.go:190-191 vs todo_handler.go:162,219). Solo lectura y creación.',
+            style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: AppColors.mutedStrong),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRealPanel() {
+    if (!_isRealGroup) {
+      return Container(
+        margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          border: Border.all(
+              color: AppColors.border, width: AppDimens.borderWidth),
+          borderRadius: BorderRadius.circular(AppDimens.radius),
+        ),
+        child: const Text(
+          'TABLERO REAL: selecciona un grupo real (UUID) para GET /groups/:id/workspace.kanban y POST /groups/:id/todo. '
+          'Abajo: vista previa local, movimientos no persistidos.',
+          style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: AppColors.mutedStrong),
+        ),
+      );
+    }
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border:
+            Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+        boxShadow: AppShadows.card,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text('TABLERO REAL (workspace.kanban)',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 12,
+                        color: AppColors.text)),
+              ),
+              NeobrutalistButton(
+                label: 'Recargar',
+                icon: Icons.refresh_rounded,
+                variant: NeobrutalistButtonVariant.secondary,
+                onPressed: _loadingReal ? null : _loadReal,
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(
+                  child: _RealCountChip(
+                      label: 'POR HACER',
+                      count: _realTodo.length,
+                      onAdd: () => _createRealTodo('todo'))),
+              const SizedBox(width: 6),
+              Expanded(
+                  child: _RealCountChip(
+                      label: 'EN PROGRESO',
+                      count: _realDoing.length,
+                      onAdd: () => _createRealTodo('in_progress'))),
+              const SizedBox(width: 6),
+              Expanded(
+                  child: _RealCountChip(
+                      label: 'FINALIZADO',
+                      count: _realDone.length,
+                      onAdd: () => _createRealTodo('done'))),
+            ],
+          ),
+          if (_loadingReal) ...[
+            const SizedBox(height: 6),
+            const Center(
+                child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2))),
+          ] else if (_realError != null) ...[
+            const SizedBox(height: 6),
+            Text(_realError!,
+                style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.error)),
+          ] else ...[
+            const SizedBox(height: 6),
+            Text(
+              'Real: ${_realTodo.length} por hacer · ${_realDoing.length} en progreso · ${_realDone.length} finalizadas. '
+              'Mover/editar/borrar bloqueado: PATCH/DELETE /groups/:id/todo sin :taskId '
+              '(main.go:190-191 vs todo_handler.go:162,219).',
+              style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.mutedStrong),
+            ),
+            if (_realTodo.isNotEmpty)
+              Text(
+                'Ej. real: ${_realTodo.first.title}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.text),
+              ),
+          ],
+        ],
       ),
     );
   }
@@ -1352,3 +1680,91 @@ class _NewTaskSheetState extends State<_NewTaskSheet> {
     );
   }
 }
+
+class _RealCountChip extends StatelessWidget {
+  const _RealCountChip(
+      {required this.label, required this.count, required this.onAdd});
+
+  final String label;
+  final int count;
+  final VoidCallback onAdd;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: AppColors.bg,
+        border: Border.all(color: AppColors.border, width: 1.5),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        children: [
+          Text('$label ($count)',
+              style: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w900,
+                  color: AppColors.text)),
+          const SizedBox(height: 4),
+          InkWell(
+              onTap: onAdd,
+              child: const Text('+ Nueva real',
+                  style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.accentBlueDeep))),
+        ],
+      ),
+    );
+  }
+}
+
+class _RealListSection extends StatelessWidget {
+  const _RealListSection({required this.title, required this.tasks});
+
+  final String title;
+  final List<TodoTask> tasks;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border:
+            Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('$title (${tasks.length})',
+              style: const TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 11,
+                  color: AppColors.text)),
+          const SizedBox(height: 6),
+          if (tasks.isEmpty)
+            const Text('Vacío (real).',
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.mutedStrong))
+          else
+            for (final t in tasks)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Text('• ${t.title}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.text)),
+              ),
+        ],
+      ),
+    );
+  }
+}
+

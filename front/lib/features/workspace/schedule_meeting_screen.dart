@@ -8,11 +8,17 @@
 import 'package:flutter/material.dart';
 
 import '../../core/common_widgets.dart';
+import '../../core/models/social_models.dart';
+import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 
 class ScheduleMeetingScreen extends StatefulWidget {
-  const ScheduleMeetingScreen({super.key});
+  const ScheduleMeetingScreen({super.key, this.groupId, SocialService? service})
+      : _serviceOverride = service;
+
+  final String? groupId;
+  final SocialService? _serviceOverride;
 
   @override
   State<ScheduleMeetingScreen> createState() => _ScheduleMeetingScreenState();
@@ -28,39 +34,31 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
   final List<String> _members = ['Sofía', 'Matías', 'Ana', 'Tú'];
   final Set<String> _selectedMembers = {'Sofía', 'Tú'};
 
-  // Estado simulado del flujo OAuth de Google Calendar.
-  bool _linkingCalendar = false;
-  bool _calendarLinked = false;
-  String? _calendarAccount;
-  bool _syncingEvent = false;
-  bool _eventSynced = false;
+  late final SocialService _social;
+  bool _isSubmitting = false;
+  String? _createdMeetingId;
+  String? _submitError;
+
+  @override
+  void initState() {
+    super.initState();
+    _social = widget._serviceOverride ?? SocialService();
+  }
 
   @override
   void dispose() {
     _titleCtrl.dispose();
     _linkCtrl.dispose();
     _descCtrl.dispose();
+    if (widget._serviceOverride == null) _social.dispose();
     super.dispose();
   }
 
-  /// Simula el flujo OAuth de Google Calendar: un pequeño delay de
-  /// "autorización" y luego queda vinculada la cuenta del usuario.
-  Future<void> _linkGoogleCalendar() async {
-    if (_linkingCalendar || _calendarLinked) return;
-    setState(() => _linkingCalendar = true);
-    await Future<void>.delayed(const Duration(milliseconds: 900));
-    if (!mounted) return;
-    setState(() {
-      _linkingCalendar = false;
-      _calendarLinked = true;
-      _calendarAccount = 'tu_cuenta@gmail.com';
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Google Calendar vinculado correctamente'),
-        backgroundColor: AppColors.successDeep,
-      ),
-    );
+  bool get _isRealGroup {
+    final id = widget.groupId?.trim() ?? '';
+    final uuid = RegExp(
+        r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$');
+    return id.isNotEmpty && uuid.hasMatch(id);
   }
 
   Future<void> _pickDate() async {
@@ -93,42 +91,64 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
     if (t != null) setState(() => _selectedTime = t);
   }
 
+  // POST real: POST /groups/:id/meetings
+  // {title, description?, scheduled_at RFC3339} -> 201 {meeting_id}.
+  // Ver back/social/cmd/server/main.go:198 y meeting_handler.go:32.
+  // No existe GET /groups/:id/meetings: no se inventa listado.
+  // No se envían reuniones de prueba sin autorización: solo envía al pulsar.
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     if (_selectedMembers.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Selecciona al menos un miembro'),
+          content: Text('Selecciona al menos un miembro (local)'),
           backgroundColor: AppColors.error,
         ),
       );
       return;
     }
-    // Si Google Calendar está vinculado se simula la sincronización del evento.
-    if (_calendarLinked) setState(() => _syncingEvent = true);
-    await Future<void>.delayed(
-      _calendarLinked ? const Duration(milliseconds: 700) : Duration.zero,
-    );
-    if (!mounted) return;
-    if (_calendarLinked) {
-      setState(() {
-        _syncingEvent = false;
-        _eventSynced = true;
-      });
+    if (!_isRealGroup) {
+      setState(() => _submitError =
+          'Sin grupo real (UUID): selecciona un grupo para POST /groups/:id/meetings. No se envió nada.');
+      return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          _calendarLinked
-              ? 'Reunión "${_titleCtrl.text.trim()}" agendada y sincronizada con Google Calendar ($_calendarAccount)'
-              : 'Reunión "${_titleCtrl.text.trim()}" agendada para '
-                    '${_selectedDate.day}/${_selectedDate.month} a las '
-                    '${_selectedTime.format(context)}',
+    setState(() {
+      _isSubmitting = true;
+      _submitError = null;
+      _createdMeetingId = null;
+    });
+    try {
+      final when = DateTime(
+        _selectedDate.year,
+        _selectedDate.month,
+        _selectedDate.day,
+        _selectedTime.hour,
+        _selectedTime.minute,
+      ).toUtc();
+      final desc = _descCtrl.text.trim();
+      final id = await _social.createMeeting(
+        groupId: widget.groupId!.trim(),
+        title: _titleCtrl.text.trim(),
+        description: desc.isEmpty ? null : desc,
+        scheduledAtUtc: when,
+      );
+      if (!mounted) return;
+      setState(() => _createdMeetingId = id);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Reunión creada (real): $id'),
+          backgroundColor: AppColors.border,
         ),
-        backgroundColor: AppColors.border,
-      ),
-    );
-    Navigator.of(context).maybePop();
+      );
+    } on SocialApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _submitError = 'No se pudo crear: $e');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _submitError = 'No se pudo crear: $e');
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
   }
 
   @override
@@ -229,13 +249,13 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                             ],
                           ),
                           const SizedBox(height: AppDimens.spaceMd),
-                          const AppFieldLabel('ENLACE / SALA'),
+                          const AppFieldLabel('ENLACE / SALA (LOCAL, NO SE ENVÍA)'),
                           const SizedBox(height: AppDimens.spaceSm),
                           _FieldShell(
                             child: TextFormField(
                               controller: _linkCtrl,
                               decoration: appInputDecoration(
-                                'https://meet.google.com/...',
+                                'https://meet.google.com/... (solo nota local)',
                               ),
                               style: const TextStyle(
                                 fontWeight: FontWeight.w700,
@@ -244,47 +264,46 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                               ),
                             ),
                           ),
+                          const SizedBox(height: 4),
+                          const Text(
+                            'El contrato POST /groups/:id/meetings solo acepta title, description y scheduled_at. El enlace no se envía.',
+                            style: TextStyle(
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.muted,
+                            ),
+                          ),
                           const SizedBox(height: AppDimens.spaceMd),
-                          const AppFieldLabel('GOOGLE CALENDAR'),
+                          const AppFieldLabel('GOOGLE CALENDAR (BACKEND)'),
                           const SizedBox(height: AppDimens.spaceSm),
-                          if (!_calendarLinked) ...[
-                            SizedBox(
-                              child: NeobrutalistButton(
-                                label: _linkingCalendar
-                                    ? 'Vinculando…'
-                                    : 'Vincular con Google Calendar',
-                                icon: _linkingCalendar
-                                    ? Icons.sync_rounded
-                                    : Icons.calendar_today_rounded,
-                                variant: NeobrutalistButtonVariant.info,
-                                expand: true,
-                                borderWidth: AppDimens.borderWidthAction,
-                                onPressed: _linkingCalendar
-                                    ? null
-                                    : _linkGoogleCalendar,
+                          Container(
+                            padding: const EdgeInsets.all(AppDimens.spaceMd),
+                            decoration: BoxDecoration(
+                              color: AppColors.bg,
+                              border: Border.all(
+                                color: AppColors.border,
+                                width: AppDimens.borderWidth,
+                              ),
+                              borderRadius: BorderRadius.circular(
+                                AppDimens.radius,
                               ),
                             ),
-                            if (_linkingCalendar) ...[
-                              const SizedBox(height: AppDimens.spaceSm),
-                              const LinearProgressIndicator(
-                                color: AppColors.accentBlueDeep,
-                                backgroundColor: AppColors.bg,
-                              ),
-                            ],
-                            const SizedBox(height: AppDimens.spaceXs),
-                            const Text(
-                              'Se abrirá un flujo OAuth simulado para conectar tu cuenta.',
+                            child: const Text(
+                              'Sin vinculación simulada aquí. Tras el POST real, el backend sincroniza con Calendar/Discord/Stream en background (best-effort).',
                               style: TextStyle(
-                                fontSize: 10.5,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.muted,
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.mutedStrong,
+                                height: 1.35,
                               ),
                             ),
-                          ] else ...[
+                          ),
+                          if (_createdMeetingId != null) ...[
+                            const SizedBox(height: AppDimens.spaceSm),
                             Container(
                               padding: const EdgeInsets.all(AppDimens.spaceMd),
                               decoration: BoxDecoration(
-                                color: AppColors.surface,
+                                color: const Color(0xFFE7F6E7),
                                 border: Border.all(
                                   color: AppColors.border,
                                   width: AppDimens.borderWidth,
@@ -292,69 +311,52 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                                 borderRadius: BorderRadius.circular(
                                   AppDimens.radius,
                                 ),
-                                boxShadow: AppShadows.badge,
                               ),
-                              child: Row(
-                                crossAxisAlignment:
-                                    CrossAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    _syncingEvent
-                                        ? Icons.sync_rounded
-                                        : Icons.check_circle_rounded,
-                                    size: 22,
-                                    color: _syncingEvent
-                                        ? AppColors.accentBlueDeep
-                                        : AppColors.successDeep,
-                                  ),
-                                  const SizedBox(
-                                    width: AppDimens.spaceSm,
-                                  ),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        const Text(
-                                          'GOOGLE CALENDAR',
-                                          style: TextStyle(
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.w900,
-                                            letterSpacing: 0.5,
-                                            color: AppColors.muted,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          _syncingEvent
-                                              ? 'Sincronizando evento…'
-                                              : 'Vinculado con Google Calendar: '
-                                                    '$_calendarAccount',
-                                          style: const TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w900,
-                                            color: AppColors.text,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  if (_eventSynced) ...[
-                                    const SizedBox(
-                                      width: AppDimens.spaceSm,
-                                    ),
-                                    NeobrutalistBadge(
-                                      label: 'Evento sincronizado',
-                                      tone: NeobrutalistTone.success,
-                                      compact: true,
-                                    ),
-                                  ],
-                                ],
+                              child: Text(
+                                'Reunión creada (real): $_createdMeetingId',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w800,
+                                  color: AppColors.text,
+                                ),
+                              ),
+                            ),
+                          ],
+                          if (_submitError != null) ...[
+                            const SizedBox(height: AppDimens.spaceSm),
+                            Container(
+                              padding: const EdgeInsets.all(AppDimens.spaceMd),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFDE8E8),
+                                border: Border.all(
+                                  color: AppColors.border,
+                                  width: AppDimens.borderWidth,
+                                ),
+                                borderRadius: BorderRadius.circular(
+                                  AppDimens.radius,
+                                ),
+                              ),
+                              child: Text(
+                                _submitError!,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.text,
+                                ),
                               ),
                             ),
                           ],
                           const SizedBox(height: AppDimens.spaceMd),
-                          const AppFieldLabel('MIEMBROS INVITADOS'),
+                          const AppFieldLabel('MIEMBROS INVITADOS (LOCAL)'),
+                          const SizedBox(height: 4),
+                          const Text(
+                            'Selección local: el contrato no recibe miembros.',
+                            style: TextStyle(
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.muted,
+                            ),
+                          ),
                           const SizedBox(height: AppDimens.spaceSm),
                           Wrap(
                             spacing: AppDimens.spaceSm,
@@ -376,13 +378,39 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                                 ),
                             ],
                           ),
+                          if (!_isRealGroup) ...[
+                            const SizedBox(height: AppDimens.spaceSm),
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: AppColors.bg,
+                                border: Border.all(
+                                  color: AppColors.border,
+                                  width: AppDimens.borderWidth,
+                                ),
+                                borderRadius: BorderRadius.circular(
+                                  AppDimens.radius,
+                                ),
+                              ),
+                              child: const Text(
+                                'Sin grupo real: el botón no envía nada. Abre esta vista desde un grupo real para POST /groups/:id/meetings.',
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.mutedStrong,
+                                ),
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: AppDimens.spaceXl),
                           NeobrutalistButton(
-                            label: 'Agendar reunión',
+                            label: _isSubmitting
+                                ? 'Enviando POST real...'
+                                : 'Agendar reunión (POST real)',
                             icon: Icons.calendar_month_rounded,
                             variant: NeobrutalistButtonVariant.accent,
                             expand: true,
-                            onPressed: _submit,
+                            onPressed: _isSubmitting ? null : _submit,
                           ),
                         ],
                       ),
@@ -412,7 +440,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
         ),
         const SizedBox(height: AppDimens.spaceXs),
         const Text(
-          'Coordina con tu grupo y sincroniza con Google Calendar',
+          'POST real /groups/:id/meetings. No hay GET de reuniones: no se lista aquí.',
           style: TextStyle(
             fontSize: 12.5,
             fontWeight: FontWeight.w700,

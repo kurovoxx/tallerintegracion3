@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository/sqlc"
 )
 
@@ -30,12 +29,23 @@ type NoopMeetingCreatedNotifier struct{}
 
 func (NoopMeetingCreatedNotifier) OnMeetingCreated(ctx context.Context, meeting sqlc.SocialMeeting) {}
 
+// MeetingRepo es la porción de persistencia que usa MeetingService.
+// *repository.MeetingRepository es la implementación real (Postgres);
+// MemoryMeetingStore, la de tests. La costura permite probar el servicio
+// y los flujos con notifiers sin base de datos.
+type MeetingRepo interface {
+	GetGroupByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialGroup, error)
+	IsMember(ctx context.Context, groupID, userID pgtype.UUID) (bool, error)
+	CreateMeetingWithNotifications(ctx context.Context, arg sqlc.CreateMeetingParams) (sqlc.SocialMeeting, error)
+	ListMeetingsByGroup(ctx context.Context, groupID pgtype.UUID) ([]sqlc.SocialMeeting, error)
+}
+
 type MeetingService struct {
-	repo     *repository.MeetingRepository
+	repo     MeetingRepo
 	notifier MeetingCreatedNotifier
 }
 
-func NewMeetingService(repo *repository.MeetingRepository, notifier MeetingCreatedNotifier) *MeetingService {
+func NewMeetingService(repo MeetingRepo, notifier MeetingCreatedNotifier) *MeetingService {
 	if notifier == nil {
 		notifier = NoopMeetingCreatedNotifier{}
 	}
@@ -160,7 +170,9 @@ func (s *MeetingService) CreateMeeting(ctx context.Context, groupID, userID, tit
 		return sqlc.SocialMeeting{}, err
 	}
 
-	go s.notifier.OnMeetingCreated(context.Background(), meeting)
+	GoBestEffort("meetings", func(ctx context.Context) {
+		s.notifier.OnMeetingCreated(ctx, meeting)
+	})
 
 	return meeting, nil
 }
