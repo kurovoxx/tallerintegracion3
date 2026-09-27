@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/common_widgets.dart';
 import '../../core/services/auth_service.dart';
@@ -17,6 +18,8 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
+  static const String _rememberedEmailKey = 'auth_remembered_email';
+
   bool isLoginTab = true;
   final _authService = AuthService();
   bool _isSubmittingLogin = false;
@@ -40,6 +43,31 @@ class _LoginScreenState extends State<LoginScreen> {
   // El rol queda fijado de manera definitiva e inmutable; no se expone ningún
   // selector ni vuelve a ser editable desde el perfil.
   static const String _selectedRole = 'student';
+
+  @override
+  void initState() {
+    super.initState();
+    _restoreRememberedEmail();
+  }
+
+  Future<void> _restoreRememberedEmail() async {
+    final preferences = await SharedPreferences.getInstance();
+    final savedEmail = preferences.getString(_rememberedEmailKey);
+    if (!mounted || savedEmail == null || savedEmail.isEmpty) return;
+    setState(() {
+      _loginEmailController.text = savedEmail;
+      _rememberMe = true;
+    });
+  }
+
+  Future<void> _persistRememberedEmail(String email) async {
+    final preferences = await SharedPreferences.getInstance();
+    if (_rememberMe) {
+      await preferences.setString(_rememberedEmailKey, email);
+    } else {
+      await preferences.remove(_rememberedEmailKey);
+    }
+  }
 
   @override
   void dispose() {
@@ -77,6 +105,7 @@ class _LoginScreenState extends State<LoginScreen> {
             rememberMe: _rememberMe,
           );
         }
+        await _persistRememberedEmail(_loginEmailController.text.trim());
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
