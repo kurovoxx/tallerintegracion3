@@ -62,6 +62,9 @@ services:
       STORAGE_MODE: drive
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      SOCIAL_SERVICE_URL: ${SOCIAL_SERVICE_URL:-http://social:8083}
+      SOCIAL_TIMEOUT: 5s
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
     depends_on:
       postgres:
         condition: service_healthy

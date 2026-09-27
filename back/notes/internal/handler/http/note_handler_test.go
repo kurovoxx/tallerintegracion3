@@ -355,7 +355,7 @@ func TestHandlerAttachment(t *testing.T) {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	part, _ := writer.CreateFormFile("file", "test.png")
-	part.Write([]byte("fake png data"))
+	part.Write(testPNGBytes)
 	writer.Close()
 	w2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodPost, "/notes/"+nid+"/attachments", body)
@@ -525,7 +525,7 @@ func TestHandlerExternalAttachment(t *testing.T) {
 	nid := cre["note_id"]
 	// Precondición: el archivo debe existir y pertenecer al usuario en Drive
 	// (VerifyFileAccess valida el trust boundary antes de registrar el adjunto).
-	extID, err := driveMock.CreateFile(context.Background(), userID, "doc.pdf", "contenido")
+	extID, err := driveMock.CreateFile(context.Background(), userID, "", "doc.pdf", "contenido")
 	if err != nil {
 		t.Fatalf("precondición: no se pudo crear archivo externo en Drive mock: %v", err)
 	}
@@ -580,6 +580,45 @@ func TestHandlerPatchSyncDrive(t *testing.T) {
 	}
 	if getResp["title"] != "Nuevo" {
 		t.Fatalf("title not updated got %v", getResp["title"])
+	}
+}
+
+// TestHandlerPatchVersionConflict valida el contrato HTTP del versionado
+// optimista: PATCH con la versión vigente responde 200 y la nueva version; un
+// PATCH con la versión stale responde 409 conflict.
+func TestHandlerPatchVersionConflict(t *testing.T) {
+	r, svc, _, _ := setupRouter()
+	ctx := context.Background()
+	userID := uuid.NewString()
+	token := genToken(userID, "student")
+	note, err := svc.Create(ctx, userID, "VersionHandler", nil, "private", nil, "")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	patch := func(body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPatch, "/notes/"+note.ID, bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+token)
+		r.ServeHTTP(w, req)
+		return w
+	}
+	w := patch(`{"title":"v2","version":1}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("patch con versión vigente: %d %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Version int64 `json:"version"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json inválido: %v", err)
+	}
+	if resp.Version != 2 {
+		t.Fatalf("la respuesta debe traer la nueva version 2, got %d", resp.Version)
+	}
+	w2 := patch(`{"title":"stale","version":1}`)
+	if w2.Code != http.StatusConflict {
+		t.Fatalf("patch con versión stale debe ser 409, got %d %s", w2.Code, w2.Body.String())
 	}
 }
 
@@ -905,8 +944,8 @@ func TestHandlerGetAccessAuthor200(t *testing.T) {
 	if resp["can_read"] != true {
 		t.Fatalf("can_read debe ser true, got %v", resp)
 	}
-	if resp["access_mode"] != "private" {
-		t.Fatalf("access_mode debe ser private, got %v", resp)
+	if resp["access_mode"] != "owner" {
+		t.Fatalf("access_mode debe ser owner, got %v", resp)
 	}
 	du, _ := resp["drive_url"].(string)
 	if !strings.Contains(du, "drive.google.com") {

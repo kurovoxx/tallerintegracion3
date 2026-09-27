@@ -56,7 +56,9 @@ func IsForbidden(err error) bool {
 // En tests se usa MockClient.
 type Client interface {
 	// CreateFile crea archivo .md en carpeta designada del autor, retorna driveFileID.
-	CreateFile(ctx context.Context, userID string, title string, content string) (string, error)
+	// El archivo se indexa con appProperties (notes_note_id, notes_owner_user_id)
+	// para poder recuperarlo si el proceso crashea antes de persistir el fileID.
+	CreateFile(ctx context.Context, userID string, noteID string, title string, content string) (string, error)
 	// GetFileContent descarga contenido Markdown desde Drive usando driveFileID.
 	GetFileContent(ctx context.Context, userID string, driveFileID string) (string, error)
 	// UpdateFile actualiza contenido o renombra.
@@ -70,10 +72,19 @@ type Client interface {
 	UploadAttachment(ctx context.Context, userID string, noteID string, fileName string, fileType string, data []byte, isInline bool) (string, string, error)
 	// DeleteAttachment elimina adjunto en Drive.
 	DeleteAttachment(ctx context.Context, userID string, externalFileID string) error
-	// CopyFile clona archivo: descarga de src y crea nuevo en Drive de dst.
-	CopyFile(ctx context.Context, srcUserID string, srcFileID string, dstUserID string, newTitle string) (string, error)
+	// CopyFile clona archivo: descarga de src y crea nuevo en Drive de dst. El
+	// clon se indexa con appProperties de la nueva nota (newNoteID) y su dueño.
+	CopyFile(ctx context.Context, srcUserID string, srcFileID string, dstUserID string, newNoteID string, newTitle string) (string, error)
+	// FindFileByNoteID busca el archivo .md asociado a una nota por su
+	// appProperties notes_note_id (dueño = ownerUserID) y devuelve su fileID;
+	// "" sin error cuando no existe. Permite recuperar huérfanos tras un crash.
+	FindFileByNoteID(ctx context.Context, ownerUserID string, noteID string) (string, error)
 	// Share helpers (opcional): grant/revoke permisos en Drive vía API.
 	GrantPermission(ctx context.Context, ownerUserID string, fileID string, granteeEmail string, role string) error
+	GrantLinkPermission(ctx context.Context, ownerUserID string, fileID string) (string, error)
+	// An empty permissionID resolves and revokes the current anyone permission.
+	// This permits cleanup after a restart without persisting a Google permission ID.
+	RevokePermissionByID(ctx context.Context, ownerUserID string, fileID string, permissionID string) error
 	RevokePermission(ctx context.Context, ownerUserID string, fileID string, granteeEmail string) error
 	RevokeAllPermissions(ctx context.Context, ownerUserID string, fileID string) error
 	// VerifyFileAccess comprueba que el usuario puede acceder al archivo.
@@ -98,8 +109,14 @@ type MockClient struct {
 	DeleteErr error
 	CopyErr   error
 	// GrantCalls registra cada GrantPermission; GrantErr inyecta fallo por email.
-	GrantCalls []GrantCall
-	GrantErr   map[string]error // email normalizado o crudo -> error
+	GrantCalls     []GrantCall
+	GrantErr       map[string]error // email normalizado o crudo -> error
+	LinkGrantCalls []string
+	LinkGrantErr   error
+	RevokeCalls    []GrantCall
+	RevokeIDCalls  []GrantCall
+	RevokeErr      error
+	permissions    map[string]map[string]string // fileID -> permissionID -> email (empty for anyone)
 	// NoOAuth simula usuarios sin conexión OAuth (comportamiento RealDriveClient:
 	// serviceFor falla con "no oauth connection found"). Cuando un userID está
 	// marcado, las operaciones que requieren su token fallan igual que en prod.
@@ -109,18 +126,42 @@ type MockClient struct {
 }
 
 type mockFile struct {
-	ID       string
-	OwnerID  string
-	Title    string
-	Content  string
-	MimeType string
-	Folder   string // noteID o "root"
+	ID            string
+	OwnerID       string
+	Title         string
+	Content       string
+	MimeType      string
+	Folder        string // noteID o "root"
+	AppProperties map[string]string
+}
+
+// noteFileProperties indexa el archivo .md con su nota y dueño. notes_note_id
+// es la clave de recuperación tras un crash (FindFileByNoteID); se omite si la
+// nota aún no tiene ID para no indexar archivos anónimos.
+func noteFileProperties(ownerUserID, noteID string) map[string]string {
+	props := map[string]string{"notes_owner_user_id": ownerUserID}
+	if strings.TrimSpace(noteID) != "" {
+		props["notes_note_id"] = noteID
+	}
+	return props
+}
+
+func cloneProperties(props map[string]string) map[string]string {
+	if props == nil {
+		return nil
+	}
+	cop := make(map[string]string, len(props))
+	for k, v := range props {
+		cop[k] = v
+	}
+	return cop
 }
 
 func NewMockClient() *MockClient {
 	return &MockClient{
-		files:  make(map[string]*mockFile),
-		GetErr: make(map[string]error),
+		files:       make(map[string]*mockFile),
+		GetErr:      make(map[string]error),
+		permissions: make(map[string]map[string]string),
 	}
 }
 
@@ -152,7 +193,7 @@ func (m *MockClient) Reconnect(userID string) {
 	}
 }
 
-func (m *MockClient) CreateFile(ctx context.Context, userID string, title string, content string) (string, error) {
+func (m *MockClient) CreateFile(ctx context.Context, userID string, noteID string, title string, content string) (string, error) {
 	if err := m.checkOAuth(userID); err != nil {
 		return "", err
 	}
@@ -162,7 +203,7 @@ func (m *MockClient) CreateFile(ctx context.Context, userID string, title string
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	id := "drive_" + uuid.NewString()
-	m.files[id] = &mockFile{ID: id, OwnerID: userID, Title: title, Content: content, MimeType: MimeMarkdown}
+	m.files[id] = &mockFile{ID: id, OwnerID: userID, Title: title, Content: content, MimeType: MimeMarkdown, AppProperties: noteFileProperties(userID, noteID)}
 	return id, nil
 }
 
@@ -283,7 +324,7 @@ func (m *MockClient) DeleteAttachment(ctx context.Context, userID string, extern
 	return nil
 }
 
-func (m *MockClient) CopyFile(ctx context.Context, srcUserID string, srcFileID string, dstUserID string, newTitle string) (string, error) {
+func (m *MockClient) CopyFile(ctx context.Context, srcUserID string, srcFileID string, dstUserID string, newNoteID string, newTitle string) (string, error) {
 	// Paridad con RealDriveClient desacoplado: solo se exige OAuth del destino.
 	// El token del autor original NO es requerido (permite clonar apuntes
 	// públicos aunque el autor haya revocado Drive).
@@ -306,9 +347,34 @@ func (m *MockClient) CopyFile(ctx context.Context, srcUserID string, srcFileID s
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	newID := "drive_" + uuid.NewString()
-	m.files[newID] = &mockFile{ID: newID, OwnerID: dstUserID, Title: newTitle, Content: src.Content}
+	m.files[newID] = &mockFile{ID: newID, OwnerID: dstUserID, Title: newTitle, Content: src.Content, MimeType: MimeMarkdown, AppProperties: noteFileProperties(dstUserID, newNoteID)}
 	_ = srcUserID
 	return newID, nil
+}
+
+// FindFileByNoteID replica Files.List con query appProperties: devuelve el
+// archivo .md del dueño indexado con notes_note_id=noteID ("" si no existe).
+// Ante varios candidatos (p. ej. reintentos previos) elige el de ID menor para
+// ser determinista.
+func (m *MockClient) FindFileByNoteID(ctx context.Context, ownerUserID string, noteID string) (string, error) {
+	if err := m.checkOAuth(ownerUserID); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(noteID) == "" {
+		return "", nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	found := ""
+	for id, f := range m.files {
+		if f.OwnerID != ownerUserID || f.AppProperties["notes_note_id"] != noteID {
+			continue
+		}
+		if found == "" || id < found {
+			found = id
+		}
+	}
+	return found, nil
 }
 
 func (m *MockClient) VerifyFileAccess(ctx context.Context, userID string, driveFileID string) error {
@@ -335,6 +401,9 @@ func (m *MockClient) VerifyFileAccess(ctx context.Context, userID string, driveF
 }
 
 func (m *MockClient) GrantPermission(ctx context.Context, ownerUserID string, fileID string, granteeEmail string, role string) error {
+	if err := m.checkOAuth(ownerUserID); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.GrantCalls = append(m.GrantCalls, GrantCall{FileID: fileID, Email: granteeEmail, Role: role})
@@ -343,12 +412,84 @@ func (m *MockClient) GrantPermission(ctx context.Context, ownerUserID string, fi
 			return err
 		}
 	}
+	m.setPermission(fileID, granteeEmail, granteeEmail)
 	return nil
 }
+func (m *MockClient) setPermission(fileID, id, email string) {
+	if m.permissions == nil {
+		m.permissions = make(map[string]map[string]string)
+	}
+	if m.permissions[fileID] == nil {
+		m.permissions[fileID] = make(map[string]string)
+	}
+	m.permissions[fileID][id] = email
+}
+
+func (m *MockClient) GrantLinkPermission(ctx context.Context, ownerUserID, fileID string) (string, error) {
+	if err := m.checkOAuth(ownerUserID); err != nil {
+		return "", err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.LinkGrantCalls = append(m.LinkGrantCalls, fileID)
+	if m.LinkGrantErr != nil {
+		return "", m.LinkGrantErr
+	}
+	for id, email := range m.permissions[fileID] {
+		if email == "" {
+			return id, nil
+		}
+	}
+	id := "permission_" + uuid.NewString()
+	m.setPermission(fileID, id, "")
+	return id, nil
+}
+
+func (m *MockClient) RevokePermissionByID(ctx context.Context, ownerUserID, fileID, permissionID string) error {
+	if err := m.checkOAuth(ownerUserID); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.RevokeIDCalls = append(m.RevokeIDCalls, GrantCall{FileID: fileID, Email: permissionID})
+	if m.RevokeErr != nil {
+		return m.RevokeErr
+	}
+	if permissionID == "" {
+		for id, email := range m.permissions[fileID] {
+			if email == "" {
+				delete(m.permissions[fileID], id)
+			}
+		}
+	} else {
+		delete(m.permissions[fileID], permissionID)
+	}
+	return nil
+}
+
 func (m *MockClient) RevokePermission(ctx context.Context, ownerUserID string, fileID string, granteeEmail string) error {
+	if err := m.checkOAuth(ownerUserID); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.RevokeCalls = append(m.RevokeCalls, GrantCall{FileID: fileID, Email: granteeEmail})
+	if m.RevokeErr != nil {
+		return m.RevokeErr
+	}
+	delete(m.permissions[fileID], granteeEmail)
 	return nil
 }
 func (m *MockClient) RevokeAllPermissions(ctx context.Context, ownerUserID string, fileID string) error {
+	if err := m.checkOAuth(ownerUserID); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.RevokeErr != nil {
+		return m.RevokeErr
+	}
+	delete(m.permissions, fileID)
 	return nil
 }
 
@@ -396,6 +537,18 @@ func (m *MockClient) FileMimeType(fileID string) (string, bool) {
 		return "", false
 	}
 	return f.MimeType, true
+}
+
+// FileAppProperties expone las appProperties con las que se almacenó un
+// archivo (solo tests): permite verificar notes_note_id / notes_owner_user_id.
+func (m *MockClient) FileAppProperties(fileID string) (map[string]string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	f, ok := m.files[fileID]
+	if !ok {
+		return nil, false
+	}
+	return cloneProperties(f.AppProperties), true
 }
 
 // Ensure interface compliance

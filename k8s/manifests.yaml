@@ -64,6 +64,8 @@ spec:
             - {name: PORT, value: "8082"}
             - {name: NOTES_PORT, value: "8082"}
             - {name: STORAGE_MODE, value: drive}
+            - {name: SOCIAL_SERVICE_URL, value: "http://social:8083"}
+            - {name: SOCIAL_TIMEOUT, value: "5s"}
 ---
 apiVersion: v1
 kind: Service

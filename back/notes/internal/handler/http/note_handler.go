@@ -217,8 +217,8 @@ func (h *NoteHandler) Get(c *gin.Context) {
 		"title":       note.Title,
 		"visibility":  note.Visibility,
 		"likes_count": note.LikesCount,
-		"created_at":  note.CreatedAt,
-		"updated_at":  note.UpdatedAt,
+		"created_at":  note.CreatedAt.UTC().Format(time.RFC3339),
+		"updated_at":  note.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 	if note.SubjectID != nil {
 		resp["subject_id"] = *note.SubjectID
@@ -266,8 +266,8 @@ func (h *NoteHandler) ListMy(c *gin.Context) {
 			"title":       n.Title,
 			"visibility":  n.Visibility,
 			"likes_count": n.LikesCount,
-			"created_at":  n.CreatedAt,
-			"updated_at":  n.UpdatedAt,
+			"created_at":  n.CreatedAt.UTC().Format(time.RFC3339),
+			"updated_at":  n.UpdatedAt.UTC().Format(time.RFC3339),
 		}
 		if n.SubjectID != nil {
 			item["subject_id"] = *n.SubjectID
@@ -285,6 +285,9 @@ type patchRequest struct {
 	Title      *string `json:"title" binding:"omitempty,min=1,max=300"`
 	Visibility *string `json:"visibility" binding:"omitempty,oneof=public private"`
 	Content    *string `json:"content"` // opcional para sync Drive
+	// Version es la precondición de versionado optimista: si se envía, el
+	// cambio solo se aplica cuando la nota sigue en esa versión (409 si no).
+	Version *int64 `json:"version" binding:"omitempty,min=1"`
 }
 
 func (h *NoteHandler) Patch(c *gin.Context) {
@@ -315,7 +318,11 @@ func (h *NoteHandler) Patch(c *gin.Context) {
 	// responde a los replays de red con el resultado cacheado (TTL 10 min) sin
 	// re-aplicar el cambio en PG/Drive.
 	idemKey := c.GetHeader("X-Idempotency-Key")
-	updated, err := h.svc.Update(c.Request.Context(), userID, id, req.Title, req.Visibility, req.Content, idemKey)
+	expectedVersion := int64(0)
+	if req.Version != nil {
+		expectedVersion = *req.Version
+	}
+	updated, err := h.svc.UpdateWithExpectedVersion(c.Request.Context(), userID, id, req.Title, req.Visibility, req.Content, expectedVersion, idemKey)
 	if err != nil {
 		handleServiceError(c, err)
 		return
@@ -324,7 +331,8 @@ func (h *NoteHandler) Patch(c *gin.Context) {
 		"id":         updated.ID,
 		"title":      updated.Title,
 		"visibility": updated.Visibility,
-		"updated_at": updated.UpdatedAt,
+		"version":    updated.Version,
+		"updated_at": updated.UpdatedAt.UTC().Format(time.RFC3339),
 	})
 }
 
@@ -344,6 +352,21 @@ func (h *NoteHandler) Delete(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+// respondMimeValidationError traduce los errores tipados del sniffing estricto
+// de adjuntos a la respuesta HTTP canónica: 415 cuando el contenido real no
+// pertenece a la whitelist (image/jpeg, image/png, application/pdf) y 400
+// cuando el MIME declarado por el cliente no coincide con el contenido.
+func respondMimeValidationError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, drive.ErrUnsupportedMimeType):
+		utils.RespondError(c, http.StatusUnsupportedMediaType, utils.ErrUnsupportedMediaType, "Tipo de archivo no permitido: solo image/jpeg, image/png o application/pdf")
+	case errors.Is(err, drive.ErrMimeTypeMismatch):
+		utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "El contenido del archivo no coincide con el tipo declarado")
+	default:
+		utils.RespondError(c, http.StatusUnsupportedMediaType, utils.ErrUnsupportedMediaType, utils.MessageForCode(utils.ErrUnsupportedMediaType))
+	}
 }
 
 // POST /notes/{id}/attachments
@@ -395,6 +418,13 @@ func (h *NoteHandler) UploadAttachment(c *gin.Context) {
 			if body.FileName != nil {
 				fn = *body.FileName
 			}
+			// El registro externo no aporta binario que sniffar: se exige que el
+			// tipo declarado (o resuelto por extensión) pertenezca a la misma
+			// whitelist estricta, para que no sea un bypass del sniffing.
+			if !drive.IsAllowedAttachmentMimeType(drive.DetectMimeType(fn, ft, nil)) {
+				utils.RespondError(c, http.StatusUnsupportedMediaType, utils.ErrUnsupportedMediaType, "Tipo de archivo no permitido: solo image/jpeg, image/png o application/pdf")
+				return
+			}
 			att, err := h.svc.AddAttachmentExternal(c.Request.Context(), userID, noteID, *body.ExternalFileID, fn, ft, isInline, body.FileSize)
 			if err != nil {
 				handleServiceError(c, err)
@@ -429,13 +459,24 @@ func (h *NoteHandler) UploadAttachment(c *gin.Context) {
 		utils.RespondError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
 		return
 	}
+	if len(data) == 0 {
+		utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "archivo vacío")
+		return
+	}
 	// también respetar header
 	isInline := c.Query("is_inline") == "true" || c.PostForm("is_inline") == "true"
 	fileType := header.Header.Get("Content-Type")
 	if fileType == "" {
 		fileType = "application/octet-stream"
 	}
-	att, err := h.svc.AddAttachment(c.Request.Context(), userID, noteID, header.Filename, fileType, data, isInline)
+	// Sniffing estricto: el tipo real (primeros 512 bytes) manda. Se rechaza
+	// 415 si no está en la whitelist y 400 si el MIME declarado lo contradice.
+	sniffedType, mimeErr := drive.ValidateAttachmentMime(fileType, data)
+	if mimeErr != nil {
+		respondMimeValidationError(c, mimeErr)
+		return
+	}
+	att, err := h.svc.AddAttachment(c.Request.Context(), userID, noteID, header.Filename, sniffedType, data, isInline)
 	if err != nil {
 		handleServiceError(c, err)
 		return
@@ -475,8 +516,22 @@ func (h *NoteHandler) UploadFile(c *gin.Context) {
 		utils.RespondError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
 		return
 	}
+	if len(data) == 0 {
+		utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "archivo vacío")
+		return
+	}
 	fileType := header.Header.Get("Content-Type")
-	up, err := h.svc.UploadToDrive(c.Request.Context(), userID, header.Filename, fileType, data)
+	if strings.TrimSpace(fileType) == "" {
+		fileType = "application/octet-stream"
+	}
+	// Sniffing estricto: el tipo real (primeros 512 bytes) manda. Se rechaza
+	// 415 si no está en la whitelist y 400 si el MIME declarado lo contradice.
+	sniffedType, mimeErr := drive.ValidateAttachmentMime(fileType, data)
+	if mimeErr != nil {
+		respondMimeValidationError(c, mimeErr)
+		return
+	}
+	up, err := h.svc.UploadToDrive(c.Request.Context(), userID, header.Filename, sniffedType, data)
 	if err != nil {
 		handleServiceError(c, err)
 		return
@@ -698,6 +753,20 @@ func (h *NoteHandler) UnshareAll(c *gin.Context) {
 }
 
 // GET /notes/{id}/access
+//
+// Responde 200 con el contrato de acceso: la autorización de aplicación se
+// resuelve localmente (owner | public | link | restricted) y las banderas de
+// Drive describen el estado remoto sin abortar la petición:
+//   - drive_sync_status: convergencia de notes.drive_managed_permissions
+//     (failed > pending > synced), calculada con GetAccessInfo;
+//   - drive_connection_required: true sólo cuando el autor de una nota no pública
+//     (access_mode=owner) no tiene conexión OAuth vigente para el archivo
+//     (drive.OAuthError). La falta de conexión se informa como metadato, no como
+//     403, para que el cliente pueda ofrecer reconectar Drive.
+//   - drive_access_verified: true sólo cuando Drive confirma el acceso del autor
+//     (VerifyFileAccess sin error). Para link, public y restricted ambas banderas
+//     son false: el archivo se sirve con la autorización de la aplicación, no con
+//     el token del solicitante, así que no se consulta Drive.
 func (h *NoteHandler) GetAccess(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
@@ -745,7 +814,7 @@ func (h *NoteHandler) ListGroupNotes(c *gin.Context) {
 		item := gin.H{
 			"id": n.ID, "user_id": n.UserID, "title": n.Title,
 			"visibility": n.Visibility, "likes_count": n.LikesCount,
-			"created_at": n.CreatedAt, "updated_at": n.UpdatedAt,
+			"created_at": n.CreatedAt.UTC().Format(time.RFC3339), "updated_at": n.UpdatedAt.UTC().Format(time.RFC3339),
 		}
 		out = append(out, item)
 	}

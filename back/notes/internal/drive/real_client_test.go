@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -13,6 +14,129 @@ import (
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 )
+
+func TestRealLinkPermissionLifecycle(t *testing.T) {
+	r := NewRealDriveClient(&stubTokenProvider{token: "owner-token"})
+	var calls []string
+	r.newService = func(ctx context.Context, token string) (*drive.Service, error) {
+		if token != "owner-token" {
+			t.Fatalf("wrong token: %s", token)
+		}
+		return driveServiceWithTransport(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			calls = append(calls, req.Method+" "+req.URL.Path)
+			if req.Method == http.MethodPost {
+				var body map[string]any
+				if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if body["type"] != "anyone" || body["role"] != "reader" || body["allowFileDiscovery"] != false {
+					t.Fatalf("wrong link policy: %v", body)
+				}
+				if req.URL.Query().Get("fields") != "id" {
+					t.Fatal("permission ID must be requested")
+				}
+				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"link-id"}`))}, nil
+			}
+			if req.Method != http.MethodDelete || !strings.HasSuffix(req.URL.Path, "/files/file-id/permissions/link-id") {
+				t.Fatalf("unexpected request: %s %s", req.Method, req.URL)
+			}
+			return &http.Response{StatusCode: 204, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
+		})), nil
+	}
+	id, err := r.GrantLinkPermission(context.Background(), "owner", "file-id")
+	if err != nil || id != "link-id" {
+		t.Fatalf("grant = %q, %v", id, err)
+	}
+	if err := r.RevokePermissionByID(context.Background(), "owner", "file-id", id); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("calls: %v", calls)
+	}
+}
+
+func TestRealLinkPermissionErrors(t *testing.T) {
+	for _, code := range []int{403, 404, 500} {
+		t.Run(fmt.Sprint(code), func(t *testing.T) {
+			r := NewRealDriveClient(&stubTokenProvider{token: "token"})
+			r.newService = func(ctx context.Context, token string) (*drive.Service, error) {
+				return driveServiceWithTransport(t, roundTripFunc(func(req *http.Request) (*http.Response, error) { return googleErrResp(code, "failed"), nil })), nil
+			}
+			if id, err := r.GrantLinkPermission(context.Background(), "owner", "file"); err == nil || id != "" {
+				t.Fatalf("grant = %q, %v", id, err)
+			}
+			err := r.RevokePermissionByID(context.Background(), "owner", "file", "permission")
+			if (err == nil) != (code == 404) {
+				t.Fatalf("revoke status %d: %v", code, err)
+			}
+		})
+	}
+	r := NewRealDriveClient(nil)
+	if _, err := r.GrantLinkPermission(context.Background(), "owner", "file"); !IsOAuthError(err) {
+		t.Fatalf("OAuth: %v", err)
+	}
+	if err := r.RevokePermissionByID(context.Background(), "owner", "file", "permission"); !IsOAuthError(err) {
+		t.Fatalf("OAuth: %v", err)
+	}
+}
+
+func TestRealRevokeLinkAfterRestart(t *testing.T) {
+	r := NewRealDriveClient(&stubTokenProvider{token: "token"})
+	var deleted []string
+	r.newService = func(ctx context.Context, token string) (*drive.Service, error) {
+		return driveServiceWithTransport(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodGet {
+				body := `{"nextPageToken":"page2","permissions":[{"id":"owner","type":"user","role":"owner"},{"id":"member","type":"user","role":"reader"}]}`
+				if req.URL.Query().Get("pageToken") == "page2" {
+					body = `{"permissions":[{"id":"actual-link-id","type":"anyone","role":"reader"}]}`
+				}
+				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+			}
+			deleted = append(deleted, req.URL.Path)
+			return googleErrResp(404, "already removed"), nil
+		})), nil
+	}
+	if err := r.RevokePermissionByID(context.Background(), "owner", "file", ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(deleted) != 1 || !strings.HasSuffix(deleted[0], "/permissions/actual-link-id") {
+		t.Fatalf("deleted wrong permissions: %v", deleted)
+	}
+}
+
+func TestMockLinkPermissionLifecycle(t *testing.T) {
+	m := NewMockClient()
+	ctx := context.Background()
+	id, err := m.GrantLinkPermission(ctx, "owner", "file")
+	if err != nil || id == "" {
+		t.Fatalf("grant: %q %v", id, err)
+	}
+	again, _ := m.GrantLinkPermission(ctx, "owner", "file")
+	if again != id {
+		t.Fatal("duplicate link permission")
+	}
+	if err := m.RevokePermissionByID(ctx, "owner", "file", id); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.permissions["file"]) != 0 {
+		t.Fatal("link remains")
+	}
+	_, _ = m.GrantLinkPermission(ctx, "owner", "file")
+	_ = m.GrantPermission(ctx, "owner", "file", "real@example.com", "reader")
+	if err := m.RevokePermissionByID(ctx, "owner", "file", ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.permissions["file"]) != 1 {
+		t.Fatal("must preserve nominal permission")
+	}
+	m.Disconnect("owner")
+	if _, err := m.GrantLinkPermission(ctx, "owner", "file"); !IsOAuthError(err) {
+		t.Fatalf("OAuth: %v", err)
+	}
+	if err := m.RevokePermissionByID(ctx, "owner", "file", id); !IsOAuthError(err) {
+		t.Fatalf("OAuth: %v", err)
+	}
+}
 
 func TestMapGoogleErrorCodes(t *testing.T) {
 	cases := []struct {
@@ -125,14 +249,14 @@ func TestMockCopyRequiresDstOAuthOnly(t *testing.T) {
 	author := "author-1"
 	copier := "copier-1"
 	// Crear archivo original con autor conectado.
-	fid, err := m.CreateFile(ctx, author, "orig.md", "contenido")
+	fid, err := m.CreateFile(ctx, author, "note-orig", "orig.md", "contenido")
 	if err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
 	// Desconectar al AUTOR: la clonación desacoplada debe seguir funcionando
 	// (caso apunte público cuyo autor revocó Drive).
 	m.Disconnect(author)
-	newID, err := m.CopyFile(ctx, author, fid, copier, "clon")
+	newID, err := m.CopyFile(ctx, author, fid, copier, "note-clon", "clon")
 	if err != nil {
 		t.Fatalf("copy desacoplada debe funcionar sin token del autor, got %v", err)
 	}
@@ -142,7 +266,7 @@ func TestMockCopyRequiresDstOAuthOnly(t *testing.T) {
 	m.Reconnect(author)
 	// Desconectar al DESTINO: debe rechazarse (caso TestHandlerCopyDestWithoutOAuthRejected).
 	m.Disconnect(copier)
-	if _, err := m.CopyFile(ctx, author, fid, copier, "clon2"); err == nil {
+	if _, err := m.CopyFile(ctx, author, fid, copier, "note-clon-2", "clon2"); err == nil {
 		t.Fatal("copy sin OAuth destino debe fallar")
 	} else if !IsOAuthError(err) {
 		t.Fatalf("debe ser *OAuthError tipado (sin texto interno), got %T %v", err, err)
@@ -153,7 +277,7 @@ func TestMockCreateRequiresOAuth(t *testing.T) {
 	ctx := context.Background()
 	m := NewMockClient()
 	m.Disconnect("u-sin-oauth")
-	if _, err := m.CreateFile(ctx, "u-sin-oauth", "a.md", "x"); err == nil {
+	if _, err := m.CreateFile(ctx, "u-sin-oauth", "", "a.md", "x"); err == nil {
 		t.Fatal("CreateFile sin OAuth debe fallar como RealDriveClient")
 	}
 }
@@ -243,7 +367,7 @@ func TestRealCopyFileFallbackDstFailsSrcSucceeds(t *testing.T) {
 			return nil, context.DeadlineExceeded
 		}
 	}
-	newID, err := r.CopyFile(ctx, "src-user", "src123", "dst-user", "clon.md")
+	newID, err := r.CopyFile(ctx, "src-user", "src123", "dst-user", "note-clon", "clon.md")
 	if err != nil {
 		t.Fatalf("fallback dst→src debe tener éxito, got %v", err)
 	}
@@ -267,7 +391,7 @@ func TestRealCopyFileFallbackBothFail(t *testing.T) {
 			return googleErrResp(500, "unexpected"), nil
 		})), nil
 	}
-	_, err := r.CopyFile(ctx, "src-user", "missing", "dst-user", "clon.md")
+	_, err := r.CopyFile(ctx, "src-user", "missing", "dst-user", "note-clon", "clon.md")
 	if err == nil {
 		t.Fatal("si ambos (dst y src) fallan, CopyFile debe fallar")
 	}
@@ -288,7 +412,7 @@ func TestRealCopyFileDstNoOAuthNoFallback(t *testing.T) {
 		t.Fatal("sin OAuth destino no debe intentar fallback con src")
 		return nil, context.DeadlineExceeded
 	}
-	_, err := r.CopyFile(ctx, "src-user", "src123", "dst-user", "clon.md")
+	_, err := r.CopyFile(ctx, "src-user", "src123", "dst-user", "note-clon", "clon.md")
 	if err == nil {
 		t.Fatal("sin OAuth destino debe fallar antes del fallback")
 	}
@@ -296,7 +420,7 @@ func TestRealCopyFileDstNoOAuthNoFallback(t *testing.T) {
 
 func TestRealCreateFileEmptyTitle400(t *testing.T) {
 	r := NewRealDriveClient(&stubTokenProvider{token: "x"})
-	if _, err := r.CreateFile(context.Background(), "u", "   ", "c"); err == nil {
+	if _, err := r.CreateFile(context.Background(), "u", "", "   ", "c"); err == nil {
 		t.Fatal("título vacío debe fallar sin llamar a Drive")
 	} else if de, ok := err.(*DriveError); !ok || de.Code != 400 {
 		t.Fatalf("título vacío debe ser DriveError 400, got %v", err)
@@ -318,5 +442,119 @@ func TestRealVerifyFileAccessRequiresOAuth(t *testing.T) {
 	r := NewRealDriveClient(stub)
 	if err := r.VerifyFileAccess(context.Background(), "u", "f"); err == nil {
 		t.Fatal("sin OAuth VerifyFileAccess debe fallar")
+	}
+}
+
+// --- appProperties + FindFileByNoteID ---
+
+// CreateFile indexa el .md con notes_note_id y notes_owner_user_id, de modo que
+// FindFileByNoteID puede recuperarlo por nota y respeta el dueño.
+func TestMockCreateFileIndexesAppPropertiesAndFindsByNoteID(t *testing.T) {
+	ctx := context.Background()
+	m := NewMockClient()
+	owner := "owner-1"
+	noteID := "note-abc"
+	fid, err := m.CreateFile(ctx, owner, noteID, "nota.md", "contenido")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	props, ok := m.FileAppProperties(fid)
+	if !ok {
+		t.Fatal("el archivo debe existir")
+	}
+	if props["notes_note_id"] != noteID || props["notes_owner_user_id"] != owner {
+		t.Fatalf("appProperties esperadas note=%q owner=%q, got %v", noteID, owner, props)
+	}
+	found, err := m.FindFileByNoteID(ctx, owner, noteID)
+	if err != nil || found != fid {
+		t.Fatalf("FindFileByNoteID debe encontrar el archivo: got %q err=%v", found, err)
+	}
+	// Otro dueño no puede encontrarlo, y una nota sin archivo devuelve "".
+	if other, err := m.FindFileByNoteID(ctx, "otro", noteID); err != nil || other != "" {
+		t.Fatalf("otro dueño no debe encontrarlo: got %q err=%v", other, err)
+	}
+	if missing, err := m.FindFileByNoteID(ctx, owner, "sin-archivo"); err != nil || missing != "" {
+		t.Fatalf("nota sin archivo debe devolver vacío: got %q err=%v", missing, err)
+	}
+	// Sin OAuth del dueño la búsqueda falla tipada (paridad con Real).
+	m.Disconnect(owner)
+	if _, err := m.FindFileByNoteID(ctx, owner, noteID); !IsOAuthError(err) {
+		t.Fatalf("sin OAuth debe ser OAuthError, got %v", err)
+	}
+}
+
+// CopyFile indexa el clon con el notes_note_id de la NUEVA nota y el dueño
+// destino, permitiendo recuperarlo tras un crash.
+func TestMockCopyFileIndexesNewNoteID(t *testing.T) {
+	ctx := context.Background()
+	m := NewMockClient()
+	srcFile, err := m.CreateFile(ctx, "author", "note-src", "src.md", "data")
+	if err != nil {
+		t.Fatalf("create src failed: %v", err)
+	}
+	cloneFile, err := m.CopyFile(ctx, "author", srcFile, "copier", "note-clone", "clon")
+	if err != nil {
+		t.Fatalf("copy failed: %v", err)
+	}
+	found, err := m.FindFileByNoteID(ctx, "copier", "note-clone")
+	if err != nil || found != cloneFile {
+		t.Fatalf("el clon debe quedar indexado: got %q err=%v", found, err)
+	}
+	props, _ := m.FileAppProperties(cloneFile)
+	if props["notes_note_id"] != "note-clone" || props["notes_owner_user_id"] != "copier" {
+		t.Fatalf("appProperties del clon incorrectas: %v", props)
+	}
+}
+
+// FindFileByNoteID del cliente real arma la query de appProperties y filtra por
+// notes_owner_user_id, eligiendo el ID menor de forma determinista.
+func TestRealFindFileByNoteIDQueriesAppProperties(t *testing.T) {
+	ctx := context.Background()
+	prov := &perUserTokenProvider{tokens: map[string]string{"owner": "tok"}}
+	r := NewRealDriveClient(prov)
+	var gotQuery string
+	r.newService = func(context.Context, string) (*drive.Service, error) {
+		return driveServiceWithTransport(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			gotQuery = req.URL.Query().Get("q")
+			body, _ := json.Marshal(map[string]interface{}{
+				"files": []map[string]interface{}{
+					{"id": "file-b", "appProperties": map[string]string{"notes_note_id": "note-1", "notes_owner_user_id": "owner"}},
+					{"id": "file-a", "appProperties": map[string]string{"notes_note_id": "note-1", "notes_owner_user_id": "owner"}},
+					{"id": "file-ajeno", "appProperties": map[string]string{"notes_note_id": "note-1", "notes_owner_user_id": "otro"}},
+				},
+			})
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body)), Header: http.Header{"Content-Type": []string{"application/json"}}}, nil
+		})), nil
+	}
+	got, err := r.FindFileByNoteID(ctx, "owner", "note-1")
+	if err != nil || got != "file-a" {
+		t.Fatalf("esperaba file-a (dueño correcto, ID menor), got %q err=%v", got, err)
+	}
+	wantQuery := "appProperties has { key='notes_note_id' and value='note-1' }"
+	if !strings.Contains(gotQuery, wantQuery) || !strings.Contains(gotQuery, "trashed = false") {
+		t.Fatalf("query de appProperties incorrecta: %q", gotQuery)
+	}
+}
+
+// Sin resultados (o sin OAuth) FindFileByNoteID no inventa un fileID.
+func TestRealFindFileByNoteIDEmptyAndOAuth(t *testing.T) {
+	ctx := context.Background()
+	prov := &perUserTokenProvider{tokens: map[string]string{"owner": "tok"}}
+	r := NewRealDriveClient(prov)
+	if got, err := r.FindFileByNoteID(ctx, "owner", ""); err != nil || got != "" {
+		t.Fatalf("noteID vacío debe devolver vacío sin error: %q %v", got, err)
+	}
+	r.newService = func(context.Context, string) (*drive.Service, error) {
+		return driveServiceWithTransport(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			body, _ := json.Marshal(map[string]interface{}{"files": []interface{}{}})
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body)), Header: http.Header{"Content-Type": []string{"application/json"}}}, nil
+		})), nil
+	}
+	if got, err := r.FindFileByNoteID(ctx, "owner", "note-sin-archivo"); err != nil || got != "" {
+		t.Fatalf("sin coincidencias debe devolver vacío sin error: %q %v", got, err)
+	}
+	stub := &stubTokenProvider{err: context.DeadlineExceeded}
+	if _, err := NewRealDriveClient(stub).FindFileByNoteID(ctx, "owner", "note-1"); err == nil {
+		t.Fatal("sin OAuth FindFileByNoteID debe fallar")
 	}
 }

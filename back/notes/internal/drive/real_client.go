@@ -81,7 +81,7 @@ func mapGoogleError(op string, err error) error {
 	}
 }
 
-func (r *RealDriveClient) CreateFile(ctx context.Context, userID string, title string, content string) (string, error) {
+func (r *RealDriveClient) CreateFile(ctx context.Context, userID string, noteID string, title string, content string) (string, error) {
 	if strings.TrimSpace(title) == "" {
 		return "", &DriveError{Code: 400, Message: "título vacío"}
 	}
@@ -89,7 +89,7 @@ func (r *RealDriveClient) CreateFile(ctx context.Context, userID string, title s
 	if err != nil {
 		return "", err
 	}
-	f, err := srv.Files.Create(&drive.File{Name: title, MimeType: MimeMarkdown}).
+	f, err := srv.Files.Create(&drive.File{Name: title, MimeType: MimeMarkdown, AppProperties: noteFileProperties(userID, noteID)}).
 		Media(strings.NewReader(content)).
 		Fields("id").
 		Context(ctx).
@@ -99,6 +99,41 @@ func (r *RealDriveClient) CreateFile(ctx context.Context, userID string, title s
 	}
 	log.Printf("drive: archivo creado id=%s", f.Id)
 	return f.Id, nil
+}
+
+// FindFileByNoteID lista los archivos indexados con notes_note_id=noteID en el
+// Drive del dueño (query appProperties) y devuelve el fileID del .md; "" sin
+// error cuando no existe. Recupera apuntes cuyo Create crasheó entre el alta
+// en Drive y la persistencia del external_file_id.
+func (r *RealDriveClient) FindFileByNoteID(ctx context.Context, ownerUserID string, noteID string) (string, error) {
+	if strings.TrimSpace(noteID) == "" {
+		return "", nil
+	}
+	srv, err := r.serviceFor(ctx, ownerUserID)
+	if err != nil {
+		return "", err
+	}
+	query := fmt.Sprintf("appProperties has { key='notes_note_id' and value='%s' } and trashed = false", escapeDriveQueryValue(noteID))
+	list, err := srv.Files.List().Q(query).Fields("files(id,appProperties)").PageSize(100).Context(ctx).Do()
+	if err != nil {
+		return "", mapGoogleError("FindFileByNoteID", err)
+	}
+	best := ""
+	for _, f := range list.Files {
+		if f.AppProperties["notes_owner_user_id"] != ownerUserID {
+			continue
+		}
+		if best == "" || f.Id < best {
+			best = f.Id
+		}
+	}
+	return best, nil
+}
+
+// escapeDriveQueryValue neutraliza comillas simples dentro de un literal de la
+// query de Drive (defensivo: los IDs son UUID, nunca deberían contenerlas).
+func escapeDriveQueryValue(value string) string {
+	return strings.ReplaceAll(value, "'", "\\'")
 }
 
 func (r *RealDriveClient) GetFileContent(ctx context.Context, userID string, driveFileID string) (string, error) {
@@ -188,7 +223,7 @@ func (r *RealDriveClient) DeleteAttachment(ctx context.Context, userID string, e
 	return r.DeleteFile(ctx, userID, externalFileID)
 }
 
-func (r *RealDriveClient) CopyFile(ctx context.Context, srcUserID string, srcFileID string, dstUserID string, newTitle string) (string, error) {
+func (r *RealDriveClient) CopyFile(ctx context.Context, srcUserID string, srcFileID string, dstUserID string, newNoteID string, newTitle string) (string, error) {
 	// Desacoplado del token del autor: la clonación de apuntes públicos no debe
 	// romperse si el autor revocó Drive o su token expiró sin refresh. Se exige
 	// OAuth válido solo del clonador (dst). La descarga se intenta primero con
@@ -213,7 +248,7 @@ func (r *RealDriveClient) CopyFile(ctx context.Context, srcUserID string, srcFil
 		}
 		data = dataFallback
 	}
-	f, err := dstSrv.Files.Create(&drive.File{Name: newTitle, MimeType: MimeMarkdown}).
+	f, err := dstSrv.Files.Create(&drive.File{Name: newTitle, MimeType: MimeMarkdown, AppProperties: noteFileProperties(dstUserID, newNoteID)}).
 		Media(bytes.NewReader(data)).
 		Fields("id").
 		Context(ctx).
@@ -265,21 +300,89 @@ func (r *RealDriveClient) GrantPermission(ctx context.Context, ownerUserID strin
 	return nil
 }
 
+func (r *RealDriveClient) GrantLinkPermission(ctx context.Context, ownerUserID, fileID string) (string, error) {
+	srv, err := r.serviceFor(ctx, ownerUserID)
+	if err != nil {
+		return "", err
+	}
+	p, err := srv.Permissions.Create(fileID, &drive.Permission{
+		Type: "anyone", Role: "reader", AllowFileDiscovery: false,
+		ForceSendFields: []string{"AllowFileDiscovery"},
+	}).Fields("id").Context(ctx).Do()
+	if err != nil {
+		return "", mapGoogleError("GrantLinkPermission", err)
+	}
+	if p.Id == "" {
+		return "", &DriveError{Code: 500, Message: "Drive returned an empty permission ID"}
+	}
+	return p.Id, nil
+}
+
+func (r *RealDriveClient) RevokePermissionByID(ctx context.Context, ownerUserID, fileID, permissionID string) error {
+	srv, err := r.serviceFor(ctx, ownerUserID)
+	if err != nil {
+		return err
+	}
+	ids := []string{permissionID}
+	if permissionID == "" {
+		ids = nil
+		page := ""
+		for {
+			list, err := srv.Permissions.List(fileID).Fields("nextPageToken,permissions(id,type,role)").PageToken(page).Context(ctx).Do()
+			if err != nil {
+				mapped := mapGoogleError("RevokePermissionByID/list", err)
+				if IsNotFound(mapped) {
+					return nil
+				}
+				return mapped
+			}
+			for _, p := range list.Permissions {
+				if p.Type == "anyone" && p.Role != "owner" {
+					ids = append(ids, p.Id)
+				}
+			}
+			page = list.NextPageToken
+			if page == "" {
+				break
+			}
+		}
+	}
+	for _, id := range ids {
+		if err := srv.Permissions.Delete(fileID, id).Context(ctx).Do(); err != nil {
+			mapped := mapGoogleError("RevokePermissionByID/delete", err)
+			if !IsNotFound(mapped) {
+				return mapped
+			}
+		}
+	}
+	return nil
+}
+
 func (r *RealDriveClient) RevokePermission(ctx context.Context, ownerUserID string, fileID string, granteeEmail string) error {
 	srv, err := r.serviceFor(ctx, ownerUserID)
 	if err != nil {
 		return err
 	}
-	list, err := srv.Permissions.List(fileID).Fields("permissions(id,emailAddress,role)").Context(ctx).Do()
-	if err != nil {
-		return mapGoogleError("RevokePermission/list", err)
-	}
-	for _, p := range list.Permissions {
-		if strings.EqualFold(p.EmailAddress, granteeEmail) {
-			if err := srv.Permissions.Delete(fileID, p.Id).Context(ctx).Do(); err != nil {
-				return mapGoogleError("RevokePermission/delete", err)
+	page := ""
+	for {
+		list, err := srv.Permissions.List(fileID).Fields("nextPageToken,permissions(id,emailAddress,role)").PageToken(page).Context(ctx).Do()
+		if err != nil {
+			return mapGoogleError("RevokePermission/list", err)
+		}
+		for _, p := range list.Permissions {
+			if p.Role != "owner" && strings.EqualFold(p.EmailAddress, granteeEmail) {
+				if err := srv.Permissions.Delete(fileID, p.Id).Context(ctx).Do(); err != nil {
+					mapped := mapGoogleError("RevokePermission/delete", err)
+					if !IsNotFound(mapped) {
+						return mapped
+					}
+				}
+				return nil
 			}
-			return nil
+		}
+		page = list.NextPageToken
+		if page == "" {
+			break
 		}
 	}
 	return nil // idempotente: permiso no encontrado

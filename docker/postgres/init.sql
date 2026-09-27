@@ -169,6 +169,9 @@ CREATE TABLE notes.notes (
     likes_count int NOT NULL DEFAULT 0,
     forked_from_note_id uuid REFERENCES notes.notes(id) ON DELETE SET NULL,
     sync_status varchar(30) NOT NULL DEFAULT 'synced',
+    -- version implementa el versionado optimista de PATCH: cada Update
+    -- condiciona la escritura a la versión leída y la incrementa.
+    version bigint NOT NULL DEFAULT 1,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -232,6 +235,7 @@ CREATE TABLE notes.shared_notes (
     is_admin_note boolean NOT NULL DEFAULT false,
     access_mode varchar(20) NOT NULL DEFAULT 'link' CHECK (access_mode IN ('link', 'restricted')),
     author_followers_snapshot int NOT NULL DEFAULT 0,
+    permission_sync_status text NOT NULL DEFAULT 'pending',
     shared_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -243,6 +247,55 @@ CREATE INDEX idx_shared_notes_group_id ON notes.shared_notes(group_id);
 -- en notes.notes, no en esta tabla. A esta escala de datos, es instantáneo.
 CREATE INDEX idx_shared_notes_group_priority
     ON notes.shared_notes (group_id, is_admin_note DESC);
+
+-- Keep aligned with back/notes/db/migrations/001_reconciliation_and_idempotency.sql.
+-- Logical references survive local deletion for subsequent Drive cleanup.
+CREATE TABLE notes.drive_reconciliation_queue (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    operation text NOT NULL,
+    note_id uuid,
+    attachment_id uuid,
+    external_file_id text,
+    owner_user_id uuid NOT NULL,
+    payload jsonb NOT NULL DEFAULT '{}',
+    status text NOT NULL DEFAULT 'pending',
+    attempts integer NOT NULL DEFAULT 0,
+    next_attempt_at timestamptz NOT NULL DEFAULT now(),
+    last_error text,
+    created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now(),
+    completed_at timestamptz
+);
+
+CREATE INDEX idx_drive_reconciliation_queue_pending
+    ON notes.drive_reconciliation_queue (status, next_attempt_at)
+    WHERE status IN ('pending', 'failed');
+
+CREATE TABLE notes.idempotency_keys (
+    user_id uuid NOT NULL,
+    operation text NOT NULL,
+    idempotency_key text NOT NULL,
+    resource_id uuid,
+    request_hash text NOT NULL,
+    status text NOT NULL,
+    created_at timestamptz DEFAULT now(),
+    expires_at timestamptz NOT NULL,
+    UNIQUE (user_id, operation, idempotency_key)
+);
+
+CREATE TABLE notes.drive_managed_permissions (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    note_id uuid NOT NULL,
+    external_file_id text NOT NULL,
+    principal_type text NOT NULL,
+    principal_key text NOT NULL,
+    drive_permission_id text,
+    role text NOT NULL,
+    sync_status text NOT NULL,
+    created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now(),
+    UNIQUE (note_id, principal_type, principal_key)
+);
 
 -- =====================================================
 -- SOCIAL / GROUPS SERVICE

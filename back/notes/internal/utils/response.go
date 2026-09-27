@@ -26,25 +26,28 @@ func RespondSuccess(c *gin.Context, status int, payload interface{}) {
 }
 
 const (
-	ErrBadRequest         = "bad_request"
-	ErrUnauthorized       = "unauthorized"
-	ErrForbidden          = "forbidden"
-	ErrNotFound           = "not_found"
-	ErrConflict           = "conflict"
-	ErrPayloadTooLarge    = "payload_too_large"
-	ErrInternal           = "internal_error"
-	ErrInvalidTitle       = "invalid_title"
-	ErrInvalidVisibility  = "invalid_visibility"
-	ErrInvalidSubjectID   = "invalid_subject_id"
-	ErrInvalidToken       = "invalid_token"
-	ErrTokenExpired       = "token_expired"
-	ErrAlreadySaved       = "already_saved"
-	ErrAlreadyLiked       = "already_liked"
-	ErrNotLiked           = "not_liked"
-	ErrNoteUnavailable    = "note_unavailable"
-	ErrFileTooLarge       = "file_too_large"
-	ErrInvalidAccessMode  = "invalid_access_mode"
-	ErrRateLimited        = "rate_limited"
+	ErrBadRequest        = "bad_request"
+	ErrUnauthorized      = "unauthorized"
+	ErrForbidden         = "forbidden"
+	ErrNotFound          = "not_found"
+	ErrConflict          = "conflict"
+	ErrPayloadTooLarge   = "payload_too_large"
+	ErrInternal          = "internal_error"
+	ErrInvalidTitle      = "invalid_title"
+	ErrInvalidVisibility = "invalid_visibility"
+	ErrInvalidSubjectID  = "invalid_subject_id"
+	ErrInvalidToken      = "invalid_token"
+	ErrTokenExpired      = "token_expired"
+	ErrAlreadySaved      = "already_saved"
+	ErrAlreadyLiked      = "already_liked"
+	ErrNotLiked          = "not_liked"
+	ErrNoteUnavailable   = "note_unavailable"
+	ErrFileTooLarge      = "file_too_large"
+	ErrInvalidAccessMode = "invalid_access_mode"
+	ErrRateLimited       = "rate_limited"
+	// ErrUnsupportedMediaType: el contenido real del archivo no pertenece a la
+	// whitelist estricta de adjuntos (image/jpeg, image/png, application/pdf).
+	ErrUnsupportedMediaType = "unsupported_media_type"
 )
 
 func MessageForCode(code string) string {
@@ -75,6 +78,8 @@ func MessageForCode(code string) string {
 		return "Archivo muy grande"
 	case ErrRateLimited:
 		return "Demasiadas solicitudes"
+	case ErrUnsupportedMediaType:
+		return "Tipo de archivo no permitido"
 	default:
 		return "Error"
 	}
@@ -94,6 +99,8 @@ func StatusForCode(code string) int {
 		return http.StatusConflict
 	case ErrFileTooLarge, ErrPayloadTooLarge:
 		return http.StatusRequestEntityTooLarge
+	case ErrUnsupportedMediaType:
+		return http.StatusUnsupportedMediaType
 	case ErrRateLimited:
 		return http.StatusTooManyRequests
 	default:

@@ -19,7 +19,7 @@ type failingCreateStore struct {
 	*MemoryNoteStore
 }
 
-func (f *failingCreateStore) Create(ctx context.Context, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string, syncStatus string) (*model.Note, error) {
+func (f *failingCreateStore) Create(ctx context.Context, noteID string, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string, syncStatus string) (*model.Note, error) {
 	return nil, fmt.Errorf("db insert failed (simulado)")
 }
 
@@ -112,7 +112,7 @@ type failingUpdateStore struct {
 	*MemoryNoteStore
 }
 
-func (f *failingUpdateStore) Update(ctx context.Context, id string, title *string, visibility *string) (*model.Note, error) {
+func (f *failingUpdateStore) Update(ctx context.Context, id string, title *string, visibility *string, expectedVersion int64) (*model.Note, error) {
 	return nil, fmt.Errorf("db update failed (simulado)")
 }
 
@@ -148,12 +148,12 @@ type flakyCreateStore struct {
 	failOnce bool
 }
 
-func (f *flakyCreateStore) Create(ctx context.Context, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string, syncStatus string) (*model.Note, error) {
+func (f *flakyCreateStore) Create(ctx context.Context, noteID string, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string, syncStatus string) (*model.Note, error) {
 	if f.failOnce {
 		f.failOnce = false
 		return nil, fmt.Errorf("db insert failed (simulado)")
 	}
-	return f.MemoryNoteStore.Create(ctx, userID, subjectID, title, externalFileID, visibility, forkedFrom, syncStatus)
+	return f.MemoryNoteStore.Create(ctx, noteID, userID, subjectID, title, externalFileID, visibility, forkedFrom, syncStatus)
 }
 
 // Idempotencia: ante error, el defer libera la clave para permitir reintentos
@@ -254,6 +254,10 @@ type failingDeleteStore struct {
 
 func (f *failingDeleteStore) Delete(ctx context.Context, id string) error {
 	return fmt.Errorf("db delete failed (simulado)")
+}
+
+func (f *failingDeleteStore) DeleteWithDriveCleanup(ctx context.Context, id, requesterID string) (string, error) {
+	return "", fmt.Errorf("db delete failed (simulado)")
 }
 
 func countNotes(s *MemoryNoteStore) int {
@@ -460,238 +464,398 @@ func TestCopySourceMissingNoRecordNoOrphan(t *testing.T) {
 	}
 }
 
-// idemEntryStored lee una entrada del caché unificado de idempotencia bajo el
-// RWMutex (helper de test para el nuevo idemStore).
-func idemEntryStored(svc *NoteService, key string) (*idemEntry, bool) {
-	svc.idemMu.RLock()
-	defer svc.idemMu.RUnlock()
-	e, ok := svc.idemStore[key]
-	return e, ok
+// idemRecordStored lee el registro durable de idempotencia del store en
+// memoria (helper de test).
+func idemRecordStored(svc *NoteService, userID, operation, key string) (*model.IdempotencyKey, bool) {
+	mem, ok := svc.notes.(*MemoryNoteStore)
+	if !ok {
+		return nil, false
+	}
+	mem.mu.RLock()
+	defer mem.mu.RUnlock()
+	rec, loaded := mem.idempotencyKeys[idemMemoryKey(userID, operation, key)]
+	return cloneIdempotencyKey(rec), loaded
 }
 
-// --- TTL del caché de idempotencia (10 minutos) ---
+// seedIdemClaim inserta un claim durable en el store en memoria para simular
+// estados de crash (lease vencido) o de operación en progreso sin PG.
+func seedIdemClaim(svc *NoteService, userID, operation, key, requestHash, status string, expiresAt time.Time) {
+	mem, ok := svc.notes.(*MemoryNoteStore)
+	if !ok {
+		panic("seedIdemClaim requiere un MemoryNoteStore")
+	}
+	mem.mu.Lock()
+	defer mem.mu.Unlock()
+	if mem.idempotencyKeys == nil {
+		mem.idempotencyKeys = make(map[string]*model.IdempotencyKey)
+	}
+	mem.idempotencyKeys[idemMemoryKey(userID, operation, key)] = &model.IdempotencyKey{
+		UserID:         userID,
+		Operation:      operation,
+		IdempotencyKey: key,
+		RequestHash:    requestHash,
+		Status:         status,
+		ExpiresAt:      expiresAt,
+	}
+}
 
-// Una entrada *idemEntry con más de 10 minutos se purga al consultarla y la
-// misma clave vuelve a ejecutar Create (no queda memoria retenida ni replay
-// obsoleto).
-func TestIdemCacheTTLPurgesExpiredEntryOnCreate(t *testing.T) {
+// seedIdemClaimWithResource inserta un claim durable ya preasociado a un
+// resource_id (noteID) para simular un crash entre el claim y la
+// materialización de la nota.
+func seedIdemClaimWithResource(svc *NoteService, userID, operation, key, requestHash, status, resourceID string, expiresAt time.Time) {
+	mem, ok := svc.notes.(*MemoryNoteStore)
+	if !ok {
+		panic("seedIdemClaimWithResource requiere un MemoryNoteStore")
+	}
+	mem.mu.Lock()
+	defer mem.mu.Unlock()
+	if mem.idempotencyKeys == nil {
+		mem.idempotencyKeys = make(map[string]*model.IdempotencyKey)
+	}
+	rid := resourceID
+	mem.idempotencyKeys[idemMemoryKey(userID, operation, key)] = &model.IdempotencyKey{
+		UserID:         userID,
+		Operation:      operation,
+		IdempotencyKey: key,
+		ResourceID:     &rid,
+		RequestHash:    requestHash,
+		Status:         status,
+		ExpiresAt:      expiresAt,
+	}
+}
+
+// --- Idempotencia durable sobre notes.idempotency_keys ---
+
+// Un replay de Create con la misma clave y el mismo payload devuelve el
+// recurso persistido sin duplicar filas PG ni archivos en Drive, y deja el
+// registro durable 'completed' apuntando a la nota.
+func TestIdempotencyCreateReplaySameHashReturnsResource(t *testing.T) {
 	svc, driveMock, noteStore, _, _, _, _, _ := newTestService()
 	ctx := context.Background()
 	userID := uuid.NewString()
-	key := "ttl-create-1"
-	first, err := svc.Create(ctx, userID, "TTL create", nil, "private", stringPtr("v1"), key)
+	key := "idem-create-replay"
+	first, err := svc.Create(ctx, userID, "Durable", nil, "private", stringPtr("v1"), key)
 	if err != nil {
 		t.Fatalf("primer create failed: %v", err)
 	}
-	// Simular que la entrada cumplió el TTL (11 minutos > 10 minutos).
-	svc.storeIdemEntry(idemKey("create", key), &idemEntry{status: idemSuccess, note: first, createdAt: time.Now().Add(-11 * time.Minute)})
 	beforeNotes := countNotes(noteStore)
 	beforeFiles := driveMock.FileCount()
-	second, err := svc.Create(ctx, userID, "TTL create", nil, "private", stringPtr("v2"), key)
+	second, err := svc.Create(ctx, userID, "Durable", nil, "private", stringPtr("v1"), key)
 	if err != nil {
-		t.Fatalf("create tras expiración debe proceder: %v", err)
+		t.Fatalf("replay debe responder desde la clave durable, got %v", err)
 	}
-	if second.ID == first.ID {
-		t.Fatal("entrada expirada debe purgarse y permitir re-ejecución")
+	if second.ID != first.ID {
+		t.Fatalf("replay debe devolver la misma nota: %s vs %s", second.ID, first.ID)
 	}
-	if got := countNotes(noteStore); got != beforeNotes+1 {
-		t.Fatalf("debe crear una fila nueva tras expirar, antes=%d ahora=%d", beforeNotes, got)
+	if countNotes(noteStore) != beforeNotes || driveMock.FileCount() != beforeFiles {
+		t.Fatalf("replay no debe duplicar efectos (notes %d->%d, files %d->%d)",
+			beforeNotes, countNotes(noteStore), beforeFiles, driveMock.FileCount())
 	}
-	if got := driveMock.FileCount(); got != beforeFiles+1 {
-		t.Fatalf("debe crear un archivo nuevo tras expirar, antes=%d ahora=%d", beforeFiles, got)
+	rec, loaded := idemRecordStored(svc, userID, "create", key)
+	if !loaded || rec == nil {
+		t.Fatal("la clave durable debe quedar registrada")
 	}
-	// La respuesta nueva queda cacheada como idemEntry fresca...
-	entry, loaded := idemEntryStored(svc, idemKey("create", key))
-	if !loaded || entry == nil {
-		t.Fatal("tras el éxito debe quedar una entrada vigente en el caché")
-	}
-	if entry.note == nil || entry.note.ID != second.ID {
-		t.Fatal("la entrada debe apuntar a la nota recién creada")
-	}
-	if age := time.Since(entry.createdAt); age > time.Minute {
-		t.Fatalf("createdAt debe ser fresco (TTL reiniciado), edad=%v", age)
-	}
-	// ...y el replay inmediato responde desde el caché sin duplicar efectos.
-	third, err := svc.Create(ctx, userID, "TTL create", nil, "private", stringPtr("v3"), key)
-	if err != nil {
-		t.Fatalf("replay vigente failed: %v", err)
-	}
-	if third.ID != second.ID {
-		t.Fatalf("replay vigente debe devolver la nota cacheada: %s vs %s", third.ID, second.ID)
-	}
-	if got := countNotes(noteStore); got != beforeNotes+1 {
-		t.Fatalf("replay no debe duplicar filas, got %d", got)
+	if rec.Status != model.IdempotencyStatusCompleted || rec.ResourceID == nil || *rec.ResourceID != first.ID {
+		t.Fatalf("esperaba registro completed apuntando a %s, got %+v", first.ID, rec)
 	}
 }
 
-// Misma semántica de TTL para Copy: la entrada vencida se purga y se ejecuta un
-// clon nuevo, manteniendo el replay vigente posterior.
-func TestIdemCacheTTLPurgesExpiredEntryOnCopy(t *testing.T) {
-	svc, _, noteStore, _, _, _, _, _ := newTestService()
-	ctx := context.Background()
-	author := uuid.NewString()
-	copier := uuid.NewString()
-	src, err := svc.Create(ctx, author, "Origen TTL", nil, "public", stringPtr("data"), "")
-	if err != nil {
-		t.Fatalf("create origen failed: %v", err)
-	}
-	key := "ttl-copy-1"
-	first, err := svc.Copy(ctx, copier, src.ID, key)
-	if err != nil {
-		t.Fatalf("primer copy failed: %v", err)
-	}
-	svc.storeIdemEntry(idemKey("copy", key), &idemEntry{status: idemSuccess, note: first, createdAt: time.Now().Add(-11 * time.Minute)})
-	beforeNotes := countNotes(noteStore)
-	second, err := svc.Copy(ctx, copier, src.ID, key)
-	if err != nil {
-		t.Fatalf("copy tras expiración debe proceder: %v", err)
-	}
-	if second.ID == first.ID {
-		t.Fatal("entrada expirada debe purgarse y permitir un clon nuevo")
-	}
-	if got := countNotes(noteStore); got != beforeNotes+1 {
-		t.Fatalf("debe crear un clon nuevo tras expirar, antes=%d ahora=%d", beforeNotes, got)
-	}
-	third, err := svc.Copy(ctx, copier, src.ID, key)
-	if err != nil {
-		t.Fatalf("replay vigente de copy failed: %v", err)
-	}
-	if third.ID != second.ID {
-		t.Fatalf("replay vigente debe devolver el clon cacheado: %s vs %s", third.ID, second.ID)
-	}
-}
-
-// La entrada in-flight unificada (*idemEntry con status=idemInFlight) rechaza
-// la solicitud concurrente y se conserva mientras está vigente; al liberarse,
-// la clave vuelve a ser utilizable.
-func TestIdemCacheInFlightEntryRejectsConcurrent(t *testing.T) {
+// Misma clave de Create con un payload distinto => 409 Conflict sin efectos
+// nuevos (no se crean filas ni archivos).
+func TestIdempotencyCreateHashMismatchConflicts(t *testing.T) {
 	svc, driveMock, noteStore, _, _, _, _, _ := newTestService()
 	ctx := context.Background()
 	userID := uuid.NewString()
-	key := "inflight-1"
-	svc.storeIdemEntry(idemKey("create", key), &idemEntry{status: idemInFlight, createdAt: time.Now()})
+	key := "idem-create-conflict"
+	if _, err := svc.Create(ctx, userID, "Original", nil, "private", stringPtr("v1"), key); err != nil {
+		t.Fatalf("primer create failed: %v", err)
+	}
+	beforeNotes := countNotes(noteStore)
+	beforeFiles := driveMock.FileCount()
+	_, err := svc.Create(ctx, userID, "Distinta", nil, "private", stringPtr("v2"), key)
+	if err == nil {
+		t.Fatal("misma clave con payload distinto debe rechazarse")
+	}
+	se, ok := err.(*ServiceError)
+	if !ok || se.Code != "conflict" {
+		t.Fatalf("esperaba conflict (409), got %v", err)
+	}
+	if countNotes(noteStore) != beforeNotes || driveMock.FileCount() != beforeFiles {
+		t.Fatal("el conflicto no debe crear filas ni archivos")
+	}
+}
+
+// Un claim 'in_progress' vigente rechaza la solicitud concurrente con 409
+// "solicitud en progreso" sin efectos; al liberarse la clave, el reintento se
+// reprocesa con normalidad.
+func TestIdempotencyInProgressClaimRejectsConcurrentCreate(t *testing.T) {
+	svc, driveMock, noteStore, _, _, _, _, _ := newTestService()
+	ctx := context.Background()
+	userID := uuid.NewString()
+	key := "idem-create-inflight"
+	seedIdemClaim(svc, userID, "create", key, "hash-en-vuelo", model.IdempotencyStatusInProgress, time.Now().Add(idemClaimTTL))
 	beforeNotes := countNotes(noteStore)
 	beforeFiles := driveMock.FileCount()
 	_, err := svc.Create(ctx, userID, "En vuelo", nil, "private", nil, key)
 	if err == nil {
-		t.Fatal("clave in-flight debe rechazar la solicitud concurrente")
+		t.Fatal("clave in-progress debe rechazar la solicitud concurrente")
 	}
 	se, ok := err.(*ServiceError)
-	if !ok || se.Code != "bad_request" || se.Message != "solicitud en progreso" {
-		t.Fatalf("esperaba bad_request/solicitud en progreso, got %v", err)
+	if !ok || se.Code != "conflict" || se.Message != "solicitud en progreso" {
+		t.Fatalf("esperaba conflict/solicitud en progreso, got %v", err)
 	}
 	if countNotes(noteStore) != beforeNotes || driveMock.FileCount() != beforeFiles {
-		t.Fatal("la solicitud rechazada por in-flight no debe tener efectos")
+		t.Fatal("la solicitud rechazada no debe tener efectos")
 	}
-	// La entrada in-flight vigente se conserva (el TTL de 2 minutos no vence).
-	entry, loaded := idemEntryStored(svc, idemKey("create", key))
-	if !loaded || entry == nil {
-		t.Fatal("la entrada in-flight vigente debe conservarse")
+	// Al liberar el claim, la misma clave se puede reclamar.
+	if err := svc.notes.DeleteIdempotencyKey(ctx, userID, "create", key); err != nil {
+		t.Fatalf("liberar claim failed: %v", err)
 	}
-	if entry.status != idemInFlight {
-		t.Fatalf("la entrada in-flight debe ser *idemEntry{status: idemInFlight}, got %#v", entry)
-	}
-	// Al liberar la clave, el reintento se reprocesa con normalidad.
-	svc.deleteIdemEntry(idemKey("create", key))
 	if _, err := svc.Create(ctx, userID, "Tras liberar", nil, "private", nil, key); err != nil {
-		t.Fatalf("tras liberar el in-flight la clave debe funcionar: %v", err)
+		t.Fatalf("tras liberar el claim la clave debe funcionar: %v", err)
 	}
 }
 
-// Un in-flight colgado más de 2 minutos (proceso muerto a mitad de operación)
-// se purga al consultarlo y el reintento vuelve a ejecutar Create sin quedar
-// bloqueado por "solicitud en progreso".
-func TestIdemCacheStaleInFlightPurgedOnCreate(t *testing.T) {
+// Un claim 'in_progress' vencido (el proceso murió a mitad de la operación) se
+// reclama en el reintento: Create procede y publica un replay fresco.
+func TestIdempotencyExpiredClaimRecoveredOnCreate(t *testing.T) {
 	svc, driveMock, noteStore, _, _, _, _, _ := newTestService()
 	ctx := context.Background()
 	userID := uuid.NewString()
-	key := "inflight-stale-1"
-	svc.storeIdemEntry(idemKey("create", key), &idemEntry{status: idemInFlight, createdAt: time.Now().Add(-3 * time.Minute)})
+	key := "idem-create-expired"
+	seedIdemClaim(svc, userID, "create", key, "hash-colgado", model.IdempotencyStatusInProgress, time.Now().Add(-time.Minute))
 	beforeNotes := countNotes(noteStore)
 	beforeFiles := driveMock.FileCount()
-	note, err := svc.Create(ctx, userID, "Reprocesar", nil, "private", nil, key)
+	note, err := svc.Create(ctx, userID, "Recuperada", nil, "private", stringPtr("v1"), key)
 	if err != nil {
-		t.Fatalf("el in-flight colgado debe purgarse y permitir reprocesar: %v", err)
+		t.Fatalf("el claim vencido debe reclamarse y permitir reprocesar: %v", err)
 	}
 	if note == nil || note.ID == "" {
 		t.Fatal("el reintento debe crear la nota")
 	}
-	if got := countNotes(noteStore); got != beforeNotes+1 {
-		t.Fatalf("debe crear una fila nueva tras purgar el in-flight, antes=%d ahora=%d", beforeNotes, got)
+	if countNotes(noteStore) != beforeNotes+1 || driveMock.FileCount() != beforeFiles+1 {
+		t.Fatalf("debe crear fila y archivo nuevos (notes %d->%d, files %d->%d)",
+			beforeNotes, countNotes(noteStore), beforeFiles, driveMock.FileCount())
 	}
-	if got := driveMock.FileCount(); got != beforeFiles+1 {
-		t.Fatalf("debe crear un archivo nuevo tras purgar el in-flight, antes=%d ahora=%d", beforeFiles, got)
-	}
-	// El resultado exitoso queda cacheado como replay unificado.
-	entry, loaded := idemEntryStored(svc, idemKey("create", key))
-	if !loaded || entry == nil {
-		t.Fatal("tras el éxito debe quedar una entrada vigente en el caché")
-	}
-	if entry.status != idemSuccess || entry.note == nil || entry.note.ID != note.ID {
-		t.Fatalf("esperaba *idemEntry{status: idemSuccess} apuntando a la nota nueva, got %#v", entry)
+	rec, loaded := idemRecordStored(svc, userID, "create", key)
+	if !loaded || rec == nil || rec.Status != model.IdempotencyStatusCompleted || rec.ResourceID == nil || *rec.ResourceID != note.ID {
+		t.Fatalf("el claim recuperado debe completarse con el nuevo recurso, got %+v", rec)
 	}
 }
 
-// Una entrada con estado desconocido (corrupta/legado) se purga al consultarse
-// y la operación se reprocesa: con el mapa unificado tipado el único estado
-// ilegítimo posible es un idemStatus fuera del contrato, y nunca se interpreta
-// como in-flight válido ni bloquea la clave.
-func TestIdemCacheUnknownStatusPurgedAndReprocessed(t *testing.T) {
+// Copy: replay con la misma clave y el mismo origen devuelve el clon ya creado
+// sin volver a copiar en Drive.
+func TestIdempotencyCopyReplaySameSourceReturnsClone(t *testing.T) {
 	svc, driveMock, noteStore, _, _, _, _, _ := newTestService()
 	ctx := context.Background()
-	userID := uuid.NewString()
-	key := "legacy-1"
-	svc.storeIdemEntry(idemKey("create", key), &idemEntry{status: idemStatus(99), createdAt: time.Now()})
+	author := uuid.NewString()
+	copier := uuid.NewString()
+	src, err := svc.Create(ctx, author, "Origen durable", nil, "public", stringPtr("data"), "")
+	if err != nil {
+		t.Fatalf("create origen failed: %v", err)
+	}
+	key := "idem-copy-replay"
+	first, err := svc.Copy(ctx, copier, src.ID, key)
+	if err != nil {
+		t.Fatalf("primer copy failed: %v", err)
+	}
 	beforeNotes := countNotes(noteStore)
 	beforeFiles := driveMock.FileCount()
-	note, err := svc.Create(ctx, userID, "Legado", nil, "private", nil, key)
+	second, err := svc.Copy(ctx, copier, src.ID, key)
 	if err != nil {
-		t.Fatalf("un valor legado debe purgarse y permitir reprocesar: %v", err)
+		t.Fatalf("replay de copy debe responder desde la clave durable, got %v", err)
 	}
-	if note == nil || note.ID == "" {
-		t.Fatal("el reintento debe crear la nota")
+	if second.ID != first.ID {
+		t.Fatalf("replay de copy debe devolver el mismo clon: %s vs %s", second.ID, first.ID)
 	}
-	if got := countNotes(noteStore); got != beforeNotes+1 {
-		t.Fatalf("debe crear una fila nueva, antes=%d ahora=%d", beforeNotes, got)
-	}
-	if got := driveMock.FileCount(); got != beforeFiles+1 {
-		t.Fatalf("debe crear un archivo nuevo, antes=%d ahora=%d", beforeFiles, got)
-	}
-	if entry, loaded := idemEntryStored(svc, idemKey("create", key)); !loaded || entry == nil {
-		t.Fatal("tras el éxito debe quedar la entrada unificada vigente")
+	if countNotes(noteStore) != beforeNotes || driveMock.FileCount() != beforeFiles {
+		t.Fatalf("replay de copy no debe duplicar efectos (notes %d->%d, files %d->%d)",
+			beforeNotes, countNotes(noteStore), beforeFiles, driveMock.FileCount())
 	}
 }
 
-// El mismo contrato unificado aplica a Copy: un in-flight colgado (>2 min) se
-// purga y el clon se reprocesa.
-func TestIdemCacheStaleInFlightPurgedOnCopy(t *testing.T) {
+// Copy: la misma clave con un origen distinto => 409 Conflict.
+func TestIdempotencyCopyDifferentSourceConflicts(t *testing.T) {
+	svc, _, _, _, _, _, _, _ := newTestService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	copier := uuid.NewString()
+	srcA, err := svc.Create(ctx, author, "Origen A", nil, "public", stringPtr("a"), "")
+	if err != nil {
+		t.Fatalf("create A failed: %v", err)
+	}
+	srcB, err := svc.Create(ctx, author, "Origen B", nil, "public", stringPtr("b"), "")
+	if err != nil {
+		t.Fatalf("create B failed: %v", err)
+	}
+	key := "idem-copy-conflict"
+	if _, err := svc.Copy(ctx, copier, srcA.ID, key); err != nil {
+		t.Fatalf("primer copy failed: %v", err)
+	}
+	_, err = svc.Copy(ctx, copier, srcB.ID, key)
+	if err == nil {
+		t.Fatal("misma clave con origen distinto debe rechazarse")
+	}
+	se, ok := err.(*ServiceError)
+	if !ok || se.Code != "conflict" {
+		t.Fatalf("esperaba conflict (409), got %v", err)
+	}
+}
+
+// Copy: un claim vencido por crash se recupera y el clon se reprocesa.
+func TestIdempotencyExpiredClaimRecoveredOnCopy(t *testing.T) {
 	svc, _, noteStore, _, _, _, _, _ := newTestService()
 	ctx := context.Background()
 	author := uuid.NewString()
 	copier := uuid.NewString()
-	src, err := svc.Create(ctx, author, "Origen in-flight", nil, "public", stringPtr("data"), "")
+	src, err := svc.Create(ctx, author, "Origen crash", nil, "public", stringPtr("data"), "")
 	if err != nil {
 		t.Fatalf("create origen failed: %v", err)
 	}
-	key := "inflight-stale-copy-1"
-	svc.storeIdemEntry(idemKey("copy", key), &idemEntry{status: idemInFlight, createdAt: time.Now().Add(-3 * time.Minute)})
+	key := "idem-copy-expired"
+	seedIdemClaim(svc, copier, "copy", key, "hash-colgado", model.IdempotencyStatusInProgress, time.Now().Add(-time.Minute))
 	beforeNotes := countNotes(noteStore)
 	cloned, err := svc.Copy(ctx, copier, src.ID, key)
 	if err != nil {
-		t.Fatalf("el in-flight colgado de copy debe purgarse y permitir reprocesar: %v", err)
+		t.Fatalf("el claim vencido de copy debe reclamarse: %v", err)
 	}
 	if cloned == nil || cloned.ID == "" {
 		t.Fatal("el reintento debe crear el clon")
 	}
 	if got := countNotes(noteStore); got != beforeNotes+1 {
-		t.Fatalf("debe crear un clon nuevo tras purgar el in-flight, antes=%d ahora=%d", beforeNotes, got)
+		t.Fatalf("debe crear un clon nuevo tras recuperar el claim, antes=%d ahora=%d", beforeNotes, got)
 	}
-	entry, loaded := idemEntryStored(svc, idemKey("copy", key))
-	if !loaded || entry == nil {
-		t.Fatal("tras el éxito debe quedar la entrada unificada vigente")
+	rec, loaded := idemRecordStored(svc, copier, "copy", key)
+	if !loaded || rec == nil || rec.Status != model.IdempotencyStatusCompleted || rec.ResourceID == nil || *rec.ResourceID != cloned.ID {
+		t.Fatalf("el claim recuperado debe completarse con el clon, got %+v", rec)
 	}
-	if entry.status != idemSuccess || entry.note == nil || entry.note.ID != cloned.ID {
-		t.Fatalf("esperaba *idemEntry{status: idemSuccess} apuntando al clon, got %#v", entry)
+}
+
+// Crash recovery lógico: si el proceso murió tras reclamar la clave y
+// materializar la fila pending_drive, el reintento con la misma clave reutiliza
+// el noteID preasociado (resource_id) y completa el alta en Drive sin duplicar
+// ni la nota local ni el archivo remoto.
+func TestIdempotencyCreateCrashRecoveryReusesPreassignedResourceID(t *testing.T) {
+	svc, driveMock, noteStore, _, _, _, _, _ := newTestService()
+	ctx := context.Background()
+	userID := uuid.NewString()
+	key := "idem-create-crash"
+	noteID := uuid.NewString()
+	seedIdemClaimWithResource(svc, userID, "create", key, "hash-colgado", model.IdempotencyStatusInProgress, noteID, time.Now().Add(-time.Minute))
+	if _, err := noteStore.Create(ctx, noteID, userID, nil, "Recuperada", nil, "private", nil, "pending_drive"); err != nil {
+		t.Fatalf("seed nota pending_drive: %v", err)
+	}
+	beforeNotes := countNotes(noteStore)
+	beforeFiles := driveMock.FileCount()
+
+	note, err := svc.Create(ctx, userID, "Recuperada", nil, "private", stringPtr("v1"), key)
+	if err != nil {
+		t.Fatalf("el retry tras crash debe recuperar la nota preasociada: %v", err)
+	}
+	if note.ID != noteID {
+		t.Fatalf("el retry debe reutilizar el noteID preasociado %s, got %s", noteID, note.ID)
+	}
+	if countNotes(noteStore) != beforeNotes {
+		t.Fatalf("no debe duplicar la nota local: antes=%d ahora=%d", beforeNotes, countNotes(noteStore))
+	}
+	if driveMock.FileCount() != beforeFiles+1 {
+		t.Fatalf("debe crear exactamente un archivo: antes=%d ahora=%d", beforeFiles, driveMock.FileCount())
+	}
+	stored, _ := noteStore.GetByID(ctx, noteID)
+	if stored == nil || stored.SyncStatus != "synced" || stored.ExternalFileID == nil {
+		t.Fatalf("la nota recuperada debe quedar synced con external_file_id: %+v", stored)
+	}
+	rec, loaded := idemRecordStored(svc, userID, "create", key)
+	if !loaded || rec == nil || rec.Status != model.IdempotencyStatusCompleted || rec.ResourceID == nil || *rec.ResourceID != noteID {
+		t.Fatalf("la clave debe completarse con el recurso preasociado, got %+v", rec)
+	}
+}
+
+// Crash recovery lógico: si el crash ocurrió después del alta en Drive pero
+// antes de persistir external_file_id, el reintento adopta el archivo huérfano
+// (appProperties notes_note_id) en lugar de crear un duplicado remoto.
+func TestIdempotencyCreateCrashRecoveryAdoptsOrphanFile(t *testing.T) {
+	svc, driveMock, noteStore, _, _, _, _, _ := newTestService()
+	ctx := context.Background()
+	userID := uuid.NewString()
+	key := "idem-create-crash-orphan"
+	noteID := uuid.NewString()
+	seedIdemClaimWithResource(svc, userID, "create", key, "hash-colgado", model.IdempotencyStatusInProgress, noteID, time.Now().Add(-time.Minute))
+	if _, err := noteStore.Create(ctx, noteID, userID, nil, "Rescatada", nil, "private", nil, "pending_drive"); err != nil {
+		t.Fatalf("seed nota pending_drive: %v", err)
+	}
+	orphan, err := driveMock.CreateFile(ctx, userID, noteID, "Rescatada.md", "contenido rescatado")
+	if err != nil {
+		t.Fatalf("seed archivo huérfano: %v", err)
+	}
+	beforeFiles := driveMock.FileCount()
+
+	note, err := svc.Create(ctx, userID, "Rescatada", nil, "private", stringPtr("contenido rescatado"), key)
+	if err != nil {
+		t.Fatalf("el retry debe adoptar el huérfano: %v", err)
+	}
+	if note.ID != noteID || note.ExternalFileID == nil || *note.ExternalFileID != orphan {
+		t.Fatalf("debe adoptar el archivo huérfano %s, got %+v", orphan, note)
+	}
+	if driveMock.FileCount() != beforeFiles {
+		t.Fatalf("no debe crear archivos duplicados: antes=%d ahora=%d", beforeFiles, driveMock.FileCount())
+	}
+	if content, err := driveMock.GetFileContent(ctx, userID, orphan); err != nil || content != "contenido rescatado" {
+		t.Fatalf("el contenido debe preservarse: %q %v", content, err)
+	}
+}
+
+// Crash recovery lógico en Copy: el reintento reutiliza el clon preasociado y
+// no vuelve a copiar el archivo en Drive.
+func TestIdempotencyCopyCrashRecoveryReusesPreassignedClone(t *testing.T) {
+	svc, driveMock, noteStore, _, _, _, _, _ := newTestService()
+	ctx := context.Background()
+	author := uuid.NewString()
+	copier := uuid.NewString()
+	src, err := svc.Create(ctx, author, "Origen crash copy", nil, "public", stringPtr("data"), "")
+	if err != nil {
+		t.Fatalf("create origen failed: %v", err)
+	}
+	key := "idem-copy-crash"
+	cloneID := uuid.NewString()
+	seedIdemClaimWithResource(svc, copier, "copy", key, "hash-colgado", model.IdempotencyStatusInProgress, cloneID, time.Now().Add(-time.Minute))
+	if _, err := noteStore.Create(ctx, cloneID, copier, nil, src.Title, nil, "private", &src.ID, "pending_drive"); err != nil {
+		t.Fatalf("seed clon pending_drive: %v", err)
+	}
+	beforeNotes := countNotes(noteStore)
+	beforeFiles := driveMock.FileCount()
+
+	cloned, err := svc.Copy(ctx, copier, src.ID, key)
+	if err != nil {
+		t.Fatalf("el retry de copy tras crash debe recuperar el clon: %v", err)
+	}
+	if cloned.ID != cloneID {
+		t.Fatalf("debe reutilizar el clon preasociado %s, got %s", cloneID, cloned.ID)
+	}
+	if countNotes(noteStore) != beforeNotes || driveMock.FileCount() != beforeFiles+1 {
+		t.Fatalf("sin duplicados locales y un único archivo remoto (notes %d->%d, files %d->%d)",
+			beforeNotes, countNotes(noteStore), beforeFiles, driveMock.FileCount())
+	}
+	if cloned.ExternalFileID == nil || *cloned.ExternalFileID == *src.ExternalFileID {
+		t.Fatal("el clon recuperado debe tener un archivo remoto nuevo")
+	}
+}
+
+// El claim preasocia resource_id cuando es nuevo y PRESERVA el id del intento
+// anterior al reclamar un lease vencido (paridad PG/memoria).
+func TestIdempotencyPreassignedResourceIDClaimAndReclaim(t *testing.T) {
+	store := NewMemoryNoteStore()
+	ctx := context.Background()
+	userID := uuid.NewString()
+	first := uuid.NewString()
+	rec, claimed, err := store.GetOrClaimIdempotencyKey(ctx, userID, "create", "preassigned-key", "hash-a", &first, time.Now().Add(-time.Minute))
+	if err != nil || !claimed || rec == nil || rec.ResourceID == nil || *rec.ResourceID != first {
+		t.Fatalf("claim nuevo debe preasociar resource_id: rec=%+v claimed=%v err=%v", rec, claimed, err)
+	}
+	second := uuid.NewString()
+	rec, claimed, err = store.GetOrClaimIdempotencyKey(ctx, userID, "create", "preassigned-key", "hash-b", &second, time.Now().Add(idemClaimTTL))
+	if err != nil || !claimed || rec == nil || rec.ResourceID == nil || *rec.ResourceID != first {
+		t.Fatalf("el reclamo vencido debe preservar el resource_id previo: rec=%+v claimed=%v err=%v", rec, claimed, err)
 	}
 }
 
@@ -812,9 +976,9 @@ func (d *deadlineDriveClient) record(name string, ctx context.Context) {
 	}
 }
 
-func (d *deadlineDriveClient) CreateFile(ctx context.Context, userID string, title string, content string) (string, error) {
+func (d *deadlineDriveClient) CreateFile(ctx context.Context, userID string, noteID string, title string, content string) (string, error) {
 	d.record("CreateFile", ctx)
-	return d.MockClient.CreateFile(ctx, userID, title, content)
+	return d.MockClient.CreateFile(ctx, userID, noteID, title, content)
 }
 func (d *deadlineDriveClient) GetFileContent(ctx context.Context, userID string, driveFileID string) (string, error) {
 	d.record("GetFileContent", ctx)
@@ -828,9 +992,9 @@ func (d *deadlineDriveClient) DeleteFile(ctx context.Context, userID string, dri
 	d.record("DeleteFile", ctx)
 	return d.MockClient.DeleteFile(ctx, userID, driveFileID)
 }
-func (d *deadlineDriveClient) CopyFile(ctx context.Context, srcUserID string, srcFileID string, dstUserID string, newTitle string) (string, error) {
+func (d *deadlineDriveClient) CopyFile(ctx context.Context, srcUserID string, srcFileID string, dstUserID string, newNoteID string, newTitle string) (string, error) {
 	d.record("CopyFile", ctx)
-	return d.MockClient.CopyFile(ctx, srcUserID, srcFileID, dstUserID, newTitle)
+	return d.MockClient.CopyFile(ctx, srcUserID, srcFileID, dstUserID, newNoteID, newTitle)
 }
 
 // Todas las llamadas críticas a Drive (CreateFile, GetFileContent, UpdateFile,

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -85,4 +86,45 @@ func (r *AttachmentRepository) Delete(ctx context.Context, db DBTX, id string) e
 		return fmt.Errorf("not_found")
 	}
 	return nil
+}
+
+func (r *AttachmentRepository) DeleteAttachmentWithDriveCleanup(ctx context.Context, noteID, attachmentID, requesterID string) (string, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("begin delete attachment: %w", err)
+	}
+	defer tx.Rollback(context.Background())
+	// Lock the parent first, matching note deletion's lock order.
+	var owner string
+	err = tx.QueryRow(ctx, `SELECT user_id FROM notes.notes WHERE id = $1 FOR UPDATE`, noteID).Scan(&owner)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("lock attachment owner: %w", err)
+	}
+	if owner != requesterID {
+		return "", ErrForbidden
+	}
+	var fileID string
+	err = tx.QueryRow(ctx, `SELECT external_file_id FROM notes.note_attachments
+		WHERE id = $1 AND note_id = $2 FOR UPDATE`, attachmentID, noteID).Scan(&fileID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("lock attachment: %w", err)
+	}
+	if fileID != "" {
+		if err := NewNoteRepository(r.pool).EnqueueDriveOperation(ctx, tx, "delete_attachment", noteID, attachmentID, fileID, owner, nil); err != nil {
+			return "", err
+		}
+	}
+	if err := r.Delete(ctx, tx, attachmentID); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("commit delete attachment: %w", err)
+	}
+	return fileID, nil
 }

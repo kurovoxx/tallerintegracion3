@@ -24,9 +24,10 @@ func patchWithIdem(r *gin.Engine, noteID, token, body, key string) *httptest.Res
 	return w
 }
 
-// PATCH con X-Idempotency-Key: el primer request aplica el cambio y el replay
-// con la misma clave responde desde el caché con el mismo resultado, sin volver
-// a mutar el recurso. El mecanismo es el unificado loadIdemEntry / idemEntry.
+// PATCH con X-Idempotency-Key: el primer request aplica el cambio; el replay
+// con la misma clave y el mismo payload responde 200 desde el registro
+// 'completed' sin volver a mutar el recurso; la misma clave con un body
+// distinto responde 409 Conflict.
 func TestHandlerPatchIdempotencyReplay(t *testing.T) {
 	r, _, _, _ := setupRouter()
 	author := uuid.NewString()
@@ -48,8 +49,8 @@ func TestHandlerPatchIdempotencyReplay(t *testing.T) {
 		t.Fatalf("primer patch debe aplicar el título, got %q", r1.Title)
 	}
 
-	// Replay de red con la misma clave aunque el payload cambie.
-	w2 := patchWithIdem(r, nid, tok, `{"title":"Segundo"}`, key)
+	// Replay de red con la misma clave y el mismo payload.
+	w2 := patchWithIdem(r, nid, tok, `{"title":"Primero"}`, key)
 	if w2.Code != http.StatusOK {
 		t.Fatalf("replay patch esperaba 200, got %d %s", w2.Code, w2.Body.String())
 	}
@@ -61,6 +62,12 @@ func TestHandlerPatchIdempotencyReplay(t *testing.T) {
 	}
 	if r2.Title != "Primero" {
 		t.Fatalf("replay debe devolver el resultado cacheado (Primero), got %q", r2.Title)
+	}
+
+	// Misma clave con un body distinto: 409 Conflict, sin re-aplicar.
+	w3 := patchWithIdem(r, nid, tok, `{"title":"Segundo"}`, key)
+	if w3.Code != http.StatusConflict {
+		t.Fatalf("misma clave con body distinto esperaba 409, got %d %s", w3.Code, w3.Body.String())
 	}
 
 	// El recurso no debe haber cambiado: GET devuelve el título aplicado una vez.
@@ -137,5 +144,88 @@ func TestHandlerPatchIdempotencyDistinctKeysAndErrorCleanup(t *testing.T) {
 	wRetry := patchWithIdem(r, nid, tok, `{"title":"CCC"}`, "patch-spec95-c")
 	if wRetry.Code != http.StatusOK {
 		t.Fatalf("reintento con la misma clave tras el 404 debe proceder, got %d %s", wRetry.Code, wRetry.Body.String())
+	}
+}
+
+// postJSONWithIdem ejecuta POST con header opcional X-Idempotency-Key.
+func postJSONWithIdem(r *gin.Engine, path, token, body, key string) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	if key != "" {
+		req.Header.Set("X-Idempotency-Key", key)
+	}
+	r.ServeHTTP(w, req)
+	return w
+}
+
+// POST /notes con X-Idempotency-Key: el replay con el mismo payload devuelve el
+// mismo note_id sin duplicar, y un payload distinto con la misma clave responde
+// 409 Conflict (idempotencia durable en notes.idempotency_keys).
+func TestHandlerCreateIdempotencyReplayAndConflict(t *testing.T) {
+	r, _, _, _ := setupRouter()
+	author := uuid.NewString()
+	tok := genToken(author, "student")
+	key := "create-spec95-1"
+	body := `{"title":"Idem Create","visibility":"private","content":"v1"}`
+	w1 := postJSONWithIdem(r, "/notes", tok, body, key)
+	if w1.Code != http.StatusCreated {
+		t.Fatalf("primer create esperaba 201, got %d %s", w1.Code, w1.Body.String())
+	}
+	var r1 map[string]string
+	if err := json.Unmarshal(w1.Body.Bytes(), &r1); err != nil {
+		t.Fatalf("respuesta create inválida: %v", err)
+	}
+	w2 := postJSONWithIdem(r, "/notes", tok, body, key)
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("replay create esperaba 201, got %d %s", w2.Code, w2.Body.String())
+	}
+	var r2 map[string]string
+	if err := json.Unmarshal(w2.Body.Bytes(), &r2); err != nil {
+		t.Fatalf("respuesta replay inválida: %v", err)
+	}
+	if r2["note_id"] != r1["note_id"] || r1["note_id"] == "" {
+		t.Fatalf("el replay debe devolver el mismo note_id: %q vs %q", r2["note_id"], r1["note_id"])
+	}
+	w3 := postJSONWithIdem(r, "/notes", tok, `{"title":"Idem Create","visibility":"private","content":"v2"}`, key)
+	if w3.Code != http.StatusConflict {
+		t.Fatalf("payload distinto con la misma clave esperaba 409, got %d %s", w3.Code, w3.Body.String())
+	}
+}
+
+// POST /notes/{id}/copy con X-Idempotency-Key: el replay devuelve el mismo clon
+// y un origen distinto con la misma clave responde 409 Conflict.
+func TestHandlerCopyIdempotencyReplayAndConflict(t *testing.T) {
+	r, _, _, _ := setupRouter()
+	author := uuid.NewString()
+	copier := uuid.NewString()
+	tokAuthor := genToken(author, "student")
+	tokCopier := genToken(copier, "student")
+	srcA := createNoteHTTP(t, r, tokAuthor, "Origen A", "public", "a")
+	srcB := createNoteHTTP(t, r, tokAuthor, "Origen B", "public", "b")
+	key := "copy-spec95-1"
+	w1 := postJSONWithIdem(r, "/notes/"+srcA+"/copy", tokCopier, "", key)
+	if w1.Code != http.StatusCreated {
+		t.Fatalf("primer copy esperaba 201, got %d %s", w1.Code, w1.Body.String())
+	}
+	var r1 map[string]string
+	if err := json.Unmarshal(w1.Body.Bytes(), &r1); err != nil {
+		t.Fatalf("respuesta copy inválida: %v", err)
+	}
+	w2 := postJSONWithIdem(r, "/notes/"+srcA+"/copy", tokCopier, "", key)
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("replay copy esperaba 201, got %d %s", w2.Code, w2.Body.String())
+	}
+	var r2 map[string]string
+	if err := json.Unmarshal(w2.Body.Bytes(), &r2); err != nil {
+		t.Fatalf("respuesta replay inválida: %v", err)
+	}
+	if r2["note_id"] != r1["note_id"] || r1["note_id"] == "" {
+		t.Fatalf("el replay debe devolver el mismo clon: %q vs %q", r2["note_id"], r1["note_id"])
+	}
+	w3 := postJSONWithIdem(r, "/notes/"+srcB+"/copy", tokCopier, "", key)
+	if w3.Code != http.StatusConflict {
+		t.Fatalf("origen distinto con la misma clave esperaba 409, got %d %s", w3.Code, w3.Body.String())
 	}
 }

@@ -110,7 +110,7 @@ func TestCreateRollbackOnDBFailure(t *testing.T) {
 
 type failingNoteStore struct{ err error }
 
-func (f *failingNoteStore) Create(ctx context.Context, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string, syncStatus string) (*model.Note, error) {
+func (f *failingNoteStore) Create(ctx context.Context, noteID string, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string, syncStatus string) (*model.Note, error) {
 	return nil, f.err
 }
 func (f *failingNoteStore) GetByID(ctx context.Context, id string) (*model.Note, error) {
@@ -119,19 +119,45 @@ func (f *failingNoteStore) GetByID(ctx context.Context, id string) (*model.Note,
 func (f *failingNoteStore) ListByUser(ctx context.Context, userID, cursor string, limit int) ([]*model.Note, string, error) {
 	return nil, "", nil
 }
-func (f *failingNoteStore) Update(ctx context.Context, id string, title *string, visibility *string) (*model.Note, error) {
+func (f *failingNoteStore) Update(ctx context.Context, id string, title *string, visibility *string, expectedVersion int64) (*model.Note, error) {
 	return nil, nil
 }
 func (f *failingNoteStore) Delete(ctx context.Context, id string) error { return nil }
-func (f *failingNoteStore) UpdateSyncStatus(ctx context.Context, noteID, syncStatus string) error { return nil }
+func (f *failingNoteStore) UpdateSyncStatus(ctx context.Context, noteID, syncStatus string) error {
+	return nil
+}
 
-func (f *failingNoteStore) InsertDeadLetter(ctx context.Context, fileID, reason string) error { return nil }
+func (f *failingNoteStore) DeleteWithDriveCleanup(ctx context.Context, noteID, requesterID string) (string, error) {
+	return "", f.err
+}
+func (f *failingNoteStore) EnqueueDriveOperation(ctx context.Context, op, noteID, attID, fileID, ownerUserID string, payload map[string]any) error {
+	return f.err
+}
+func (f *failingNoteStore) ClaimDriveOperations(ctx context.Context, limit int, lockDuration time.Duration) ([]*model.DriveOperation, error) {
+	return nil, f.err
+}
+func (f *failingNoteStore) CompleteDriveOperation(ctx context.Context, id string) error { return f.err }
+func (f *failingNoteStore) FailDriveOperation(ctx context.Context, id, errStr string, nextAttempt time.Time) error {
+	return f.err
+}
 
 func (f *failingNoteStore) IncrementLikes(ctx context.Context, noteID string, delta int) error {
 	return nil
 }
 func (f *failingNoteStore) UpdateExternalFileID(ctx context.Context, noteID, fileID string) error {
 	return nil
+}
+func (f *failingNoteStore) GetOrClaimIdempotencyKey(ctx context.Context, userID, operation, idempotencyKey, requestHash string, preassignedResourceID *string, expiresAt time.Time) (*model.IdempotencyKey, bool, error) {
+	return nil, false, f.err
+}
+func (f *failingNoteStore) CompleteIdempotencyKey(ctx context.Context, userID, operation, idempotencyKey, resourceID string) error {
+	return f.err
+}
+func (f *failingNoteStore) DeleteIdempotencyKey(ctx context.Context, userID, operation, idempotencyKey string) error {
+	return f.err
+}
+func (f *failingNoteStore) MarkIdempotencyRecoverable(ctx context.Context, userID, operation, idempotencyKey, resourceID, lastErr string) error {
+	return f.err
 }
 
 func TestGetWithContent(t *testing.T) {
@@ -594,7 +620,7 @@ func TestGetAccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getAccess author failed: %v", err)
 	}
-	if access["can_read"] != true {
+	if access.CanRead != true {
 		t.Fatalf("author debe poder leer")
 	}
 	// member sin share 403
@@ -608,10 +634,10 @@ func TestGetAccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("member con share debe tener acceso: %v", err)
 	}
-	if access2["can_read"] != true {
+	if access2.CanRead != true {
 		t.Fatalf("member con share can_read true")
 	}
-	if access2["access_mode"] != "restricted" {
+	if access2.AccessMode != "restricted" {
 		t.Fatalf("access_mode debe ser restricted")
 	}
 }
@@ -1126,13 +1152,16 @@ func TestGetAccessAuthor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("author GetAccess failed: %v", err)
 	}
-	if access["can_read"] != true {
+	if access.CanRead != true {
 		t.Fatalf("author can_read debe ser true")
 	}
-	if access["access_mode"] != "private" {
-		t.Fatalf("author access_mode debe ser su visibility (private), got %v", access["access_mode"])
+	if access.AccessMode != "owner" {
+		t.Fatalf("author access_mode debe ser owner, got %v", access.AccessMode)
 	}
-	url, _ := access["drive_url"].(string)
+	if access.DriveURL == nil {
+		t.Fatal("drive_url missing")
+	}
+	url := *access.DriveURL
 	if !strings.Contains(url, *note.ExternalFileID) {
 		t.Fatalf("drive_url debe contener external_file_id, got %q", url)
 	}
@@ -1169,7 +1198,7 @@ func TestGetAccessLink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("outsider con link debe leer: %v", err)
 	}
-	if access["can_read"] != true || access["access_mode"] != "link" {
+	if access.CanRead != true || access.AccessMode != "link" {
 		t.Fatalf("esperaba can_read=true access_mode=link, got %v", access)
 	}
 }
@@ -1197,8 +1226,8 @@ func TestGetAccessRestrictedMemberAndOutsider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("miembro restricted debe leer: %v", err)
 	}
-	if access["access_mode"] != "restricted" {
-		t.Fatalf("esperaba access_mode=restricted, got %v", access["access_mode"])
+	if access.AccessMode != "restricted" {
+		t.Fatalf("esperaba access_mode=restricted, got %v", access.AccessMode)
 	}
 	if _, err := svc.GetAccess(ctx, outsider, note.ID); err == nil {
 		t.Fatal("outsider restricted debe 404")
@@ -1213,7 +1242,7 @@ func TestGetAccessNoExternalFile(t *testing.T) {
 	author := uuid.NewString()
 	other := uuid.NewString()
 	// privada sin external_file_id (offline-first aún no sincronizado)
-	priv, err := noteStore.Create(ctx, author, nil, "Sin archivo", nil, "private", nil, "")
+	priv, err := noteStore.Create(ctx, "", author, nil, "Sin archivo", nil, "private", nil, "")
 	if err != nil {
 		t.Fatalf("create memoria failed: %v", err)
 	}
@@ -1223,7 +1252,7 @@ func TestGetAccessNoExternalFile(t *testing.T) {
 		t.Fatalf("esperaba note_unavailable, got %q", se.Code)
 	}
 	// pública sin archivo: autoriza pero no hay qué servir
-	pub, _ := noteStore.Create(ctx, author, nil, "Pública sin archivo", nil, "public", nil, "")
+	pub, _ := noteStore.Create(ctx, "", author, nil, "Pública sin archivo", nil, "public", nil, "")
 	if _, err := svc.GetAccess(ctx, other, pub.ID); err == nil {
 		t.Fatal("pública sin archivo debe dar nota no disponible")
 	} else if se := err.(*ServiceError); se.Code != "note_unavailable" {
@@ -1259,8 +1288,8 @@ func TestGetAccessMultiShare(t *testing.T) {
 		if err != nil {
 			t.Fatalf("miembro debe leer: %v", err)
 		}
-		if access["access_mode"] != "restricted" {
-			t.Fatalf("esperaba restricted, got %v", access["access_mode"])
+		if access.AccessMode != "restricted" {
+			t.Fatalf("esperaba restricted, got %v", access.AccessMode)
 		}
 	}
 	// outsider 404 mientras todo es restricted
@@ -1277,8 +1306,8 @@ func TestGetAccessMultiShare(t *testing.T) {
 	if err != nil {
 		t.Fatalf("outsider con link debe leer: %v", err)
 	}
-	if access["access_mode"] != "link" {
-		t.Fatalf("esperaba access_mode=link, got %v", access["access_mode"])
+	if access.AccessMode != "link" {
+		t.Fatalf("esperaba access_mode=link, got %v", access.AccessMode)
 	}
 }
 
@@ -1367,38 +1396,66 @@ func TestShareRestrictedMemberError(t *testing.T) {
 	social.AddAdmin(author, groupID)
 	md.SetError(fmt.Errorf("social caído"))
 	note, _ := svc.Create(ctx, author, "Restr dir error", nil, "private", stringPtr("x"), "")
-	// error al obtener miembros no rompe el flujo principal: el share persiste
 	shared, err := svc.Share(ctx, author, note.ID, groupID, "restricted")
-	if err != nil {
-		t.Fatalf("share debe mantenerse aunque falle el directorio: %v", err)
+	if err == nil || shared != nil {
+		t.Fatal("directory failure must cancel sharing")
 	}
-	if shared == nil {
-		t.Fatal("share nil")
+	shares, _ := svc.shared.ListByNote(ctx, note.ID)
+	if len(shares) != 0 {
+		t.Fatal("failed share must not persist")
 	}
 	if len(driveMock.GrantCalls) != 0 {
 		t.Fatalf("sin miembros no hay grants, got %d", len(driveMock.GrantCalls))
 	}
 }
 
-func TestShareRestrictedPartialFailure(t *testing.T) {
+// Fallo parcial de grants: DB-first persiste la intención del share y el
+// estado deseado; el miembro que falló queda 'failed' y el reconciliador lo
+// completa cuando Drive se recupera (sin rollback destructivo).
+func TestShareRestrictedPartialFailureConvergesLater(t *testing.T) {
 	svc, driveMock, md, social := newRestrictedService()
 	ctx := context.Background()
 	author := uuid.NewString()
 	groupID := uuid.NewString()
 	social.AddAdmin(author, groupID)
-	md.SetEmails(groupID, []string{"bad@example.com", "good@example.com"})
+	md.SetEmails(groupID, []string{"good@example.com", "bad@example.com"})
 	driveMock.InjectGrantError("bad@example.com", &drive.DriveError{Code: 500, Message: "boom"})
 	note, _ := svc.Create(ctx, author, "Restr parcial", nil, "private", stringPtr("x"), "")
-	// éxito parcial: el share se crea y se continúa con los demás miembros
 	shared, err := svc.Share(ctx, author, note.ID, groupID, "restricted")
-	if err != nil {
-		t.Fatalf("fallo parcial de Drive no debe revertir el share: %v", err)
+	if err != nil || shared == nil {
+		t.Fatalf("DB-first share must persist: %v %v", shared, err)
 	}
-	if shared == nil {
-		t.Fatal("share nil")
+	if shared.PermissionSyncStatus != model.PermissionSyncFailed {
+		t.Fatalf("share must expose failed convergence: %+v", shared)
 	}
-	if len(driveMock.GrantCalls) != 2 {
-		t.Fatalf("se debe intentar con ambos miembros, got %d", len(driveMock.GrantCalls))
+	shares, _ := svc.shared.ListByNote(ctx, note.ID)
+	if len(shares) != 1 {
+		t.Fatal("share with partial Drive failure must persist for convergence")
+	}
+	if len(driveMock.RevokeCalls) != 0 {
+		t.Fatalf("DB-first semantics must not roll back successful grants: %v", driveMock.RevokeCalls)
+	}
+	statuses := map[string]string{}
+	rows, _ := svc.shared.ListManagedPermissions(ctx, note.ID)
+	for _, row := range rows {
+		statuses[row.PrincipalKey] = row.SyncStatus
+	}
+	if statuses["good@example.com"] != model.PermissionSyncInSync || statuses["bad@example.com"] != model.PermissionSyncFailed {
+		t.Fatalf("desired-state must track per-principal convergence: %+v", rows)
+	}
+	driveMock.GrantErr = nil
+	if err := svc.ReconcilePendingNotes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ = svc.shared.ListManagedPermissions(ctx, note.ID)
+	for _, row := range rows {
+		if row.SyncStatus != model.PermissionSyncInSync {
+			t.Fatalf("reconciler must converge failed grants: %+v", row)
+		}
+	}
+	shares, _ = svc.shared.ListByNote(ctx, note.ID)
+	if len(shares) != 1 || shares[0].PermissionSyncStatus != model.PermissionSyncInSync {
+		t.Fatalf("share must converge to in_sync: %+v", shares)
 	}
 }
 
