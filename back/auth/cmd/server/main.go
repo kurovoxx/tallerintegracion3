@@ -65,7 +65,7 @@ func main() {
 		RedirectURI:  cfg.GoogleRedirectURI,
 	}
 	driveSvc := service.NewDriveOAuthService(oauthRepo, driveProvider)
-	driveH := httpHandler.NewDriveHandler(driveSvc)
+	driveH := httpHandler.NewDriveHandlerWithGoogleConfig(driveSvc, cfg.GoogleClientID, cfg.GoogleRedirectURI)
 
 	// Calendar OAuth: Handler → Service → Repository (google-calendar/connect + interno para Social)
 	calendarProvider := &service.ConfigCalendarOAuthProvider{
@@ -118,12 +118,7 @@ func main() {
 	// Config pública de Google OAuth para el front: el client ID es público
 	// por diseño (viaja en URLs visibles); el secret jamás sale del backend.
 	// Así ningún cliente necesita --dart-define ni IDs quemados.
-	r.GET("/auth/google-config", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"client_id":    cfg.GoogleClientID,
-			"redirect_uri": cfg.GoogleRedirectURI,
-		})
-	})
+	r.GET("/auth/google-config", driveH.GetGoogleConfig)
 
 	r.GET("/health/db", func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)

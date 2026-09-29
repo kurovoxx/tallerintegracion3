@@ -9,13 +9,38 @@ import (
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/utils"
 )
 
-// DriveHandler maneja POST /auth/google-drive/connect
+// DriveHandler maneja POST /auth/google-drive/connect y la config pública
+// de Google OAuth (GET /auth/google-config).
 type DriveHandler struct {
-	svc *service.DriveOAuthService
+	svc               *service.DriveOAuthService
+	googleClientID    string
+	googleRedirectURI string
 }
 
 func NewDriveHandler(svc *service.DriveOAuthService) *DriveHandler {
 	return &DriveHandler{svc: svc}
+}
+
+// NewDriveHandlerWithGoogleConfig inyecta los valores públicos de OAuth que
+// expone GET /auth/google-config. El client_id es público por diseño; el
+// secret jamás sale del backend.
+func NewDriveHandlerWithGoogleConfig(svc *service.DriveOAuthService, clientID, redirectURI string) *DriveHandler {
+	return &DriveHandler{svc: svc, googleClientID: clientID, googleRedirectURI: redirectURI}
+}
+
+type googleConfigResponse struct {
+	ClientID    string `json:"client_id"`
+	RedirectURI string `json:"redirect_uri"`
+}
+
+// GetGoogleConfig maneja GET /auth/google-config (público, sin middleware de auth).
+// Responde 200 con client_id y redirect_uri para que el front no necesite
+// --dart-define ni IDs quemados.
+func (h *DriveHandler) GetGoogleConfig(c *gin.Context) {
+	c.JSON(http.StatusOK, googleConfigResponse{
+		ClientID:    h.googleClientID,
+		RedirectURI: h.googleRedirectURI,
+	})
 }
 
 type driveConnectRequest struct {

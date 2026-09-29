@@ -10,6 +10,8 @@ import 'package:url_launcher/url_launcher.dart';
 /// Configuración por --dart-define (ver front/Dockerfile): GOOGLE_CLIENT_ID
 /// y GOOGLE_REDIRECT_URI. Sin client ID el flujo falla visible (nunca quemado).
 class GoogleDriveService {
+  // Sin defaultValue: el client ID vive en el .env del backend y llega por
+  // GET /auth/google-config (o por --dart-define=GOOGLE_CLIENT_ID). Nunca quemado.
   static const _serverClientId = String.fromEnvironment(
     'GOOGLE_CLIENT_ID',
     defaultValue: '',
@@ -41,17 +43,21 @@ class GoogleDriveService {
   /// Llamar antes de getServerAuthCode para no depender de --dart-define.
   static Future<void> ensureConfigured({required String backendBaseUrl}) async {
     if ((_remoteClientId ?? '').trim().isNotEmpty) return;
+    final base = backendBaseUrl.trim().replaceFirst(RegExp(r'/+$'), '');
+    if (base.isEmpty) return;
     try {
-      final resp = await http.get(
-        Uri.parse('$backendBaseUrl/auth/google-config'),
-      ).timeout(const Duration(seconds: 8));
-      if (resp.statusCode == 200) {
-        final body = jsonDecode(resp.body);
-        if (body is Map) {
-          _remoteClientId = (body['client_id'] ?? '').toString();
-          _remoteRedirectUri = (body['redirect_uri'] ?? '').toString();
-        }
-      }
+      final resp = await http
+          .get(Uri.parse('$base/auth/google-config'))
+          .timeout(const Duration(seconds: 8));
+      if (resp.statusCode != 200) return;
+      final body = jsonDecode(resp.body);
+      if (body is! Map) return;
+      final clientId = (body['client_id'] ?? '').toString().trim();
+      final redirectUri = (body['redirect_uri'] ?? '').toString().trim();
+      // Solo cachea valores no vacíos: si el backend responde incompleto,
+      // queda el fallback (--dart-define) y se reintenta en la próxima conexión.
+      if (clientId.isNotEmpty) _remoteClientId = clientId;
+      if (redirectUri.isNotEmpty) _remoteRedirectUri = redirectUri;
     } catch (_) {
       // Sin red no hay config remota: caen los defines/defaults.
     }
@@ -90,8 +96,8 @@ class GoogleDriveService {
     }
     final account = await _googleSignIn.signIn();
     if (account == null) return null;
-    final auth = await account.authentication;
-    return auth.serverAuthCode;
+    // serverAuthCode vive en la cuenta (ver deprecación de GoogleSignInAuthentication).
+    return account.serverAuthCode;
   }
 
   Future<String?> _getServerAuthCodeDesktop({String? loginHint}) async {
