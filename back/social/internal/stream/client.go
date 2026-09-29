@@ -106,17 +106,41 @@ func NewRESTClient(apiKey, apiSecret string) *RESTClient {
 	}
 }
 
-// serverToken firma un JWT HS256 mínimo para auth server-side de Stream.
-func serverToken(apiSecret string) (string, error) {
+// signJWT firma un payload JSON como JWT HS256 con el API secret.
+func signJWT(apiSecret string, payload []byte) (string, error) {
 	if strings.TrimSpace(apiSecret) == "" {
 		return "", errors.New("api secret vacío")
 	}
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
-	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"server":true}`))
+	encoded := base64.RawURLEncoding.EncodeToString(payload)
 	mac := hmac.New(sha256.New, []byte(apiSecret))
-	mac.Write([]byte(header + "." + payload))
+	mac.Write([]byte(header + "." + encoded))
 	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-	return header + "." + payload + "." + sig, nil
+	return header + "." + encoded + "." + sig, nil
+}
+
+// serverToken firma un JWT HS256 mínimo para auth server-side de Stream.
+func serverToken(apiSecret string) (string, error) {
+	token, err := signJWT(apiSecret, []byte(`{"server":true}`))
+	if err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// SignUserToken firma el token de un usuario final para que el cliente
+// (front) se conecte directo a Stream. Payload mínimo: {"user_id"}.
+// Exportada para el endpoint GET /groups/:id/stream-token y sus tests.
+func SignUserToken(apiSecret, userID string) (string, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return "", errors.New("user_id vacío")
+	}
+	payload, err := json.Marshal(map[string]string{"user_id": userID})
+	if err != nil {
+		return "", err
+	}
+	return signJWT(apiSecret, payload)
 }
 
 type createChannelRequest struct {

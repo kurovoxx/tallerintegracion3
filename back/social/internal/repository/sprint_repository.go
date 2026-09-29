@@ -24,6 +24,13 @@ func (r *SprintRepository) GetGroupByID(ctx context.Context, id pgtype.UUID) (sq
 	return r.queries.GetGroupByID(ctx, id)
 }
 
+func (r *SprintRepository) IsMember(ctx context.Context, groupID, userID pgtype.UUID) (bool, error) {
+	return r.queries.IsGroupMember(ctx, sqlc.IsGroupMemberParams{
+		GroupID: groupID,
+		UserID:  userID,
+	})
+}
+
 func (r *SprintRepository) GetSheetByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialSprintSheet, error) {
 	return r.queries.GetSheetByID(ctx, id)
 }

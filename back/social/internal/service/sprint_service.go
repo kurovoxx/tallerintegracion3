@@ -10,7 +10,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository/sqlc"
 )
 
@@ -40,10 +39,26 @@ var validSprintStatuses = map[string]struct{}{
 const defaultSheetName = "Sprint 1"
 
 type SprintService struct {
-	repo *repository.SprintRepository
+	repo SprintRepo
 }
 
-func NewSprintService(repo *repository.SprintRepository) *SprintService {
+// SprintRepo es la porción de persistencia que usa SprintService.
+// *repository.SprintRepository es la implementación real (Postgres);
+// MemoryTasksStore, la de tests.
+type SprintRepo interface {
+	GetGroupByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialGroup, error)
+	IsMember(ctx context.Context, groupID, userID pgtype.UUID) (bool, error)
+	GetSheetByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialSprintSheet, error)
+	ListSheetsByGroup(ctx context.Context, groupID pgtype.UUID) ([]sqlc.SocialSprintSheet, error)
+	CreateSheet(ctx context.Context, arg sqlc.CreateSheetParams) (sqlc.SocialSprintSheet, error)
+	GetTaskByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialSprintSheetTask, error)
+	CreateTask(ctx context.Context, arg sqlc.CreateSprintSheetTaskParams) (sqlc.SocialSprintSheetTask, error)
+	ListTasksByGroup(ctx context.Context, arg sqlc.ListSprintSheetTasksByGroupParams) ([]sqlc.ListSprintSheetTasksByGroupRow, error)
+	UpdateTask(ctx context.Context, arg sqlc.UpdateSprintSheetTaskParams) (sqlc.SocialSprintSheetTask, error)
+	DeleteTask(ctx context.Context, id pgtype.UUID) (sqlc.SocialSprintSheetTask, error)
+}
+
+func NewSprintService(repo SprintRepo) *SprintService {
 	return &SprintService{
 		repo: repo,
 	}
@@ -60,6 +75,49 @@ func (s *SprintService) requireGroup(ctx context.Context, gid pgtype.UUID) error
 			return ErrGroupNotFound
 		}
 		return err
+	}
+	return nil
+}
+
+// requireMembership exige que el usuario pertenezca al grupo (403 si no).
+func (s *SprintService) requireMembership(ctx context.Context, gid, uid pgtype.UUID) error {
+	isMember, err := s.repo.IsMember(ctx, gid, uid)
+	if err != nil {
+		return err
+	}
+	if !isMember {
+		return ErrForbidden
+	}
+	return nil
+}
+
+// requireAssigneeMember exige regla 4.4: el asignado debe ser miembro del grupo.
+func (s *SprintService) requireAssigneeMember(ctx context.Context, gid, auid pgtype.UUID) error {
+	if !auid.Valid {
+		return ErrAssigneeRequired
+	}
+	isMember, err := s.repo.IsMember(ctx, gid, auid)
+	if err != nil {
+		return err
+	}
+	if !isMember {
+		return ErrAssigneeNotMember
+	}
+	return nil
+}
+
+// requireTaskInGroup verifica que la hoja de la tarea pertenece al grupo.
+// Tarea de otro grupo (u hoja inexistente) => ErrSprintTaskNotFound (404, sin filtrar).
+func (s *SprintService) requireTaskInGroup(ctx context.Context, gid, sheetID pgtype.UUID) error {
+	sheet, err := s.repo.GetSheetByID(ctx, sheetID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrSprintTaskNotFound
+		}
+		return err
+	}
+	if sheet.GroupID != gid {
+		return ErrSprintTaskNotFound
 	}
 	return nil
 }
@@ -151,7 +209,7 @@ func parseEstimatedHours(hours *float64) (pgtype.Numeric, error) {
 	return n, nil
 }
 
-func (s *SprintService) CreateSprintTask(ctx context.Context, groupID, sheetID, title, assignedTo, priority, status string, estimatedHours *float64) (SprintTaskView, error) {
+func (s *SprintService) CreateSprintTask(ctx context.Context, groupID, userID, sheetID, title, assignedTo, priority, status string, estimatedHours *float64) (SprintTaskView, error) {
 	title, err := validateTitle(title)
 	if err != nil {
 		return SprintTaskView{}, err
@@ -177,7 +235,17 @@ func (s *SprintService) CreateSprintTask(ctx context.Context, groupID, sheetID, 
 	if err != nil {
 		return SprintTaskView{}, err
 	}
+	uid, err := parseMeetingUserUUID(userID)
+	if err != nil {
+		return SprintTaskView{}, err
+	}
 	if err := s.requireGroup(ctx, gid); err != nil {
+		return SprintTaskView{}, err
+	}
+	if err := s.requireMembership(ctx, gid, uid); err != nil {
+		return SprintTaskView{}, err
+	}
+	if err := s.requireAssigneeMember(ctx, gid, assignee); err != nil {
 		return SprintTaskView{}, err
 	}
 	sheet, err := s.resolveSheet(ctx, gid, sheetID)
@@ -215,8 +283,12 @@ func (s *SprintService) ListSheets(ctx context.Context, groupID string) ([]sqlc.
 	return s.repo.ListSheetsByGroup(ctx, gid)
 }
 
-func (s *SprintService) ListSprintTasks(ctx context.Context, groupID, status, priority, sheetID string) ([]SprintTaskView, error) {
+func (s *SprintService) ListSprintTasks(ctx context.Context, groupID, userID, status, priority, sheetID string) ([]SprintTaskView, error) {
 	gid, err := parseGroupUUID(groupID)
+	if err != nil {
+		return nil, err
+	}
+	uid, err := parseMeetingUserUUID(userID)
 	if err != nil {
 		return nil, err
 	}
@@ -235,6 +307,9 @@ func (s *SprintService) ListSprintTasks(ctx context.Context, groupID, status, pr
 	}
 
 	if err := s.requireGroup(ctx, gid); err != nil {
+		return nil, err
+	}
+	if err := s.requireMembership(ctx, gid, uid); err != nil {
 		return nil, err
 	}
 
@@ -281,9 +356,24 @@ func (s *SprintService) ListSprintTasks(ctx context.Context, groupID, status, pr
 	return views, nil
 }
 
-func (s *SprintService) UpdateSprintTask(ctx context.Context, taskID string, title, assignedTo, priority, status *string, estimatedHours *float64) (SprintTaskView, error) {
+func (s *SprintService) UpdateSprintTask(ctx context.Context, groupID, userID, taskID string, title, assignedTo, priority, status *string, estimatedHours *float64) (SprintTaskView, error) {
 	if title == nil && assignedTo == nil && priority == nil && status == nil && estimatedHours == nil {
 		return SprintTaskView{}, ErrNothingToPatch
+	}
+
+	gid, err := parseGroupUUID(groupID)
+	if err != nil {
+		return SprintTaskView{}, err
+	}
+	uid, err := parseMeetingUserUUID(userID)
+	if err != nil {
+		return SprintTaskView{}, err
+	}
+	if err := s.requireGroup(ctx, gid); err != nil {
+		return SprintTaskView{}, err
+	}
+	if err := s.requireMembership(ctx, gid, uid); err != nil {
+		return SprintTaskView{}, err
 	}
 
 	taskID = strings.TrimSpace(taskID)
@@ -300,6 +390,9 @@ func (s *SprintService) UpdateSprintTask(ctx context.Context, taskID string, tit
 		if errors.Is(err, pgx.ErrNoRows) {
 			return SprintTaskView{}, ErrSprintTaskNotFound
 		}
+		return SprintTaskView{}, err
+	}
+	if err := s.requireTaskInGroup(ctx, gid, current.SheetID); err != nil {
 		return SprintTaskView{}, err
 	}
 
@@ -322,6 +415,9 @@ func (s *SprintService) UpdateSprintTask(ctx context.Context, taskID string, tit
 	if assignedTo != nil {
 		a, err := parseRequiredAssignee(*assignedTo)
 		if err != nil {
+			return SprintTaskView{}, err
+		}
+		if err := s.requireAssigneeMember(ctx, gid, a); err != nil {
 			return SprintTaskView{}, err
 		}
 		arg.AssigneeUserID = a
@@ -369,7 +465,22 @@ func (s *SprintService) UpdateSprintTask(ctx context.Context, taskID string, tit
 	return SprintTaskView{Task: updated, Sheet: sheet}, nil
 }
 
-func (s *SprintService) DeleteSprintTask(ctx context.Context, taskID string) (SprintTaskView, error) {
+func (s *SprintService) DeleteSprintTask(ctx context.Context, groupID, userID, taskID string) (SprintTaskView, error) {
+	gid, err := parseGroupUUID(groupID)
+	if err != nil {
+		return SprintTaskView{}, err
+	}
+	uid, err := parseMeetingUserUUID(userID)
+	if err != nil {
+		return SprintTaskView{}, err
+	}
+	if err := s.requireGroup(ctx, gid); err != nil {
+		return SprintTaskView{}, err
+	}
+	if err := s.requireMembership(ctx, gid, uid); err != nil {
+		return SprintTaskView{}, err
+	}
+
 	taskID = strings.TrimSpace(taskID)
 	if _, err := uuid.Parse(taskID); err != nil {
 		return SprintTaskView{}, ErrInvalidSprintTaskID
@@ -377,6 +488,17 @@ func (s *SprintService) DeleteSprintTask(ctx context.Context, taskID string) (Sp
 	var tid pgtype.UUID
 	if err := tid.Scan(taskID); err != nil {
 		return SprintTaskView{}, ErrInvalidSprintTaskID
+	}
+
+	current, err := s.repo.GetTaskByID(ctx, tid)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return SprintTaskView{}, ErrSprintTaskNotFound
+		}
+		return SprintTaskView{}, err
+	}
+	if err := s.requireTaskInGroup(ctx, gid, current.SheetID); err != nil {
+		return SprintTaskView{}, err
 	}
 
 	deleted, err := s.repo.DeleteTask(ctx, tid)
