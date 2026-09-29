@@ -20,8 +20,45 @@ class GoogleDriveService {
     defaultValue: 'http://localhost:8081/auth/google/callback',
   );
 
+  // Config remota (cacheada) servida por el backend: GET {auth}/auth/google-config.
+  // Prioridad: remoto > --dart-define > default. Así el .env raíz es la única fuente.
+  static String? _remoteClientId;
+  static String? _remoteRedirectUri;
+
+  static String get _clientId {
+    final remote = _remoteClientId?.trim() ?? '';
+    if (remote.isNotEmpty) return remote;
+    return _serverClientId.trim();
+  }
+
+  static String get _redirect {
+    final remote = _remoteRedirectUri?.trim() ?? '';
+    if (remote.isNotEmpty) return remote;
+    return _redirectUri;
+  }
+
+  /// Trae la config OAuth desde el backend (una vez; luego cache).
+  /// Llamar antes de getServerAuthCode para no depender de --dart-define.
+  static Future<void> ensureConfigured({required String backendBaseUrl}) async {
+    if ((_remoteClientId ?? '').trim().isNotEmpty) return;
+    try {
+      final resp = await http.get(
+        Uri.parse('$backendBaseUrl/auth/google-config'),
+      ).timeout(const Duration(seconds: 8));
+      if (resp.statusCode == 200) {
+        final body = jsonDecode(resp.body);
+        if (body is Map) {
+          _remoteClientId = (body['client_id'] ?? '').toString();
+          _remoteRedirectUri = (body['redirect_uri'] ?? '').toString();
+        }
+      }
+    } catch (_) {
+      // Sin red no hay config remota: caen los defines/defaults.
+    }
+  }
+
   /// true si hay client ID configurado para iniciar el flujo OAuth.
-  static bool get isConfigured => _serverClientId.trim().isNotEmpty;
+  static bool get isConfigured => _clientId.isNotEmpty;
 
   // Scopes mínimos: drive.file (solo archivos creados por la app, dentro de
   // la carpeta "Apuntes TI3") + openid email profile (capturar el correo).
@@ -35,7 +72,7 @@ class GoogleDriveService {
       'email',
       'profile',
     ],
-    serverClientId: _serverClientId,
+    serverClientId: _clientId,
   );
 
   /// Retorna serverAuthCode (oauth_code). En desktop abre navegador y escucha localhost.
@@ -59,12 +96,12 @@ class GoogleDriveService {
 
   Future<String?> _getServerAuthCodeDesktop({String? loginHint}) async {
     // redirect_uri canónica (debe estar en Cloud Console): ver GOOGLE_REDIRECT_URI.
-    final redirectUri = _redirectUri;
+    final redirectUri = _redirect;
     final hintParam = (loginHint != null && loginHint.trim().isNotEmpty)
         ? '&login_hint=${Uri.encodeComponent(loginHint.trim())}'
         : '';
     final authUrl =
-        'https://accounts.google.com/o/oauth2/v2/auth?response_type=code&scope=$_scopes&access_type=offline&prompt=consent&client_id=$_serverClientId&redirect_uri=$redirectUri$hintParam';
+        'https://accounts.google.com/o/oauth2/v2/auth?response_type=code&scope=$_scopes&access_type=offline&prompt=consent&client_id=$_clientId&redirect_uri=$redirectUri$hintParam';
     // Inicia servidor local para capturar code
     final server = await HttpServer.bind('localhost', 8081);
     if (!await launchUrl(Uri.parse(authUrl), mode: LaunchMode.externalApplication)) {
@@ -90,7 +127,7 @@ class GoogleDriveService {
     final hint = (loginHint != null && loginHint.trim().isNotEmpty)
         ? '&login_hint=${Uri.encodeComponent(loginHint.trim())}'
         : '';
-    return 'https://accounts.google.com/o/oauth2/v2/auth?response_type=code&scope=$_scopes&access_type=offline&prompt=consent&client_id=$_serverClientId&redirect_uri=$_redirectUri$hint';
+    return 'https://accounts.google.com/o/oauth2/v2/auth?response_type=code&scope=$_scopes&access_type=offline&prompt=consent&client_id=$_clientId&redirect_uri=$_redirect$hint';
   }
 
   Future<bool> openWebAuthUrl({String? loginHint}) {

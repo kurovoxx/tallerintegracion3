@@ -234,6 +234,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() => _driveStatus = _DriveStatus.connecting);
 
     try {
+      // Config OAuth desde el backend (.env raíz como única fuente).
+      await GoogleDriveService.ensureConfigured(backendBaseUrl: authApiBaseUrl);
       // En web no hay localhost que capture el code: diálogo pegar-código.
       final String? code = kIsWeb
           ? await _askWebAuthCode(messenger, declaredEmail)
