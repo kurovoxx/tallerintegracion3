@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/model"
@@ -18,8 +19,8 @@ type PGNoteStore struct {
 func NewPGNoteStore(pool *pgxpool.Pool) *PGNoteStore {
 	return &PGNoteStore{repo: repository.NewNoteRepository(pool), pool: pool}
 }
-func (p *PGNoteStore) Create(ctx context.Context, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string, syncStatus string) (*model.Note, error) {
-	return p.repo.Create(ctx, nil, userID, subjectID, title, externalFileID, visibility, forkedFrom, syncStatus)
+func (p *PGNoteStore) Create(ctx context.Context, noteID string, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string, syncStatus string) (*model.Note, error) {
+	return p.repo.Create(ctx, nil, noteID, userID, subjectID, title, externalFileID, visibility, forkedFrom, syncStatus)
 }
 func (p *PGNoteStore) GetByID(ctx context.Context, id string) (*model.Note, error) {
 	return p.repo.GetByID(ctx, nil, id)
@@ -27,8 +28,8 @@ func (p *PGNoteStore) GetByID(ctx context.Context, id string) (*model.Note, erro
 func (p *PGNoteStore) ListByUser(ctx context.Context, userID, cursor string, limit int) ([]*model.Note, string, error) {
 	return p.repo.ListByUser(ctx, nil, userID, cursor, limit)
 }
-func (p *PGNoteStore) Update(ctx context.Context, id string, title *string, visibility *string) (*model.Note, error) {
-	return p.repo.Update(ctx, nil, id, title, visibility)
+func (p *PGNoteStore) Update(ctx context.Context, id string, title *string, visibility *string, expectedVersion int64) (*model.Note, error) {
+	return p.repo.Update(ctx, nil, id, title, visibility, expectedVersion)
 }
 func (p *PGNoteStore) Delete(ctx context.Context, id string) error {
 	return p.repo.Delete(ctx, nil, id)
@@ -142,6 +143,92 @@ func (p *PGSharedStore) HasAnyShare(ctx context.Context, noteID string) (bool, e
 	return p.repo.HasAnyShare(ctx, nil, noteID)
 }
 
-func (s *PGNoteStore) InsertDeadLetter(ctx context.Context, fileID, reason string) error { return s.repo.InsertDeadLetter(ctx, nil, fileID, reason) }
+func (p *PGSharedStore) UpdatePermissionSyncStatus(ctx context.Context, id, status string) error {
+	return p.repo.UpdatePermissionSyncStatus(ctx, nil, id, status)
+}
 
-func (p *PGNoteStore) UpdateSyncStatus(ctx context.Context, noteID, syncStatus string) error { return p.repo.UpdateSyncStatus(ctx, nil, noteID, syncStatus) }
+func (p *PGSharedStore) UpdateNotePermissionSyncStatus(ctx context.Context, noteID, status string) error {
+	return p.repo.UpdateNotePermissionSyncStatus(ctx, nil, noteID, status)
+}
+
+func (p *PGSharedStore) ListNotesWithPendingPermissionSync(ctx context.Context, limit int) ([]string, error) {
+	return p.repo.ListNotesWithPendingPermissionSync(ctx, nil, limit)
+}
+
+func (p *PGSharedStore) ListManagedPermissions(ctx context.Context, noteID string) ([]*model.DriveManagedPermission, error) {
+	return p.repo.ListManagedPermissions(ctx, nil, noteID)
+}
+
+func (p *PGSharedStore) UpsertManagedPermission(ctx context.Context, permission *model.DriveManagedPermission) (*model.DriveManagedPermission, error) {
+	return p.repo.UpsertManagedPermission(ctx, nil, permission)
+}
+
+func (p *PGSharedStore) DeleteManagedPermission(ctx context.Context, noteID, principalType, principalKey string) error {
+	return p.repo.DeleteManagedPermission(ctx, nil, noteID, principalType, principalKey)
+}
+
+func (p *PGSharedStore) DeleteManagedPermissionsByNote(ctx context.Context, noteID string) error {
+	return p.repo.DeleteManagedPermissionsByNote(ctx, nil, noteID)
+}
+
+func (p *PGSharedStore) MarkManagedPermissionsPending(ctx context.Context, noteID string) error {
+	return p.repo.MarkManagedPermissionsPending(ctx, nil, noteID)
+}
+
+// WithNoteLock serializa por nota (lock distribuido pg_advisory_xact_lock) las
+// mutaciones del estado deseado de ACL, compartido entre réplicas.
+func (p *PGSharedStore) WithNoteLock(ctx context.Context, noteID string, fn func(ctx context.Context) error) error {
+	return p.repo.WithNoteLock(ctx, noteID, fn)
+}
+
+func (p *PGNoteStore) EnqueueDriveOperation(ctx context.Context, op, noteID, attID, fileID, ownerUserID string, payload map[string]any) error {
+	return p.repo.EnqueueDriveOperation(ctx, nil, op, noteID, attID, fileID, ownerUserID, payload)
+}
+
+func (p *PGNoteStore) ClaimDriveOperations(ctx context.Context, limit int, lockDuration time.Duration) ([]*model.DriveOperation, error) {
+	return p.repo.ClaimDriveOperations(ctx, limit, lockDuration)
+}
+
+func (p *PGNoteStore) CompleteDriveOperation(ctx context.Context, id string) error {
+	return p.repo.CompleteDriveOperation(ctx, id)
+}
+
+func (p *PGNoteStore) FailDriveOperation(ctx context.Context, id, errStr string, nextAttempt time.Time) error {
+	return p.repo.FailDriveOperation(ctx, id, errStr, nextAttempt)
+}
+
+func (p *PGNoteStore) DeleteWithDriveCleanup(ctx context.Context, noteID, requesterID string) (string, error) {
+	return p.repo.DeleteWithDriveCleanup(ctx, noteID, requesterID)
+}
+
+func (p *PGAttachmentStore) DeleteAttachmentWithDriveCleanup(ctx context.Context, noteID, attachmentID, requesterID string) (string, error) {
+	return p.repo.DeleteAttachmentWithDriveCleanup(ctx, noteID, attachmentID, requesterID)
+}
+
+func (p *PGNoteStore) UpdateSyncStatus(ctx context.Context, noteID, syncStatus string) error {
+	return p.repo.UpdateSyncStatus(ctx, nil, noteID, syncStatus)
+}
+
+// GetOrClaimIdempotencyKey expone el claim durable de idempotencia (Create/Copy)
+// sobre notes.idempotency_keys. preassignedResourceID pre-asocia el recurso
+// (noteID) al claim para recuperación lógica tras un crash.
+func (p *PGNoteStore) GetOrClaimIdempotencyKey(ctx context.Context, userID, operation, idempotencyKey, requestHash string, preassignedResourceID *string, expiresAt time.Time) (*model.IdempotencyKey, bool, error) {
+	return p.repo.GetOrClaimIdempotencyKey(ctx, nil, userID, operation, idempotencyKey, requestHash, preassignedResourceID, expiresAt)
+}
+
+// CompleteIdempotencyKey asocia el recurso creado a la clave reclamada.
+func (p *PGNoteStore) CompleteIdempotencyKey(ctx context.Context, userID, operation, idempotencyKey, resourceID string) error {
+	return p.repo.CompleteIdempotencyKey(ctx, nil, userID, operation, idempotencyKey, resourceID)
+}
+
+// DeleteIdempotencyKey libera una clave reclamada cuya operación falló.
+func (p *PGNoteStore) DeleteIdempotencyKey(ctx context.Context, userID, operation, idempotencyKey string) error {
+	return p.repo.DeleteIdempotencyKey(ctx, nil, userID, operation, idempotencyKey)
+}
+
+// MarkIdempotencyRecoverable marca la clave como 'recoverable' tras un fallo
+// posterior a la inserción local: preserva el recurso ya persistido para que un
+// reintento inmediato lo retome sin duplicar.
+func (p *PGNoteStore) MarkIdempotencyRecoverable(ctx context.Context, userID, operation, idempotencyKey, resourceID, lastErr string) error {
+	return p.repo.MarkIdempotencyRecoverable(ctx, nil, userID, operation, idempotencyKey, resourceID, lastErr)
+}

@@ -19,6 +19,7 @@ import (
 var (
 	testPNGBytes  = []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
 	testJPEGBytes = []byte("\xff\xd8\xff\xe0\x00\x10JFIF")
+	testPDFBytes  = []byte("%PDF-1.4\n1 0 obj")
 )
 
 // TestHandlerUploadDirectToDrive verifica POST /notes/upload: sube el binario
@@ -56,17 +57,17 @@ func TestHandlerUploadDirectToDrive(t *testing.T) {
 	}
 }
 
-// TestHandlerUploadMarkdownThenLink reproduce el flujo del mandato: subida
-// directa a Drive y posterior vinculación a la nota vía external_file_id.
-func TestHandlerUploadMarkdownThenLink(t *testing.T) {
+// TestHandlerUploadPdfThenLink reproduce el flujo del mandato para un tipo de
+// la whitelist estricta: subida directa a Drive y posterior vinculación a la
+// nota vía external_file_id.
+func TestHandlerUploadPdfThenLink(t *testing.T) {
 	r, svc, driveMock, _ := setupRouter()
 	userID := uuid.NewString()
 	token := genToken(userID, "student")
 
-	md := []byte("# Apunte\n\ncontenido markdown")
-	w := doMultipart(t, r, "/notes/upload", token, "apunte.md", "application/octet-stream", md)
+	w := doMultipart(t, r, "/notes/upload", token, "apunte.pdf", "application/octet-stream", testPDFBytes)
 	if w.Code != http.StatusCreated {
-		t.Fatalf("upload md esperaba 201, got %d %s", w.Code, w.Body.String())
+		t.Fatalf("upload pdf esperaba 201, got %d %s", w.Code, w.Body.String())
 	}
 	var up map[string]interface{}
 	json.Unmarshal(w.Body.Bytes(), &up)
@@ -74,15 +75,15 @@ func TestHandlerUploadMarkdownThenLink(t *testing.T) {
 	if extID == "" {
 		t.Fatal("external_file_id vacío")
 	}
-	if got, _ := up["file_type"].(string); got != "text/markdown" {
-		t.Fatalf("file_type = %q, want text/markdown", got)
+	if got, _ := up["file_type"].(string); got != "application/pdf" {
+		t.Fatalf("file_type = %q, want application/pdf", got)
 	}
-	if mt, _ := driveMock.FileMimeType(extID); mt != "text/markdown" {
-		t.Fatalf("mime en Drive = %q, want text/markdown", mt)
+	if mt, _ := driveMock.FileMimeType(extID); mt != "application/pdf" {
+		t.Fatalf("mime en Drive = %q, want application/pdf", mt)
 	}
 
 	nid := createNoteHTTP(t, r, token, "Nota con adjunto", "private", "c")
-	body := fmt.Sprintf(`{"external_file_id":%q,"file_name":"apunte.md","file_type":"application/octet-stream","is_inline":true}`, extID)
+	body := fmt.Sprintf(`{"external_file_id":%q,"file_name":"apunte.pdf","file_type":"application/octet-stream","is_inline":true}`, extID)
 	w2 := doReq(r, http.MethodPost, "/notes/"+nid+"/attachments", token, body)
 	if w2.Code != http.StatusCreated {
 		t.Fatalf("vincular adjunto esperaba 201, got %d %s", w2.Code, w2.Body.String())
@@ -105,8 +106,8 @@ func TestHandlerUploadMarkdownThenLink(t *testing.T) {
 	if len(list) != 1 {
 		t.Fatalf("adjuntos = %d, want 1", len(list))
 	}
-	if list[0].FileType != "text/markdown" {
-		t.Fatalf("file_type persistido = %q, want text/markdown (detección por extensión)", list[0].FileType)
+	if list[0].FileType != "application/pdf" {
+		t.Fatalf("file_type persistido = %q, want application/pdf (detección por extensión)", list[0].FileType)
 	}
 }
 
@@ -182,13 +183,13 @@ func TestHandlerAttachmentPreservesDeclaredMime(t *testing.T) {
 	}
 }
 
-// TestHandlerAttachmentDetectsMimeByExtension: sin MIME específico, la
-// extensión resuelve el tipo (application/pdf).
-func TestHandlerAttachmentDetectsMimeByExtension(t *testing.T) {
+// TestHandlerAttachmentSniffingWinsOverExtension: el contenido real manda; una
+// extensión .pdf con bytes PNG se persiste como image/png (nunca por extensión).
+func TestHandlerAttachmentSniffingWinsOverExtension(t *testing.T) {
 	r, _, driveMock, _ := setupRouter()
 	userID := uuid.NewString()
 	token := genToken(userID, "student")
-	nid := createNoteHTTP(t, r, token, "MIME por extensión", "private", "c")
+	nid := createNoteHTTP(t, r, token, "MIME por sniffing", "private", "c")
 
 	w := doMultipart(t, r, "/notes/"+nid+"/attachments", token, "informe.pdf", "application/octet-stream", testPNGBytes)
 	if w.Code != http.StatusCreated {
@@ -197,8 +198,80 @@ func TestHandlerAttachmentDetectsMimeByExtension(t *testing.T) {
 	var att map[string]interface{}
 	json.Unmarshal(w.Body.Bytes(), &att)
 	extID, _ := att["external_file_id"].(string)
-	if mt, _ := driveMock.FileMimeType(extID); mt != "application/pdf" {
-		t.Fatalf("mime en Drive = %q, want application/pdf (extensión .pdf)", mt)
+	if mt, _ := driveMock.FileMimeType(extID); mt != "image/png" {
+		t.Fatalf("mime en Drive = %q, want image/png (sniffing del contenido)", mt)
+	}
+}
+
+// TestHandlerAttachmentRejectsMimeMismatch: MIME declarado específico que
+// contradice el contenido real => 400 Bad Request sin tocar Drive.
+func TestHandlerAttachmentRejectsMimeMismatch(t *testing.T) {
+	r, _, driveMock, _ := setupRouter()
+	userID := uuid.NewString()
+	token := genToken(userID, "student")
+	nid := createNoteHTTP(t, r, token, "MIME mentido", "private", "c")
+	before := driveMock.FileCount()
+
+	w := doMultipart(t, r, "/notes/"+nid+"/attachments", token, "foto.jpg", "image/jpeg", testPNGBytes)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("mismatch MIME esperaba 400, got %d %s", w.Code, w.Body.String())
+	}
+	if driveMock.FileCount() != before {
+		t.Fatalf("no debe subirse nada a Drive ante mismatch: antes=%d ahora=%d", before, driveMock.FileCount())
+	}
+}
+
+// TestHandlerAttachmentRejectsUnsupportedContent: contenido fuera de la
+// whitelist estricta (texto/markdown) => 415 Unsupported Media Type.
+func TestHandlerAttachmentRejectsUnsupportedContent(t *testing.T) {
+	r, _, driveMock, _ := setupRouter()
+	userID := uuid.NewString()
+	token := genToken(userID, "student")
+	nid := createNoteHTTP(t, r, token, "Contenido no permitido", "private", "c")
+	before := driveMock.FileCount()
+
+	w := doMultipart(t, r, "/notes/"+nid+"/attachments", token, "apunte.md", "text/markdown", []byte("# Apunte\n\ncontenido"))
+	if w.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("contenido no permitido esperaba 415, got %d %s", w.Code, w.Body.String())
+	}
+	if driveMock.FileCount() != before {
+		t.Fatalf("no debe subirse nada a Drive ante 415: antes=%d ahora=%d", before, driveMock.FileCount())
+	}
+}
+
+// TestHandlerUploadDirectRejectsUnsupportedContent: el sniffing estricto
+// también aplica a la subida directa POST /notes/upload.
+func TestHandlerUploadDirectRejectsUnsupportedContent(t *testing.T) {
+	r, _, driveMock, _ := setupRouter()
+	userID := uuid.NewString()
+	token := genToken(userID, "student")
+	before := driveMock.FileCount()
+
+	w := doMultipart(t, r, "/notes/upload", token, "notas.txt", "text/plain", []byte("solo texto"))
+	if w.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("texto plano esperaba 415, got %d %s", w.Code, w.Body.String())
+	}
+	if driveMock.FileCount() != before {
+		t.Fatalf("no debe subirse nada a Drive ante 415: antes=%d ahora=%d", before, driveMock.FileCount())
+	}
+}
+
+// TestHandlerExternalAttachmentRejectsUnsupportedType: el registro de un
+// adjunto externo (JSON external_file_id) con un tipo fuera de la whitelist
+// estricta se rechaza con 415, igual que la subida multipart.
+func TestHandlerExternalAttachmentRejectsUnsupportedType(t *testing.T) {
+	r, _, driveMock, _ := setupRouter()
+	userID := uuid.NewString()
+	token := genToken(userID, "student")
+	nid := createNoteHTTP(t, r, token, "Externo no permitido", "private", "c")
+	extID, err := driveMock.CreateFile(context.Background(), userID, "", "doc.txt", "contenido")
+	if err != nil {
+		t.Fatalf("precondición Drive: %v", err)
+	}
+	body := fmt.Sprintf(`{"external_file_id":%q,"file_name":"doc.txt","file_type":"text/plain","is_inline":false}`, extID)
+	w := doReq(r, http.MethodPost, "/notes/"+nid+"/attachments", token, body)
+	if w.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("tipo externo no permitido esperaba 415, got %d %s", w.Code, w.Body.String())
 	}
 }
 

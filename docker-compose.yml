@@ -27,8 +27,8 @@ services:
     ports:
       - "8085:8080" # host 8081 reservado para callback OAuth local de Drive -> auth en 8085
     environment:
-      DATABASE_URL: ${DOCKER_DATABASE_URL}
-      DIRECT_URL: ${DOCKER_DATABASE_URL}
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable}
+      DIRECT_URL: ${DOCKER_DATABASE_URL:-postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable}
       JWT_SECRET: ${JWT_SECRET}
       JWT: ${JWT}
       PORT: 8080
@@ -53,8 +53,8 @@ services:
     ports:
       - "8082:8082"
     environment:
-      DATABASE_URL: ${DOCKER_DATABASE_URL}
-      DIRECT_URL: ${DOCKER_DATABASE_URL}
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable}
+      DIRECT_URL: ${DOCKER_DATABASE_URL:-postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable}
       JWT_SECRET: ${JWT_SECRET}
       JWT: ${JWT}
       PORT: 8082
@@ -62,6 +62,9 @@ services:
       STORAGE_MODE: drive
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      SOCIAL_SERVICE_URL: ${SOCIAL_SERVICE_URL:-http://social:8083}
+      SOCIAL_TIMEOUT: 5s
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
     depends_on:
       postgres:
         condition: service_healthy
@@ -77,14 +80,14 @@ services:
     ports:
       - "8083:8083"
     environment:
-      DATABASE_URL: postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable
-      DIRECT_URL: postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable
-      JWT_SECRET: 5987f6ae236ec37e229aaf3bcbd488b0ca3aa8c1c980a3a699ac47e42402e41f
-      JWT: 961e9b2e-0333-4ec9-aadb-72e95ca06e4d
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable}
+      DIRECT_URL: ${DOCKER_DATABASE_URL:-postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT: ${JWT}
       PORT: 8083
       SOCIAL_PORT: 8083
       AUTH_BASE_URL: http://auth:8080
-      INTERNAL_API_KEY: dev-internal-key-change-me
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
       CALENDAR_MODE: mock
       STREAM_API_KEY: ${STREAM_API_KEY}
       STREAM_API_SECRET: ${STREAM_API_SECRET:-dev-stream-secret-change-me}
@@ -105,6 +108,8 @@ services:
         BASE_URL: ${API_BASE_URL:-http://localhost:8085}
         NOTES_BASE_URL: ${NOTES_BASE_URL:-http://localhost:8082}
         SOCIAL_BASE_URL: ${SOCIAL_BASE_URL:-http://localhost:8083}
+        GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+        GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8081/auth/google/callback}
     container_name: ti3-front
     ports:
       - "8086:80"

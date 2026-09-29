@@ -1,5 +1,5 @@
 # Deploy en namespace student-brojas (cluster pillan).
-# DB real = Supabase (ver .env), no hay pod postgres acá.
+# DB = Postgres propio del cluster (k8s/postgres.yaml, service "postgres:5432"). Supabase ya no es la DB de pillan.
 # Secret "ti3-secrets" NO va acá (no se versiona). Ver k8s/create-secrets.sh.
 # Imagenes privadas en GHCR necesitan pull secret "ghcr-cred" (ver mismo script).
 
@@ -20,7 +20,7 @@ spec:
       imagePullSecrets: [{name: ghcr-cred}]
       containers:
         - name: auth
-          image: ghcr.io/pvcdf/tallerintegracion3-auth:latest
+          image: ghcr.io/kurovoxx/tallerintegracion3-auth:latest
           ports: [{containerPort: 8080}]
           resources:
             requests: {cpu: 50m, memory: 64Mi}
@@ -54,7 +54,7 @@ spec:
       imagePullSecrets: [{name: ghcr-cred}]
       containers:
         - name: notes
-          image: ghcr.io/pvcdf/tallerintegracion3-notes:latest
+          image: ghcr.io/kurovoxx/tallerintegracion3-notes:latest
           ports: [{containerPort: 8082}]
           resources:
             requests: {cpu: 50m, memory: 64Mi}
@@ -64,6 +64,8 @@ spec:
             - {name: PORT, value: "8082"}
             - {name: NOTES_PORT, value: "8082"}
             - {name: STORAGE_MODE, value: drive}
+            - {name: SOCIAL_SERVICE_URL, value: "http://social:8083"}
+            - {name: SOCIAL_TIMEOUT, value: "5s"}
 ---
 apiVersion: v1
 kind: Service
@@ -90,7 +92,7 @@ spec:
       imagePullSecrets: [{name: ghcr-cred}]
       containers:
         - name: social
-          image: ghcr.io/pvcdf/tallerintegracion3-social:latest
+          image: ghcr.io/kurovoxx/tallerintegracion3-social:latest
           ports: [{containerPort: 8083}]
           resources:
             requests: {cpu: 50m, memory: 64Mi}
@@ -127,7 +129,7 @@ spec:
       imagePullSecrets: [{name: ghcr-cred}]
       containers:
         - name: front
-          image: ghcr.io/pvcdf/tallerintegracion3-front:latest
+          image: ghcr.io/kurovoxx/tallerintegracion3-front:latest
           ports: [{containerPort: 80}]
           resources:
             requests: {cpu: 25m, memory: 64Mi}

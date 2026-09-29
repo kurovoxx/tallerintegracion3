@@ -11,7 +11,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository/sqlc"
 )
 
@@ -21,10 +20,23 @@ var (
 )
 
 type HoursService struct {
-	repo *repository.HoursRepository
+	repo HoursRepo
 }
 
-func NewHoursService(repo *repository.HoursRepository) *HoursService {
+// HoursRepo es la porción de persistencia que usa HoursService.
+// *repository.HoursRepository es la implementación real (Postgres);
+// MemoryTasksStore, la de tests.
+type HoursRepo interface {
+	GetTaskByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialSprintSheetTask, error)
+	GetSheetByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialSprintSheet, error)
+	IsMember(ctx context.Context, groupID, userID pgtype.UUID) (bool, error)
+	GetByTaskAndDate(ctx context.Context, arg sqlc.GetDailyHoursByTaskAndDateParams) (sqlc.SocialSprintSheetDailyHour, error)
+	ListByTask(ctx context.Context, arg sqlc.ListDailyHoursByTaskParams) ([]sqlc.SocialSprintSheetDailyHour, error)
+	Create(ctx context.Context, arg sqlc.CreateDailyHoursParams) (sqlc.SocialSprintSheetDailyHour, error)
+	Update(ctx context.Context, arg sqlc.UpdateDailyHoursParams) (sqlc.SocialSprintSheetDailyHour, error)
+}
+
+func NewHoursService(repo HoursRepo) *HoursService {
 	return &HoursService{
 		repo: repo,
 	}
@@ -82,17 +94,43 @@ func parseHours(hours float64) (pgtype.Numeric, error) {
 	return n, nil
 }
 
-func (s *HoursService) requireTask(ctx context.Context, tid pgtype.UUID) error {
-	if _, err := s.repo.GetTaskByID(ctx, tid); err != nil {
+// requireTaskGroup resuelve el grupo de la tarea (tarea → hoja → grupo).
+func (s *HoursService) requireTaskGroup(ctx context.Context, tid pgtype.UUID) (pgtype.UUID, error) {
+	var gid pgtype.UUID
+	task, err := s.repo.GetTaskByID(ctx, tid)
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrSprintTaskNotFound
+			return gid, ErrSprintTaskNotFound
 		}
+		return gid, err
+	}
+	sheet, err := s.repo.GetSheetByID(ctx, task.SheetID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return gid, ErrSprintTaskNotFound
+		}
+		return gid, err
+	}
+	return sheet.GroupID, nil
+}
+
+// requireMembership exige que el usuario pertenezca al grupo (403 si no).
+func (s *HoursService) requireMembership(ctx context.Context, gid, uid pgtype.UUID) error {
+	isMember, err := s.repo.IsMember(ctx, gid, uid)
+	if err != nil {
 		return err
+	}
+	if !isMember {
+		return ErrForbidden
 	}
 	return nil
 }
 
-func (s *HoursService) LogHours(ctx context.Context, taskID, logDate string, hours float64) (sqlc.SocialSprintSheetDailyHour, bool, error) {
+func (s *HoursService) LogHours(ctx context.Context, userID, taskID, logDate string, hours float64) (sqlc.SocialSprintSheetDailyHour, bool, error) {
+	uid, err := parseMeetingUserUUID(userID)
+	if err != nil {
+		return sqlc.SocialSprintSheetDailyHour{}, false, err
+	}
 	tid, err := parseTaskUUID(taskID)
 	if err != nil {
 		return sqlc.SocialSprintSheetDailyHour{}, false, err
@@ -105,7 +143,11 @@ func (s *HoursService) LogHours(ctx context.Context, taskID, logDate string, hou
 	if err != nil {
 		return sqlc.SocialSprintSheetDailyHour{}, false, err
 	}
-	if err := s.requireTask(ctx, tid); err != nil {
+	gid, err := s.requireTaskGroup(ctx, tid)
+	if err != nil {
+		return sqlc.SocialSprintSheetDailyHour{}, false, err
+	}
+	if err := s.requireMembership(ctx, gid, uid); err != nil {
 		return sqlc.SocialSprintSheetDailyHour{}, false, err
 	}
 
@@ -162,7 +204,11 @@ func (s *HoursService) LogHours(ctx context.Context, taskID, logDate string, hou
 	return created, true, nil
 }
 
-func (s *HoursService) ListHours(ctx context.Context, taskID, from, to string) ([]sqlc.SocialSprintSheetDailyHour, float64, error) {
+func (s *HoursService) ListHours(ctx context.Context, userID, taskID, from, to string) ([]sqlc.SocialSprintSheetDailyHour, float64, error) {
+	uid, err := parseMeetingUserUUID(userID)
+	if err != nil {
+		return nil, 0, err
+	}
 	tid, err := parseTaskUUID(taskID)
 	if err != nil {
 		return nil, 0, err
@@ -175,7 +221,11 @@ func (s *HoursService) ListHours(ctx context.Context, taskID, from, to string) (
 	if err != nil {
 		return nil, 0, err
 	}
-	if err := s.requireTask(ctx, tid); err != nil {
+	gid, err := s.requireTaskGroup(ctx, tid)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := s.requireMembership(ctx, gid, uid); err != nil {
 		return nil, 0, err
 	}
 

@@ -150,7 +150,9 @@ func (s *GroupService) Create(ctx context.Context, userID string, name string, d
 		return nil, newServiceError(utils.ErrInternal)
 	}
 
-	go s.notifier.OnGroupCreated(context.Background(), group.ID)
+	GoBestEffort("group-channel", func(ctx context.Context) {
+		s.notifier.OnGroupCreated(ctx, group.ID)
+	})
 
 	return group, nil
 }

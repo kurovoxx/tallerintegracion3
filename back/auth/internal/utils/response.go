@@ -37,6 +37,7 @@ const (
 	ErrForbidden          = "forbidden"
 	ErrInvalidToken       = "invalid_token"
 	ErrTokenExpired       = "token_expired"
+	ErrEmailMismatch      = "email_mismatch"
 )
 
 func MessageForCode(code string) string {
@@ -61,6 +62,8 @@ func MessageForCode(code string) string {
 		return "Token inválido"
 	case ErrTokenExpired:
 		return "Token expirado"
+	case ErrEmailMismatch:
+		return "El correo declarado no coincide con la cuenta de Google conectada"
 	default:
 		return "Error"
 	}

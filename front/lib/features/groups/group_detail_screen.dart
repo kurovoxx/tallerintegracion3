@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../core/models/social_models.dart';
+import '../../core/services/social_service.dart';
 import '../chat/group_chat_screen.dart';
 import '../workspace/kanban_screen.dart';
 import '../workspace/schedule_meeting_screen.dart';
@@ -8,7 +10,10 @@ import '../workspace/sprint_sheet_screen.dart';
 class GroupDetailScreen extends StatefulWidget {
   final Map<String, dynamic> group;
 
-  const GroupDetailScreen({super.key, required this.group});
+  const GroupDetailScreen({super.key, required this.group, SocialService? service})
+      : _serviceOverride = service;
+
+  final SocialService? _serviceOverride;
 
   @override
   State<GroupDetailScreen> createState() => _GroupDetailScreenState();
@@ -19,6 +24,12 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> with SingleTicker
   int _currentIndex = 0;
 
   final List<String> _tabs = const ['CHAT', 'DISCORD', 'HOJA SPRINT', 'KANBAN', 'AGENDAR'];
+
+  late final SocialService _service;
+  bool _loadingHeader = false;
+  String? _headerError;
+  GroupDetail? _detail;
+  String? _loadedForId;
 
   @override
   void initState() {
@@ -31,19 +42,191 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> with SingleTicker
         setState(() => _currentIndex = _tabController.index);
       }
     });
+    _service = widget._serviceOverride ?? SocialService();
+    _maybeLoadHeader();
+  }
+
+  @override
+  void didUpdateWidget(GroupDetailScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.group['id']?.toString() != widget.group['id']?.toString()) {
+      _maybeLoadHeader();
+    }
   }
 
   @override
   void dispose() {
     _tabController.dispose();
+    if (widget._serviceOverride == null) _service.dispose();
     super.dispose();
+  }
+
+  String? _realGroupId() {
+    final raw = widget.group['id']?.toString().trim() ?? '';
+    // El backend usa UUID (36 con guiones). Los mocks viejos (g1/g2) no son
+    // reales: se tratan como sin grupo para no llamar con ID inválido.
+    final uuid = RegExp(
+        r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$');
+    if (uuid.hasMatch(raw)) return raw;
+    return null;
+  }
+
+  // Cabecera real: GET /groups/:id (GroupView).
+  // Ver back/social/internal/handler/http/group_handler.go:119 Get.
+  Future<void> _loadHeader() async {
+    final id = _realGroupId();
+    if (id == null) return;
+    if (!mounted) return;
+    setState(() {
+      _loadingHeader = true;
+      _headerError = null;
+    });
+    try {
+      final d = await _service.getGroup(id);
+      if (!mounted) return;
+      setState(() {
+        _detail = d;
+        _loadedForId = id;
+        _loadingHeader = false;
+      });
+    } on SocialApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _headerError = e.toString();
+        _loadingHeader = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _headerError = 'No se pudo cargar el grupo: $e';
+        _loadingHeader = false;
+      });
+    }
+  }
+
+  void _maybeLoadHeader() {
+    final id = _realGroupId();
+    if (id == null) return;
+    if (_loadedForId == id && _detail != null) return;
+    _detail = null;
+    _loadHeader();
+  }
+
+  Widget _buildHeaderTitle(String? groupId) {
+    // Sin UUID real: solo datos de navegación, rotulados como no actualizados.
+    if (groupId == null) {
+      final navName =
+          (widget.group['name']?.toString() ?? 'Grupo').toUpperCase();
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(navName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                  color: Color(0xFF1A1A1A),
+                  letterSpacing: -0.3)),
+          const Text('Datos de navegación (no actualizados)',
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF555555))),
+          const Text('Vista previa local: ID no es UUID real, sin backend',
+              style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF8A6D00))),
+        ],
+      );
+    }
+    if (_loadingHeader) {
+      return const Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('CARGANDO GRUPO REAL...',
+              style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                  color: Color(0xFF1A1A1A),
+                  letterSpacing: -0.3)),
+          SizedBox(height: 4),
+          SizedBox(
+              width: 120,
+              height: 4,
+              child: LinearProgressIndicator(
+                  color: Color(0xFF1A1A1A),
+                  backgroundColor: Color(0xFFF5F0E8))),
+        ],
+      );
+    }
+    if (_headerError != null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('NO SE PUDO CARGAR EL GRUPO (REAL)',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w900,
+                  color: Color(0xFF1A1A1A))),
+          Text(_headerError!,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF555555))),
+          InkWell(
+            onTap: _loadHeader,
+            child: const Text('REINTENTAR',
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFF1A1A1A),
+                    decoration: TextDecoration.underline)),
+          ),
+        ],
+      );
+    }
+    final d = _detail;
+    if (d == null) {
+      return const Text('GRUPO',
+          style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w900,
+              color: Color(0xFF1A1A1A)));
+    }
+    final desc = (d.description == null || d.description!.trim().isEmpty)
+        ? 'Sin descripción (real)'
+        : d.description!.trim();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(d.name.toUpperCase(),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w900,
+                color: Color(0xFF1A1A1A),
+                letterSpacing: -0.3)),
+        Text('$desc · ${d.role} (real GET /groups/:id)',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF555555))),
+      ],
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final groupName = widget.group['name'] as String? ?? 'Grupo';
-    final subject = widget.group['subject'] as String? ?? 'General';
-    final members = widget.group['members'] as int? ?? 0;
+    final groupId = _realGroupId();
 
     return Scaffold(
       backgroundColor: const Color(0xFFF5F0E8),
@@ -56,17 +239,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> with SingleTicker
           icon: const Icon(Icons.arrow_back_rounded, color: Color(0xFF1A1A1A)),
           onPressed: () => Navigator.of(context).pop(),
         ),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(groupName.toUpperCase(),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: Color(0xFF1A1A1A), letterSpacing: -0.3)),
-            Text('$subject · $members integrantes',
-                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF555555))),
-          ],
-        ),
+        title: _buildHeaderTitle(groupId),
       ),
       body: Column(
         children: [
@@ -134,12 +307,12 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> with SingleTicker
           Expanded(
             child: TabBarView(
               controller: _tabController,
-              children: const [
-                GroupChatTab(),
-                GroupDiscordTab(),
-                SprintSheetScreen(),
-                KanbanScreen(),
-                ScheduleMeetingScreen(),
+              children: [
+                GroupChatTab(groupId: groupId),
+                const GroupDiscordTab(),
+                SprintSheetScreen(groupId: groupId),
+                KanbanScreen(groupId: groupId),
+                ScheduleMeetingScreen(groupId: groupId),
               ],
             ),
           ),
@@ -150,11 +323,13 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> with SingleTicker
 }
 
 class GroupChatTab extends StatelessWidget {
-  const GroupChatTab({super.key});
+  const GroupChatTab({super.key, this.groupId});
+
+  final String? groupId;
 
   @override
   Widget build(BuildContext context) {
-    return const GroupChatScreen();
+    return GroupChatScreen(groupId: groupId);
   }
 }
 
@@ -261,28 +436,34 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
 }
 
 class GroupSprintTab extends StatelessWidget {
-  const GroupSprintTab({super.key});
+  const GroupSprintTab({super.key, this.groupId});
+
+  final String? groupId;
 
   @override
   Widget build(BuildContext context) {
-    return const SprintSheetScreen();
+    return SprintSheetScreen(groupId: groupId);
   }
 }
 
 class GroupKanbanTab extends StatelessWidget {
-  const GroupKanbanTab({super.key});
+  const GroupKanbanTab({super.key, this.groupId});
+
+  final String? groupId;
 
   @override
   Widget build(BuildContext context) {
-    return const KanbanScreen();
+    return KanbanScreen(groupId: groupId);
   }
 }
 
 class GroupScheduleTab extends StatelessWidget {
-  const GroupScheduleTab({super.key});
+  const GroupScheduleTab({super.key, this.groupId});
+
+  final String? groupId;
 
   @override
   Widget build(BuildContext context) {
-    return const ScheduleMeetingScreen();
+    return ScheduleMeetingScreen(groupId: groupId);
   }
 }

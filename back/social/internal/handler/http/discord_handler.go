@@ -21,6 +21,12 @@ func NewDiscordHandler(svc *service.DiscordService) *DiscordHandler {
 	return &DiscordHandler{svc: svc}
 }
 
+// RegisterRoutes registra las rutas de Discord en un router ya protegido por
+// el middleware de autenticación. main.go y los tests comparten esta lista.
+func (h *DiscordHandler) RegisterRoutes(r gin.IRoutes) {
+	r.PUT("/groups/:id/discord-config", h.PutConfig)
+}
+
 // PUT /groups/{id}/discord-config — contrato: agentApiContract.md sección 5
 // Body: {server_name, invite_url, webhook_url?} → 200. Solo admin.
 type PutDiscordConfigRequest struct {

@@ -4,10 +4,10 @@
 set -euo pipefail
 
 kubectl create secret generic ti3-secrets -n student-brojas \
-  --from-literal=DATABASE_URL="<pegar de .env>" \
-  --from-literal=DIRECT_URL="<pegar de .env>" \
+  --from-literal=DATABASE_URL="postgresql://postgres:<POSTGRES_PASSWORD de postgres-auth>@postgres:5432/postgres?sslmode=disable" \
+  --from-literal=DIRECT_URL="postgresql://postgres:<POSTGRES_PASSWORD de postgres-auth>@postgres:5432/postgres?sslmode=disable" \
   --from-literal=JWT="<pegar de .env>" \
-  --from-literal=JWT_SECRET="<pegar del docker-compose.yml, bloque social>" \
+  --from-literal=JWT_SECRET="<secreto HS256 comun a auth/notes/social: openssl rand -hex 32>" \
   --from-literal=SUPABASE_URL="<pegar de .env>" \
   --from-literal=DISCOVERY_URL="<pegar de .env>" \
   --from-literal=INTERNAL_API_KEY="dev-internal-key-change-me" \

@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -70,19 +73,11 @@ func runServer(pool *pgxpool.Pool, driveClient drive.Client, cfg *config.Config)
 	savedStore := service.NewPGSavedStore(pool)
 	likeStore := service.NewPGLikeStore(pool)
 	sharedStore := service.NewPGSharedStore(pool)
-	social := service.NewMemorySocialResolver()
-	if os.Getenv("APP_ENV") == "development" || os.Getenv("DEV_SEED_SOCIAL") == "true" {
-		testUserA := "11111111-1111-1111-1111-111111111111"
-		testUserB := "22222222-2222-2222-2222-222222222222"
-		testGroupID := "33333333-3333-3333-3333-333333333333"
-		social.AddAdmin(testUserA, testGroupID)
-		social.AddMember(testUserB, testGroupID)
-		log.Println("notes: semilla de desarrollo cargada para SocialResolver")
-	}
+	social, members := newSocialAdapters(cfg)
 	svc := service.NewNoteService(noteStore, attStore, savedStore, likeStore, sharedStore, driveClient, social)
-	// Directorio de correos para share restricted: noop por ahora. El adaptador
-	// real (gRPC a Social/Identity) se inyectará aquí vía SetMemberDirectory.
-	svc.SetMemberDirectory(service.NewNoopMemberDirectory())
+	// Directorio de correos para share restricted: adaptador HTTP real a Social
+	// (o memoria solo con DEV_SEED_SOCIAL explícito).
+	svc.SetMemberDirectory(members)
 	startGin(svc, cfg)
 }
 
@@ -93,12 +88,21 @@ func runServerMemory(driveClient drive.Client, cfg *config.Config) {
 	likeStore := service.NewMemoryLikeStore()
 	likeStore.SetNoteStore(noteStore)
 	sharedStore := service.NewMemorySharedStore()
-	social := service.NewMemorySocialResolver()
+	social, members := newSocialAdapters(cfg)
 
 	svc := service.NewNoteService(noteStore, attStore, savedStore, likeStore, sharedStore, driveClient, social)
-	// Mismo seam que runServer: el adaptador gRPC real irá aquí.
-	svc.SetMemberDirectory(service.NewNoopMemberDirectory())
+	svc.SetMemberDirectory(members)
 	startGin(svc, cfg)
+}
+
+// newSocialAdapters inyecta los adaptadores de Social: clientes HTTP reales
+// contra SOCIAL_SERVICE_URL con timeout y degradación controlada. No hay
+// adaptadores mock fijos en producción; los resolvers en memoria solo viven en
+// los tests (service/store_memory.go).
+func newSocialAdapters(cfg *config.Config) (service.SocialResolver, service.GroupMemberDirectory) {
+	adapter := service.NewSocialHTTPAdapter(cfg.SocialServiceURL, cfg.SocialTimeout, cfg.InternalAPIKey)
+	log.Printf("notes: adaptadores Social HTTP activados (base=%s timeout=%s)", cfg.SocialServiceURL, cfg.SocialTimeout)
+	return adapter, adapter
 }
 
 // startGin inicia Gin con middleware y rutas según agentApiContract.md
@@ -147,7 +151,44 @@ func startGin(svc *service.NoteService, cfg *config.Config) {
 
 	addr := ":" + cfg.Port
 	log.Printf("Notes service corriendo en http://localhost%s", addr)
-	if err := r.Run(addr); err != nil {
-		log.Fatalf("Error iniciando notes service: %v", err)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	interval := cfg.ReconcileInterval
+	if interval <= 0 {
+		interval = 30 * time.Second
 	}
+	reconcileDone := make(chan struct{})
+	go func() {
+		defer close(reconcileDone)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := svc.ReconcilePendingNotes(ctx); err != nil && ctx.Err() == nil {
+					log.Printf("notes: reconciliation failed: %v", err)
+				}
+			}
+		}
+	}()
+	server := &http.Server{Addr: addr, Handler: r, ReadHeaderTimeout: 10 * time.Second}
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.ListenAndServe() }()
+	select {
+	case <-ctx.Done():
+	case err := <-serverDone:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("Error iniciando notes service: %v", err)
+		}
+	}
+	stop()
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancelShutdown()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("notes: graceful shutdown: %v", err)
+		_ = server.Close()
+	}
+	<-reconcileDone
 }

@@ -11,10 +11,11 @@ import (
 // provider = google_drive; fallback documentado: identity.users.email. Los
 // miembros sin correo válido se omiten.
 //
-// Notes nunca consulta esos schemas directamente: el adaptador real (gRPC a
-// Social/Identity, futuro archivo grpc_member_directory.go) implementará esta
-// interfaz. En producción se inyecta vía SetMemberDirectory; en tests se usa
-// MemoryMemberDirectory.
+// Notes nunca consulta esos schemas directamente: el adaptador de producción es
+// el cliente HTTP a Social (social_adapter.go, /internal/groups/{id}/member-emails)
+// inyectado en main.go vía SetMemberDirectory; en tests se usa
+// MemoryMemberDirectory. NewNoopMemberDirectory queda solo como default seguro
+// de construcción (grupo sin miembros), nunca como adaptador de producción.
 type GroupMemberDirectory interface {
 	// ListMemberEmails retorna los correos crudos de los miembros del grupo.
 	// Puede contener duplicados, vacíos o mayúsculas: el servicio normaliza
@@ -41,7 +42,8 @@ func NormalizeEmails(emails []string) []string {
 	return out
 }
 
-// noopMemberDirectory retorna grupo sin miembros (adaptador aún no configurado).
+// noopMemberDirectory retorna grupo sin miembros: default seguro de
+// construcción para tests; producción inyecta SocialHTTPAdapter.
 type noopMemberDirectory struct{}
 
 // NewNoopMemberDirectory crea el directorio nulo usado por defecto.

@@ -24,6 +24,13 @@ func (r *TodoRepository) GetGroupByID(ctx context.Context, id pgtype.UUID) (sqlc
 	return r.queries.GetGroupByID(ctx, id)
 }
 
+func (r *TodoRepository) IsMember(ctx context.Context, groupID, userID pgtype.UUID) (bool, error) {
+	return r.queries.IsGroupMember(ctx, sqlc.IsGroupMemberParams{
+		GroupID: groupID,
+		UserID:  userID,
+	})
+}
+
 func (r *TodoRepository) GetBoardByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialTodoBoard, error) {
 	return r.queries.GetBoardByID(ctx, id)
 }

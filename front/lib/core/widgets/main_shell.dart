@@ -8,23 +8,28 @@ import '../../features/academic/profile_screen.dart';
 import '../../features/academic/schedule_screen.dart';
 import '../../features/groups/groups_screen.dart';
 import '../../features/notes/all_notes_screen.dart';
+import '../models/social_models.dart';
+import '../services/social_service.dart';
 import '../theme/app_theme.dart';
 import 'neobrutalism.dart';
 
 /// Shell global neobrutalista y responsivo:
 /// - expandido (> 1024 dp): sidebar 280/72 dp + canvas centrado.
 /// - medio (600-1024 dp): rail colapsado de 72 dp + canvas centrado.
-/// - compacto (< 600 dp): drawer + bottom navigation + FAB contextual.
+/// - compacto (< 600 dp): drawer + FAB contextual.
 ///
 /// La creación de notas es estrictamente contextual a la pantalla de Notas:
 /// en desktop vive en la cabecera de AllNotesScreen y en mobile la aporta el
 /// FAB, visible solo cuando la pestaña activa es Notas. El shell no intercepta
 /// atajos de teclado: Ctrl+N (Cmd+N) lo gestiona AllNotesScreen localmente.
 class MainShell extends StatefulWidget {
-  const MainShell({super.key, this.initialIndex = 5, this.userData});
+  const MainShell(
+      {super.key, this.initialIndex = 5, this.userData, SocialService? service})
+      : _serviceOverride = service;
 
   final int initialIndex;
   final Map<String, dynamic>? userData;
+  final SocialService? _serviceOverride;
 
   @override
   State<MainShell> createState() => _MainShellState();
@@ -32,6 +37,7 @@ class MainShell extends StatefulWidget {
 
 class _MainShellState extends State<MainShell> {
   static const int _notesIndex = 5;
+  static const int _groupsIndex = 6;
 
   late int _selectedIndex;
   bool _isCollapsed = false;
@@ -39,10 +45,51 @@ class _MainShellState extends State<MainShell> {
   final GlobalKey<AllNotesScreenState> _notesKey =
       GlobalKey<AllNotesScreenState>();
 
+  late final SocialService _social;
+  Overview? _overview;
+  String? _sidebarError;
+  bool _loadingSidebar = false;
+
   @override
   void initState() {
     super.initState();
     _selectedIndex = widget.initialIndex;
+    _social = widget._serviceOverride ?? SocialService();
+    _loadSidebar();
+  }
+
+  @override
+  void dispose() {
+    if (widget._serviceOverride == null) _social.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadSidebar() async {
+    if (!mounted) return;
+    setState(() {
+      _loadingSidebar = true;
+      _sidebarError = null;
+    });
+    try {
+      final ov = await _social.getOverview();
+      if (!mounted) return;
+      setState(() {
+        _overview = ov;
+        _loadingSidebar = false;
+      });
+    } on SocialApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _sidebarError = e.toString();
+        _loadingSidebar = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _sidebarError = 'Sin conexión: $e';
+        _loadingSidebar = false;
+      });
+    }
   }
 
   // Pantallas del shell global: 5 académicas + 3 de espacio general.
@@ -119,8 +166,6 @@ class _MainShellState extends State<MainShell> {
     _notesKey.currentState?.openCreateDialog();
   }
 
-  void _openMore() => _scaffoldKey.currentState?.openDrawer();
-
   @override
   Widget build(BuildContext context) {
     final breakpoint = context.breakpoint;
@@ -132,7 +177,6 @@ class _MainShellState extends State<MainShell> {
       backgroundColor: AppColors.bg,
       appBar: _buildAppBar(isDesktop: isDesktop),
       drawer: isDesktop ? null : _buildDrawer(),
-      bottomNavigationBar: isCompact ? _buildBottomNav() : null,
       // El FAB de creación es contextual: solo en la pestaña de Notas.
       floatingActionButton: isCompact && _selectedIndex == _notesIndex
           ? NeobrutalistFab(
@@ -324,6 +368,7 @@ class _MainShellState extends State<MainShell> {
             },
           ),
         ),
+        _buildGroupsFooter(isCollapsed: isCollapsed),
         const Divider(
           color: AppColors.border,
           thickness: AppDimens.borderWidth,
@@ -331,6 +376,133 @@ class _MainShellState extends State<MainShell> {
         ),
         _buildProfileFooter(isCollapsed: isCollapsed),
       ],
+    );
+  }
+
+  // Barra lateral global real: GET /me/overview.sidebar.groups.
+  // Ver back/social/internal/handler/http/view_handler.go:29 y model/views.go.
+  Widget _buildGroupsFooter({required bool isCollapsed}) {
+    if (isCollapsed) {
+      final count = _overview?.groupsCount;
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Center(
+          child: _loadingSidebar
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : InkWell(
+                  onTap: () => _onSelectPage(_groupsIndex),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: AppColors.accentYellow,
+                      border: Border.all(
+                          color: AppColors.border,
+                          width: AppDimens.borderWidth),
+                      borderRadius:
+                          BorderRadius.circular(AppDimens.radiusChip),
+                    ),
+                    child: Text('${count ?? '·'}',
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w900, fontSize: 11)),
+                  ),
+                ),
+        ),
+      );
+    }
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: AppColors.bg,
+        border:
+            Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text('MIS GRUPOS (REAL)',
+                    style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.6,
+                        color: AppColors.muted)),
+              ),
+              InkWell(
+                onTap: _loadingSidebar ? null : _loadSidebar,
+                child: const Icon(Icons.refresh_rounded,
+                    size: 14, color: AppColors.text),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          if (_loadingSidebar)
+            const Center(
+                child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2)))
+          else if (_sidebarError != null)
+            Text(_sidebarError!,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.mutedStrong))
+          else if (_overview == null || _overview!.sidebarGroups.isEmpty)
+            const Text('Sin grupos. Crea uno en Grupos.',
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.mutedStrong))
+          else ...[
+            Text(
+                '${_overview!.groupsCount} grupos · ${_overview!.adminGroupsCount} admin (real)',
+                style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.text)),
+            const SizedBox(height: 6),
+            for (final g in _overview!.sidebarGroups.take(5))
+              InkWell(
+                onTap: () => _onSelectPage(_groupsIndex),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.groups_rounded,
+                          size: 13, color: AppColors.text),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(g.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.text)),
+                      ),
+                      Text(g.role,
+                          style: const TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.mutedStrong)),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ],
+      ),
     );
   }
 
@@ -394,52 +566,6 @@ class _MainShellState extends State<MainShell> {
     );
   }
 
-  Widget _buildBottomNav() {
-    final primaryIndexes = <int>[
-      for (int i = 0; i < _navItems.length; i++)
-        if (_navItems[i].short != null) i,
-    ];
-    final moreSelected = !primaryIndexes.contains(_selectedIndex);
-
-    return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.surface,
-        border: Border(
-          top: BorderSide(
-            color: AppColors.border,
-            width: AppDimens.borderWidth,
-          ),
-        ),
-      ),
-      child: SafeArea(
-        top: false,
-        child: SizedBox(
-          height: 62,
-          child: Row(
-            children: <Widget>[
-              for (final int index in primaryIndexes)
-                Expanded(
-                  child: _BottomNavTile(
-                    icon: _navItems[index].icon,
-                    label: _navItems[index].short!,
-                    isSelected: _selectedIndex == index,
-                    onTap: () => _onSelectPage(index),
-                  ),
-                ),
-              Expanded(
-                child: _BottomNavTile(
-                  icon: Icons.more_horiz_rounded,
-                  label: 'Más',
-                  isSelected: moreSelected,
-                  onTap: _openMore,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 class _NavItem {
@@ -527,65 +653,6 @@ class _SidebarTile extends StatelessWidget {
         vertical: 3,
       ),
       child: isCollapsed ? Tooltip(message: label, child: tile) : tile,
-    );
-  }
-}
-
-class _BottomNavTile extends StatelessWidget {
-  const _BottomNavTile({
-    required this.icon,
-    required this.label,
-    required this.isSelected,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final bool isSelected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return ClickCursor(
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: AppMotion.fast,
-          curve: AppMotion.standard,
-          margin: const EdgeInsets.symmetric(
-            horizontal: AppDimens.spaceXs,
-            vertical: 6,
-          ),
-          decoration: BoxDecoration(
-            color: isSelected ? AppColors.accentYellow : Colors.transparent,
-            border: Border.all(
-              color: isSelected ? AppColors.border : Colors.transparent,
-              width: AppDimens.borderWidth,
-            ),
-            borderRadius: BorderRadius.circular(AppDimens.radius),
-            boxShadow: isSelected ? AppShadows.badge : null,
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: <Widget>[
-              Icon(icon, size: 20, color: AppColors.text),
-              const SizedBox(height: 2),
-              Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.2,
-                  color: AppColors.text,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }

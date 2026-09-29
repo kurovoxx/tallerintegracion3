@@ -90,10 +90,13 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 		))
 	meetingH := httpHandler.NewMeetingHandler(meetingSvc)
 
+	streamTokenSvc := service.NewStreamTokenService(streamRepo, cfg.StreamSecret)
+	streamH := httpHandler.NewStreamHandler(streamTokenSvc)
+
 	viewSvc := service.NewViewService(groupSvc, todoSvc, sprintSvc, meetingSvc)
 	viewH := httpHandler.NewViewHandler(groupSvc, viewSvc)
 
-	startGin(groupSvc, todoH, sprintH, hoursH, meetingH, discordH, viewH, pool, cfg)
+	startGin(groupSvc, todoH, sprintH, hoursH, meetingH, discordH, viewH, streamH, pool, cfg)
 }
 
 func calendarNotifierFor(cfg *config.Config, meetingRepo *repository.MeetingRepository) service.MeetingCreatedNotifier {
@@ -139,7 +142,7 @@ func streamNotifierFor(cfg *config.Config, streamRepo *repository.StreamReposito
 	)
 }
 
-func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, meetingH *httpHandler.MeetingHandler, discordH *httpHandler.DiscordHandler, viewH *httpHandler.ViewHandler, pool *pgxpool.Pool, cfg *config.Config) {
+func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, meetingH *httpHandler.MeetingHandler, discordH *httpHandler.DiscordHandler, viewH *httpHandler.ViewHandler, streamH *httpHandler.StreamHandler, pool *pgxpool.Pool, cfg *config.Config) {
 	validator := &middleware.SimpleHS256Validator{
 		Secret:   []byte(cfg.JWTSecret),
 		Issuer:   "apuntes-auth",
@@ -187,16 +190,17 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 
 		protected.POST("/groups/:id/todo", todoH.CreateTodo)
 		protected.GET("/groups/:id/todo", todoH.ListTodos)
-		protected.PATCH("/groups/:id/todo", todoH.UpdateTodo)
-		protected.DELETE("/groups/:id/todo", todoH.DeleteTodo)
+		protected.PATCH("/groups/:id/todo/:taskId", todoH.UpdateTodo)
+		protected.DELETE("/groups/:id/todo/:taskId", todoH.DeleteTodo)
 		protected.POST("/groups/:id/sprint-sheet", sprintH.CreateSprintTask)
 		protected.GET("/groups/:id/sprint-sheet", sprintH.ListSprintTasks)
-		protected.PATCH("/groups/:id/sprint-sheet", sprintH.UpdateSprintTask)
-		protected.DELETE("/groups/:id/sprint-sheet", sprintH.DeleteSprintTask)
+		protected.PATCH("/groups/:id/sprint-sheet/:taskId", sprintH.UpdateSprintTask)
+		protected.DELETE("/groups/:id/sprint-sheet/:taskId", sprintH.DeleteSprintTask)
 		protected.POST("/sprint-sheet/:taskId/hours", hoursH.LogHours)
 		protected.GET("/sprint-sheet/:taskId/hours", hoursH.ListHours)
 		protected.POST("/groups/:id/meetings", meetingH.CreateMeeting)
-		protected.PUT("/groups/:id/discord-config", discordH.PutConfig)
+		protected.GET("/groups/:id/stream-token", streamH.Token)
+		discordH.RegisterRoutes(protected)
 	}
 
 	addr := ":" + cfg.Port

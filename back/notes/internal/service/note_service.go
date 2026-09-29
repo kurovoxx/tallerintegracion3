@@ -2,11 +2,15 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/drive"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/model"
+	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/repository"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/utils"
 )
 
@@ -99,175 +104,168 @@ func sanitizeMarkdown(content string) string {
 }
 
 // maxIdempotencyKeyLength acota la longitud de la clave de idempotencia
-// admitida: una clave desmedida no se cachea (evita abuso de memoria con
-// headers X-Idempotency-Key gigantes). Vacío => sin idempotencia.
+// admitida: una clave desmedida no se registra (evita abuso con headers
+// X-Idempotency-Key gigantes). Vacío => sin idempotencia.
 const maxIdempotencyKeyLength = 128
 
-// idemKey namespacea la clave de idempotencia por operación (create/copy) para
-// evitar colisiones cruzadas entre endpoints. Vacío => sin idempotencia.
+// idemKey normaliza la clave de idempotencia: la operación ya namespacea la
+// clave en la UNIQUE (user_id, operation, idempotency_key) de
+// notes.idempotency_keys. Vacío o demasiado larga => sin idempotencia.
 func idemKey(op, key string) string {
 	if strings.TrimSpace(key) == "" || len(key) > maxIdempotencyKeyLength {
 		return ""
 	}
-	return op + ":" + key
+	return strings.TrimSpace(key)
 }
 
-// idemStatus modela el estado de una entrada del caché de idempotencia.
-type idemStatus int
-
+// Ventanas de la idempotencia durable:
+//   - idemClaimTTL es el lease del claim 'in_progress': si el proceso muere a
+//     mitad de la operación, un reintento con la misma clave puede reclamarla
+//     pasados 2 minutos (crash recovery) en lugar de quedar bloqueado.
+//   - inMemoryIdempotencyReplayTTL es la retención de un registro 'completed'
+//     en el store en memoria (espejo del intervalo '24 hours' de PostgreSQL).
 const (
-	// idemInFlight: hay una operación en curso para la clave.
-	idemInFlight idemStatus = iota
-	// idemSuccess: la operación terminó y su resultado es replicable.
-	idemSuccess
+	idemClaimTTL                 = 2 * time.Minute
+	inMemoryIdempotencyReplayTTL = 24 * time.Hour
 )
 
-// idemEntry es la entrada unificada del caché de idempotencia: encapsula el
-// estado de la operación (in-flight o success), la respuesta exitosa (note)
-// cuando aplica y el instante de creación para expirar la entrada.
+// idempotencyRequestHash deriva el hash canónico del payload de una operación:
+// misma clave + mismo hash => replay legítimo; misma clave + hash distinto =>
+// conflicto 409.
+func idempotencyRequestHash(operation string, parts ...string) string {
+	h := sha256.New()
+	h.Write([]byte(operation))
+	for _, part := range parts {
+		h.Write([]byte{0})
+		h.Write([]byte(part))
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// derefOrEmpty aplana un *string opcional para el hash de idempotencia.
+func derefOrEmpty(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+// beginIdempotentOperation reclama la clave durable en BD o resuelve un replay.
 //
-// Un único tipo evita la falsa condición de carrera del centinela booleano:
-// in-flight y replay exitoso comparten el mismo struct y el estado se
-// discrimina por el campo status, nunca por el tipo dinámico del valor.
-type idemEntry struct {
-	status    idemStatus
-	note      *model.Note
-	createdAt time.Time
-}
-
-// Ventanas de expiración del caché de idempotencia:
-//   - idemInFlightTTL: una operación in-flight más antigua se considera colgada
-//     (crash a mitad de camino) y la clave se purga para permitir reprocesar.
-//   - idemSuccessTTL: TTL del replay exitoso cacheado.
-const (
-	idemInFlightTTL = 2 * time.Minute
-	idemSuccessTTL  = 10 * time.Minute
-	// maxIdemEntries es el tope de entradas del caché de idempotencia: evita
-	// que claves únicas con distintos X-Idempotency-Key acumulen memoria sin
-	// límite. Al alcanzarlo, storeIdemEntry realiza una pasada de purga de las
-	// entradas vencidas por TTL antes de admitir la nueva.
-	maxIdemEntries = 5000
-)
-
-// loadIdemEntry consulta la clave de idempotencia sobre el mapa unificado
-// idemStore. La evaluación del TTL ocurre bajo s.idemMu.RLock(); si la entrada
-// venció, se suelta el RLock, se adquiere el Lock exclusivo y se purga.
-// Devuelve:
-//   - (note, true, nil) cuando hay una respuesta exitosa vigente (replay);
-//   - (nil, true, err) cuando hay una operación in-flight vigente;
-//   - (nil, false, nil) cuando la clave no existe, expiró por TTL o quedó
-//     colgada: la entrada vencida se purga y se trata como no encontrada para
-//     permitir reprocesar.
-func (s *NoteService) loadIdemEntry(cacheKey string) (*model.Note, bool, error) {
-	if cacheKey == "" {
-		return nil, false, nil
+// Contrato de retorno:
+//   - (rec, nil, true, nil): el llamador reclamó la clave; debe ejecutar la
+//     operación (rec.ResourceID lleva el recurso preasociado efectivo, que en
+//     un claim recuperado tras crash puede ser el noteID del intento anterior)
+//     y, al terminar, completeIdempotentOperation (o
+//     releaseIdempotentOperation si falla).
+//   - (rec, note, false, nil): replay de una operación 'completed'; note es el
+//     recurso persistido.
+//   - (rec, nil, false, err): conflicto 409 (hash distinto o solicitud en
+//     progreso) o error interno de la idempotencia.
+//
+// matchHash controla el replay: Create/Copy/Update exigen que el hash del
+// payload coincida (payload distinto con la misma clave => 409).
+//
+// preassignedResourceID pre-asocia el recurso antes de crearlo (crash recovery
+// lógico): el claim nuevo persiste resource_id = preassignedResourceID y un
+// claim vencido conserva el resource_id del intento que murió.
+func (s *NoteService) beginIdempotentOperation(ctx context.Context, userID, operation, key, requestHash string, matchHash bool, preassignedResourceID *string) (*model.IdempotencyKey, *model.Note, bool, error) {
+	rec, claimed, err := s.notes.GetOrClaimIdempotencyKey(ctx, userID, operation, key, requestHash, preassignedResourceID, time.Now().Add(idemClaimTTL))
+	if err != nil {
+		return nil, nil, false, ErrInternalDatabase
 	}
-	s.idemMu.RLock()
-	entry, loaded := s.idemStore[cacheKey]
-	if !loaded || entry == nil {
-		s.idemMu.RUnlock()
-		return nil, false, nil
-	}
-	status := entry.status
-	note := entry.note
-	expired := false
-	switch status {
-	case idemInFlight:
-		expired = time.Since(entry.createdAt) > idemInFlightTTL
-	case idemSuccess:
-		expired = time.Since(entry.createdAt) > idemSuccessTTL
-	default:
-		// Estado desconocido (entrada corrupta/legado): nunca puede
-		// interpretarse como in-flight válido.
-		expired = true
-	}
-	s.idemMu.RUnlock()
-	if expired {
-		// Purga con Lock exclusivo tras soltar el RLock; la comparación de
-		// puntero evita borrar una entrada fresca publicada por otra goroutine
-		// entre la lectura y la purga.
-		s.purgeIdemEntry(cacheKey, entry)
-		return nil, false, nil
-	}
-	if status == idemInFlight {
-		return nil, true, newServiceErrorMsg(utils.ErrBadRequest, "solicitud en progreso")
-	}
-	return note, true, nil
-}
-
-// purgeIdemEntry elimina la clave solo si la entrada vigente sigue siendo la
-// misma que se observó al leer con RLock. Evita la carrera de borrar una
-// entrada fresca publicada por otra goroutine entre la lectura y la purga.
-func (s *NoteService) purgeIdemEntry(cacheKey string, observed *idemEntry) {
-	s.idemMu.Lock()
-	defer s.idemMu.Unlock()
-	if current, ok := s.idemStore[cacheKey]; ok && current == observed {
-		delete(s.idemStore, cacheKey)
-	}
-}
-
-// storeIdemEntry publica una entrada en idemStore respetando el tope
-// maxIdemEntries. Al alcanzar el tope se purgan primero las entradas vencidas
-// por TTL (in-flight >2 min, success >10 min; el TTL de éxito es de 10 min) y,
-// si aun así no hay espacio (todas frescas), se desaloja la entrada más antigua
-// para admitir la nueva sin superar nunca el tope. Todo ocurre bajo idemMu: el
-// conteo y la purga son atómicos respecto a la inserción.
-func (s *NoteService) storeIdemEntry(cacheKey string, entry *idemEntry) {
-	if cacheKey == "" || entry == nil {
-		return
-	}
-	s.idemMu.Lock()
-	defer s.idemMu.Unlock()
-	if _, exists := s.idemStore[cacheKey]; exists {
-		s.idemStore[cacheKey] = entry
-		return
-	}
-	if len(s.idemStore) >= maxIdemEntries {
-		now := time.Now()
-		// Recolección primero, borrado después: el mapa nunca se muta mientras
-		// se itera (evita comportamiento indefinido con implementaciones que
-		// prohíben modificar el mapa durante range).
-		toDelete := make([]string, 0)
-		oldestKey := ""
-		oldestAt := time.Now()
-		for k, e := range s.idemStore {
-			if e == nil {
-				toDelete = append(toDelete, k)
-				continue
+	// Un registro 'completed' cuyo recurso ya no existe se libera y se reclama
+	// de nuevo: la operación se re-ejecuta en lugar de responder un replay
+	// fantasma. Acotado a dos intentos para no competir con writers activos.
+	// Un registro 'recoverable' (fallo posterior a la inserción local) solo
+	// llega aquí si el store NO otorgó el claim: el request_hash difiere, así
+	// que la misma clave con otro payload es 409 Conflict sin esperar al lease.
+	for attempt := 0; !claimed && rec != nil && attempt < 2; attempt++ {
+		if rec.Status == model.IdempotencyStatusRecoverable {
+			if matchHash && rec.RequestHash != requestHash {
+				return rec, nil, false, newServiceError(utils.ErrConflict)
 			}
-			ttl := idemSuccessTTL
-			if e.status == idemInFlight {
-				ttl = idemInFlightTTL
+			// El store otorga el claim inmediato de un recoverable con el mismo
+			// hash; si no lo hizo pudo ser una carrera con otro retry idéntico
+			// que acaba de marcar recoverable: se reintenta el claim una vez.
+			rec, claimed, err = s.notes.GetOrClaimIdempotencyKey(ctx, userID, operation, key, requestHash, preassignedResourceID, time.Now().Add(idemClaimTTL))
+			if err != nil {
+				return rec, nil, false, ErrInternalDatabase
 			}
-			if now.Sub(e.createdAt) > ttl {
-				toDelete = append(toDelete, k)
-				continue
+			if claimed {
+				return rec, nil, true, nil
 			}
-			if oldestKey == "" || e.createdAt.Before(oldestAt) {
-				oldestKey = k
-				oldestAt = e.createdAt
+			return rec, nil, false, newServiceErrorMsg(utils.ErrConflict, "solicitud en recuperación")
+		}
+		if rec.Status != model.IdempotencyStatusCompleted {
+			return rec, nil, false, newServiceErrorMsg(utils.ErrConflict, "solicitud en progreso")
+		}
+		if matchHash && rec.RequestHash != requestHash {
+			return rec, nil, false, newServiceError(utils.ErrConflict)
+		}
+		if rec.ResourceID != nil {
+			existing, getErr := s.notes.GetByID(ctx, *rec.ResourceID)
+			if getErr != nil {
+				return rec, nil, false, ErrInternalDatabase
+			}
+			if existing != nil {
+				return rec, existing, false, nil
 			}
 		}
-		for _, k := range toDelete {
-			delete(s.idemStore, k)
+		if delErr := s.notes.DeleteIdempotencyKey(ctx, userID, operation, key); delErr != nil {
+			return rec, nil, false, ErrInternalDatabase
 		}
-		if len(s.idemStore) >= maxIdemEntries && oldestKey != "" {
-			delete(s.idemStore, oldestKey)
+		rec, claimed, err = s.notes.GetOrClaimIdempotencyKey(ctx, userID, operation, key, requestHash, preassignedResourceID, time.Now().Add(idemClaimTTL))
+		if err != nil {
+			return rec, nil, false, ErrInternalDatabase
 		}
 	}
-	s.idemStore[cacheKey] = entry
+	if !claimed {
+		return rec, nil, false, ErrInternalDatabase
+	}
+	return rec, nil, true, nil
 }
 
-// deleteIdemEntry elimina incondicionalmente una clave del caché unificado.
-// Se usa para liberar la clave cuando la operación falla (defer) y permitir
-// reintentos seguros.
-func (s *NoteService) deleteIdemEntry(cacheKey string) {
-	if cacheKey == "" {
-		return
+// releaseIdempotentOperation libera la clave reclamada tras un fallo de la
+// operación para permitir reintentos inmediatos con la misma clave. Usa un
+// contexto desacoplado de la cancelación del request para no dejar el claim
+// colgado hasta que venza el lease.
+func (s *NoteService) releaseIdempotentOperation(ctx context.Context, userID, operation, key string) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), driveCallTimeout)
+	defer cancel()
+	if err := s.notes.DeleteIdempotencyKey(cleanupCtx, userID, operation, key); err != nil {
+		log.Printf("notes: no se pudo liberar la clave de idempotencia %s: %v", operation, err)
 	}
-	s.idemMu.Lock()
-	defer s.idemMu.Unlock()
-	delete(s.idemStore, cacheKey)
+}
+
+// markIdempotentRecoverable transiciona la clave reclamada a 'recoverable'
+// cuando la operación falló DESPUÉS de insertar el recurso local (Drive,
+// timeout, OAuthError): la nota ya existe en PG, así que se preserva su id para
+// que el reintento inmediato con la misma clave la retome y reintente
+// Drive/reconciliación sin duplicar ni responder 409. Usa un contexto
+// desacoplado de la cancelación del request para que la marca no se pierda.
+func (s *NoteService) markIdempotentRecoverable(ctx context.Context, userID, operation, key, resourceID string, cause error) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), driveCallTimeout)
+	defer cancel()
+	lastErr := ""
+	if cause != nil {
+		lastErr = cause.Error()
+	}
+	log.Printf("notes: operación %s marcada recoverable (recurso %s): %s", operation, resourceID, lastErr)
+	if err := s.notes.MarkIdempotencyRecoverable(cleanupCtx, userID, operation, key, resourceID, lastErr); err != nil {
+		log.Printf("notes: no se pudo marcar la clave de idempotencia %s como recoverable: %v", operation, err)
+	}
+}
+
+// completeIdempotentOperation publica el recurso asociado a la clave
+// reclamada. Si falla se registra el error: la operación ya tuvo efecto y el
+// recurso se recupera por reconciliación, así que no se propaga al usuario.
+func (s *NoteService) completeIdempotentOperation(ctx context.Context, userID, operation, key, resourceID string) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), driveCallTimeout)
+	defer cancel()
+	if err := s.notes.CompleteIdempotencyKey(cleanupCtx, userID, operation, key, resourceID); err != nil {
+		log.Printf("notes: no se pudo completar la clave de idempotencia %s: %v", operation, err)
+	}
 }
 
 // driveCallTimeout es el presupuesto máximo por llamada al upstream de Drive.
@@ -362,6 +360,24 @@ func isRetryableDriveError(err error) bool {
 	return true
 }
 
+// findOrphanDriveFile busca el archivo .md que un intento previo pudo dejar
+// huérfano en Drive, indexado con appProperties (notes_note_id). Devuelve ""
+// sin error cuando no existe; un error significa que no se pudo probar la
+// ausencia (OAuth/red), no que el archivo no exista.
+func (s *NoteService) findOrphanDriveFile(ctx context.Context, ownerUserID, noteID string) (string, error) {
+	findCtx, cancelFind := withDriveTimeout(ctx)
+	defer cancelFind()
+	var fileID string
+	if err := retryDriveOperation(findCtx, driveRetryMaxAttempts, func() error {
+		var opErr error
+		fileID, opErr = s.drive.FindFileByNoteID(findCtx, ownerUserID, noteID)
+		return opErr
+	}); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(fileID), nil
+}
+
 func newServiceError(code string) *ServiceError {
 	return &ServiceError{Code: code, Message: utils.MessageForCode(code)}
 }
@@ -371,15 +387,35 @@ func newServiceErrorMsg(code, msg string) *ServiceError {
 
 // Store interfaces para desacoplar de pgx y permitir mocks en tests.
 type NoteStore interface {
-	Create(ctx context.Context, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string, syncStatus string) (*model.Note, error)
+	// Create inserta la nota con el id preasignado noteID (vacío => generado por
+	// el store). La pre-asignación permite que un retry tras crash recupere la
+	// misma fila en lugar de duplicarla.
+	Create(ctx context.Context, noteID string, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string, syncStatus string) (*model.Note, error)
 	GetByID(ctx context.Context, id string) (*model.Note, error)
 	ListByUser(ctx context.Context, userID, cursor string, limit int) ([]*model.Note, string, error)
-	Update(ctx context.Context, id string, title *string, visibility *string) (*model.Note, error)
+	// Update aplica el cambio de metadata con versionado optimista: solo muta
+	// si la fila sigue en expectedVersion; si otro writer la cambió devuelve
+	// repository.ErrConflict (o un error equivalente del store).
+	Update(ctx context.Context, id string, title *string, visibility *string, expectedVersion int64) (*model.Note, error)
 	Delete(ctx context.Context, id string) error
 	IncrementLikes(ctx context.Context, noteID string, delta int) error
 	UpdateExternalFileID(ctx context.Context, noteID, fileID string) error
 	UpdateSyncStatus(ctx context.Context, noteID, syncStatus string) error
-	InsertDeadLetter(ctx context.Context, fileID, reason string) error
+	DeleteWithDriveCleanup(ctx context.Context, noteID, requesterID string) (string, error)
+	EnqueueDriveOperation(ctx context.Context, op, noteID, attID, fileID, ownerUserID string, payload map[string]any) error
+	ClaimDriveOperations(ctx context.Context, limit int, lockDuration time.Duration) ([]*model.DriveOperation, error)
+	CompleteDriveOperation(ctx context.Context, id string) error
+	FailDriveOperation(ctx context.Context, id, errStr string, nextAttempt time.Time) error
+	// Idempotencia durable sobre notes.idempotency_keys: GetOrClaim... reclama
+	// la clave (o devuelve el registro vigente) pre-asociando preassignedResourceID
+	// cuando el claim es nuevo, y Complete... publica el recurso asociado.
+	// Delete... libera el claim cuando la operación falla antes de insertar.
+	// Mark... marca 'recoverable' cuando el fallo ocurre después de insertar,
+	// preservando el recurso para un retry inmediato sin duplicados.
+	GetOrClaimIdempotencyKey(ctx context.Context, userID, operation, idempotencyKey, requestHash string, preassignedResourceID *string, expiresAt time.Time) (*model.IdempotencyKey, bool, error)
+	CompleteIdempotencyKey(ctx context.Context, userID, operation, idempotencyKey, resourceID string) error
+	DeleteIdempotencyKey(ctx context.Context, userID, operation, idempotencyKey string) error
+	MarkIdempotencyRecoverable(ctx context.Context, userID, operation, idempotencyKey, resourceID, lastErr string) error
 }
 
 type AttachmentStore interface {
@@ -387,6 +423,7 @@ type AttachmentStore interface {
 	GetByID(ctx context.Context, id string) (*model.Attachment, error)
 	ListByNote(ctx context.Context, noteID string) ([]*model.Attachment, error)
 	Delete(ctx context.Context, id string) error
+	DeleteAttachmentWithDriveCleanup(ctx context.Context, noteID, attachmentID, requesterID string) (string, error)
 }
 
 type SavedStore interface {
@@ -413,15 +450,35 @@ type SharedStore interface {
 	DeleteByUserAndGroup(ctx context.Context, userID, groupID string) error
 	HasAccess(ctx context.Context, noteID, groupID string) (bool, error)
 	HasAnyShare(ctx context.Context, noteID string) (bool, error)
+	// Estado deseado de permisos de Drive (notes.drive_managed_permissions) y
+	// convergencia: la BD es la fuente de verdad; Drive se sincroniza después.
+	UpdatePermissionSyncStatus(ctx context.Context, id, status string) error
+	UpdateNotePermissionSyncStatus(ctx context.Context, noteID, status string) error
+	ListNotesWithPendingPermissionSync(ctx context.Context, limit int) ([]string, error)
+	ListManagedPermissions(ctx context.Context, noteID string) ([]*model.DriveManagedPermission, error)
+	UpsertManagedPermission(ctx context.Context, permission *model.DriveManagedPermission) (*model.DriveManagedPermission, error)
+	DeleteManagedPermission(ctx context.Context, noteID, principalType, principalKey string) error
+	DeleteManagedPermissionsByNote(ctx context.Context, noteID string) error
+	MarkManagedPermissionsPending(ctx context.Context, noteID string) error
+	// WithNoteLock ejecuta fn sosteniendo un lock distribuido por nota
+	// (pg_advisory_xact_lock(hashtextextended(noteID, 0)) en PG; mutex por nota
+	// en el store en memoria). Serializa Share/Unshare/Update y el reconciliador
+	// antes de mutar notes.drive_managed_permissions y permission_sync_status.
+	WithNoteLock(ctx context.Context, noteID string, fn func(context.Context) error) error
 }
 
-// SocialResolver verifica pertenencia/membership vía gRPC a Social (mock en tests).
+// SocialResolver verifica pertenencia/membership y seguidores. En producción se
+// inyecta el adaptador HTTP a Social (SocialHTTPAdapter); los resolvers en
+// memoria/noop solo se usan en tests.
 type SocialResolver interface {
 	IsMember(ctx context.Context, userID, groupID string) (bool, error)
 	IsAdmin(ctx context.Context, userID, groupID string) (bool, error)
 	GetFollowersCount(ctx context.Context, userID string) (int, error)
 }
 
+// noopSocialResolver es el fallback de construcción cuando no se inyecta un
+// resolver: asume membresía (comportamiento de desarrollo). main.go siempre
+// inyecta el adaptador HTTP real en producción; los tests usan MemorySocialResolver.
 type noopSocialResolver struct{}
 
 func (n *noopSocialResolver) IsMember(ctx context.Context, userID, groupID string) (bool, error) {
@@ -443,21 +500,29 @@ type NoteService struct {
 	drive       drive.Client
 	social      SocialResolver
 	members     GroupMemberDirectory
-	// idemMu protege idemStore, el caché de idempotencia unificado. Una única
-	// estructura evita la dualidad sync.Map + libro de claves: el conteo, la
-	// purga por tope y el acceso por clave son atómicos bajo el mismo lock.
-	idemMu    sync.RWMutex
-	idemStore map[string]*idemEntry
+	// La idempotencia de Create/Copy/Update vive en notes.idempotency_keys
+	// (durable, compartida entre réplicas): no hay caché en memoria que perder
+	// ante un crash ni que purgar por TTL. idemClaimTTL actúa como lease de
+	// recuperación de claims colgados.
 	// reconcileMu serializa EXCLUSIVAMENTE las ejecuciones del cron/job de
 	// reconciliación (ReconcilePendingNotes) para que dos instancias en
 	// paralelo no colisionen al compensar la misma nota pendiente. Es un lock
 	// aislado del camino HTTP normal: ninguna operación de usuario (Create,
 	// Get, Update, Copy, Delete...) lo adquiere, por lo que la reconciliación
 	// nunca bloquea a los requests de los usuarios ni viceversa.
+	// La exclusión de los cambios de ACL (Share/Unshare/Update/reconciliador)
+	// ya no depende de un mutex local: usa shared.WithNoteLock, un lock
+	// distribuido por nota (pg_advisory_xact_lock en PG) que serializa también
+	// entre réplicas.
 	reconcileMu sync.Mutex
 }
 
 func NewNoteService(notes NoteStore, attachments AttachmentStore, saved SavedStore, likes LikeStore, shared SharedStore, d drive.Client, social SocialResolver) *NoteService {
+	if provider, ok := notes.(interface{ memoryNoteStore() *MemoryNoteStore }); ok {
+		if binder, ok := attachments.(interface{ SetNoteStore(*MemoryNoteStore) }); ok {
+			binder.SetNoteStore(provider.memoryNoteStore())
+		}
+	}
 	if social == nil {
 		social = &noopSocialResolver{}
 	}
@@ -473,13 +538,12 @@ func NewNoteService(notes NoteStore, attachments AttachmentStore, saved SavedSto
 		drive:       d,
 		social:      social,
 		members:     NewNoopMemberDirectory(),
-		idemStore:   make(map[string]*idemEntry),
 	}
 }
 
 // SetMemberDirectory inyecta el directorio de correos de miembros usado por el
-// share restricted. El adaptador real (gRPC a Social/Identity) se conectará
-// aquí; por defecto es noop (grupo sin miembros).
+// share restricted. En producción main.go inyecta el adaptador HTTP real
+// (SocialHTTPAdapter); el default es noop (grupo sin miembros).
 func (s *NoteService) SetMemberDirectory(d GroupMemberDirectory) {
 	if d == nil {
 		d = NewNoopMemberDirectory()
@@ -570,17 +634,25 @@ func validateSubjectID(s *string) error {
 // tras el alta en Drive, se compensa borrando el huérfano (DLQ + log
 // [CRITICAL_UNRECONCILED] si la compensación también falla).
 //
-// Idempotencia robusta en memoria (mapa unificado idemStore protegido por
-// idemMu RWMutex): al iniciar se publica un *idemEntry{status: idemInFlight} y
-// al tener éxito se reemplaza por *idemEntry{status: idemSuccess, note,
-// createdAt} para responder replays sin duplicar PG/Drive; las entradas
-// in-flight colgadas (>2 min) y los replays vencidos (>10 min) se purgan al
-// consultarse; el defer limpia la clave ante error, evitando memory leaks y
-// bloqueos.
+// Idempotencia durable en notes.idempotency_keys (compartida entre réplicas):
+// la clave se reclama antes de tocar PG/Drive; al tener éxito se publica el
+// recurso con CompleteIdempotencyKey (replay si coincide request_hash, 409
+// Conflict si difiere). Un fallo ANTES de insertar la fila local libera la
+// clave con DeleteIdempotencyKey (retry inmediato); un fallo DESPUÉS (Drive,
+// timeout, OAuth) la marca 'recoverable' con MarkIdempotencyRecoverable,
+// preservando el noteID: el retry con la misma clave retoma la nota existente y
+// reintenta Drive/reconciliación sin duplicar ni responder 409 falso. Un claim
+// colgado por crash se recupera al vencer su lease (idemClaimTTL).
+//
+// Pre-asociación del ResourceID (crash recovery lógico): noteID se genera ANTES
+// del claim y se persiste como resource_id. Si el proceso muere a mitad de la
+// operación, el reintento con la misma clave recupera ese noteID preasociado,
+// reutiliza la fila/búsqueda remota existente y continúa la reconciliación en
+// lugar de crear una nota duplicada.
 func (s *NoteService) Create(ctx context.Context, userID string, title string, subjectID *string, visibility string, content *string, idempotencyKey string) (note *model.Note, err error) {
 	// Validación estricta temprana: título (1-255 tras TrimSpace) y subject_id
-	// (UUID válido tras TrimSpace) se rechazan ANTES de tocar DB, Drive o el
-	// caché de idempotencia.
+	// (UUID válido tras TrimSpace) se rechazan ANTES de tocar DB, Drive o la
+	// idempotencia durable.
 	if err := validateTitle(title); err != nil {
 		return nil, err
 	}
@@ -593,22 +665,6 @@ func (s *NoteService) Create(ctx context.Context, userID string, title string, s
 	if content != nil {
 		*content = sanitizeMarkdown(*content)
 	}
-	cacheKey := idemKey("create", idempotencyKey)
-	if cacheKey != "" {
-		cached, found, cacheErr := s.loadIdemEntry(cacheKey)
-		if cacheErr != nil {
-			return nil, cacheErr
-		}
-		if found {
-			return cached, nil
-		}
-		s.storeIdemEntry(cacheKey, &idemEntry{status: idemInFlight, createdAt: time.Now()})
-	}
-	defer func() {
-		if err != nil && cacheKey != "" {
-			s.deleteIdemEntry(cacheKey)
-		}
-	}()
 
 	// validaciones (FASE 1)
 	title = utils.NormalizeTitle(title)
@@ -642,50 +698,163 @@ func (s *NoteService) Create(ctx context.Context, userID string, title string, s
 		mdContent = fmt.Sprintf("# %s\n\n", title)
 	}
 
+	// 0. Reclamar la clave de idempotencia durable ANTES de tocar PG/Drive:
+	// misma clave + mismo payload => replay del recurso ya creado; misma clave
+	// + payload distinto => 409 Conflict; claim en progreso => 409. El noteID se
+	// preasigna antes del claim para que quede durable como resource_id.
+	noteID := uuid.NewString()
+	recoveredFromCrash := false
+	// pgInserted distingue el punto de fallo: antes de materializar la fila en
+	// notes.notes el claim se libera (DELETE); después, la nota ya existe y se
+	// marca 'recoverable' preservando su id para que el retry no duplique.
+	pgInserted := false
+	opKey := idemKey("create", idempotencyKey)
+	if opKey != "" {
+		requestHash := idempotencyRequestHash("create", userID, title, derefOrEmpty(subjectID), visibility, mdContent)
+		rec, replay, claimed, idemErr := s.beginIdempotentOperation(ctx, userID, "create", opKey, requestHash, true, &noteID)
+		if idemErr != nil {
+			return nil, idemErr
+		}
+		if replay != nil {
+			return replay, nil
+		}
+		if !claimed {
+			return nil, ErrInternalDatabase
+		}
+		if rec != nil && rec.ResourceID != nil && strings.TrimSpace(*rec.ResourceID) != "" && *rec.ResourceID != noteID {
+			// Claim recuperado (crash o recoverable): el intento previo dejó su
+			// noteID preasociado; el retry lo reutiliza sin duplicar la nota.
+			noteID = *rec.ResourceID
+			recoveredFromCrash = true
+		}
+		pgInserted = recoveredFromCrash
+		defer func() {
+			if err == nil {
+				return
+			}
+			if pgInserted {
+				s.markIdempotentRecoverable(ctx, userID, "create", opKey, noteID, err)
+			} else {
+				s.releaseIdempotentOperation(ctx, userID, "create", opKey)
+			}
+		}()
+	}
+
 	// 1. Insertar metadata en PG con sync_status='pending_drive' ANTES de llamar a Drive
-	// Así si el proceso crashea, se puede reconciliar consultando notas con pending_drive
-	note, err = s.notes.Create(ctx, userID, subjectID, title, nil, visibility, nil, "pending_drive")
-	if err != nil {
-		return nil, ErrInternalDatabase
+	// Así si el proceso crashea, se puede reconciliar consultando notas con pending_drive.
+	// El id preasignado se materializa en la fila; si el intento anterior murió
+	// después de insertarla, el retry reutiliza esa misma fila (sin duplicar).
+	if recoveredFromCrash {
+		note, err = s.notes.GetByID(ctx, noteID)
+		if err != nil {
+			return nil, ErrInternalDatabase
+		}
+	}
+	if note == nil {
+		note, err = s.notes.Create(ctx, noteID, userID, subjectID, title, nil, visibility, nil, "pending_drive")
+		if err != nil {
+			return nil, ErrInternalDatabase
+		}
+		pgInserted = true
+	} else if note.SyncStatus == "synced" && note.ExternalFileID != nil && strings.TrimSpace(*note.ExternalFileID) != "" {
+		// El crash ocurrió después de persistir el archivo: la operación ya está
+		// completa. Se publica el recurso preasociado y se responde sin duplicar.
+		if opKey != "" {
+			s.completeIdempotentOperation(ctx, userID, "create", opKey, note.ID)
+		}
+		return note, nil
 	}
 
 	// 2. Crear archivo en Drive del autor con contexto acotado (15s) y hasta 3
 	// intentos con backoff: evita bloqueos indefinidos ante un cuelgue del
-	// upstream y absorbe fallos transitorios (5xx/red).
-	driveCtx, cancelDrive := withDriveTimeout(ctx)
-	var driveFileID string
-	err = retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
-		var opErr error
-		driveFileID, opErr = s.drive.CreateFile(driveCtx, userID, title+".md", mdContent)
-		return opErr
-	})
-	cancelDrive()
-	if err != nil {
-		// Drive falló: marcar nota como failed_sync para reconciliación
-		_ = s.notes.UpdateSyncStatus(ctx, note.ID, "failed_sync")
-		// OAuth ausente/revocado: 403 genérico sin filtrar texto interno.
-		if drive.IsOAuthError(err) {
-			return nil, newServiceErrorMsg(utils.ErrForbidden, "Conecte o renueve su Google Drive")
+	// upstream y absorbe fallos transitorios (5xx/red). El archivo se indexa
+	// con appProperties (notes_note_id) para poder recuperarlo tras un crash.
+	// En un retry de crash se busca primero el huérfano remoto para no duplicarlo.
+	driveFileID := ""
+	if note.ExternalFileID != nil {
+		driveFileID = strings.TrimSpace(*note.ExternalFileID)
+	}
+	createdDriveFile := false
+	if driveFileID == "" && recoveredFromCrash {
+		found, findErr := s.findOrphanDriveFile(ctx, userID, note.ID)
+		if findErr != nil {
+			_ = s.notes.UpdateSyncStatus(ctx, note.ID, "failed_sync")
+			log.Printf("notes: create retry nota %s: no se pudo verificar el huérfano en Drive: %v", note.ID, findErr)
+			return nil, ErrDriveUnavailable
 		}
-		// 413 (archivo demasiado grande) se traduce al error canónico.
-		var de *drive.DriveError
-		if errors.As(err, &de) && de.Code == 413 {
-			return nil, newServiceError(utils.ErrFileTooLarge)
+		driveFileID = found
+	}
+	if driveFileID == "" {
+		driveCtx, cancelDrive := withDriveTimeout(ctx)
+		err = retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
+			var opErr error
+			driveFileID, opErr = s.drive.CreateFile(driveCtx, userID, note.ID, title+".md", mdContent)
+			return opErr
+		})
+		cancelDrive()
+		if err != nil {
+			// Drive falló: marcar nota como failed_sync para reconciliación
+			_ = s.notes.UpdateSyncStatus(ctx, note.ID, "failed_sync")
+			// OAuth ausente/revocado: 403 genérico sin filtrar texto interno.
+			if drive.IsOAuthError(err) {
+				return nil, newServiceErrorMsg(utils.ErrForbidden, "Conecte o renueve su Google Drive")
+			}
+			// 413 (archivo demasiado grande) se traduce al error canónico.
+			var de *drive.DriveError
+			if errors.As(err, &de) && de.Code == 413 {
+				return nil, newServiceError(utils.ErrFileTooLarge)
+			}
+			return nil, ErrDriveUnavailable
 		}
-		return nil, ErrDriveUnavailable
+		createdDriveFile = true
+	}
+
+	// Public visibility requires an actual reader link before publishing metadata.
+	// Solo se otorga para un archivo recién creado en este intento: un archivo
+	// adoptado por recovery de crash no se toca para no duplicar permisos.
+	if visibility == "public" && createdDriveFile {
+		permissionCtx, cancelPermission := withDriveTimeout(ctx)
+		linkPermissionID, permissionErr := s.drive.GrantLinkPermission(permissionCtx, userID, driveFileID)
+		cancelPermission()
+		if permissionErr != nil {
+			cleanupCtx, cancelCleanup := withDriveTimeout(context.WithoutCancel(ctx))
+			defer cancelCleanup()
+			_ = s.notes.UpdateSyncStatus(cleanupCtx, note.ID, "failed_sync")
+			if cleanupErr := s.drive.DeleteFile(cleanupCtx, userID, driveFileID); cleanupErr != nil && !drive.IsNotFound(cleanupErr) {
+				_ = s.notes.EnqueueDriveOperation(cleanupCtx, "delete_file", note.ID, "", driveFileID, userID, map[string]any{"reason": "public_permission_failed"})
+			}
+			return nil, ErrDriveUnavailable
+		}
+		// Persistir el permiso link como estado deseado/convergido (BD primero
+		// respecto de cualquier cambio futuro de visibilidad). Best-effort: si
+		// falla, el reconciliador no pierde la visibilidad pública de la nota.
+		var linkPID *string
+		if strings.TrimSpace(linkPermissionID) != "" {
+			linkPID = &linkPermissionID
+		}
+		if persistErr := s.persistManagedPermission(ctx, note.ID, driveFileID, model.PermissionPrincipalAnyone, "", linkPID, model.PermissionSyncInSync); persistErr != nil {
+			log.Printf("notes: create nota %s: no se pudo persistir el permiso link: %v", note.ID, persistErr)
+		}
 	}
 
 	// 3. Actualizar metadata en PG con external_file_id y sync_status='synced'
 	if err := s.notes.UpdateExternalFileID(ctx, note.ID, driveFileID); err != nil {
-		// Compensación: PG falló tras Drive OK -> borrar huérfano y marcar failed_sync
+		// Compensación: PG falló tras Drive OK -> borrar huérfano y marcar failed_sync.
 		_ = s.notes.UpdateSyncStatus(ctx, note.ID, "failed_sync")
+		_ = s.shared.DeleteManagedPermissionsByNote(ctx, note.ID)
+		if !createdDriveFile {
+			// El archivo adoptado pertenece a un intento previo que sí lo creó:
+			// no se borra (evita pérdida de datos); la nota queda reconciliable.
+			log.Printf("notes: create retry nota %s: fallo al persistir external_file_id tras adoptar huérfano %s: %v", note.ID, driveFileID, err)
+			return nil, ErrInternalDatabase
+		}
 		compCtx, cancelComp := withDriveTimeout(ctx)
 		compErr := retryDriveOperation(compCtx, driveRetryMaxAttempts, func() error {
 			return s.drive.DeleteFile(compCtx, userID, driveFileID)
 		})
 		cancelComp()
 		if compErr != nil && !drive.IsNotFound(compErr) {
-			s.notes.InsertDeadLetter(ctx, driveFileID, "create_orphan_failed")
+			_ = s.notes.EnqueueDriveOperation(ctx, "delete_file", note.ID, "", driveFileID, userID, map[string]any{"reason": "create_orphan_failed"})
 			log.Printf("[CRITICAL_UNRECONCILED] notes: create compensación falló (file %s): %v - PG error: %v", driveFileID, compErr, err)
 		} else {
 			log.Printf("notes: create compensación OK (huérfano Drive %s eliminado tras fallo PG)", driveFileID)
@@ -698,11 +867,11 @@ func (s *NoteService) Create(ctx context.Context, userID string, title string, s
 	if err != nil {
 		return nil, ErrInternalDatabase
 	}
-	if cacheKey != "" {
-		// Cachear el puntero exitoso con su marca temporal: los replays con la
-		// misma Idempotency-Key reciben exactamente la misma nota sin volver a
-		// tocar PG/Drive mientras la entrada no supere el TTL de 10 minutos.
-		s.storeIdemEntry(cacheKey, &idemEntry{status: idemSuccess, note: updated, createdAt: time.Now()})
+	if opKey != "" {
+		// Publicar el recurso en la clave durable: los replays con la misma
+		// Idempotency-Key y el mismo payload reciben exactamente esta nota sin
+		// volver a tocar PG/Drive.
+		s.completeIdempotentOperation(ctx, userID, "create", opKey, updated.ID)
 	}
 	return updated, nil
 }
@@ -732,8 +901,7 @@ func (s *NoteService) Get(ctx context.Context, requesterID string, noteID string
 	// descargar contenido de Drive usando external_file_id, con contexto
 	// acotado para no quedar colgado ante un cuelgue de red.
 	if note.ExternalFileID == nil || strings.TrimSpace(*note.ExternalFileID) == "" {
-		// sin file aún (offline-first brevemente) -> retornar sin contenido
-		return note, nil
+		return nil, newServiceErrorMsg(utils.ErrNoteUnavailable, "Nota no disponible en almacenamiento remoto")
 	}
 	driveCtx, cancelDrive := withDriveTimeout(ctx)
 	var content string
@@ -788,45 +956,78 @@ func (s *NoteService) ListMy(ctx context.Context, userID string, cursor string, 
 }
 
 // Update: solo autor, actualiza título/visibilidad en PG, contenido en Drive si
-// cambia. Soporta idempotencia opcional (header X-Idempotency-Key) con el mismo
-// mecanismo unificado que Create/Copy (loadIdemEntry / idemEntry): un replay de
-// red con la misma clave responde desde el caché (TTL 10 min) reiterando el
-// resultado sin volver a mutar PG/Drive, una solicitud concurrente con la misma
-// clave se rechaza con "solicitud en progreso" (in-flight) y cualquier error
-// purga la clave para permitir reintentos seguros.
+// cambia. Soporta idempotencia opcional (header X-Idempotency-Key) sobre
+// notes.idempotency_keys (durable, compartida entre réplicas): un replay de red
+// con la misma clave y el mismo body responde el resultado ya aplicado sin
+// volver a mutar PG/Drive; la misma clave con un body distinto responde 409
+// Conflict, una solicitud concurrente con la misma clave se rechaza con 409
+// "solicitud en progreso" y cualquier error libera la clave para permitir
+// reintentos seguros.
 func (s *NoteService) Update(ctx context.Context, userID string, noteID string, title *string, visibility *string, content *string, idempotencyKey string) (*model.Note, error) {
+	return s.UpdateWithExpectedVersion(ctx, userID, noteID, title, visibility, content, 0, idempotencyKey)
+}
+
+// UpdateWithExpectedVersion es Update con precondición de versión explícita
+// (versionado optimista de PATCH): expectedVersion > 0 exige que la nota siga en
+// esa versión y, si otro writer ya la modificó, responde 409 Conflict. Con
+// expectedVersion <= 0 la precondición la fija la versión leída dentro de la
+// operación (bajo el lock por nota), de modo que una escritura concurrente
+// tampoco se pisa silenciosamente.
+func (s *NoteService) UpdateWithExpectedVersion(ctx context.Context, userID string, noteID string, title *string, visibility *string, content *string, expectedVersion int64, idempotencyKey string) (*model.Note, error) {
 	if content != nil && len(*content) > maxNoteContentLength {
 		return nil, newServiceError(utils.ErrFileTooLarge)
 	}
-	cacheKey := idemKey("update", idempotencyKey)
-	if cacheKey != "" {
-		cached, found, cacheErr := s.loadIdemEntry(cacheKey)
-		if cacheErr != nil {
-			return nil, cacheErr
-		}
-		if found {
-			return cached, nil
-		}
-		s.storeIdemEntry(cacheKey, &idemEntry{status: idemInFlight, createdAt: time.Now()})
+	opKey := idemKey("update", idempotencyKey)
+	if opKey == "" {
+		return s.updateInner(ctx, userID, noteID, title, visibility, content, expectedVersion)
 	}
-	updated, err := s.updateInner(ctx, userID, noteID, title, visibility, content)
-	if cacheKey != "" {
-		if err != nil {
-			s.deleteIdemEntry(cacheKey)
-		} else if updated != nil {
-			s.storeIdemEntry(cacheKey, &idemEntry{status: idemSuccess, note: updated, createdAt: time.Now()})
-		}
+	requestHash := idempotencyRequestHash("update", userID, noteID, derefOrEmpty(title), derefOrEmpty(visibility), derefOrEmpty(content), strconv.FormatInt(expectedVersion, 10))
+	// matchHash=true: la misma X-Idempotency-Key con un body distinto es un
+	// conflicto 409, no un replay silencioso del resultado anterior.
+	_, replay, claimed, idemErr := s.beginIdempotentOperation(ctx, userID, "update", opKey, requestHash, true, nil)
+	if idemErr != nil {
+		return nil, idemErr
 	}
-	return updated, err
+	if replay != nil {
+		return replay, nil
+	}
+	if !claimed {
+		return nil, ErrInternalDatabase
+	}
+	updated, err := s.updateInner(ctx, userID, noteID, title, visibility, content, expectedVersion)
+	if err != nil {
+		s.releaseIdempotentOperation(ctx, userID, "update", opKey)
+		return nil, err
+	}
+	if updated != nil {
+		s.completeIdempotentOperation(ctx, userID, "update", opKey, updated.ID)
+	}
+	return updated, nil
 }
 
 // updateInner implementa la lógica de Update sin idempotencia: validación de
-// autor, sincronización causal PG <-> Drive con snapshot previo reversible y
-// self-healing de notas legacy sin external_file_id.
-func (s *NoteService) updateInner(ctx context.Context, userID string, noteID string, title *string, visibility *string, content *string) (*model.Note, error) {
+// autor, sincronización causal PG <-> Drive con snapshot previo reversible,
+// self-healing de notas legacy sin external_file_id y control de concurrencia.
+// Toda la operación se ejecuta bajo shared.WithNoteLock (lock distribuido por
+// nota), lo que serializa los cambios de ACL/metadata entre réplicas, y la
+// escritura final de metadata usa versionado optimista.
+func (s *NoteService) updateInner(ctx context.Context, userID string, noteID string, title *string, visibility *string, content *string, expectedVersion int64) (*model.Note, error) {
 	if !utils.ValidateUUID(noteID) {
 		return nil, newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
 	}
+	var updated *model.Note
+	lockErr := s.shared.WithNoteLock(ctx, noteID, func(lockCtx context.Context) error {
+		var opErr error
+		updated, opErr = s.updateInnerLocked(lockCtx, userID, noteID, title, visibility, content, expectedVersion)
+		return opErr
+	})
+	if lockErr != nil {
+		return nil, lockErr
+	}
+	return updated, nil
+}
+
+func (s *NoteService) updateInnerLocked(ctx context.Context, userID string, noteID string, title *string, visibility *string, content *string, expectedVersion int64) (*model.Note, error) {
 	note, err := s.notes.GetByID(ctx, noteID)
 	if err != nil {
 		return nil, ErrInternalDatabase
@@ -836,6 +1037,11 @@ func (s *NoteService) updateInner(ctx context.Context, userID string, noteID str
 	}
 	if note.UserID != userID {
 		return nil, newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
+	}
+	// Precondición de versión del cliente: se evalúa antes de tocar Drive para
+	// no aplicar efectos remotos de un cambio que ya no es válido.
+	if expectedVersion > 0 && note.Version != expectedVersion {
+		return nil, newServiceError(utils.ErrConflict)
 	}
 	// validar campos opcionales (misma sanitización XSS que Create)
 	if content != nil {
@@ -925,7 +1131,7 @@ func (s *NoteService) updateInner(ctx context.Context, userID string, noteID str
 		var newFileID string
 		err = retryDriveOperation(healCtx, driveRetryMaxAttempts, func() error {
 			var opErr error
-			newFileID, opErr = s.drive.CreateFile(healCtx, userID, titleForFile+".md", *content)
+			newFileID, opErr = s.drive.CreateFile(healCtx, userID, noteID, titleForFile+".md", *content)
 			return opErr
 		})
 		cancelHeal()
@@ -949,7 +1155,7 @@ func (s *NoteService) updateInner(ctx context.Context, userID string, noteID str
 			})
 			cancelComp()
 			if compErr != nil && !drive.IsNotFound(compErr) {
-				s.notes.InsertDeadLetter(ctx, newFileID, "update_orphan_failed")
+				_ = s.notes.EnqueueDriveOperation(ctx, "delete_file", noteID, "", newFileID, userID, map[string]any{"reason": "update_orphan_failed"})
 				log.Printf("[CRITICAL_UNRECONCILED] notes: update self-healing compensación falló (file %s): %v - PG error: %v", newFileID, compErr, err)
 			}
 			return nil, ErrInternalDatabase
@@ -978,9 +1184,56 @@ func (s *NoteService) updateInner(ctx context.Context, userID string, noteID str
 		}
 		driveMutated = true
 	}
-	// actualizar metadata PG
-	updated, err := s.notes.Update(ctx, noteID, newTitle, visibility)
+	newDriveFile := !hasDriveFile && content != nil
+	permissionsChanged := (visibility != nil && *visibility != note.Visibility) || newDriveFile
+	var desiredPermissions DesiredDrivePermissions
+	if permissionsChanged {
+		shares, policyErr := s.shared.ListByNote(ctx, noteID)
+		if policyErr != nil {
+			if newDriveFile {
+				_ = s.notes.UpdateSyncStatus(ctx, noteID, "failed_sync")
+			}
+			if revertDrive != nil {
+				revertDrive()
+			}
+			return nil, ErrInternalDatabase
+		}
+		desiredVisibility := note.Visibility
+		if visibility != nil {
+			desiredVisibility = *visibility
+		}
+		desiredPermissions, policyErr = s.ComputeDesiredDrivePermissions(ctx, desiredVisibility, shares)
+		if policyErr != nil {
+			if newDriveFile {
+				_ = s.notes.UpdateSyncStatus(ctx, noteID, "failed_sync")
+			}
+			if revertDrive != nil {
+				revertDrive()
+			}
+			return nil, policyErr
+		}
+	}
+	// actualizar metadata PG con versionado optimista. Si el cliente no fijó
+	// precondición, se usa la versión leída al inicio: una escritura
+	// concurrente que haya ganado la carrera produce ErrConflict.
+	expected := expectedVersion
+	if expected <= 0 {
+		expected = note.Version
+		if expected <= 0 {
+			expected = 1
+		}
+	}
+	updated, err := s.notes.Update(ctx, noteID, newTitle, visibility, expected)
 	if err != nil {
+		if errors.Is(err, repository.ErrConflict) {
+			// Otro writer modificó la nota entre la lectura y la escritura:
+			// revertir el efecto en Drive (si lo hubo) para no dejar el
+			// contenido divergente de la metadata y responder 409.
+			if revertDrive != nil {
+				revertDrive()
+			}
+			return nil, newServiceError(utils.ErrConflict)
+		}
 		// PG falló tras Drive OK: marcar explícitamente la fila como
 		// failed_sync (estado reconciliable) y compensar revirtiendo Drive.
 		// Si la compensación también falla, compensateDriveUpdate registra la
@@ -992,6 +1245,19 @@ func (s *NoteService) updateInner(ctx context.Context, userID string, noteID str
 			revertDrive()
 		}
 		return nil, ErrInternalDatabase
+	}
+	if updated == nil {
+		// La fila desapareció entre la lectura y la escritura (borrado
+		// concurrente): el resultado canónico es not_found.
+		return nil, newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
+	}
+	// Desired-state permissions: la metadata (visibilidad) ya está en BD; se
+	// converge el ACL de Drive después. Un fallo de Drive no revierte la
+	// actualización: queda 'failed' y el reconciliador converge.
+	if permissionsChanged {
+		if syncErr := s.syncDrivePermissions(ctx, note, desiredPermissions, !newDriveFile); syncErr != nil {
+			log.Printf("notes: update nota %s: convergencia de permisos diferida: %v", noteID, syncErr)
+		}
 	}
 	return updated, nil
 }
@@ -1007,7 +1273,7 @@ func (s *NoteService) compensateDriveUpdate(ctx context.Context, userID, fileID 
 	if err := retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
 		return s.drive.UpdateFile(driveCtx, userID, fileID, content, title)
 	}); err != nil {
-		_ = s.notes.InsertDeadLetter(ctx, fileID, reason)
+		_ = s.notes.EnqueueDriveOperation(ctx, "update_file", "", "", fileID, userID, map[string]any{"reason": reason, "content": content, "title": title})
 		log.Printf("[CRITICAL_UNRECONCILED] notes: compensación Update falló (file %s): %v", fileID, err)
 	}
 }
@@ -1036,15 +1302,14 @@ func (s *NoteService) Delete(ctx context.Context, userID string, noteID string) 
 	if note.UserID != userID {
 		return newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
 	}
-	// Capturar fileID antes del borrado PG (después la metadata ya no existe).
-	fileID := ""
-	if note.ExternalFileID != nil {
-		fileID = strings.TrimSpace(*note.ExternalFileID)
-	}
 	// 1. Borrar metadata en PG (fuente de verdad). Si falla, Drive intacto.
 	// La clasificación del error del store es tipada (revalidación con el
 	// propio store), sin inspeccionar strings ni filtrar trazas SQL.
-	if err := s.notes.Delete(ctx, noteID); err != nil {
+	fileID, err := s.notes.DeleteWithDriveCleanup(ctx, noteID, userID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) || errors.Is(err, repository.ErrForbidden) {
+			return newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
+		}
 		if current, checkErr := s.notes.GetByID(ctx, noteID); checkErr == nil && current == nil {
 			// Borrado concurrente: el recurso ya no existe -> not_found.
 			return newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
@@ -1052,6 +1317,11 @@ func (s *NoteService) Delete(ctx context.Context, userID string, noteID string) 
 		return ErrInternalDatabase
 	}
 	// 2. Borrar archivo en Drive best-effort (nunca revierte el éxito de PG).
+	// La nota ya no existe: el ACL local se limpia; los permisos de Drive
+	// mueren con el archivo (borrado abajo o por la outbox).
+	if cleanupErr := s.shared.DeleteManagedPermissionsByNote(ctx, noteID); cleanupErr != nil {
+		log.Printf("notes: delete nota %s: no se pudieron limpiar permisos administrados: %v", noteID, cleanupErr)
+	}
 	if fileID != "" {
 		driveCtx, cancelDrive := withDriveTimeout(ctx)
 		delErr := retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
@@ -1064,7 +1334,7 @@ func (s *NoteService) Delete(ctx context.Context, userID string, noteID string) 
 			}
 			// OAuth revocado/ausente o 500 tras PG OK: no fallar la operación,
 			// solo loguear (evita fila huérfana visible por token inválido).
-			s.notes.InsertDeadLetter(ctx, fileID, "delete_orphan_failed")
+			// La transacción ya dejó la limpieza durable en la outbox.
 			log.Printf("[CRITICAL_UNRECONCILED] notes: delete nota %s: PG OK, Drive best-effort falló (file %s): %v", noteID, fileID, delErr)
 		}
 	}
@@ -1127,7 +1397,7 @@ func (s *NoteService) AddAttachment(ctx context.Context, userID string, noteID s
 		})
 		cancelComp()
 		if compErr != nil {
-			s.notes.InsertDeadLetter(ctx, extID, "add_attachment_orphan")
+			_ = s.notes.EnqueueDriveOperation(ctx, "delete_attachment", noteID, "", extID, userID, map[string]any{"reason": "add_attachment_orphan"})
 			log.Printf("[CRITICAL_UNRECONCILED] notes: addAttachment compensación falló (file %s): %v - PG error: %v", extID, compErr, err)
 		}
 		return nil, ErrInternalDatabase
@@ -1159,16 +1429,25 @@ func (s *NoteService) RemoveAttachment(ctx context.Context, userID string, noteI
 	// Orden canónico PG-primero (igual que Delete de notas): si PG falla, el
 	// binario en Drive queda intacto y la operación es reintentable; si PG OK
 	// pero Drive falla, se loguea y se retorna éxito (sin fila huérfana).
-	if err := s.attachments.Delete(ctx, attachmentID); err != nil {
+	fileID, err := s.attachments.DeleteAttachmentWithDriveCleanup(ctx, noteID, attachmentID, userID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return newServiceErrorMsg(utils.ErrNotFound, "adjunto no encontrado")
+		}
+		if errors.Is(err, repository.ErrForbidden) {
+			return newServiceError(utils.ErrForbidden)
+		}
 		return ErrInternalDatabase
+	}
+	if fileID == "" {
+		return nil
 	}
 	driveCtx, cancelDrive := withDriveTimeout(ctx)
 	delErr := retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
-		return s.drive.DeleteAttachment(driveCtx, userID, att.ExternalFileID)
+		return s.drive.DeleteAttachment(driveCtx, userID, fileID)
 	})
 	cancelDrive()
-	if delErr != nil {
-		s.notes.InsertDeadLetter(ctx, att.ExternalFileID, "delete_attachment_orphan_failed")
+	if delErr != nil && !drive.IsNotFound(delErr) {
 		log.Printf("[CRITICAL_UNRECONCILED] notes: removeAttachment nota %s adjunto %s: PG OK, Drive best-effort falló: %v", noteID, attachmentID, delErr)
 	}
 	return nil
@@ -1324,28 +1603,18 @@ func (s *NoteService) Unsave(ctx context.Context, userID string, noteID string) 
 }
 
 // Copy: clona apunte de tercero, crea metadata en PG con sync_status='pending_drive',
-// copia archivo en Drive, actualiza sync_status. La idempotencia reutiliza el
-// mismo contrato unificado que Create: se publica un *idemEntry in-flight, se
-// reemplaza por *idemEntry{status: idemSuccess, note, createdAt} al tener éxito
-// y el defer libera la clave ante error para evitar memory leaks.
+// copia archivo en Drive, actualiza sync_status. La idempotencia es durable en
+// notes.idempotency_keys (compartida entre réplicas): misma clave + mismo
+// origen devuelve el clon ya creado, payload distinto responde 409 y un fallo
+// antes de insertar libera la clave (DELETE) mientras que un fallo posterior
+// (Drive, timeout, OAuth) la marca 'recoverable' conservando el clon para que
+// el retry inmediato lo retome sin duplicar.
+//
+// Pre-asociación del ResourceID (crash recovery lógico): el noteID del clon se
+// genera ANTES del claim y se persiste como resource_id; un reintento con la
+// misma clave recupera ese id, reutiliza la fila/meta remota existente y no
+// duplica el clon.
 func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, idempotencyKey string) (note *model.Note, err error) {
-	cacheKey := idemKey("copy", idempotencyKey)
-	if cacheKey != "" {
-		cached, found, cacheErr := s.loadIdemEntry(cacheKey)
-		if cacheErr != nil {
-			return nil, cacheErr
-		}
-		if found {
-			return cached, nil
-		}
-		s.storeIdemEntry(cacheKey, &idemEntry{status: idemInFlight, createdAt: time.Now()})
-	}
-	defer func() {
-		if err != nil && cacheKey != "" {
-			s.deleteIdemEntry(cacheKey)
-		}
-	}()
-
 	if !utils.ValidateUUID(noteID) {
 		return nil, notFoundNote()
 	}
@@ -1371,47 +1640,121 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 		return nil, notFoundNote()
 	}
 
-	// 1. Insertar metadata en PG con sync_status='pending_drive' ANTES de copiar en Drive
+	// 0. Reclamar la clave de idempotencia durable antes de crear fila/archivo:
+	// misma clave + mismo origen => replay del clon ya creado; misma clave +
+	// origen distinto => 409 Conflict. El id del clon se preasigna al claim.
+	newNoteID := uuid.NewString()
+	recoveredFromCrash := false
+	// pgInserted distingue el punto de fallo: antes de materializar el clon en
+	// notes.notes el claim se libera (DELETE); después, el clon ya existe y se
+	// marca 'recoverable' preservando su id para que el retry no duplique.
+	pgInserted := false
+	opKey := idemKey("copy", idempotencyKey)
+	if opKey != "" {
+		requestHash := idempotencyRequestHash("copy", userID, noteID)
+		rec, replay, claimed, idemErr := s.beginIdempotentOperation(ctx, userID, "copy", opKey, requestHash, true, &newNoteID)
+		if idemErr != nil {
+			return nil, idemErr
+		}
+		if replay != nil {
+			return replay, nil
+		}
+		if !claimed {
+			return nil, ErrInternalDatabase
+		}
+		if rec != nil && rec.ResourceID != nil && strings.TrimSpace(*rec.ResourceID) != "" && *rec.ResourceID != newNoteID {
+			newNoteID = *rec.ResourceID
+			recoveredFromCrash = true
+		}
+		pgInserted = recoveredFromCrash
+		defer func() {
+			if err == nil {
+				return
+			}
+			if pgInserted {
+				s.markIdempotentRecoverable(ctx, userID, "copy", opKey, newNoteID, err)
+			} else {
+				s.releaseIdempotentOperation(ctx, userID, "copy", opKey)
+			}
+		}()
+	}
+
+	// 1. Insertar metadata en PG con sync_status='pending_drive' ANTES de copiar en Drive.
 	// Reset SubjectID for the clone to prevent unauthorized access (auditoría:
-	// el subjectID del original nunca se hereda al clon).
+	// el subjectID del original nunca se hereda al clon). Si el intento anterior
+	// murió después de insertar el clon, se reutiliza la misma fila preasociada.
 	var nilSubject *string
 	if orig.SubjectID != nil {
 		log.Printf("notes: copy nota %s: original con subjectID %s, reseteado a nil para clon %s", noteID, *orig.SubjectID, userID)
 	}
-	newNote, err := s.notes.Create(ctx, userID, nilSubject, orig.Title, nil, "private", &orig.ID, "pending_drive")
-	if err != nil {
-		return nil, ErrInternalDatabase
+	var newNote *model.Note
+	if recoveredFromCrash {
+		newNote, err = s.notes.GetByID(ctx, newNoteID)
+		if err != nil {
+			return nil, ErrInternalDatabase
+		}
+	}
+	if newNote == nil {
+		newNote, err = s.notes.Create(ctx, newNoteID, userID, nilSubject, orig.Title, nil, "private", &orig.ID, "pending_drive")
+		if err != nil {
+			return nil, ErrInternalDatabase
+		}
+		pgInserted = true
+	} else if newNote.SyncStatus == "synced" && newNote.ExternalFileID != nil && strings.TrimSpace(*newNote.ExternalFileID) != "" {
+		// El crash ocurrió después de persistir el clon: ya está completo.
+		if opKey != "" {
+			s.completeIdempotentOperation(ctx, userID, "copy", opKey, newNote.ID)
+		}
+		return newNote, nil
 	}
 
 	// 2. Copiar archivo en Drive del copiador. CopyFile exige OAuth vigente del
 	// clonador (destino) y resuelve la lectura del origen de forma desacoplada.
 	// Contexto acotado: un cuelgue de red no bloquea el request indefinidamente.
-	copyCtx, cancelCopy := withDriveTimeout(ctx)
-	var newFileID string
-	err = retryDriveOperation(copyCtx, driveRetryMaxAttempts, func() error {
-		var opErr error
-		newFileID, opErr = s.drive.CopyFile(copyCtx, orig.UserID, *orig.ExternalFileID, userID, orig.Title)
-		return opErr
-	})
-	cancelCopy()
-	if err != nil {
-		// Drive falló: marcar nota como failed_sync para reconciliación
-		_ = s.notes.UpdateSyncStatus(ctx, newNote.ID, "failed_sync")
-		// (a) OAuth de la cuenta del clonador ausente/revocado: 403 genérico,
-		//     el problema está en su propio Drive, no en el origen.
-		if drive.IsOAuthError(err) {
-			log.Printf("notes: copy nota %s: cuenta del clonador sin OAuth vigente: %v", noteID, err)
-			return nil, newServiceErrorMsg(utils.ErrForbidden, "Conecte o renueve su Google Drive")
+	// El clon se indexa con appProperties (notes_note_id de la nueva nota).
+	// En un retry de crash se busca primero el clon huérfano para no duplicarlo.
+	newFileID := ""
+	if newNote.ExternalFileID != nil {
+		newFileID = strings.TrimSpace(*newNote.ExternalFileID)
+	}
+	createdDriveFile := false
+	if newFileID == "" && recoveredFromCrash {
+		found, findErr := s.findOrphanDriveFile(ctx, userID, newNote.ID)
+		if findErr != nil {
+			_ = s.notes.UpdateSyncStatus(ctx, newNote.ID, "failed_sync")
+			log.Printf("notes: copy retry clon %s: no se pudo verificar el huérfano en Drive: %v", newNote.ID, findErr)
+			return nil, ErrDriveUnavailable
 		}
-		// (b) El archivo origen no es legible (borrado o permisos revocados):
-		//     zero-knowledge absoluto, mismo notFoundNote que una nota
-		//     inexistente/inaccesible (sin mensajes diferenciadores).
-		if drive.IsNotFound(err) || drive.IsForbidden(err) {
-			log.Printf("notes: copy nota %s: acceso al archivo origen falló (zero-knowledge): %v", noteID, err)
-			return nil, notFoundNote()
+		newFileID = found
+	}
+	if newFileID == "" {
+		copyCtx, cancelCopy := withDriveTimeout(ctx)
+		err = retryDriveOperation(copyCtx, driveRetryMaxAttempts, func() error {
+			var opErr error
+			newFileID, opErr = s.drive.CopyFile(copyCtx, orig.UserID, *orig.ExternalFileID, userID, newNote.ID, orig.Title)
+			return opErr
+		})
+		cancelCopy()
+		if err != nil {
+			// Drive falló: marcar nota como failed_sync para reconciliación
+			_ = s.notes.UpdateSyncStatus(ctx, newNote.ID, "failed_sync")
+			// (a) OAuth de la cuenta del clonador ausente/revocado: 403 genérico,
+			//     el problema está en su propio Drive, no en el origen.
+			if drive.IsOAuthError(err) {
+				log.Printf("notes: copy nota %s: cuenta del clonador sin OAuth vigente: %v", noteID, err)
+				return nil, newServiceErrorMsg(utils.ErrForbidden, "Conecte o renueve su Google Drive")
+			}
+			// (b) El archivo origen no es legible (borrado o permisos revocados):
+			//     zero-knowledge absoluto, mismo notFoundNote que una nota
+			//     inexistente/inaccesible (sin mensajes diferenciadores).
+			if drive.IsNotFound(err) || drive.IsForbidden(err) {
+				log.Printf("notes: copy nota %s: acceso al archivo origen falló (zero-knowledge): %v", noteID, err)
+				return nil, notFoundNote()
+			}
+			// (c) Fallo transitorio del upstream de Drive.
+			return nil, ErrDriveUnavailable
 		}
-		// (c) Fallo transitorio del upstream de Drive.
-		return nil, ErrDriveUnavailable
+		createdDriveFile = true
 	}
 	// Defensa: el clon debe tener un fileID distinto al original.
 	if newFileID == *orig.ExternalFileID {
@@ -1422,7 +1765,7 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 		})
 		cancelComp()
 		if compErr != nil && !drive.IsNotFound(compErr) {
-			s.notes.InsertDeadLetter(ctx, newFileID, "copy_orphan_failed")
+			_ = s.notes.EnqueueDriveOperation(ctx, "delete_file", newNote.ID, "", newFileID, userID, map[string]any{"reason": "copy_orphan_failed"})
 			log.Printf("[CRITICAL_UNRECONCILED] notes: copy fileID duplicado, compensación falló (file %s): %v", newFileID, compErr)
 		}
 		return nil, ErrDriveUnavailable
@@ -1431,13 +1774,19 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 	// 3. Actualizar metadata en PG con external_file_id y sync_status='synced'
 	if err := s.notes.UpdateExternalFileID(ctx, newNote.ID, newFileID); err != nil {
 		_ = s.notes.UpdateSyncStatus(ctx, newNote.ID, "failed_sync")
+		if !createdDriveFile {
+			// El clon adoptado pertenece a un intento previo que sí lo creó: no
+			// se borra (evita pérdida de datos); queda reconciliable.
+			log.Printf("notes: copy retry clon %s: fallo al persistir external_file_id tras adoptar huérfano %s: %v", newNote.ID, newFileID, err)
+			return nil, ErrInternalDatabase
+		}
 		compCtx, cancelComp := withDriveTimeout(ctx)
 		compErr := retryDriveOperation(compCtx, driveRetryMaxAttempts, func() error {
 			return s.drive.DeleteFile(compCtx, userID, newFileID)
 		})
 		cancelComp()
 		if compErr != nil && !drive.IsNotFound(compErr) {
-			s.notes.InsertDeadLetter(ctx, newFileID, "copy_orphan_failed")
+			_ = s.notes.EnqueueDriveOperation(ctx, "delete_file", newNote.ID, "", newFileID, userID, map[string]any{"reason": "copy_orphan_failed"})
 			log.Printf("[CRITICAL_UNRECONCILED] notes: copy compensación falló (file %s): %v - PG error: %v", newFileID, compErr, err)
 		} else {
 			log.Printf("notes: copy compensación OK (huérfano Drive %s eliminado tras fallo PG)", newFileID)
@@ -1450,10 +1799,10 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 	if err != nil {
 		return nil, ErrInternalDatabase
 	}
-	if cacheKey != "" {
-		// TTL: la entrada de idempotencia guarda la hora de creación para poder
-		// purgarse pasados 10 minutos y no acumular memoria indefinidamente.
-		s.storeIdemEntry(cacheKey, &idemEntry{status: idemSuccess, note: updated, createdAt: time.Now()})
+	if opKey != "" {
+		// Publicar el clon en la clave durable: los replays con la misma clave
+		// y el mismo origen reciben exactamente este clon.
+		s.completeIdempotentOperation(ctx, userID, "copy", opKey, updated.ID)
 	}
 	return updated, nil
 }
@@ -1471,6 +1820,14 @@ func (s *NoteService) Like(ctx context.Context, userID string, noteID string) er
 	}
 	if note == nil {
 		return newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
+	}
+	// Check access before likes so neither existence nor a previous like leaks.
+	allowed, err := s.hasReadAccess(ctx, note, userID)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return notFoundNote()
 	}
 	exists, err := s.likes.Exists(ctx, noteID, userID)
 	if err != nil {
@@ -1494,17 +1851,38 @@ func (s *NoteService) Unlike(ctx context.Context, userID string, noteID string) 
 	if !utils.ValidateUUID(noteID) {
 		return newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
 	}
+	// UnlikeAtomic decrements only when DELETE affects a row and clamps at zero.
 	if err := s.likes.UnlikeAtomic(ctx, noteID, userID); err != nil {
 		return ErrInternalDatabase
 	}
 	return nil
 }
 
-// Share
+// Share registra la intención de compartir en PostgreSQL ANTES de tocar Drive
+// (desired-state permissions): el share se inserta 'pending' y el estado deseado
+// se materializa en notes.drive_managed_permissions; después se intenta
+// converger el ACL de Drive de inmediato. Si Drive falla, la operación NO se
+// revierte: el share persiste y permission_sync_status queda 'failed' para que
+// el reconciliador converja en el siguiente tick (convergencia ante fallos).
+// Se ejecuta bajo shared.WithNoteLock (lock distribuido por nota) para que dos
+// réplicas no intercalen cambios de ACL de la misma nota.
 func (s *NoteService) Share(ctx context.Context, ownerID string, noteID string, groupID string, accessMode string) (*model.SharedNote, error) {
 	if !utils.ValidateUUID(noteID) || !utils.ValidateUUID(groupID) {
 		return nil, newServiceErrorMsg(utils.ErrNotFound, "nota o grupo no encontrado")
 	}
+	var shared *model.SharedNote
+	lockErr := s.shared.WithNoteLock(ctx, noteID, func(lockCtx context.Context) error {
+		var opErr error
+		shared, opErr = s.shareLocked(lockCtx, ownerID, noteID, groupID, accessMode)
+		return opErr
+	})
+	if lockErr != nil {
+		return nil, lockErr
+	}
+	return shared, nil
+}
+
+func (s *NoteService) shareLocked(ctx context.Context, ownerID string, noteID string, groupID string, accessMode string) (*model.SharedNote, error) {
 	if !utils.ValidateAccessMode(accessMode) {
 		return nil, newServiceError(utils.ErrInvalidAccessMode)
 	}
@@ -1529,50 +1907,373 @@ func (s *NoteService) Share(ctx context.Context, ownerID string, noteID string, 
 	isAdmin, _ := s.social.IsAdmin(ctx, ownerID, groupID)
 	followers, _ := s.social.GetFollowersCount(ctx, ownerID)
 
+	previous, err := s.shared.ListByNote(ctx, noteID)
+	if err != nil {
+		return nil, ErrInternalDatabase
+	}
+	candidate := &model.SharedNote{NoteID: noteID, GroupID: groupID, AccessMode: accessMode}
+	shares := make([]*model.SharedNote, 0, len(previous)+1)
+	shares = append(shares, previous...)
+	shares = append(shares, candidate)
+	// El estado deseado se calcula ANTES de persistir: si el directorio de
+	// miembros no responde no se crea un share que no podamos converger.
+	desired, err := s.ComputeDesiredDrivePermissions(ctx, note.Visibility, shares)
+	if err != nil {
+		return nil, err
+	}
+
+	// 1) BD primero: intención durable del share ('pending') y de los permisos.
 	shared, err := s.shared.Create(ctx, noteID, groupID, isAdmin, accessMode, followers)
 	if err != nil {
 		return nil, ErrInternalDatabase
 	}
-	// access_mode=link no crea permisos nominales en Drive.
-	if accessMode == "restricted" {
-		s.grantRestrictedPermissions(ctx, ownerID, note, groupID)
+	// 2) Sincronizar Drive; ante fallo queda 'failed' y el reconciliador converge.
+	shared.PermissionSyncStatus = model.PermissionSyncInSync
+	if syncErr := s.syncDrivePermissions(ctx, note, desired, true); syncErr != nil {
+		shared.PermissionSyncStatus = model.PermissionSyncFailed
+		log.Printf("notes: share nota %s grupo %s persistido; convergencia Drive diferida: %v", noteID, groupID, syncErr)
 	}
 	return shared, nil
 }
 
-// grantRestrictedPermissions otorga permiso reader en Drive a cada miembro del
-// grupo de forma best-effort: si un permiso falla se registra el error (sin
-// secretos) y se continúa con los demás; nunca revierte la fila de
-// notes.shared_notes ya creada. Los correos se normalizan (trim, lowercase,
-// sin vacíos ni duplicados); si el correo del autor viene en el listado queda
-// incluido una sola vez (ya es dueño del archivo, el permiso es inofensivo).
-func (s *NoteService) grantRestrictedPermissions(ctx context.Context, ownerID string, note *model.Note, groupID string) {
-	if note.ExternalFileID == nil || strings.TrimSpace(*note.ExternalFileID) == "" {
-		return
-	}
-	dir := s.members
-	if dir == nil {
-		dir = NewNoopMemberDirectory()
-	}
-	emails, err := dir.ListMemberEmails(ctx, groupID)
-	if err != nil {
-		log.Printf("notes: share restricted nota %s: no se pudieron obtener emails del grupo (se mantiene el share): %v", note.ID, err)
-		return
-	}
-	for _, email := range NormalizeEmails(emails) {
-		grantCtx, cancelGrant := withDriveTimeout(ctx)
-		grantErr := s.drive.GrantPermission(grantCtx, ownerID, *note.ExternalFileID, email, "reader")
-		cancelGrant()
-		if grantErr != nil {
-			log.Printf("notes: share restricted nota %s: no se pudo otorgar permiso a %s: %v", note.ID, email, grantErr)
-		}
-	}
+// DesiredDrivePermissions is the union of the note visibility and all active shares.
+// Nominal grants remain independent of link access, so removing the last link
+// does not accidentally remove access required by restricted groups.
+type DesiredDrivePermissions struct {
+	Anyone bool
+	Emails []string
 }
 
+func (s *NoteService) ComputeDesiredDrivePermissions(ctx context.Context, visibility string, shares []*model.SharedNote) (DesiredDrivePermissions, error) {
+	policy := DesiredDrivePermissions{Anyone: visibility == "public"}
+	groups := map[string]bool{}
+	for _, sh := range shares {
+		if sh.AccessMode == "link" {
+			policy.Anyone = true
+		}
+		if sh.AccessMode != "restricted" || groups[sh.GroupID] {
+			continue
+		}
+		groups[sh.GroupID] = true
+		if s.members == nil {
+			return DesiredDrivePermissions{}, ErrInternalDatabase
+		}
+		emails, err := s.members.ListMemberEmails(ctx, sh.GroupID)
+		if err != nil {
+			return DesiredDrivePermissions{}, ErrInternalDatabase
+		}
+		policy.Emails = append(policy.Emails, emails...)
+	}
+	policy.Emails = NormalizeEmails(policy.Emails)
+	return policy, nil
+}
+
+// persistManagedPermission hace upsert del estado deseado/observado de un
+// permiso administrado en notes.drive_managed_permissions (BD primero).
+func (s *NoteService) persistManagedPermission(ctx context.Context, noteID, fileID, principalType, principalKey string, permissionID *string, status string) error {
+	_, err := s.shared.UpsertManagedPermission(ctx, &model.DriveManagedPermission{
+		NoteID:            noteID,
+		ExternalFileID:    fileID,
+		PrincipalType:     principalType,
+		PrincipalKey:      principalKey,
+		DrivePermissionID: permissionID,
+		Role:              "reader",
+		SyncStatus:        status,
+	})
+	if err != nil {
+		return ErrInternalDatabase
+	}
+	return nil
+}
+
+// isPermissionAlreadyExists reconoce el 409 de Drive (permiso ya otorgado):
+// un conflicto al re-otorgar significa que el ACL remoto ya convergió, no un
+// fallo que deba reintentarse.
+func isPermissionAlreadyExists(err error) bool {
+	var de *drive.DriveError
+	return errors.As(err, &de) && de.Code == 409
+}
+
+// syncDrivePermissions converge el ACL remoto del archivo de la nota al estado
+// deseado (visibilidad + shares) y persiste cada transición en
+// notes.drive_managed_permissions. Contrato de convergencia:
+//   - La BD es la fuente de verdad: el estado deseado se registra como
+//     'pending' ANTES de llamar a Drive y luego pasa a 'in_sync'/'failed'.
+//   - Las bajas se revocan (idempotente ante 404) y su fila se elimina.
+//   - Los fallos de Drive/BD se persisten como 'failed' y NO revierten las
+//     intenciones ya guardadas: el reconciliador reintenta.
+//   - permission_sync_status de notes.shared_notes se actualiza a in_sync o
+//     failed según el resultado global de la nota.
+//
+// El llamador debe sostener el lock distribuido por nota
+// (shared.WithNoteLock), que serializa los cambios de ACL de una nota frente a
+// Share/Unshare/Update y al reconciliador incluso entre réplicas.
+func (s *NoteService) syncDrivePermissions(ctx context.Context, note *model.Note, desired DesiredDrivePermissions, legacyLinkExists bool) error {
+	if note == nil {
+		return nil
+	}
+	if note.ExternalFileID == nil || strings.TrimSpace(*note.ExternalFileID) == "" {
+		// Sin archivo remoto no hay ACL que converger: el estado de aplicación
+		// queda sincronizado y el alta del archivo (Create/self-healing) o el
+		// reconciliador aplicará los permisos cuando exista el archivo.
+		return s.shared.UpdateNotePermissionSyncStatus(ctx, note.ID, model.PermissionSyncInSync)
+	}
+	fileID, ownerID := *note.ExternalFileID, note.UserID
+	rows, err := s.shared.ListManagedPermissions(ctx, note.ID)
+	if err != nil {
+		return ErrInternalDatabase
+	}
+	// Notas públicas previas al desired-state no tienen fila anyone en la
+	// tabla: si el archivo remoto ya existía se asume el link otorgado (evita
+	// duplicar grants en Drive) y se materializa la fila para que una baja de
+	// visibilidad pueda revocarlo. Con un archivo recién creado no se asume
+	// nada: el link debe otorgarse.
+	hasAnyoneRow := false
+	for _, row := range rows {
+		if row.PrincipalType == model.PermissionPrincipalAnyone {
+			hasAnyoneRow = true
+			break
+		}
+	}
+	if !hasAnyoneRow && note.Visibility == "public" && legacyLinkExists {
+		if err := s.persistManagedPermission(ctx, note.ID, fileID, model.PermissionPrincipalAnyone, "", nil, model.PermissionSyncInSync); err != nil {
+			log.Printf("notes: sync nota %s: no se pudo materializar el link legacy: %v", note.ID, err)
+		}
+		rows = append(rows, &model.DriveManagedPermission{
+			NoteID:         note.ID,
+			ExternalFileID: fileID,
+			PrincipalType:  model.PermissionPrincipalAnyone,
+			Role:           "reader",
+			SyncStatus:     model.PermissionSyncInSync,
+		})
+	}
+	desiredEmails := make(map[string]bool, len(desired.Emails))
+	for _, email := range desired.Emails {
+		desiredEmails[email] = true
+	}
+	existing := make(map[string]*model.DriveManagedPermission, len(desired.Emails))
+	var anyoneRow *model.DriveManagedPermission
+	stale := make([]*model.DriveManagedPermission, 0, len(rows))
+	for _, row := range rows {
+		if row.ExternalFileID != fileID {
+			// El archivo remoto anterior ya no existe (self-healing/legacy):
+			// el permiso murió con él, no hay nada que revocar en Drive.
+			stale = append(stale, row)
+			continue
+		}
+		switch row.PrincipalType {
+		case model.PermissionPrincipalEmail:
+			if desiredEmails[row.PrincipalKey] {
+				existing[row.PrincipalKey] = row
+			} else {
+				stale = append(stale, row)
+			}
+		case model.PermissionPrincipalAnyone:
+			if desired.Anyone {
+				anyoneRow = row
+			} else {
+				stale = append(stale, row)
+			}
+		}
+	}
+
+	var firstErr error
+	noteErr := func(err error) {
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	// 1) Bajas: persistir 'pending' antes de revocar en Drive (si el proceso
+	// muere a mitad, la fila pendiente dispara la convergencia).
+	for _, row := range stale {
+		if row.ExternalFileID != fileID {
+			continue
+		}
+		if err := s.persistManagedPermission(ctx, note.ID, fileID, row.PrincipalType, row.PrincipalKey, row.DrivePermissionID, model.PermissionSyncPending); err != nil {
+			noteErr(err)
+		}
+	}
+
+	// 2) Altas: persistir el estado deseado como 'pending' antes de tocar Drive.
+	toGrant := make([]string, 0, len(desired.Emails))
+	for _, email := range desired.Emails {
+		row := existing[email]
+		if row != nil && row.SyncStatus == model.PermissionSyncInSync {
+			continue
+		}
+		toGrant = append(toGrant, email)
+	}
+	needAnyone := desired.Anyone && (anyoneRow == nil || anyoneRow.SyncStatus != model.PermissionSyncInSync)
+	for _, email := range toGrant {
+		if err := s.persistManagedPermission(ctx, note.ID, fileID, model.PermissionPrincipalEmail, email, nil, model.PermissionSyncPending); err != nil {
+			noteErr(err)
+		}
+	}
+	if needAnyone {
+		if err := s.persistManagedPermission(ctx, note.ID, fileID, model.PermissionPrincipalAnyone, "", nil, model.PermissionSyncPending); err != nil {
+			noteErr(err)
+		}
+	}
+
+	// 3) Drive: revocar bajas (404 = ya no existe, idempotente).
+	for _, row := range stale {
+		if row.ExternalFileID != fileID {
+			if err := s.shared.DeleteManagedPermission(ctx, note.ID, row.PrincipalType, row.PrincipalKey); err != nil {
+				noteErr(ErrInternalDatabase)
+			}
+			continue
+		}
+		driveCtx, cancel := withDriveTimeout(ctx)
+		var revErr error
+		switch row.PrincipalType {
+		case model.PermissionPrincipalAnyone:
+			permissionID := derefOrEmpty(row.DrivePermissionID)
+			revErr = retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
+				return s.drive.RevokePermissionByID(driveCtx, ownerID, fileID, permissionID)
+			})
+		case model.PermissionPrincipalEmail:
+			email := row.PrincipalKey
+			revErr = retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
+				return s.drive.RevokePermission(driveCtx, ownerID, fileID, email)
+			})
+		}
+		cancel()
+		if revErr != nil && !drive.IsNotFound(revErr) {
+			if err := s.persistManagedPermission(ctx, note.ID, fileID, row.PrincipalType, row.PrincipalKey, row.DrivePermissionID, model.PermissionSyncFailed); err != nil {
+				noteErr(err)
+			}
+			noteErr(ErrDriveUnavailable)
+			continue
+		}
+		if err := s.shared.DeleteManagedPermission(ctx, note.ID, row.PrincipalType, row.PrincipalKey); err != nil {
+			noteErr(ErrInternalDatabase)
+		}
+	}
+
+	// 4) Drive: otorgar altas (409 = ya otorgado, cuenta como convergencia).
+	for _, email := range toGrant {
+		driveCtx, cancel := withDriveTimeout(ctx)
+		grantErr := retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
+			return s.drive.GrantPermission(driveCtx, ownerID, fileID, email, "reader")
+		})
+		cancel()
+		if grantErr != nil && !isPermissionAlreadyExists(grantErr) {
+			if err := s.persistManagedPermission(ctx, note.ID, fileID, model.PermissionPrincipalEmail, email, nil, model.PermissionSyncFailed); err != nil {
+				noteErr(err)
+			}
+			noteErr(ErrDriveUnavailable)
+			continue
+		}
+		if err := s.persistManagedPermission(ctx, note.ID, fileID, model.PermissionPrincipalEmail, email, nil, model.PermissionSyncInSync); err != nil {
+			noteErr(err)
+		}
+	}
+	if needAnyone {
+		driveCtx, cancel := withDriveTimeout(ctx)
+		var permissionID string
+		grantErr := retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
+			var opErr error
+			permissionID, opErr = s.drive.GrantLinkPermission(driveCtx, ownerID, fileID)
+			return opErr
+		})
+		cancel()
+		if grantErr != nil && !isPermissionAlreadyExists(grantErr) {
+			if err := s.persistManagedPermission(ctx, note.ID, fileID, model.PermissionPrincipalAnyone, "", nil, model.PermissionSyncFailed); err != nil {
+				noteErr(err)
+			}
+			noteErr(ErrDriveUnavailable)
+		} else {
+			var pid *string
+			if strings.TrimSpace(permissionID) != "" {
+				pid = &permissionID
+			}
+			if err := s.persistManagedPermission(ctx, note.ID, fileID, model.PermissionPrincipalAnyone, "", pid, model.PermissionSyncInSync); err != nil {
+				noteErr(err)
+			}
+		}
+	}
+
+	status := model.PermissionSyncInSync
+	if firstErr != nil {
+		status = model.PermissionSyncFailed
+	}
+	if err := s.shared.UpdateNotePermissionSyncStatus(ctx, note.ID, status); err != nil {
+		noteErr(ErrInternalDatabase)
+	}
+	return firstErr
+}
+
+// reconcileManagedPermissions converge las notas con permisos pendientes o
+// fallidos en notes.drive_managed_permissions/shared_notes. Es idempotente:
+// converger una nota ya sincronizada no genera llamadas a Drive. Un fallo de
+// Social (directorio) no descarta la intención: queda 'failed' y se reintenta.
+func (s *NoteService) reconcileManagedPermissions(ctx context.Context) error {
+	noteIDs, err := s.shared.ListNotesWithPendingPermissionSync(ctx, 100)
+	if err != nil {
+		return ErrInternalDatabase
+	}
+	var result error
+	for _, noteID := range noteIDs {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(result, err)
+		}
+		note, err := s.notes.GetByID(ctx, noteID)
+		if err != nil {
+			result = errors.Join(result, ErrInternalDatabase)
+			continue
+		}
+		if note == nil {
+			// Nota borrada: la tabla sin FK puede conservar filas huérfanas.
+			if err := s.shared.DeleteManagedPermissionsByNote(ctx, noteID); err != nil {
+				result = errors.Join(result, ErrInternalDatabase)
+			}
+			continue
+		}
+		lockErr := s.shared.WithNoteLock(ctx, noteID, func(lockCtx context.Context) error {
+			shares, err := s.shared.ListByNote(lockCtx, noteID)
+			if err != nil {
+				return ErrInternalDatabase
+			}
+			desired, err := s.ComputeDesiredDrivePermissions(lockCtx, note.Visibility, shares)
+			if err != nil {
+				// No se puede calcular el estado deseado (p. ej. Social caído):
+				// preservar failed para el siguiente tick sin perder la intención.
+				_ = s.shared.UpdateNotePermissionSyncStatus(lockCtx, noteID, model.PermissionSyncFailed)
+				return nil
+			}
+			return s.syncDrivePermissions(lockCtx, note, desired, true)
+		})
+		if lockErr != nil {
+			result = errors.Join(result, lockErr)
+		}
+	}
+	return result
+}
+
+// Unshare elimina el share en PostgreSQL ANTES de revocar el ACL de Drive
+// (desired-state permissions). El estado deseado pasa a materializarse en
+// notes.drive_managed_permissions: las filas afectadas se marcan 'pending' y se
+// converge de inmediato; si Drive falla, la baja queda persistida y el
+// reconciliador la converge después sin bloquear al usuario ni resucitar el
+// share. Se ejecuta bajo shared.WithNoteLock (lock distribuido por nota).
 func (s *NoteService) Unshare(ctx context.Context, userID string, sharedNoteID string) error {
 	if !utils.ValidateUUID(sharedNoteID) {
 		return newServiceErrorMsg(utils.ErrNotFound, "compartición no encontrada")
 	}
+	sh, err := s.shared.GetByID(ctx, sharedNoteID)
+	if err != nil {
+		return ErrInternalDatabase
+	}
+	if sh == nil {
+		return newServiceErrorMsg(utils.ErrNotFound, "compartición no encontrada")
+	}
+	return s.shared.WithNoteLock(ctx, sh.NoteID, func(lockCtx context.Context) error {
+		return s.unshareLocked(lockCtx, userID, sharedNoteID)
+	})
+}
+
+func (s *NoteService) unshareLocked(ctx context.Context, userID string, sharedNoteID string) error {
 	sh, err := s.shared.GetByID(ctx, sharedNoteID)
 	if err != nil {
 		return ErrInternalDatabase
@@ -1587,6 +2288,7 @@ func (s *NoteService) Unshare(ctx context.Context, userID string, sharedNoteID s
 	if note == nil {
 		// nota ya borrada, borrar share
 		_ = s.shared.Delete(ctx, sharedNoteID)
+		_ = s.shared.DeleteManagedPermissionsByNote(ctx, sh.NoteID)
 		return nil
 	}
 	// solo autor o admin del grupo puede retirar (simplificado: autor)
@@ -1600,32 +2302,66 @@ func (s *NoteService) Unshare(ctx context.Context, userID string, sharedNoteID s
 			return newServiceError(utils.ErrForbidden)
 		}
 	}
+	// 1) BD primero: el share deja de existir en la aplicación.
 	if err := s.shared.Delete(ctx, sharedNoteID); err != nil {
 		return ErrInternalDatabase
 	}
-	// revocar permiso Drive si restricted (best-effort, contexto acotado)
-	if sh.AccessMode == "restricted" && note.ExternalFileID != nil {
-		revCtx, cancelRev := withDriveTimeout(ctx)
-		_ = s.drive.RevokePermission(revCtx, note.UserID, *note.ExternalFileID, "member@example.com")
-		cancelRev()
+	// 1b) Marcar los permisos administrados como pendientes: si la convergencia
+	// inmediata no puede completarse (Drive o Social caídos), el reconciliador
+	// tendrá el disparo durable para revocar lo que ya no es deseado.
+	if err := s.shared.MarkManagedPermissionsPending(ctx, note.ID); err != nil {
+		log.Printf("notes: unshare nota %s: no se pudo marcar permisos pendientes: %v", note.ID, err)
+	}
+	// 2) Convergencia inmediata best-effort del estado deseado restante.
+	remaining, err := s.shared.ListByNote(ctx, note.ID)
+	if err != nil {
+		_ = s.shared.UpdateNotePermissionSyncStatus(ctx, note.ID, model.PermissionSyncFailed)
+		return nil
+	}
+	desired, err := s.ComputeDesiredDrivePermissions(ctx, note.Visibility, remaining)
+	if err != nil {
+		_ = s.shared.UpdateNotePermissionSyncStatus(ctx, note.ID, model.PermissionSyncFailed)
+		return nil
+	}
+	if syncErr := s.syncDrivePermissions(ctx, note, desired, true); syncErr != nil {
+		log.Printf("notes: unshare nota %s: convergencia Drive diferida: %v", note.ID, syncErr)
 	}
 	return nil
 }
 
 func (s *NoteService) UnshareAll(ctx context.Context, userID string, groupID string) error {
 	if !utils.ValidateUUID(groupID) || !utils.ValidateUUID(userID) {
-		return newServiceErrorMsg(utils.ErrBadRequest, "ids inválidos")
+		return newServiceErrorMsg(utils.ErrBadRequest, "ids inv?lidos")
 	}
-	// Sin validar autor individual: borra todos los shares de userID en groupID
-	if err := s.shared.DeleteByUserAndGroup(ctx, userID, groupID); err != nil {
-		return ErrInternalDatabase
+	// Page through the owner's notes, not the shares being deleted: removing a
+	// share must not invalidate the pagination cursor or skip another author.
+	cursor := ""
+	for {
+		notes, next, err := s.notes.ListByUser(ctx, userID, cursor, 100)
+		if err != nil {
+			return ErrInternalDatabase
+		}
+		for _, note := range notes {
+			shares, err := s.shared.ListByNote(ctx, note.ID)
+			if err != nil {
+				return ErrInternalDatabase
+			}
+			for _, sh := range shares {
+				if sh.GroupID == groupID {
+					if err := s.Unshare(ctx, userID, sh.ID); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		if next == "" {
+			return nil
+		}
+		cursor = next
 	}
-	// restaurar permisos Drive: revocar todos
-	// Necesitaríamos listar notes de user y revocar; simplificado no-op
-	return nil
 }
 
-func (s *NoteService) GetAccess(ctx context.Context, requesterID string, noteID string) (map[string]interface{}, error) {
+func (s *NoteService) GetAccess(ctx context.Context, requesterID string, noteID string) (*model.NoteAccessResponse, error) {
 	if !utils.ValidateUUID(noteID) {
 		return nil, newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
 	}
@@ -1637,10 +2373,10 @@ func (s *NoteService) GetAccess(ctx context.Context, requesterID string, noteID 
 		return nil, newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
 	}
 	canRead := false
-	accessMode := "private"
+	accessMode := "restricted"
 	if note.UserID == requesterID {
 		canRead = true
-		accessMode = note.Visibility
+		accessMode = "owner"
 	} else if note.Visibility == "public" {
 		canRead = true
 		accessMode = "public"
@@ -1685,15 +2421,103 @@ func (s *NoteService) GetAccess(ctx context.Context, requesterID string, noteID 
 	if note.ExternalFileID == nil || strings.TrimSpace(*note.ExternalFileID) == "" {
 		return nil, newServiceErrorMsg(utils.ErrNoteUnavailable, "Nota no disponible en almacenamiento remoto")
 	}
-	driveURL := ""
-	if note.ExternalFileID != nil {
-		driveURL = fmt.Sprintf("https://drive.google.com/file/d/%s/view", *note.ExternalFileID)
+	driveURL := fmt.Sprintf("https://drive.google.com/file/d/%s/view", *note.ExternalFileID)
+	// El estado real de convergencia de los permisos de Drive se deriva de
+	// notes.drive_managed_permissions (no del sync_status del archivo .md):
+	// failed > pending > synced, de forma inequívoca para link y restricted.
+	driveSyncStatus, err := s.GetAccessInfo(ctx, note.ID)
+	if err != nil {
+		return nil, err
 	}
-	return map[string]interface{}{
-		"access_mode": accessMode,
-		"can_read":    canRead,
-		"drive_url":   driveURL,
+	driveAccessVerified, driveConnectionRequired := s.driveAccessFlags(ctx, requesterID, note.Visibility, accessMode, *note.ExternalFileID)
+	return &model.NoteAccessResponse{
+		CanRead:                 canRead,
+		CanWrite:                note.UserID == requesterID,
+		Visibility:              note.Visibility,
+		AccessMode:              accessMode,
+		DriveSyncStatus:         driveSyncStatus,
+		DriveAccessVerified:     driveAccessVerified,
+		DriveConnectionRequired: driveConnectionRequired,
+		DriveURL:                &driveURL,
 	}, nil
+}
+
+// driveAccessFlags deriva las dos banderas de Drive de GET /notes/{id}/access
+// con semántica estricta por modo de acceso:
+//
+//   - link, public (cualquier visibilidad pública) y restricted: el archivo se
+//     sirve con la autorización de la aplicación (enlace público, permiso de
+//     lectura en Drive o permiso de grupo), no con el token del solicitante.
+//     Drive no se consulta: ambas banderas quedan en false y una eventual falta
+//     de conexión OAuth no se reporta, porque no impide abrir la nota.
+//   - owner sobre nota no pública: el archivo sólo es legible con la conexión
+//     del autor, así que se verifica con VerifyFileAccess (best-effort y con
+//     contexto acotado). err == nil -> verificado y sin conexión requerida;
+//     drive.OAuthError -> no verificado y conexión requerida; 403/404 (permisos
+//     o archivo ausente) o cualquier otro fallo del upstream -> no verificado y
+//     sin conexión requerida, porque no es falta de token.
+//
+// GetAccess nunca falla por Drive: los errores de la verificación se traducen a
+// banderas.
+func (s *NoteService) driveAccessFlags(ctx context.Context, requesterID, visibility, accessMode, fileID string) (verified, connectionRequired bool) {
+	if accessMode != "owner" || visibility == "public" {
+		return false, false
+	}
+	if s.drive == nil || strings.TrimSpace(fileID) == "" {
+		return false, false
+	}
+	verifyCtx, cancelVerify := withDriveTimeout(ctx)
+	err := s.drive.VerifyFileAccess(verifyCtx, requesterID, fileID)
+	cancelVerify()
+	if err == nil {
+		return true, false
+	}
+	if drive.IsOAuthError(err) {
+		return false, true
+	}
+	return false, false
+}
+
+// Estados de convergencia de los permisos administrados de Drive expuestos por
+// NoteAccessResponse.DriveSyncStatus.
+const (
+	DriveSyncStatusSynced  = "synced"
+	DriveSyncStatusPending = "pending"
+	DriveSyncStatusFailed  = "failed"
+)
+
+// GetAccessInfo deriva el estado real de convergencia de los permisos de Drive
+// de una nota a partir de notes.drive_managed_permissions:
+//   - si alguna fila está 'failed'  -> DriveSyncStatusFailed;
+//   - si alguna fila está 'pending' -> DriveSyncStatusPending;
+//   - si todas están 'in_sync' (o no hay filas) -> DriveSyncStatusSynced.
+//
+// El orden de precedencia failed > pending > synced garantiza que un fallo de
+// convergencia nunca quede enmascarado por filas ya sincronizadas.
+func (s *NoteService) GetAccessInfo(ctx context.Context, noteID string) (string, error) {
+	rows, err := s.shared.ListManagedPermissions(ctx, noteID)
+	if err != nil {
+		return "", ErrInternalDatabase
+	}
+	return DriveSyncStatusFromManagedPermissions(rows), nil
+}
+
+// DriveSyncStatusFromManagedPermissions calcula el estado agregado de
+// convergencia de las filas de notes.drive_managed_permissions.
+func DriveSyncStatusFromManagedPermissions(rows []*model.DriveManagedPermission) string {
+	status := DriveSyncStatusSynced
+	for _, row := range rows {
+		if row == nil {
+			continue
+		}
+		switch row.SyncStatus {
+		case model.PermissionSyncFailed:
+			return DriveSyncStatusFailed
+		case model.PermissionSyncPending:
+			status = DriveSyncStatusPending
+		}
+	}
+	return status
 }
 
 func (s *NoteService) ListGroupNotes(ctx context.Context, requesterID string, groupID string, cursor string, limit int) ([]*model.Note, string, error) {
@@ -1754,9 +2578,9 @@ func MustUUID(s string) bool { _, err := uuid.Parse(s); return err == nil }
 
 // reconcilePendingMinAge es la ventana mínima de gracia antes de compensar una
 // nota 'pending_drive'. Elevada a 15 minutos para superar holgadamente tanto el
-// TTL in-flight (2 min) como el TTL del caché de idempotencia (10 min): un
-// Create/Copy en vuelo nunca es compensado por una ejecución concurrente del
-// reconciler, ni siquiera cuando su replay de idempotencia acaba de expirar.
+// lease del claim de idempotencia (2 min) como el presupuesto de una operación
+// con reintentos: un Create/Copy en vuelo nunca es compensado por una ejecución
+// concurrente del reconciler.
 const reconcilePendingMinAge = 15 * time.Minute
 
 // reconcileTimeout acota el presupuesto total de una pasada de reconciliación:
@@ -1764,52 +2588,38 @@ const reconcilePendingMinAge = 15 * time.Minute
 // indefinidamente. Cada borrado individual ya lleva su propio withDriveTimeout.
 const reconcileTimeout = 30 * time.Second
 
-// ReconcilePendingNotes ejecuta la compensación (borrado del huérfano en Drive
-// y de la fila en PG) de las notas que quedaron en estado 'pending_drive'
-// cuando el proceso murió entre la inserción en Postgres y el alta/confirmación
-// en Drive. Filtro anti-race: solo procesa notas 'pending_drive' cuya última
-// actividad (created_at / updated_at) supere los 15 minutos, de modo que un
-// Create en vuelo (o su replay de idempotencia) nunca sea compensado por un
-// reconciliador concurrente.
-//
-// Verificación previa anti-eliminación agresiva: antes de compensar una nota
-// con external_file_id, se intenta leer el archivo en Drive; si existe y tiene
-// contenido, la divergencia era solo de metadata (el archivo sí se creó, pero
-// la confirmación en PG no llegó) y la nota se repara a 'synced' en lugar de
-// destruirse. Solo se compensa (borra Drive + PG) cuando el archivo no existe,
-// no es legible o está vacío.
-//
-// Casos especiales: una nota sin external_file_id limpia directamente su fila
-// de PG (no hay nada que preservar en Drive) y un error de OAuth en Drive
-// marca la nota como 'failed_sync' con log de auditoría en lugar de eliminarla
-// o reintentar en vano, porque el fallo es de credenciales, no de datos.
-//
-// Toda la pasada se ejecuta bajo un contexto con timeout de 30 segundos para
-// que el cron/job nunca quede colgado, y se serializa con reconcileMu: este
-// lock es EXCLUSIVO del job de reconciliación (múltiples schedulers/replicas)
-// y es independiente del camino HTTP de los usuarios; ninguna operación normal
-// de usuario (Create, Get, Update, Copy, Delete, ...) lo adquiere, por lo que
-// el reconciliador no bloquea requests ni viceversa. Los estados 'failed_sync'
-// no se tocan aquí: su divergencia ya quedó registrada en la dead-letter queue
-// para revisión.
+// ReconcilePendingNotes repairs stale pending/failed notes and drains the durable
+// Drive outbox. A readable empty Markdown file is valid and must be preserved.
+// Antes de descartar una nota sin external_file_id busca por appProperties
+// (FindFileByNoteID) el archivo que un crash pudo dejar huérfano y, si existe,
+// adopta ese fileID para recuperar el apunte.
 func (s *NoteService) ReconcilePendingNotes(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, reconcileTimeout)
 	defer cancel()
 	s.reconcileMu.Lock()
 	defer s.reconcileMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	queueErr := s.reconcileDriveOperations(ctx)
+	permissionErr := s.reconcileManagedPermissions(ctx)
 	type pendingStore interface {
 		GetPendingSyncNotes(ctx context.Context) ([]*model.Note, error)
 	}
 	ps, ok := s.notes.(pendingStore)
 	if !ok {
-		return nil
+		return errors.Join(queueErr, permissionErr)
 	}
 	notes, err := ps.GetPendingSyncNotes(ctx)
 	if err != nil {
-		return ErrInternalDatabase
+		return errors.Join(queueErr, permissionErr, ErrInternalDatabase)
 	}
+	result := errors.Join(queueErr, permissionErr)
 	for _, n := range notes {
-		if n.SyncStatus != "pending_drive" {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(result, err)
+		}
+		if n.SyncStatus != "pending_drive" && n.SyncStatus != "failed_sync" {
 			continue
 		}
 		age := time.Since(n.CreatedAt)
@@ -1820,43 +2630,148 @@ func (s *NoteService) ReconcilePendingNotes(ctx context.Context) error {
 			continue
 		}
 		if n.ExternalFileID == nil || strings.TrimSpace(*n.ExternalFileID) == "" {
-			// Sin archivo remoto no hay nada que verificar ni compensar en
-			// Drive: la fila pending_drive es basura pura de PG y se limpia
-			// directamente.
-			_ = s.notes.Delete(ctx, n.ID)
+			// Crash recovery: el alta en Drive pudo completarse antes de que el
+			// proceso muriera sin persistir external_file_id. Se busca el
+			// archivo huérfano por appProperties (notes_note_id) antes de
+			// descartar la nota: si aparece, se recupera el apunte en lugar de
+			// perder su contenido.
+			findCtx, cancelFind := withDriveTimeout(ctx)
+			var orphanFileID string
+			findErr := retryDriveOperation(findCtx, driveRetryMaxAttempts, func() error {
+				var opErr error
+				orphanFileID, opErr = s.drive.FindFileByNoteID(findCtx, n.UserID, n.ID)
+				return opErr
+			})
+			cancelFind()
+			if findErr == nil && strings.TrimSpace(orphanFileID) != "" {
+				if err := s.notes.UpdateExternalFileID(ctx, n.ID, orphanFileID); err != nil {
+					if errors.Is(err, repository.ErrNotFound) {
+						continue // la fila desapareció: nada que recuperar
+					}
+					result = errors.Join(result, ErrInternalDatabase)
+				}
+				continue
+			}
+			if findErr != nil {
+				// No se puede probar la ausencia del archivo (OAuth, permiso o
+				// fallo transitorio): preservar la fila para el siguiente tick.
+				log.Printf("notes: reconcile note %s: no se pudo buscar huérfano por appProperties: %v", n.ID, findErr)
+				if err := s.notes.UpdateSyncStatus(ctx, n.ID, "failed_sync"); err != nil {
+					result = errors.Join(result, ErrInternalDatabase)
+				}
+				continue
+			}
+			if n.SyncStatus == "failed_sync" {
+				continue // No evidence that failed user data may safely be deleted.
+			}
+			if _, err := s.notes.DeleteWithDriveCleanup(ctx, n.ID, n.UserID); err != nil && !errors.Is(err, repository.ErrNotFound) {
+				result = errors.Join(result, ErrInternalDatabase)
+			}
 			continue
 		}
-		// Verificación previa anti-eliminación agresiva: si el archivo existe
-		// y es legible en Drive (lectura con contenido), la nota solo quedó
-		// desincronizada en metadata: se repara a 'synced' y se conserva sin
-		// destruir datos del usuario.
 		driveCtx, cancelDrive := withDriveTimeout(ctx)
-		var content string
 		statErr := retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
-			var opErr error
-			content, opErr = s.drive.GetFileContent(driveCtx, n.UserID, *n.ExternalFileID)
-			return opErr
+			_, err := s.drive.GetFileContent(driveCtx, n.UserID, *n.ExternalFileID)
+			return err
 		})
 		cancelDrive()
-		if drive.IsOAuthError(statErr) {
-			// OAuth del autor ausente/revocado: no es un huérfano compensable
-			// (borrar sería destruir datos por un problema de credenciales).
-			// Se marca failed_sync para revisión/reconexión y se conserva.
-			log.Printf("notes: reconcile nota %s: Drive sin OAuth vigente, se marca failed_sync: %v", n.ID, statErr)
-			_ = s.notes.UpdateSyncStatus(ctx, n.ID, "failed_sync")
+		if statErr == nil {
+			// Zero bytes is valid Markdown, including for recovered failed_sync notes.
+			if err := s.notes.UpdateSyncStatus(ctx, n.ID, "synced"); err != nil {
+				result = errors.Join(result, ErrInternalDatabase)
+			}
 			continue
 		}
-		if statErr == nil && len(content) > 0 {
-			_ = s.notes.UpdateSyncStatus(ctx, n.ID, "synced")
+		if err := ctx.Err(); err != nil {
+			return errors.Join(result, err)
+		}
+		if !drive.IsNotFound(statErr) || n.SyncStatus == "failed_sync" {
+			// OAuth, permission and transient failures do not establish data loss.
+			log.Printf("notes: reconcile note %s: preserving failed_sync after Drive read error: %v", n.ID, statErr)
+			if err := s.notes.UpdateSyncStatus(ctx, n.ID, "failed_sync"); err != nil {
+				result = errors.Join(result, ErrInternalDatabase)
+			}
 			continue
 		}
-		// Archivo ausente, ilegible o vacío: compensar el huérfano.
-		delCtx, cancelDel := withDriveTimeout(ctx)
-		_ = retryDriveOperation(delCtx, driveRetryMaxAttempts, func() error {
-			return s.drive.DeleteFile(delCtx, n.UserID, *n.ExternalFileID)
-		})
-		cancelDel()
-		_ = s.notes.Delete(ctx, n.ID)
+		// Only stale incomplete creation with a missing remote file is removed;
+		// the transaction also durably schedules cleanup for its attachments.
+		if err := s.Delete(ctx, n.UserID, n.ID); err != nil {
+			result = errors.Join(result, err)
+		}
 	}
-	return nil
+	return result
+}
+
+func (s *NoteService) reconcileDriveOperations(ctx context.Context) error {
+	var result error
+	// Claim one job at a time so queued work cannot outlive its lease while
+	// waiting behind slow Drive calls. Bound the work per scheduler tick.
+	for i := 0; i < 100; i++ {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(result, err)
+		}
+		ops, err := s.notes.ClaimDriveOperations(ctx, 1, 2*reconcileTimeout)
+		if err != nil {
+			return errors.Join(result, ErrInternalDatabase)
+		}
+		if len(ops) == 0 {
+			break
+		}
+		op := ops[0]
+		driveCtx, cancelDrive := withDriveTimeout(ctx)
+		opErr := retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
+			return s.executeDriveOperation(driveCtx, op)
+		})
+		cancelDrive()
+		if opErr == nil {
+			if err := s.notes.CompleteDriveOperation(ctx, op.ID); err != nil {
+				result = errors.Join(result, ErrInternalDatabase)
+			}
+			continue
+		}
+		// Exponential retry delay, capped at one hour; the claimed attempt is 1-based.
+		delay := 30 * time.Second
+		for attempt := 1; attempt < op.Attempts && delay < time.Hour; attempt++ {
+			delay *= 2
+		}
+		if delay > time.Hour {
+			delay = time.Hour
+		}
+		if err := s.notes.FailDriveOperation(ctx, op.ID, opErr.Error(), time.Now().Add(delay)); err != nil {
+			result = errors.Join(result, ErrInternalDatabase)
+		}
+		log.Printf("notes: Drive operation %s (%s) scheduled for retry: %v", op.ID, op.Operation, opErr)
+	}
+	return result
+}
+
+func (s *NoteService) executeDriveOperation(ctx context.Context, op *model.DriveOperation) error {
+	if op.ExternalFileID == nil || strings.TrimSpace(*op.ExternalFileID) == "" {
+		return &drive.DriveError{Code: 400, Message: "outbox operation requires external_file_id"}
+	}
+	var err error
+	switch op.Operation {
+	case "delete_file":
+		err = s.drive.DeleteFile(ctx, op.OwnerUserID, *op.ExternalFileID)
+	case "delete_attachment":
+		err = s.drive.DeleteAttachment(ctx, op.OwnerUserID, *op.ExternalFileID)
+	case "update_file":
+		var payload struct {
+			Content *string `json:"content"`
+			Title   *string `json:"title"`
+		}
+		if err := json.Unmarshal(op.Payload, &payload); err != nil {
+			return &drive.DriveError{Code: 400, Message: "invalid update_file payload"}
+		}
+		if payload.Content == nil && payload.Title == nil {
+			return &drive.DriveError{Code: 400, Message: "update_file payload requires content or title"}
+		}
+		return s.drive.UpdateFile(ctx, op.OwnerUserID, *op.ExternalFileID, payload.Content, payload.Title)
+	default:
+		return &drive.DriveError{Code: 400, Message: "unsupported outbox operation"}
+	}
+	if drive.IsNotFound(err) {
+		return nil // Replaying a successful deletion is safe.
+	}
+	return err
 }

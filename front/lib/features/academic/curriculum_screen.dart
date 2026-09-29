@@ -11,8 +11,14 @@ const String kSubjectInProgress = 'in_progress';
 const String kSubjectFailed = 'failed';
 const String kSubjectPending = 'pending';
 
-/// Ancho de cada columna de semestre en la fila horizontal única.
+/// Ancho de cada columna de semestre en la fila horizontal única (desktop).
 const double _kSemesterColumnWidth = 350;
+
+/// Ancho compacto de cada columna de semestre en pantallas móviles.
+const double _kSemesterColumnWidthMobile = 285;
+
+/// Breakpoint móvil: por debajo se aplica la malla compacta.
+const double _kMobileBreakpoint = 600;
 
 /// Semestre en el que se insertan los cursos creados en Mis Cursos que no
 /// existen aún en la malla.
@@ -245,8 +251,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         'code': course['code'] ?? '',
         'name': course['name'] ?? 'Nuevo ramo',
         'credits': course['credits'] is int ? course['credits'] : 5,
-        'status':
-            course['status'] is String ? course['status'] : kSubjectPending,
+        'status': course['status'] is String
+            ? course['status']
+            : kSubjectPending,
         'requisite': null,
       });
     }
@@ -447,8 +454,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isDesktop =
-        MediaQuery.of(context).size.width > AppDimens.breakpointDesktop;
+    final width = MediaQuery.of(context).size.width;
+    final isDesktop = width > AppDimens.breakpointDesktop;
+    final isMobile = width < _kMobileBreakpoint;
     final canPop = Navigator.of(context).canPop();
 
     return Scaffold(
@@ -469,12 +477,12 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      _buildHeader(canPop, isDesktop),
-                      const SizedBox(height: 18),
+                      _buildHeader(canPop, isDesktop, isMobile),
+                      SizedBox(height: isMobile ? 12 : 18),
                       if (_isLoading)
                         _buildLoadingCard()
                       else
-                        _buildMallaContent(isDesktop),
+                        _buildMallaContent(isDesktop, isMobile),
                     ],
                   ),
                 ),
@@ -483,7 +491,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     );
   }
 
-  Widget _buildHeader(bool canPop, bool isDesktop) {
+  Widget _buildHeader(bool canPop, bool isDesktop, bool isMobile) {
     final titleBlock = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -496,7 +504,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             letterSpacing: -0.6,
           ),
         ),
-        const SizedBox(height: 4),
+        SizedBox(height: isMobile ? 2 : 4),
         const Text(
           'Planifica y visualiza tu progreso académico.',
           style: TextStyle(
@@ -505,7 +513,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             fontSize: 13,
           ),
         ),
-        const SizedBox(height: 6),
+        SizedBox(height: isMobile ? 4 : 6),
         Wrap(
           spacing: 8,
           runSpacing: 6,
@@ -560,11 +568,14 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             ),
           ],
         ),
-        const SizedBox(height: 12),
+        SizedBox(height: isMobile ? 8 : 12),
         // Progreso dinámico de la carrera: se recalcula según los créditos
         // aprobados de las asignaturas realmente registradas en la malla.
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          padding: EdgeInsets.symmetric(
+            horizontal: isMobile ? 10 : 12,
+            vertical: isMobile ? 8 : 10,
+          ),
           decoration: BoxDecoration(
             color: AppColors.surface,
             border: Border.all(color: AppColors.border, width: 2),
@@ -576,7 +587,11 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             children: [
               Row(
                 children: [
-                  const Icon(Icons.trending_up_rounded, size: 16, color: AppColors.text),
+                  const Icon(
+                    Icons.trending_up_rounded,
+                    size: 16,
+                    color: AppColors.text,
+                  ),
                   const SizedBox(width: 8),
                   const Expanded(
                     child: Text(
@@ -599,7 +614,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
+              SizedBox(height: isMobile ? 6 : 8),
               Container(
                 height: 12,
                 decoration: BoxDecoration(
@@ -615,7 +630,11 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
               const SizedBox(height: 6),
               Row(
                 children: [
-                  const Icon(Icons.sync_rounded, size: 13, color: AppColors.muted),
+                  const Icon(
+                    Icons.sync_rounded,
+                    size: 13,
+                    color: AppColors.muted,
+                  ),
                   const SizedBox(width: 6),
                   const Expanded(
                     child: Text(
@@ -720,9 +739,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             ),
           ],
         ),
-        const SizedBox(height: 14),
+        SizedBox(height: isMobile ? 10 : 14),
         actions,
-        const SizedBox(height: 14),
+        SizedBox(height: isMobile ? 10 : 14),
         Container(
           height: 4,
           decoration: BoxDecoration(
@@ -734,7 +753,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     );
   }
 
-  Widget _buildMallaContent(bool isDesktop) {
+  Widget _buildMallaContent(bool isDesktop, bool isMobile) {
     // Ordena semestres numéricamente
     final semesterKeys = _semesters.keys.toList()..sort();
     // Asegura que al menos se muestren semestres 1..8 aunque algunos vacíos
@@ -744,18 +763,19 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     }
     semesterKeys.sort();
 
-    final isMobile =
-        MediaQuery.of(context).size.width < AppDimens.breakpointCompact;
-    final columnHeight = isMobile ? 480.0 : 520.0;
+    // En móvil la columna se compacta (285 dp, 450 dp de alto) para que
+    // quepa cómodamente en pantallas de 360-412 dp de ancho; en desktop
+    // conserva los 350 dp de presencia técnica.
+    final columnHeight = isMobile ? 450.0 : 520.0;
+    final columnWidth = isMobile
+        ? _kSemesterColumnWidthMobile
+        : _kSemesterColumnWidth;
 
     // Fila horizontal única con desplazamiento lateral: las columnas conservan
     // presencia técnica (350 dp) en lugar de comprimirse en dos filas.
     final columns = <Widget>[
       for (final semester in semesterKeys)
-        SizedBox(
-          width: _kSemesterColumnWidth,
-          child: _buildSemesterColumn(semester),
-        ),
+        SizedBox(width: columnWidth, child: _buildSemesterColumn(semester)),
     ];
 
     return Column(
@@ -805,16 +825,17 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                         right: 4,
                       ),
                       itemCount: columns.length,
-                      separatorBuilder: (_, _) =>
-                          const SizedBox(width: AppDimens.spaceLg),
+                      separatorBuilder: (_, _) => SizedBox(
+                        width: isMobile ? AppDimens.spaceMd : AppDimens.spaceLg,
+                      ),
                       itemBuilder: (context, idx) => columns[idx],
                     ),
             ),
           ),
         ),
-        const SizedBox(height: 10),
+        SizedBox(height: isMobile ? 8 : 10),
         Container(
-          padding: const EdgeInsets.all(12),
+          padding: EdgeInsets.all(isMobile ? 8 : 12),
           decoration: BoxDecoration(
             color: AppColors.surface,
             border: Border.all(color: AppColors.border, width: 2),
@@ -1219,6 +1240,7 @@ class _SemesterColumn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = MediaQuery.of(context).size.width < _kMobileBreakpoint;
     final isEmpty = ramos.isEmpty;
     return Container(
       decoration: BoxDecoration(
@@ -1234,13 +1256,13 @@ class _SemesterColumn extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppDimens.radius),
         boxShadow: isEmpty ? null : AppShadows.dialog,
       ),
-      padding: const EdgeInsets.all(12),
+      padding: EdgeInsets.all(isMobile ? 8 : 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // Header
           Container(
-            padding: const EdgeInsets.only(bottom: 10),
+            padding: EdgeInsets.only(bottom: isMobile ? 8 : 10),
             decoration: BoxDecoration(
               border: Border(
                 bottom: BorderSide(
@@ -1288,7 +1310,7 @@ class _SemesterColumn extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: isMobile ? 8 : 12),
           Expanded(
             child: isEmpty
                 ? Column(
@@ -1326,7 +1348,8 @@ class _SemesterColumn extends StatelessWidget {
                   )
                 : ListView.separated(
                     itemCount: ramos.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 10),
+                    separatorBuilder: (_, _) =>
+                        SizedBox(height: isMobile ? 8 : 10),
                     itemBuilder: (context, i) {
                       final r = ramos[i];
                       return _CurriculumCard(
@@ -1337,12 +1360,12 @@ class _SemesterColumn extends StatelessWidget {
                     },
                   ),
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: isMobile ? 8 : 12),
           InkWell(
             onTap: onAdd,
             borderRadius: BorderRadius.circular(AppDimens.radius),
             child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 10),
+              padding: EdgeInsets.symmetric(vertical: isMobile ? 8 : 10),
               decoration: BoxDecoration(
                 color: AppColors.surface,
                 border: Border.all(
@@ -1387,6 +1410,7 @@ class _CurriculumCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = MediaQuery.of(context).size.width < _kMobileBreakpoint;
     final status = ramo['status'] as String;
     final isApproved = status == kSubjectApproved;
     final isFailed = status == kSubjectFailed;
@@ -1457,7 +1481,12 @@ class _CurriculumCard extends StatelessWidget {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+            padding: EdgeInsets.fromLTRB(
+              isMobile ? 10 : 12,
+              isMobile ? 8 : 10,
+              isMobile ? 6 : 8,
+              isMobile ? 8 : 10,
+            ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1469,12 +1498,12 @@ class _CurriculumCard extends StatelessWidget {
                         ramo['name'] as String,
                         style: TextStyle(
                           fontWeight: FontWeight.w900,
-                          fontSize: 12.5,
+                          fontSize: isMobile ? 12 : 13,
                           color: isFailed ? AppColors.error : AppColors.text,
                           height: 1.1,
                         ),
                       ),
-                      const SizedBox(height: 6),
+                      SizedBox(height: isMobile ? 4 : 6),
                       Row(
                         children: [
                           Container(
@@ -1513,16 +1542,16 @@ class _CurriculumCard extends StatelessWidget {
                           const SizedBox(width: 6),
                           Text(
                             '${ramo['credits']} cr.',
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontWeight: FontWeight.w700,
-                              fontSize: 10,
+                              fontSize: isMobile ? 10 : 11,
                               color: AppColors.muted,
                             ),
                           ),
                         ],
                       ),
                       if (isPending && requisiteLabel != null) ...[
-                        const SizedBox(height: 6),
+                        SizedBox(height: isMobile ? 4 : 6),
                         Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 6,
@@ -1560,7 +1589,7 @@ class _CurriculumCard extends StatelessWidget {
                         ),
                       ],
                       if (isFailed && requisiteLabel != null) ...[
-                        const SizedBox(height: 6),
+                        SizedBox(height: isMobile ? 4 : 6),
                         Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 6,
@@ -1600,15 +1629,19 @@ class _CurriculumCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                const SizedBox(width: 8),
+                SizedBox(width: isMobile ? 6 : 8),
                 Column(
                   children: [
                     InkWell(
                       onTap: onCycle,
                       borderRadius: BorderRadius.circular(4),
-                      child: Icon(statusIcon, size: 22, color: statusIconColor),
+                      child: Icon(
+                        statusIcon,
+                        size: isMobile ? 20 : 22,
+                        color: statusIconColor,
+                      ),
                     ),
-                    const SizedBox(height: 6),
+                    SizedBox(height: isMobile ? 4 : 6),
                     InkWell(
                       onTap: onRemove,
                       borderRadius: BorderRadius.circular(4),

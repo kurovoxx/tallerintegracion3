@@ -8,7 +8,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository/sqlc"
 )
 
@@ -26,10 +25,19 @@ var validWebhookHosts = map[string]struct{}{
 }
 
 type DiscordService struct {
-	repo *repository.DiscordRepository
+	repo DiscordRepo
 }
 
-func NewDiscordService(repo *repository.DiscordRepository) *DiscordService {
+// DiscordRepo es la porción de persistencia que usa DiscordService.
+// *repository.DiscordRepository es la implementación real (Postgres);
+// MemoryMeetingStore, la de tests.
+type DiscordRepo interface {
+	GetGroupByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialGroup, error)
+	GetMemberRole(ctx context.Context, groupID, userID pgtype.UUID) (string, error)
+	UpsertConfig(ctx context.Context, arg sqlc.UpsertDiscordConfigParams) (sqlc.SocialDiscordIntegration, error)
+}
+
+func NewDiscordService(repo DiscordRepo) *DiscordService {
 	return &DiscordService{repo: repo}
 }
 

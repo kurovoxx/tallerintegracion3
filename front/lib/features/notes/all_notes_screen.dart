@@ -65,7 +65,26 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   String? _error;
   bool _useMemoryFallback = false;
   bool _isSyncingBackend = false;
+  String? _backendError;
+  bool _showingLocalExample = false;
+  int _hiddenDemoCount = 0;
   String _currentQuery = '';
+
+  // Identificación verificable de ejemplos sembrados (sin borrar nada).
+  // Demo solo existe con id '1'..'7' Y título exacto de _demoNotes().
+  // Las notas reales usan UUID (36 con guiones) y las locales del usuario
+  // usan timestamp (13 dígitos): ninguna colisiona con este par id+título.
+  static const Map<String, String> _kDemoTitles = <String, String>{
+    '1': 'Cálculo - Límites y derivadas',
+    '2': 'Estructuras de Datos - Árboles',
+    '3': 'Bases de Datos - SQL Joins',
+    '4': 'Redes - Modelo OSI',
+    '5': 'Frontend - NestJS MVC',
+    '6': 'Cálculo - Integrales dobles',
+    '7': 'Nota con Adjuntos de Prueba (Conejita y PDF)',
+  };
+
+  bool _isKnownDemo(LocalNote n) => _kDemoTitles[n.id] == n.title;
   // Ids de notas del backend que pertenecen al usuario (GET /notes/me + POST 201).
   // El modelo local no guarda autor: un id con formato UUID no listado aquí se
   // trata como ajeno (solo lectura); los ids locales (dígitos) son del dispositivo.
@@ -177,6 +196,19 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         await _repo!.getAllNotes();
       } catch (e) {
         debugPrint('Drift init falló, fallback a memoria: $e');
+        final token = SessionManager.token;
+        final hasSession = token != null && token.isNotEmpty;
+        if (hasSession) {
+          // Con sesión no se siembran demos nuevas: error real.
+          if (mounted) {
+            setState(() {
+              _error = 'No se pudo abrir la base local: $e';
+              _backendError = _error;
+              _isLoading = false;
+            });
+          }
+          return _filtered;
+        }
         _useMemoryFallback = true;
         _memoryFallback = _demoNotes();
         for (final n in _memoryFallback) {
@@ -189,18 +221,31 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           _currentQuery,
           _selectedFilter,
         );
-        if (mounted) setState(() => _isLoading = false);
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _showingLocalExample = true;
+          });
+        }
         return _filtered;
       }
 
       final existing = await _repo!.getAllNotes();
       if (existing.isEmpty) {
-        final demo = _demoNotes();
-        for (final n in demo) {
-          await _repo!.upsertNote(n);
-          _likesCount[n.id] = (int.tryParse(n.id) ?? 1) * 2;
+        final token = SessionManager.token;
+        final hasSession = token != null && token.isNotEmpty;
+        if (hasSession) {
+          // Con sesión no se siembran demos nuevas: se intenta backend y,
+          // si falla, se muestra vacío/error real (nunca ejemplos).
+          await _syncFromBackend();
+        } else {
+          final demo = _demoNotes();
+          for (final n in demo) {
+            await _repo!.upsertNote(n);
+            _likesCount[n.id] = (int.tryParse(n.id) ?? 1) * 2;
+          }
+          await _syncFromBackend();
         }
-        await _syncFromBackend();
       } else {
         for (final n in existing) {
           _likesCount.putIfAbsent(n.id, () => 0);
@@ -216,10 +261,15 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     } catch (e) {
       debugPrint('AllNotes init error: $e');
       if (mounted) {
+        final token = SessionManager.token;
+        final hasSession = token != null && token.isNotEmpty;
         setState(() {
-          _error = e.toString();
           _isLoading = false;
-          if (_filtered.isEmpty && _memoryFallback.isEmpty) {
+          if (hasSession) {
+            // Con sesión: error real, no se oculta tras demo.
+            _error = 'No se pudo cargar tus notas: $e';
+            _backendError = _error;
+          } else if (_filtered.isEmpty && _memoryFallback.isEmpty) {
             _useMemoryFallback = true;
             _memoryFallback = _demoNotes();
             _filtered = _applyFilters(
@@ -228,6 +278,9 @@ class AllNotesScreenState extends State<AllNotesScreen> {
               _selectedFilter,
             );
             _error = null;
+            _showingLocalExample = true;
+          } else {
+            _error = e.toString();
           }
         });
       }
@@ -235,19 +288,42 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     }
   }
 
+  // Sincroniza GET /notes/me (real). Si hay sesión y falla, guarda
+  // _backendError real en vez de ocultar el fallo tras datos demo.
+  // Ver back/notes/cmd/server/main.go:130 y note_handler.go:241 ListMy.
   Future<void> _syncFromBackend() async {
     if (_useMemoryFallback || _repo == null) return;
-    if (mounted) setState(() => _isSyncingBackend = true);
+    if (mounted) {
+      setState(() {
+        _isSyncingBackend = true;
+        _backendError = null;
+      });
+    }
     try {
       final token = SessionManager.token;
-      final headers = <String, String>{'Content-Type': 'application/json'};
-      if (token != null && token.isNotEmpty) {
-        headers['Authorization'] = 'Bearer $token';
+      if (token == null || token.isEmpty) {
+        // Sin sesión (tests/modo local): no se exige backend. Se marca como
+        // ejemplo local para no presentar _demoNotes como notas del usuario.
+        if (mounted) setState(() => _showingLocalExample = true);
+        return;
       }
-      final res = await http
-          .get(Uri.parse('$notesBaseUrl/notes/me?limit=50'), headers: headers)
-          .timeout(const Duration(seconds: 5));
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      };
+      final res = await _withNotesClient(
+        (client) => client
+            .get(Uri.parse('$notesBaseUrl/notes/me?limit=50'),
+                headers: headers)
+            .timeout(const Duration(seconds: 5)),
+      );
       if (res.statusCode == 200) {
+        if (mounted) {
+          setState(() {
+            _backendError = null;
+            _showingLocalExample = false;
+          });
+        }
         final data = jsonDecode(utf8.decode(res.bodyBytes));
         final List notes = data['notes'] ?? [];
         for (final n in notes) {
@@ -270,9 +346,32 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             );
           } catch (_) {}
         }
+      } else {
+        String detail = 'HTTP ${res.statusCode}';
+        try {
+          final body = jsonDecode(utf8.decode(res.bodyBytes));
+          if (body is Map && body['error'] is Map) {
+            detail =
+                '${body['error']['code'] ?? 'error'}: ${body['error']['message'] ?? detail}';
+          }
+        } catch (_) {}
+        if (mounted) {
+          setState(() => _backendError =
+              'No se pudo cargar tus notas (GET /notes/me): $detail');
+        }
+        debugPrint('Backend sync error real: $detail');
       }
     } catch (e) {
       debugPrint('Backend sync falló (offline): $e');
+      if (mounted) {
+        final token = SessionManager.token;
+        if (token != null && token.isNotEmpty) {
+          setState(() => _backendError =
+              'No se pudo cargar tus notas (GET /notes/me): $e');
+        } else {
+          setState(() => _showingLocalExample = true);
+        }
+      }
     } finally {
       if (mounted) setState(() => _isSyncingBackend = false);
     }
@@ -685,6 +784,17 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     String filter,
   ) {
     var res = notes;
+    // Con sesión y fallo de backend, se ocultan (sin borrar) solo los
+    // ejemplos verificables id+título. Nunca se presentan como reales.
+    final token = SessionManager.token;
+    final hasSession = token != null && token.isNotEmpty;
+    if (hasSession && _backendError != null && res.isNotEmpty) {
+      final before = res.length;
+      res = res.where((n) => !_isKnownDemo(n)).toList();
+      _hiddenDemoCount = before - res.length;
+    } else {
+      _hiddenDemoCount = 0;
+    }
     // Filtro de chips
     if (filter == 'public') {
       res = res.where((n) => n.visibility == 'public').toList();
@@ -892,11 +1002,16 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      useSafeArea: true,
       backgroundColor: Colors.transparent,
+      // En desktop/web el modal por defecto se limita a 640px; sin tope la
+      // hoja de detalle ocupa todo el ancho disponible junto al sidebar.
+      constraints: const BoxConstraints(maxWidth: double.infinity),
       builder: (_) => DraggableScrollableSheet(
-        initialChildSize: 0.75,
+        initialChildSize: 0.95,
         minChildSize: 0.5,
-        maxChildSize: 0.95,
+        maxChildSize: 1.0,
+        expand: false,
         builder: (context, scroll) => _NoteDetailSheet(
           scrollController: scroll,
           note: note,
@@ -960,6 +1075,41 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                     const LinearProgressIndicator(
                       color: AppColors.border,
                       backgroundColor: AppColors.bg,
+                    ),
+                  ],
+                  if (_backendError != null) ...<Widget>[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFDE8E8),
+                        border: Border.all(color: Colors.black, width: 2),
+                      ),
+                      child: Text(
+                          _hiddenDemoCount > 0
+                              ? '${_backendError!} Se ocultaron $_hiddenDemoCount ejemplos locales; no se muestran como reales.'
+                              : _backendError!,
+                          style: const TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.black)),
+                    ),
+                  ],
+                  if (_backendError == null &&
+                      _showingLocalExample) ...<Widget>[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF3CD),
+                        border: Border.all(color: Colors.black, width: 2),
+                      ),
+                      child: const Text(
+                          'Modo local sin sesión: se muestran datos de ejemplo, no son tus notas reales. Inicia sesión para GET /notes/me.',
+                          style: TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.black)),
                     ),
                   ],
                   const SizedBox(height: 12),
@@ -1286,114 +1436,137 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       final isSearching =
           _searchController.text.trim().isNotEmpty || _selectedFilter != 'all';
       if (isSearching) {
-        return Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  border: Border.all(color: Colors.black, width: 2),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Colors.black,
-                      offset: Offset(3, 3),
-                      blurRadius: 0,
-                    ),
-                  ],
-                ),
-                child: const Icon(
-                  Icons.search_off_rounded,
-                  size: 36,
-                  color: Color(0xFF555555),
+        return LayoutBuilder(
+          builder: (context, constraints) => SingleChildScrollView(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(18),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          border: Border.all(color: Colors.black, width: 2),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Colors.black,
+                              offset: Offset(3, 3),
+                              blurRadius: 0,
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.search_off_rounded,
+                          size: 36,
+                          color: Color(0xFF555555),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      const Text(
+                        'SIN RESULTADOS',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          color: Colors.black,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'Prueba con otra palabra clave o prefijo (ej: prog*)',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF555555),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-              const SizedBox(height: 14),
-              const Text(
-                'SIN RESULTADOS',
-                style: TextStyle(
-                  fontWeight: FontWeight.w900,
-                  color: Colors.black,
-                ),
-              ),
-              const SizedBox(height: 6),
-              const Text(
-                'Prueba con otra palabra clave o prefijo (ej: prog*)',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF555555),
-                  fontSize: 12,
-                ),
-              ),
-            ],
+            ),
           ),
         );
       }
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                border: Border.all(color: Colors.black, width: 2),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Colors.black,
-                    offset: Offset(3, 3),
-                    blurRadius: 0,
-                  ),
-                ],
-              ),
-              child: const Icon(
-                Icons.note_add_rounded,
-                size: 36,
-                color: Colors.black,
-              ),
-            ),
-            const SizedBox(height: 14),
-            const Text(
-              'NO TIENES NOTAS CREADAS TODAVÍA',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                color: Colors.black,
-                fontSize: 14,
-              ),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Crea tu primera nota y aparecerá aquí',
-              style: TextStyle(
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF555555),
-                fontSize: 12,
-              ),
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.black,
-                foregroundColor: Colors.white,
-                shape: const RoundedRectangleBorder(
-                  borderRadius: BorderRadius.zero,
+      return LayoutBuilder(
+        builder: (context, constraints) => SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        border: Border.all(color: Colors.black, width: 2),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Colors.black,
+                            offset: Offset(3, 3),
+                            blurRadius: 0,
+                          ),
+                        ],
+                      ),
+                      child: const Icon(
+                        Icons.note_add_rounded,
+                        size: 36,
+                        color: Colors.black,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'NO TIENES NOTAS CREADAS TODAVÍA',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        color: Colors.black,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Crea tu primera nota y aparecerá aquí',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF555555),
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.black,
+                        foregroundColor: Colors.white,
+                        shape: const RoundedRectangleBorder(
+                          borderRadius: BorderRadius.zero,
+                        ),
+                        side: const BorderSide(color: Colors.black, width: 2),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 12,
+                        ),
+                      ),
+                      onPressed: _showCreateDialog,
+                      icon: const Icon(Icons.add_rounded, size: 18),
+                      label: const Text(
+                        'CREAR PRIMERA NOTA',
+                        style: TextStyle(
+                            fontWeight: FontWeight.w900, fontSize: 12),
+                      ),
+                    ),
+                  ],
                 ),
-                side: const BorderSide(color: Colors.black, width: 2),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: 12,
-                ),
-              ),
-              onPressed: _showCreateDialog,
-              icon: const Icon(Icons.add_rounded, size: 18),
-              label: const Text(
-                'CREAR PRIMERA NOTA',
-                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12),
               ),
             ),
-          ],
+          ),
         ),
       );
     }
@@ -2341,6 +2514,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
   @override
   Widget build(BuildContext context) {
     return Container(
+      width: double.infinity,
       decoration: const BoxDecoration(
         color: Colors.white,
         border: Border(
@@ -2391,25 +2565,32 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF5F0E8),
-                        border: Border.all(color: Colors.black, width: 1.5),
-                      ),
-                      child: Text(
-                        widget.tag,
-                        style: const TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                          color: Colors.black,
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF5F0E8),
+                            border: Border.all(color: Colors.black, width: 1.5),
+                          ),
+                          child: Text(
+                            widget.tag,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.black,
+                            ),
+                          ),
                         ),
                       ),
                     ),
-                    const Spacer(),
+                    const SizedBox(width: 8),
                     Text(
                       _fmtDate(widget.note.updatedAt),
                       style: const TextStyle(
@@ -4284,7 +4465,8 @@ class _ResourceViewerDialog extends StatelessWidget {
         child: isImage
             ? Container(
                 width: double.infinity,
-                height: 300,
+                height: 480,
+                constraints: const BoxConstraints(maxWidth: 900),
                 clipBehavior: Clip.hardEdge,
                 decoration: BoxDecoration(
                   color: AppColors.surfaceLow,
@@ -4713,102 +4895,127 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
   Widget _blockImage(String alt, String url) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: GestureDetector(
-          onTap: () => onOpenResource({
-            'type': 'image',
-            'name': alt.isEmpty ? url : alt,
-            'url': url,
-            'size': 'Adjunto',
-          }),
-          child: Container(
-            width: double.infinity,
-            constraints: const BoxConstraints(maxHeight: 220),
-            clipBehavior: Clip.hardEdge,
-            decoration: BoxDecoration(
-              color: AppColors.surfaceLow,
-              border: Border.all(color: AppColors.border, width: 2),
-              borderRadius: BorderRadius.circular(AppDimens.radius),
-              boxShadow: AppShadows.badge,
-            ),
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: _buildResourceImage(
-                    url: url,
-                    fit: BoxFit.contain,
-                    fallback: () => Container(
-                      color: AppColors.surfaceLow,
-                      alignment: Alignment.center,
-                      child: const Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.broken_image_rounded, size: 36, color: AppColors.muted),
-                          SizedBox(height: 6),
-                          Text(
-                            'IMAGEN NO DISPONIBLE',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w900,
-                              color: AppColors.muted,
+      child: Align(
+        alignment: Alignment.center,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(
+            minHeight: 250,
+            maxHeight: 520,
+            maxWidth: 850,
+          ),
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () => onOpenResource({
+                'type': 'image',
+                'name': alt.isEmpty ? url : alt,
+                'url': url,
+                'size': 'Adjunto',
+              }),
+              child: Container(
+                clipBehavior: Clip.hardEdge,
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceLow,
+                  border: Border.all(color: AppColors.border, width: 2),
+                  borderRadius: BorderRadius.circular(AppDimens.radius),
+                  boxShadow: AppShadows.badge,
+                ),
+                child: Stack(
+                  children: [
+                    _buildResourceImage(
+                      url: url,
+                      fit: BoxFit.contain,
+                      fallback: () => Container(
+                        width: 420,
+                        height: 260,
+                        color: AppColors.surfaceLow,
+                        alignment: Alignment.center,
+                        child: const Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.broken_image_rounded, size: 36, color: AppColors.muted),
+                            SizedBox(height: 6),
+                            Text(
+                              'IMAGEN NO DISPONIBLE',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w900,
+                                color: AppColors.muted,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      loadingBuilder: (context, child, progress) {
+                        if (progress == null) return child;
+                        return Container(
+                          width: 420,
+                          height: 260,
+                          color: AppColors.surfaceLow,
+                          alignment: Alignment.center,
+                          child: const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              color: AppColors.border,
                             ),
                           ),
-                        ],
+                        );
+                      },
+                    ),
+                    Positioned(
+                      bottom: 6,
+                      right: 6,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: AppColors.accentYellow,
+                          border: Border.all(color: AppColors.border, width: 1.5),
+                          borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+                          boxShadow: AppShadows.badge,
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.zoom_in_rounded, size: 13, color: AppColors.text),
+                            SizedBox(width: 4),
+                            Text(
+                              'AMPLIAR',
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w900,
+                                color: AppColors.text,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                ),
-                Positioned(
-                  bottom: 6,
-                  right: 6,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: AppColors.accentYellow,
-                      border: Border.all(color: AppColors.border, width: 1.5),
-                      borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-                      boxShadow: AppShadows.badge,
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.zoom_in_rounded, size: 13, color: AppColors.text),
-                        SizedBox(width: 4),
-                        Text(
-                          'AMPLIAR',
-                          style: TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.w900,
-                            color: AppColors.text,
+                    if (alt.isNotEmpty)
+                      Positioned(
+                        top: 6,
+                        left: 6,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: AppColors.surface,
+                            border: Border.all(color: AppColors.border, width: 1.5),
+                            borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+                          ),
+                          child: Text(
+                            alt,
+                            style: const TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w900,
+                              color: AppColors.text,
+                            ),
                           ),
                         ),
-                      ],
-                    ),
-                  ),
+                      ),
+                  ],
                 ),
-                if (alt.isNotEmpty)
-                  Positioned(
-                    top: 6,
-                    left: 6,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: AppColors.surface,
-                        border: Border.all(color: AppColors.border, width: 1.5),
-                        borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-                      ),
-                      child: Text(
-                        alt,
-                        style: const TextStyle(
-                          fontSize: 9,
-                          fontWeight: FontWeight.w900,
-                          color: AppColors.text,
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
+              ),
             ),
           ),
         ),

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taller_integracion_front/core/services/session_manager.dart';
 import 'package:taller_integracion_front/core/widgets/neobrutalism.dart';
 import 'package:taller_integracion_front/features/notes/all_notes_screen.dart';
@@ -14,6 +15,10 @@ void main() {
   // raíz del paquete aunque el archivo no venga en el checkout.
   final pdfFixture = File('prueba.pdf');
   var createdPdfFixture = false;
+
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
 
   setUpAll(() {
     if (!pdfFixture.existsSync()) {
@@ -97,6 +102,118 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
 
     expect(find.text('RECURSOS ADJUNTOS'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('detalle de nota se expande al ancho completo en desktop', (
+    tester,
+  ) async {
+    await pumpNotes(tester, const Size(1440, 900));
+
+    await tester.tap(find.text('Nota con Adjuntos de Prueba (Conejita y PDF)'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    final sheet = find.byType(DraggableScrollableSheet);
+    expect(sheet, findsOneWidget);
+    // Sin el tope M3 de 640px, la hoja ocupa el ancho completo de la ventana.
+    expect(tester.getSize(sheet).width, 1440);
+    expect(find.text('AMPLIAR'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('detalle de nota en movil 320dp no produce desbordes', (
+    tester,
+  ) async {
+    await pumpNotes(tester, const Size(320, 800));
+
+    final noteFinder = find.text('Nota con Adjuntos de Prueba (Conejita y PDF)');
+    await tester.scrollUntilVisible(
+      noteFinder,
+      200,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.ensureVisible(noteFinder);
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.tap(noteFinder);
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.byType(DraggableScrollableSheet), findsOneWidget);
+    expect(find.text('AMPLIAR'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('imagen embebida acota ancho de lectura y encuadra el marco', (
+    tester,
+  ) async {
+    await pumpNotes(tester, const Size(1440, 900));
+
+    await tester.tap(find.text('Nota con Adjuntos de Prueba (Conejita y PDF)'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 300));
+    // Deja avanzar la decodificación real de la imagen intercalando pumps.
+    for (var i = 0; i < 8; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    final frame = find.byWidgetPredicate(
+      (w) =>
+          w is ConstrainedBox &&
+          w.constraints.minHeight == 250 &&
+          w.constraints.maxHeight == 520 &&
+          w.constraints.maxWidth == 850,
+    );
+    expect(frame, findsOneWidget);
+
+    final size = tester.getSize(frame);
+    expect(size.width, lessThanOrEqualTo(850));
+    expect(size.height, lessThanOrEqualTo(520));
+    expect(size.height, greaterThanOrEqualTo(250));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('visor de imagen usa lienzo generoso con pan y zoom', (
+    tester,
+  ) async {
+    await pumpNotes(tester, const Size(1440, 900));
+
+    await tester.tap(find.text('Nota con Adjuntos de Prueba (Conejita y PDF)'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    final scrollFinder = find.byType(Scrollable).last;
+    await tester.scrollUntilVisible(
+      find.text('RECURSOS ADJUNTOS'),
+      200,
+      scrollable: scrollFinder,
+    );
+    await tester.pump(const Duration(milliseconds: 200));
+
+    final thumb = find.byWidgetPredicate(
+      (w) =>
+          w is Container &&
+          w.constraints ==
+              const BoxConstraints.tightFor(width: 104, height: 78),
+    );
+    expect(thumb, findsOneWidget);
+    await tester.ensureVisible(thumb);
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.tap(thumb);
+    await tester.pump(const Duration(milliseconds: 300));
+
+    final canvas = find.byWidgetPredicate(
+      (w) =>
+          w is Container &&
+          w.constraints ==
+              const BoxConstraints.tightFor(width: 900, height: 480),
+    );
+    expect(canvas, findsOneWidget);
+    expect(tester.getSize(canvas), const Size(900, 480));
+    expect(find.byType(InteractiveViewer), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -213,7 +330,7 @@ void main() {
   testWidgets('adjunto con JWT sube los bytes reales a /notes/upload y usa la URL de Drive', (
     tester,
   ) async {
-    SessionManager.saveSession('jwt-stage2-test', {'id': 'u-stage2'});
+    await SessionManager.saveSession('jwt-stage2-test', {'id': 'u-stage2'});
     final requests = <http.Request>[];
     notesHttpClientOverride = MockClient((request) async {
       requests.add(request);
@@ -233,9 +350,9 @@ void main() {
       }
       return http.Response('{}', 404);
     });
-    addTearDown(() {
+    addTearDown(() async {
       notesHttpClientOverride = null;
-      SessionManager.clear();
+      await SessionManager.clear();
     });
 
     await pumpNotes(tester, const Size(1440, 900));
@@ -248,10 +365,12 @@ void main() {
 
     expect(find.textContaining('Subido a Google Drive'), findsOneWidget);
     expect(find.textContaining('ADJUNTOS VINCULADOS'), findsOneWidget);
-    expect(requests, hasLength(1));
-    final upload = requests.single;
-    expect(upload.method, 'POST');
-    expect(upload.url.path, '/notes/upload');
+    // GET /notes/me (sync real) + POST /notes/upload usan el mismo override.
+    final uploads = requests
+        .where((r) => r.method == 'POST' && r.url.path == '/notes/upload')
+        .toList();
+    expect(uploads, hasLength(1));
+    final upload = uploads.single;
     expect(upload.headers['Authorization'], 'Bearer jwt-stage2-test');
     expect(upload.body, contains('name="file"'));
     expect(upload.body, contains('filename="prueba.pdf"'));
@@ -261,15 +380,15 @@ void main() {
   testWidgets('adjunto sin sesión conserva la referencia local con advertencia amigable', (
     tester,
   ) async {
-    SessionManager.clear();
+    await SessionManager.clear();
     var httpCalls = 0;
     notesHttpClientOverride = MockClient((request) async {
       httpCalls++;
       return http.Response('{}', 500);
     });
-    addTearDown(() {
+    addTearDown(() async {
       notesHttpClientOverride = null;
-      SessionManager.clear();
+      await SessionManager.clear();
     });
 
     await pumpNotes(tester, const Size(1440, 900));
@@ -287,7 +406,7 @@ void main() {
   testWidgets('adjunto con fallo de Drive mantiene fallback local sin crashear', (
     tester,
   ) async {
-    SessionManager.saveSession('jwt-stage2-fail', {'id': 'u-stage2'});
+    await SessionManager.saveSession('jwt-stage2-fail', {'id': 'u-stage2'});
     final requests = <http.Request>[];
     notesHttpClientOverride = MockClient((request) async {
       requests.add(request);
@@ -302,9 +421,9 @@ void main() {
         headers: {'content-type': 'application/json'},
       );
     });
-    addTearDown(() {
+    addTearDown(() async {
       notesHttpClientOverride = null;
-      SessionManager.clear();
+      await SessionManager.clear();
     });
 
     await pumpNotes(tester, const Size(1440, 900));
@@ -319,7 +438,10 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('ADJUNTOS VINCULADOS'), findsOneWidget);
-    expect(requests, hasLength(1));
+    final uploads = requests
+        .where((r) => r.method == 'POST' && r.url.path == '/notes/upload')
+        .toList();
+    expect(uploads, hasLength(1));
     expect(tester.takeException(), isNull);
   });
 }
