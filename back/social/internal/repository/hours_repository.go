@@ -24,6 +24,17 @@ func (r *HoursRepository) GetTaskByID(ctx context.Context, id pgtype.UUID) (sqlc
 	return r.queries.GetSprintSheetTaskByID(ctx, id)
 }
 
+func (r *HoursRepository) GetSheetByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialSprintSheet, error) {
+	return r.queries.GetSheetByID(ctx, id)
+}
+
+func (r *HoursRepository) IsMember(ctx context.Context, groupID, userID pgtype.UUID) (bool, error) {
+	return r.queries.IsGroupMember(ctx, sqlc.IsGroupMemberParams{
+		GroupID: groupID,
+		UserID:  userID,
+	})
+}
+
 func (r *HoursRepository) GetByTaskAndDate(ctx context.Context, arg sqlc.GetDailyHoursByTaskAndDateParams) (sqlc.SocialSprintSheetDailyHour, error) {
 	return r.queries.GetDailyHoursByTaskAndDate(ctx, arg)
 }

@@ -54,14 +54,17 @@ func (h *SprintHandler) CreateSprintTask(c *gin.Context) {
 		}
 	}
 
-	if _, exists := c.Get("user_id"); !exists {
+	uidVal, exists := c.Get("user_id")
+	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized", "code": "unauthorized"})
 		return
 	}
+	userID, _ := uidVal.(string)
 
 	view, err := h.svc.CreateSprintTask(
 		c.Request.Context(),
 		groupID,
+		userID,
 		strings.TrimSpace(req.SheetID),
 		req.Title,
 		strings.TrimSpace(req.AssignedTo),
@@ -75,6 +78,8 @@ func (h *SprintHandler) CreateSprintTask(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "group not found", "code": "group_not_found"})
 		case errors.Is(err, service.ErrSheetNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": "sheet not found in group", "code": "sheet_not_found"})
+		case errors.Is(err, service.ErrForbidden):
+			c.JSON(http.StatusForbidden, gin.H{"error": "you must be a member of the group", "code": "forbidden"})
 		case errors.Is(err, service.ErrInvalidGroupID):
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_group_id"})
 		case errors.Is(err, service.ErrInvalidSheetID):
@@ -86,6 +91,7 @@ func (h *SprintHandler) CreateSprintTask(c *gin.Context) {
 			errors.Is(err, service.ErrInvalidPriority),
 			errors.Is(err, service.ErrInvalidSprintStatus),
 			errors.Is(err, service.ErrAssigneeRequired),
+			errors.Is(err, service.ErrAssigneeNotMember),
 			errors.Is(err, service.ErrInvalidEstimatedHours):
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_body"})
 		default:
@@ -112,14 +118,17 @@ func (h *SprintHandler) ListSprintTasks(c *gin.Context) {
 		return
 	}
 
-	if _, exists := c.Get("user_id"); !exists {
+	uidVal, exists := c.Get("user_id")
+	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized", "code": "unauthorized"})
 		return
 	}
+	userID, _ := uidVal.(string)
 
 	views, err := h.svc.ListSprintTasks(
 		c.Request.Context(),
 		groupID,
+		userID,
 		strings.TrimSpace(c.Query("status")),
 		strings.TrimSpace(c.Query("priority")),
 		strings.TrimSpace(c.Query("sheet_id")),
@@ -130,6 +139,8 @@ func (h *SprintHandler) ListSprintTasks(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "group not found", "code": "group_not_found"})
 		case errors.Is(err, service.ErrSheetNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": "sheet not found in group", "code": "sheet_not_found"})
+		case errors.Is(err, service.ErrForbidden):
+			c.JSON(http.StatusForbidden, gin.H{"error": "you must be a member of the group", "code": "forbidden"})
 		case errors.Is(err, service.ErrInvalidGroupID):
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_group_id"})
 		case errors.Is(err, service.ErrInvalidSheetID):
@@ -161,7 +172,16 @@ type UpdateSprintTaskRequest struct {
 }
 
 func (h *SprintHandler) UpdateSprintTask(c *gin.Context) {
-	taskID := strings.TrimSpace(c.Param("id"))
+	groupID := strings.TrimSpace(c.Param("id"))
+	if groupID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "group ID is required", "code": "invalid_group_id"})
+		return
+	}
+	if _, err := uuid.Parse(groupID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid group ID format", "code": "invalid_group_id"})
+		return
+	}
+	taskID := strings.TrimSpace(c.Param("taskId"))
 	if taskID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "sprint task ID is required", "code": "invalid_sprint_task_id"})
 		return
@@ -177,13 +197,17 @@ func (h *SprintHandler) UpdateSprintTask(c *gin.Context) {
 		return
 	}
 
-	if _, exists := c.Get("user_id"); !exists {
+	uidVal, exists := c.Get("user_id")
+	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized", "code": "unauthorized"})
 		return
 	}
+	userID, _ := uidVal.(string)
 
 	view, err := h.svc.UpdateSprintTask(
 		c.Request.Context(),
+		groupID,
+		userID,
 		taskID,
 		req.Title,
 		req.AssignedTo,
@@ -193,8 +217,14 @@ func (h *SprintHandler) UpdateSprintTask(c *gin.Context) {
 	)
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrGroupNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "group not found", "code": "group_not_found"})
 		case errors.Is(err, service.ErrSprintTaskNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": "sprint task not found", "code": "sprint_task_not_found"})
+		case errors.Is(err, service.ErrForbidden):
+			c.JSON(http.StatusForbidden, gin.H{"error": "you must be a member of the group", "code": "forbidden"})
+		case errors.Is(err, service.ErrInvalidGroupID):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_group_id"})
 		case errors.Is(err, service.ErrInvalidSprintTaskID):
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_sprint_task_id"})
 		case errors.Is(err, service.ErrInvalidUserID):
@@ -204,6 +234,7 @@ func (h *SprintHandler) UpdateSprintTask(c *gin.Context) {
 			errors.Is(err, service.ErrInvalidPriority),
 			errors.Is(err, service.ErrInvalidSprintStatus),
 			errors.Is(err, service.ErrAssigneeRequired),
+			errors.Is(err, service.ErrAssigneeNotMember),
 			errors.Is(err, service.ErrInvalidEstimatedHours),
 			errors.Is(err, service.ErrNothingToPatch):
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_body"})
@@ -221,7 +252,16 @@ func (h *SprintHandler) UpdateSprintTask(c *gin.Context) {
 }
 
 func (h *SprintHandler) DeleteSprintTask(c *gin.Context) {
-	taskID := strings.TrimSpace(c.Param("id"))
+	groupID := strings.TrimSpace(c.Param("id"))
+	if groupID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "group ID is required", "code": "invalid_group_id"})
+		return
+	}
+	if _, err := uuid.Parse(groupID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid group ID format", "code": "invalid_group_id"})
+		return
+	}
+	taskID := strings.TrimSpace(c.Param("taskId"))
 	if taskID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "sprint task ID is required", "code": "invalid_sprint_task_id"})
 		return
@@ -231,16 +271,24 @@ func (h *SprintHandler) DeleteSprintTask(c *gin.Context) {
 		return
 	}
 
-	if _, exists := c.Get("user_id"); !exists {
+	uidVal, exists := c.Get("user_id")
+	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized", "code": "unauthorized"})
 		return
 	}
+	userID, _ := uidVal.(string)
 
-	view, err := h.svc.DeleteSprintTask(c.Request.Context(), taskID)
+	view, err := h.svc.DeleteSprintTask(c.Request.Context(), groupID, userID, taskID)
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrGroupNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "group not found", "code": "group_not_found"})
 		case errors.Is(err, service.ErrSprintTaskNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": "sprint task not found", "code": "sprint_task_not_found"})
+		case errors.Is(err, service.ErrForbidden):
+			c.JSON(http.StatusForbidden, gin.H{"error": "you must be a member of the group", "code": "forbidden"})
+		case errors.Is(err, service.ErrInvalidGroupID):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_group_id"})
 		case errors.Is(err, service.ErrInvalidSprintTaskID):
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_sprint_task_id"})
 		default:

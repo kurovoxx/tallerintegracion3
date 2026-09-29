@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -262,3 +263,22 @@ func TestDriveHandler_Connect_NoExponeTokens(t *testing.T) {
 
 // Evitar imports no usados
 var _ = repository.NewOAuthRepository
+
+func TestDriveHandler_Connect_EmailMismatch_400(t *testing.T) {
+	repo := &mockDriveRepo{}
+	real := "real@gmail.com"
+	provider := &mockDriveProvider{result: &service.DriveOAuthResult{AccessToken: "access123", ExternalEmail: &real}}
+	h := newDriveHandlerWithMocks(repo, provider)
+	c, w := newDriveContext("tok", `{"oauth_code":"code123","expected_email":"otro@gmail.com"}`)
+	c.Set(middleware.ContextUserIDKey, "user-123")
+	h.Connect(c)
+	if w.Code != 400 {
+		t.Fatalf("esperado 400, got %d %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "email_mismatch") {
+		t.Fatalf("se esperaba code email_mismatch, got %s", w.Body.String())
+	}
+	if repo.upsertCalled {
+		t.Fatal("mismatch no debe guardar nada")
+	}
+}

@@ -69,6 +69,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   final _phoneController = TextEditingController();
   final _institutionController = TextEditingController();
   final _descriptionController = TextEditingController();
+  // Correo de Google declarado por el usuario para conectar Drive.
+  // Viaja como login_hint en OAuth y como expected_email al backend,
+  // que lo compara con el email real de userinfo (anti cuenta equivocada).
+  final _googleEmailController = TextEditingController();
   String _draftVisibility = 'public';
   _DriveStatus _driveStatus = _DriveStatus.idle;
 
@@ -100,6 +104,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _phoneController.dispose();
     _institutionController.dispose();
     _descriptionController.dispose();
+    _googleEmailController.dispose();
     if (widget._serviceOverride == null) _service.dispose();
     super.dispose();
   }
@@ -220,10 +225,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
       return;
     }
     final messenger = ScaffoldMessenger.of(context);
+    final declaredEmail = _googleEmailController.text.trim();
+    if (declaredEmail.isEmpty) {
+      messenger.showSnackBar(const SnackBar(content: Text('Escribe tu correo de Google para conectar Drive')));
+      return;
+    }
     setState(() => _driveStatus = _DriveStatus.connecting);
 
     try {
-      final code = await GoogleDriveService().getServerAuthCode();
+      final code = await GoogleDriveService().getServerAuthCode(loginHint: declaredEmail);
       if (code == null) {
         if (!mounted) return;
         setState(() => _driveStatus = _DriveStatus.idle);
@@ -242,6 +252,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         backendBaseUrl: authApiBaseUrl,
         appAccessToken: token,
         oauthCode: code,
+        expectedEmail: declaredEmail,
       );
       await _persistDriveStatus(ok);
       if (!mounted) return;
@@ -650,6 +661,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ],
           ),
           const SizedBox(height: AppDimens.spaceLg),
+          if (!connected) ...[
+            TextField(
+              controller: _googleEmailController,
+              keyboardType: TextInputType.emailAddress,
+              enabled: !busy,
+              decoration: const InputDecoration(
+                labelText: 'TU CORREO DE GOOGLE',
+                hintText: 'tucorreo@gmail.com',
+                helperText: 'Se usa para abrir tu cuenta y verificar la conexión. Nunca se comparte.',
+                helperMaxLines: 2,
+              ),
+            ),
+            const SizedBox(height: AppDimens.spaceMd),
+          ],
           driveActions,
         ],
       ),
