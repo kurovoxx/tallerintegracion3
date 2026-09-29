@@ -71,7 +71,12 @@ func (p *ConfigDriveOAuthProvider) Exchange(ctx context.Context, oauthCode strin
 	if strings.TrimSpace(userinfoURL) == "" {
 		userinfoURL = "https://www.googleapis.com/oauth2/v2/userinfo"
 	}
-	// Scopes requeridos: drive.file + openid email profile
+	// Scopes mínimos (principio de menor privilegio):
+	// - drive.file: solo archivos creados o abiertos explícitamente por la app
+	//   (dentro de la carpeta "Apuntes TI3", ver notes drive.ensureAppFolder).
+	//   NUNCA scope drive completo (vería todo el Drive) ni drive.readonly
+	//   (impediría crear/subir).
+	// - openid/email/profile: solo para capturar external_account_email.
 	cfg := &oauth2.Config{
 		ClientID:     p.ClientID,
 		ClientSecret: p.ClientSecret,
@@ -259,7 +264,10 @@ func NewDriveOAuthService(repo OAuthRepository, provider DriveOAuthProvider) *Dr
 }
 
 // Connect intercambia oauth_code y guarda la conexión. No devuelve tokens.
-func (s *DriveOAuthService) Connect(ctx context.Context, userID, oauthCode string) error {
+// expectedEmail (opcional, el correo declarado en la app): si viene y el email
+// real de userinfo difiere, se rechaza con email_mismatch sin guardar nada
+// (evita vincular la cuenta de Google equivocada).
+func (s *DriveOAuthService) Connect(ctx context.Context, userID, oauthCode string, expectedEmail *string) error {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
 		return NewServiceError(utils.ErrUnauthorized)
@@ -281,6 +289,11 @@ func (s *DriveOAuthService) Connect(ctx context.Context, userID, oauthCode strin
 	}
 	if result == nil || strings.TrimSpace(result.AccessToken) == "" {
 		return NewServiceError("internal_error")
+	}
+	if expectedEmail != nil && strings.TrimSpace(*expectedEmail) != "" &&
+		result.ExternalEmail != nil && strings.TrimSpace(*result.ExternalEmail) != "" &&
+		!strings.EqualFold(strings.TrimSpace(*expectedEmail), strings.TrimSpace(*result.ExternalEmail)) {
+		return NewServiceError("email_mismatch")
 	}
 	// Upsert en BD
 	if err := s.oauthRepo.UpsertGoogleDriveConnection(ctx, userID, result.AccessToken, result.RefreshToken, result.ExpiresAt, result.ExternalEmail); err != nil {

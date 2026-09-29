@@ -20,6 +20,9 @@ func NewDriveHandler(svc *service.DriveOAuthService) *DriveHandler {
 
 type driveConnectRequest struct {
 	OAuthCode string `json:"oauth_code"`
+	// expected_email opcional: correo declarado en la app; si difiere del
+	// email real de Google se rechaza con 400 email_mismatch.
+	ExpectedEmail *string `json:"expected_email"`
 }
 
 type driveConnectResponse struct {
@@ -47,11 +50,11 @@ func (h *DriveHandler) Connect(c *gin.Context) {
 		return
 	}
 	// El Service hace TrimSpace y valida vacío
-	err := h.svc.Connect(c.Request.Context(), userID, req.OAuthCode)
+	err := h.svc.Connect(c.Request.Context(), userID, req.OAuthCode, req.ExpectedEmail)
 	if err != nil {
 		if se, ok := err.(*service.ServiceError); ok {
 			switch se.Code {
-			case "bad_request":
+			case "bad_request", "email_mismatch":
 				utils.RespondError(c, http.StatusBadRequest, se.Code, se.Message)
 				return
 			case "invalid_oauth_code":

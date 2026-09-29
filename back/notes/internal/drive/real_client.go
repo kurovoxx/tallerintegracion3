@@ -55,6 +55,49 @@ func (r *RealDriveClient) serviceFor(ctx context.Context, userID string) (*drive
 	return srv, nil
 }
 
+// AppFolderName es la carpeta dedicada donde viven todos los archivos de la app
+// en el Drive de cada usuario. Permisos mínimos: con scope drive.file la app
+// solo ve lo que ella crea; la carpeta única evita regar archivos en la raíz
+// y delimita la superficie de escritura.
+const AppFolderName = "Apuntes TI3"
+
+// appFolderMarker identifica nuestra carpeta vía appProperties (robusto ante
+// renombres por el usuario: se busca por marcador, no por nombre).
+func appFolderMarker() map[string]string {
+	return map[string]string{"notes_app_folder": "1"}
+}
+
+// ensureAppFolder devuelve el id de la carpeta de la app, creándola si no existe.
+func (r *RealDriveClient) ensureAppFolder(ctx context.Context, srv *drive.Service) (string, error) {
+	list, err := srv.Files.List().
+		Q("mimeType = 'application/vnd.google-apps.folder' and appProperties has { key='notes_app_folder' and value='1' } and trashed = false").
+		Fields("files(id)").
+		PageSize(10).
+		Context(ctx).
+		Do()
+	if err != nil {
+		return "", mapGoogleError("EnsureAppFolder/list", err)
+	}
+	for _, f := range list.Files {
+		if strings.TrimSpace(f.Id) != "" {
+			return f.Id, nil
+		}
+	}
+	created, err := srv.Files.Create(&drive.File{
+		Name:          AppFolderName,
+		MimeType:      "application/vnd.google-apps.folder",
+		AppProperties: appFolderMarker(),
+	}).Fields("id").Context(ctx).Do()
+	if err != nil {
+		return "", mapGoogleError("EnsureAppFolder/create", err)
+	}
+	if strings.TrimSpace(created.Id) == "" {
+		return "", &DriveError{Code: 500, Message: "Drive no devolvió id de carpeta"}
+	}
+	log.Printf("drive: carpeta de app creada id=%s", created.Id)
+	return created.Id, nil
+}
+
 // mapGoogleError traduce errores de la API a DriveError semánticos.
 func mapGoogleError(op string, err error) error {
 	if err == nil {
@@ -89,7 +132,11 @@ func (r *RealDriveClient) CreateFile(ctx context.Context, userID string, noteID 
 	if err != nil {
 		return "", err
 	}
-	f, err := srv.Files.Create(&drive.File{Name: title, MimeType: MimeMarkdown, AppProperties: noteFileProperties(userID, noteID)}).
+	folderID, err := r.ensureAppFolder(ctx, srv)
+	if err != nil {
+		return "", err
+	}
+	f, err := srv.Files.Create(&drive.File{Name: title, MimeType: MimeMarkdown, Parents: []string{folderID}, AppProperties: noteFileProperties(userID, noteID)}).
 		Media(strings.NewReader(content)).
 		Fields("id").
 		Context(ctx).
@@ -202,7 +249,11 @@ func (r *RealDriveClient) UploadAttachment(ctx context.Context, userID string, n
 	if err != nil {
 		return "", "", err
 	}
-	f, err := srv.Files.Create(&drive.File{Name: fileName, MimeType: fileType}).
+	folderID, err := r.ensureAppFolder(ctx, srv)
+	if err != nil {
+		return "", "", err
+	}
+	f, err := srv.Files.Create(&drive.File{Name: fileName, MimeType: fileType, Parents: []string{folderID}}).
 		Media(bytes.NewReader(data)).
 		Fields("id, webViewLink").
 		Context(ctx).
@@ -248,7 +299,11 @@ func (r *RealDriveClient) CopyFile(ctx context.Context, srcUserID string, srcFil
 		}
 		data = dataFallback
 	}
-	f, err := dstSrv.Files.Create(&drive.File{Name: newTitle, MimeType: MimeMarkdown, AppProperties: noteFileProperties(dstUserID, newNoteID)}).
+	dstFolderID, err := r.ensureAppFolder(ctx, dstSrv)
+	if err != nil {
+		return "", err
+	}
+	f, err := dstSrv.Files.Create(&drive.File{Name: newTitle, MimeType: MimeMarkdown, Parents: []string{dstFolderID}, AppProperties: noteFileProperties(dstUserID, newNoteID)}).
 		Media(bytes.NewReader(data)).
 		Fields("id").
 		Context(ctx).

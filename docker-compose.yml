@@ -108,6 +108,8 @@ services:
         BASE_URL: ${API_BASE_URL:-http://localhost:8085}
         NOTES_BASE_URL: ${NOTES_BASE_URL:-http://localhost:8082}
         SOCIAL_BASE_URL: ${SOCIAL_BASE_URL:-http://localhost:8083}
+        GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+        GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8081/auth/google/callback}
     container_name: ti3-front
     ports:
       - "8086:80"
