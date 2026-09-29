@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
@@ -38,13 +39,15 @@ class GoogleDriveService {
   );
 
   /// Retorna serverAuthCode (oauth_code). En desktop abre navegador y escucha localhost.
-  /// Lanza StateError visible si GOOGLE_CLIENT_ID no está configurado.
+  /// En web retorna null (sin localhost disponible): usar buildWebAuthUrl +
+  /// diálogo pegar-código. Lanza StateError visible si GOOGLE_CLIENT_ID falta.
   Future<String?> getServerAuthCode({String? loginHint}) async {
     if (!isConfigured) {
       throw StateError(
         'GOOGLE_CLIENT_ID no configurado: rebuild con --dart-define=GOOGLE_CLIENT_ID=... (ver front/Dockerfile)',
       );
     }
+    if (kIsWeb) return null;
     if (Platform.isWindows || Platform.isLinux) {
       return _getServerAuthCodeDesktop(loginHint: loginHint);
     }
@@ -77,6 +80,21 @@ class GoogleDriveService {
     await request.response.close();
     await server.close();
     return code;
+  }
+
+  /// URL de autorización para flujo web manual (pegar-código):
+  /// se abre en el navegador y Google redirige a redirect_uri con ?code=.
+  /// Como nada escucha ese puerto en web, el usuario copia el code de la
+  /// barra de direcciones y lo pega en la app.
+  String buildWebAuthUrl({String? loginHint}) {
+    final hint = (loginHint != null && loginHint.trim().isNotEmpty)
+        ? '&login_hint=${Uri.encodeComponent(loginHint.trim())}'
+        : '';
+    return 'https://accounts.google.com/o/oauth2/v2/auth?response_type=code&scope=$_scopes&access_type=offline&prompt=consent&client_id=$_serverClientId&redirect_uri=$_redirectUri$hint';
+  }
+
+  Future<bool> openWebAuthUrl({String? loginHint}) {
+    return launchUrl(Uri.parse(buildWebAuthUrl(loginHint: loginHint)), mode: LaunchMode.externalApplication);
   }
 
   /// Envía oauth_code al backend. Requiere access_token de tu app (de POST /auth/login).
