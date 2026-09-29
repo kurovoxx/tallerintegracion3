@@ -1,4 +1,5 @@
-﻿import 'package:flutter/material.dart';
+﻿import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -233,7 +234,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() => _driveStatus = _DriveStatus.connecting);
 
     try {
-      final code = await GoogleDriveService().getServerAuthCode(loginHint: declaredEmail);
+      // En web no hay localhost que capture el code: diálogo pegar-código.
+      final String? code = kIsWeb
+          ? await _askWebAuthCode(messenger, declaredEmail)
+          : await GoogleDriveService().getServerAuthCode(loginHint: declaredEmail);
       if (code == null) {
         if (!mounted) return;
         setState(() => _driveStatus = _DriveStatus.idle);
@@ -263,6 +267,56 @@ class _ProfileScreenState extends State<ProfileScreen> {
       setState(() => _driveStatus = _DriveStatus.error);
       messenger.showSnackBar(SnackBar(content: Text('Error al conectar Drive: $e')));
     }
+  }
+
+  /// Flujo web: abre Google en pestaña externa y pide pegar el ?code=
+  /// de la URL de retorno (nada escucha localhost en el navegador).
+  /// Retorna null si el usuario cancela.
+  Future<String?> _askWebAuthCode(ScaffoldMessengerState messenger, String declaredEmail) async {
+    final codeController = TextEditingController();
+    try {
+      await GoogleDriveService().openWebAuthUrl(loginHint: declaredEmail);
+    } catch (_) {
+      // Si ni siquiera abre el navegador, igual se ofrece el pegado manual.
+    }
+    if (!mounted) return null;
+    final pasted = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('PEGA EL CÓDIGO DE GOOGLE'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Autoriza en la pestaña de Google y copia el parámetro code= de la dirección a la que te redirige.',
+              style: TextStyle(fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: codeController,
+              decoration: const InputDecoration(
+                labelText: 'CÓDIGO (code=...)',
+                hintText: '4/0A...',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('CANCELAR'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(codeController.text.trim()),
+            child: const Text('CONECTAR'),
+          ),
+        ],
+      ),
+    );
+    final code = (pasted ?? '').trim();
+    return code.isEmpty ? null : code;
   }
 
   Future<void> _handleDisconnectDrive() async {
