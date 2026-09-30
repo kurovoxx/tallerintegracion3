@@ -21,6 +21,7 @@ func init() { gin.SetMode(gin.TestMode) }
 type mockDriveRepo struct {
 	upsertCalled bool
 	upsertErr    error
+	connections  map[string]*model.OAuthConnection
 }
 
 func (m *mockDriveRepo) UpsertGoogleDriveConnection(ctx context.Context, userID, accessToken string, refreshToken *string, expiresAt *time.Time, externalEmail *string) error {
@@ -28,7 +29,7 @@ func (m *mockDriveRepo) UpsertGoogleDriveConnection(ctx context.Context, userID,
 	return m.upsertErr
 }
 func (m *mockDriveRepo) GetByUserIDAndProvider(ctx context.Context, userID, provider string) (*model.OAuthConnection, error) {
-	return nil, nil
+	return m.connections[userID], nil
 }
 func (m *mockDriveRepo) UpdateGoogleDriveAccessToken(ctx context.Context, userID, accessToken string, refreshToken *string, expiresAt time.Time) error {
 	return nil
@@ -329,5 +330,46 @@ func TestDriveHandler_Connect_EmailMismatch_400(t *testing.T) {
 	}
 	if repo.upsertCalled {
 		t.Fatal("mismatch no debe guardar nada")
+	}
+}
+
+func TestDriveStatusIsAuthenticatedAndScoped(t *testing.T) {
+	repo := &mockDriveRepo{connections: map[string]*model.OAuthConnection{
+		"A": {AccessToken: "must-not-leak"},
+	}}
+	h := newDriveHandlerWithMocks(repo, &mockDriveProvider{})
+	for _, user := range []string{"A", "B", "A", ""} {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest("GET", "/auth/google-drive/status?user_id=A", nil)
+		if user != "" {
+			c.Set(middleware.ContextUserIDKey, user)
+		}
+		h.Status(c)
+		if user == "" {
+			if w.Code != 401 {
+				t.Fatal(w.Code)
+			}
+			continue
+		}
+		if w.Code != 200 {
+			t.Fatal(w.Code)
+		}
+		var body map[string]bool
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if body["connected"] != (user == "A") {
+			t.Fatalf("wrong state for %s", user)
+		}
+		if len(body) != 2 || strings.Contains(w.Body.String(), "must-not-leak") {
+			t.Fatal("unexpected data")
+		}
+		if w.Header().Get("Cache-Control") != "private, no-store" {
+			t.Fatal("cacheable private state")
+		}
+	}
+	if repo.upsertCalled {
+		t.Fatal("status changed OAuth connection")
 	}
 }

@@ -51,7 +51,9 @@ class AuthedHttp {
   static Future<http.Response> run(
     Future<http.Response> Function() attempt,
   ) async {
+    final revision = SessionManager.revision.value;
     final first = await attempt();
+    if (revision != SessionManager.revision.value) return first;
     if (!_isExpired(first)) return first;
 
     final current = SessionManager.refreshToken;
@@ -60,12 +62,14 @@ class AuthedHttp {
       return first;
     }
     final refreshed = await _doRefresh(current);
+    if (revision != SessionManager.revision.value) return first;
     final access = refreshed.accessToken;
     if (!refreshed.success || access == null || access.isEmpty) {
       await SessionManager.expireSession();
       return first;
     }
     await SessionManager.updateTokens(access, refreshed.refreshToken);
+    if (revision != SessionManager.revision.value) return first;
     // Reintento único con headers reconstruidos por el llamador.
     return attempt();
   }

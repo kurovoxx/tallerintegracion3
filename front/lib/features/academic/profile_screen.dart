@@ -1,7 +1,6 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/common_widgets.dart';
 import '../../core/models/profile_models.dart';
@@ -42,7 +41,14 @@ double? computeAttendance({
   return (ratio * 100).clamp(0, 100).toDouble();
 }
 
-enum _DriveStatus { idle, connecting, connected, disconnecting, error }
+enum _DriveStatus {
+  checking,
+  idle,
+  connecting,
+  connected,
+  disconnecting,
+  error,
+}
 
 class ProfileScreen extends StatefulWidget {
   final Map<String, dynamic>? userData;
@@ -57,8 +63,6 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  static const String _googleDrivePrefKey = 'profile_google_drive_connected';
-
   bool _isLoading = true;
   bool _isSaving = false;
   bool _hasError = false;
@@ -84,26 +88,53 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void initState() {
     super.initState();
     _service = widget._serviceOverride ?? ProfileService();
+    SessionManager.revision.addListener(_sessionChanged);
     _restoreDriveStatus();
     _loadProfile();
   }
 
-  Future<void> _restoreDriveStatus() async {
-    final preferences = await SharedPreferences.getInstance();
-    final wasConnected = preferences.getBool(_googleDrivePrefKey) ?? false;
-    if (!mounted) return;
+  bool _sameSession(int revision) =>
+      mounted && revision == SessionManager.revision.value;
+
+  void _sessionChanged() {
     setState(() {
-      _driveStatus = wasConnected ? _DriveStatus.connected : _DriveStatus.idle;
+      _profile = null;
+      _driveStatus = _DriveStatus.checking;
+      _isLoading = true;
+      _isEditing = false;
+      _isSaving = false;
+      _googleEmailController.clear();
+      _nameController.clear();
+      _phoneController.clear();
+      _institutionController.clear();
+      _descriptionController.clear();
     });
+    if (SessionManager.isLoggedIn) {
+      _restoreDriveStatus();
+      _loadProfile();
+    }
   }
 
-  Future<void> _persistDriveStatus(bool connected) async {
-    final preferences = await SharedPreferences.getInstance();
-    await preferences.setBool(_googleDrivePrefKey, connected);
+  Future<void> _restoreDriveStatus() async {
+    final revision = SessionManager.revision.value;
+    setState(() => _driveStatus = _DriveStatus.checking);
+    try {
+      final connected = await _service.getDriveStatus();
+      if (!mounted || !_sameSession(revision)) return;
+      setState(
+        () => _driveStatus = connected
+            ? _DriveStatus.connected
+            : _DriveStatus.idle,
+      );
+    } catch (_) {
+      if (!mounted || !_sameSession(revision)) return;
+      setState(() => _driveStatus = _DriveStatus.error);
+    }
   }
 
   @override
   void dispose() {
+    SessionManager.revision.removeListener(_sessionChanged);
     _nameController.dispose();
     _phoneController.dispose();
     _institutionController.dispose();
@@ -116,6 +147,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // Contrato real: GET /profile/me (Auth).
   // Ver back/auth/cmd/server/main.go:107 y profile_handler.go:46.
   Future<void> _loadProfile() async {
+    final revision = SessionManager.revision.value;
     setState(() {
       _isLoading = true;
       _hasError = false;
@@ -125,20 +157,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     try {
       final p = await _service.getProfile();
-      if (!mounted) return;
+      if (!mounted || !_sameSession(revision)) return;
       setState(() {
         _profile = p;
         _isLoading = false;
       });
     } on ProfileApiException catch (_) {
-      if (!mounted) return;
+      if (!mounted || !_sameSession(revision)) return;
       setState(() {
         _isLoading = false;
         _hasError = true;
         _errorMessage = 'No se pudo cargar tu perfil. Revisa tu conexión.';
       });
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || !_sameSession(revision)) return;
       setState(() {
         _isLoading = false;
         _hasError = true;
@@ -176,6 +208,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // Contrato real: PATCH /profile/me (parcial).
   // Campos omitidos no cambian; vacíos borran a NULL (salvo display_name).
   Future<void> _handleSave() async {
+    final revision = SessionManager.revision.value;
     if (_profile == null || _isSaving) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
@@ -189,7 +222,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         'visibility': _draftVisibility,
       };
       final updated = await _service.patchProfile(patch);
-      if (!mounted) return;
+      if (!mounted || !_sameSession(revision)) return;
       setState(() {
         _profile = updated;
         _isEditing = false;
@@ -205,7 +238,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
       );
     } on ProfileApiException catch (_) {
-      if (!mounted) return;
+      if (!mounted || !_sameSession(revision)) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
@@ -215,7 +248,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
       );
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || !_sameSession(revision)) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
@@ -225,11 +258,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
       );
     } finally {
-      if (mounted) setState(() => _isSaving = false);
+      if (_sameSession(revision)) setState(() => _isSaving = false);
     }
   }
 
   Future<void> _handleConnectDrive() async {
+    final revision = SessionManager.revision.value;
     if (_driveStatus == _DriveStatus.connecting ||
         _driveStatus == _DriveStatus.disconnecting) {
       return;
@@ -237,7 +271,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final messenger = ScaffoldMessenger.of(context);
     final declaredEmail = _googleEmailController.text.trim();
     if (declaredEmail.isEmpty) {
-      messenger.showSnackBar(const SnackBar(content: Text('Escribe tu correo de Google para conectar Drive')));
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Escribe tu correo de Google para conectar Drive'),
+        ),
+      );
       return;
     }
     setState(() => _driveStatus = _DriveStatus.connecting);
@@ -245,21 +283,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
     try {
       // Config OAuth desde el backend (.env raíz como única fuente).
       await GoogleDriveService.ensureConfigured(backendBaseUrl: authApiBaseUrl);
+      if (!mounted || !_sameSession(revision)) return;
       // En web no hay localhost que capture el code: diálogo pegar-código.
       final String? code = kIsWeb
           ? await _askWebAuthCode(messenger, declaredEmail)
-          : await GoogleDriveService().getServerAuthCode(loginHint: declaredEmail);
+          : await GoogleDriveService().getServerAuthCode(
+              loginHint: declaredEmail,
+            );
       if (code == null) {
-        if (!mounted) return;
+        if (!mounted || !_sameSession(revision)) return;
         setState(() => _driveStatus = _DriveStatus.idle);
         messenger.showSnackBar(
           const SnackBar(content: Text('Conexión con Drive cancelada')),
         );
+        await _restoreDriveStatus();
         return;
       }
+      if (!mounted || !_sameSession(revision)) return;
       final token = SessionManager.token;
       if (token == null) {
-        if (!mounted) return;
+        if (!mounted || !_sameSession(revision)) return;
         setState(() => _driveStatus = _DriveStatus.idle);
         messenger.showSnackBar(const SnackBar(content: Text('No hay sesión')));
         return;
@@ -270,8 +313,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         oauthCode: code,
         expectedEmail: declaredEmail,
       );
-      await _persistDriveStatus(result.ok);
-      if (!mounted) return;
+      if (!mounted || !_sameSession(revision)) return;
       setState(
         () => _driveStatus = result.ok
             ? _DriveStatus.connected
@@ -279,7 +321,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       );
       messenger.showSnackBar(SnackBar(content: Text(result.message)));
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || !_sameSession(revision)) return;
       setState(() => _driveStatus = _DriveStatus.error);
       messenger.showSnackBar(
         const SnackBar(
@@ -294,7 +336,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   /// Flujo web: abre Google en pestaña externa y pide pegar el ?code=
   /// de la URL de retorno (nada escucha localhost en el navegador).
   /// Retorna null si el usuario cancela.
-  Future<String?> _askWebAuthCode(ScaffoldMessengerState messenger, String declaredEmail) async {
+  Future<String?> _askWebAuthCode(
+    ScaffoldMessengerState messenger,
+    String declaredEmail,
+  ) async {
     final codeController = TextEditingController();
     try {
       await GoogleDriveService().openWebAuthUrl(loginHint: declaredEmail);
@@ -342,22 +387,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _handleDisconnectDrive() async {
-    if (_driveStatus == _DriveStatus.connecting ||
-        _driveStatus == _DriveStatus.disconnecting) {
-      return;
-    }
-    final messenger = ScaffoldMessenger.of(context);
-    setState(() => _driveStatus = _DriveStatus.disconnecting);
-
-    try {
-      await GoogleDriveService().signOut();
-    } catch (_) {}
-    await _persistDriveStatus(false);
-    if (!mounted) return;
-    setState(() => _driveStatus = _DriveStatus.idle);
-    messenger.showSnackBar(
-      const SnackBar(content: Text('Google Drive desconectado')),
+    // El cierre local de Google no revoca la conexión que conserva el servidor.
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Para desconectar Drive, revoca el acceso desde tu cuenta de Google.',
+        ),
+      ),
     );
+    await _restoreDriveStatus();
   }
 
   void _handleShare() {
@@ -648,7 +686,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final connecting = _driveStatus == _DriveStatus.connecting;
     final connected = _driveStatus == _DriveStatus.connected;
     final disconnecting = _driveStatus == _DriveStatus.disconnecting;
-    final busy = connecting || disconnecting;
+    final busy =
+        connecting || disconnecting || _driveStatus == _DriveStatus.checking;
 
     final connectButton = NeobrutalistButton(
       label: connecting ? 'CONECTANDO...' : 'CONECTAR DRIVE',
@@ -752,7 +791,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
               decoration: const InputDecoration(
                 labelText: 'TU CORREO DE GOOGLE',
                 hintText: 'tucorreo@gmail.com',
-                helperText: 'Se usa para abrir tu cuenta y verificar la conexión. Nunca se comparte.',
+                helperText:
+                    'Se usa para abrir tu cuenta y verificar la conexión. Nunca se comparte.',
                 helperMaxLines: 2,
               ),
             ),
@@ -766,6 +806,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Widget _buildDriveBadge() {
     switch (_driveStatus) {
+      case _DriveStatus.checking:
+        return const NeobrutalistBadge(
+          label: 'Consultando',
+          tone: NeobrutalistTone.pending,
+          icon: Icons.sync_rounded,
+        );
       case _DriveStatus.connecting:
         return const NeobrutalistBadge(
           label: 'Conectando',

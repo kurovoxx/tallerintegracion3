@@ -85,7 +85,8 @@ class GoogleDriveService {
   // Scopes mínimos: drive.file (solo archivos creados por la app, dentro de
   // la carpeta "Apuntes TI3") + openid email profile (capturar el correo).
   // Nunca drive completo (vería todo el Drive) ni solo lectura (sin escritura).
-  static const _scopes = 'https://www.googleapis.com/auth/drive.file%20openid%20email%20profile';
+  static const _scopes =
+      'https://www.googleapis.com/auth/drive.file%20openid%20email%20profile';
 
   final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: [
@@ -156,7 +157,10 @@ class GoogleDriveService {
   }
 
   Future<bool> openWebAuthUrl({String? loginHint}) {
-    return launchUrl(Uri.parse(buildWebAuthUrl(loginHint: loginHint)), mode: LaunchMode.externalApplication);
+    return launchUrl(
+      Uri.parse(buildWebAuthUrl(loginHint: loginHint)),
+      mode: LaunchMode.externalApplication,
+    );
   }
 
   /// Envía oauth_code al backend. Requiere access_token de tu app (de POST /auth/login).
@@ -170,6 +174,7 @@ class GoogleDriveService {
     required String oauthCode,
     String? expectedEmail,
   }) async {
+    final revision = SessionManager.revision.value;
     final url = Uri.parse('$backendBaseUrl/auth/google-drive/connect');
     final payload = <String, String>{'oauth_code': oauthCode};
     final expected = expectedEmail?.trim() ?? '';
@@ -178,8 +183,11 @@ class GoogleDriveService {
     }
     http.Response resp;
     try {
-      resp = await AuthedHttp.run(
-        () => http
+      resp = await AuthedHttp.run(() {
+        if (SessionManager.revision.value != revision) {
+          throw StateError('La sesión cambió');
+        }
+        return http
             .post(
               url,
               headers: {
@@ -190,8 +198,8 @@ class GoogleDriveService {
               },
               body: jsonEncode(payload),
             )
-            .timeout(const Duration(seconds: 15)),
-      );
+            .timeout(const Duration(seconds: 15));
+      });
     } catch (_) {
       return const DriveConnectResult.error(
         'No se pudo conectar con Google Drive. Inténtalo nuevamente más tarde.',

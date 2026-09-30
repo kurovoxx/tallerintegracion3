@@ -87,6 +87,7 @@ func main() {
 	r.POST("/auth/refresh", authH.Refresh)
 	r.POST("/auth/logout", authH.Logout)
 	r.POST("/auth/google-drive/connect", authMw.RequireAuth(), driveH.Connect)
+	r.GET("/auth/google-drive/status", authMw.RequireAuth(), driveH.Status)
 	r.POST("/auth/google-calendar/connect", authMw.RequireAuth(), calendarH.Connect)
 
 	// Interno servicio-a-servicio (Social → Auth): secreto compartido, sin JWT de usuario
