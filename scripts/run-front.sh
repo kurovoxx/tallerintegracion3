@@ -73,6 +73,7 @@ case "$CHOICE" in
     ;;
   5|linux-deploy|deploy)
     echo ">> Linux nativo contra dominio del Ingress (sin auth local)"
+    echo "   Ingress con Fake Certificate: se usa ALLOW_INSECURE=true solo-dev (solo ti3-brojas.dev.censei.cl)"
     check_fedora_deps
     if ! command -v flutter >/dev/null 2>&1; then echo "Flutter no encontrado"; exit 1; fi
     # Lee dominio de .env.prod o front/.env.prod.example
@@ -87,7 +88,7 @@ case "$CHOICE" in
     echo "API: $API_URL"
     cd "$FRONT_DIR"
     flutter pub get
-    flutter run -d linux --dart-define=API_BASE_URL="$API_URL" --dart-define=NOTES_BASE_URL="$NOTES_URL" --dart-define=SOCIAL_BASE_URL="$SOCIAL_URL"
+    flutter run -d linux --dart-define=API_BASE_URL="$API_URL" --dart-define=NOTES_BASE_URL="$NOTES_URL" --dart-define=SOCIAL_BASE_URL="$SOCIAL_URL" --dart-define=ALLOW_INSECURE=true
     ;;
   *)
     echo "Opción inválida"
