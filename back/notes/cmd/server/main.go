@@ -136,6 +136,7 @@ func startGin(svc *service.NoteService, cfg *config.Config) {
 		protected.POST("/notes/upload", h.UploadFile)
 		protected.GET("/notes/:id/access", h.GetAccess)
 		protected.POST("/notes/:id/attachments", h.UploadAttachment)
+		protected.GET("/notes/:id/attachments/:attachmentId/content", h.AttachmentContent)
 		protected.DELETE("/notes/:id/attachments/:attachmentId", h.DeleteAttachment)
 		protected.POST("/notes/:id/save", h.Save)
 		protected.POST("/notes/:id/copy", h.Copy)
