@@ -107,6 +107,10 @@ void main() {
     await pumpMeeting(tester, const Size(1280, 900));
 
     expect(find.text('TÍTULO DE LA REUNIÓN'), findsOneWidget);
+    final form = find.byType(Form);
+    expect(find.descendant(of: form, matching: find.byType(NeobrutalistButton)), findsOneWidget);
+    expect(find.descendant(of: form, matching: find.text('PRÓXIMAS REUNIONES')), findsNothing);
+    expect(find.descendant(of: form, matching: find.byType(TextFormField)), findsNWidgets(2));
     expect(find.text('FECHA'), findsOneWidget);
     expect(find.text('HORA'), findsOneWidget);
     expect(find.text('AGENDAR REUNIÓN'), findsWidgets);

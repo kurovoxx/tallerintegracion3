@@ -264,80 +264,6 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                               ),
                             ],
                           ),
-                          const SizedBox(height: AppDimens.spaceMd),
-                          if (_createdMeetingId != null) ...[
-                            const SizedBox(height: AppDimens.spaceSm),
-                            Container(
-                              padding: const EdgeInsets.all(AppDimens.spaceMd),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFE7F6E7),
-                                border: Border.all(
-                                  color: AppColors.border,
-                                  width: AppDimens.borderWidth,
-                                ),
-                                borderRadius: BorderRadius.circular(
-                                  AppDimens.radius,
-                                ),
-                              ),
-                              child: const Text(
-                                'Reunión agendada.',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w800,
-                                  color: AppColors.text,
-                                ),
-                              ),
-                            ),
-                          ],
-                          if (_submitError != null) ...[
-                            const SizedBox(height: AppDimens.spaceSm),
-                            Container(
-                              padding: const EdgeInsets.all(AppDimens.spaceMd),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFDE8E8),
-                                border: Border.all(
-                                  color: AppColors.border,
-                                  width: AppDimens.borderWidth,
-                                ),
-                                borderRadius: BorderRadius.circular(
-                                  AppDimens.radius,
-                                ),
-                              ),
-                              child: Text(
-                                _submitError!,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppColors.text,
-                                ),
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: AppDimens.spaceMd),
-                          if (!_isRealGroup) ...[
-                            const SizedBox(height: AppDimens.spaceSm),
-                            Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: AppColors.bg,
-                                border: Border.all(
-                                  color: AppColors.border,
-                                  width: AppDimens.borderWidth,
-                                ),
-                                borderRadius: BorderRadius.circular(
-                                  AppDimens.radius,
-                                ),
-                              ),
-                              child: const Text(
-                                'Selecciona un grupo para agendar una reunión.',
-                                style: TextStyle(
-                                  fontSize: 11.5,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppColors.mutedStrong,
-                                ),
-                              ),
-                            ),
-                          ],
                           const SizedBox(height: AppDimens.spaceXl),
                           NeobrutalistButton(
                             label: _isSubmitting
@@ -348,88 +274,152 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                             expand: true,
                             onPressed: _isSubmitting ? null : _submit,
                           ),
-                          if (_isRealGroup) ...[
-                            const SizedBox(height: AppDimens.spaceXl),
-                            const AppFieldLabel('PRÓXIMAS REUNIONES'),
-                            const SizedBox(height: AppDimens.spaceSm),
-                            if (_loadingUpcoming)
-                              const Center(
-                                child: SizedBox(
-                                  width: 22,
-                                  height: 22,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                ),
-                              )
-                            else if (_upcoming.isEmpty)
-                              const Text(
-                                'Aún no hay reuniones agendadas.',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: AppColors.mutedStrong,
-                                ),
-                              )
-                            else
-                              for (final m in _upcoming)
-                                Container(
-                                  margin: const EdgeInsets.only(bottom: 8),
-                                  padding: const EdgeInsets.all(12),
-                                  decoration: BoxDecoration(
-                                    color: AppColors.bg,
-                                    border: Border.all(
-                                      color: AppColors.border,
-                                      width: AppDimens.borderWidth,
-                                    ),
-                                    borderRadius: BorderRadius.circular(
-                                      AppDimens.radius,
-                                    ),
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        m.title,
-                                        style: const TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w800,
-                                          color: AppColors.text,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        _formatWhen(m.scheduledAt),
-                                        style: const TextStyle(
-                                          fontSize: 11.5,
-                                          fontWeight: FontWeight.w700,
-                                          color: AppColors.mutedStrong,
-                                        ),
-                                      ),
-                                      if (m.description != null &&
-                                          m.description!.trim().isNotEmpty) ...[
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          m.description!.trim(),
-                                          maxLines: 3,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w600,
-                                            color: AppColors.text,
-                                            height: 1.35,
-                                          ),
-                                        ),
-                                      ],
-                                    ],
-                                  ),
-                                ),
-                          ],
                         ],
                       ),
                     ),
                   ),
+                  if (_createdMeetingId != null) ...[
+                    const SizedBox(height: AppDimens.spaceSm),
+                    Container(
+                      padding: const EdgeInsets.all(AppDimens.spaceMd),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE7F6E7),
+                        border: Border.all(
+                          color: AppColors.border,
+                          width: AppDimens.borderWidth,
+                        ),
+                        borderRadius: BorderRadius.circular(AppDimens.radius),
+                      ),
+                      child: const Text(
+                        'Reunión agendada.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.text,
+                        ),
+                      ),
+                    ),
+                  ],
+                  if (_submitError != null) ...[
+                    const SizedBox(height: AppDimens.spaceSm),
+                    Container(
+                      padding: const EdgeInsets.all(AppDimens.spaceMd),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFDE8E8),
+                        border: Border.all(
+                          color: AppColors.border,
+                          width: AppDimens.borderWidth,
+                        ),
+                        borderRadius: BorderRadius.circular(AppDimens.radius),
+                      ),
+                      child: Text(
+                        _submitError!,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.text,
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: AppDimens.spaceMd),
+                  if (!_isRealGroup) ...[
+                    const SizedBox(height: AppDimens.spaceSm),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppColors.bg,
+                        border: Border.all(
+                          color: AppColors.border,
+                          width: AppDimens.borderWidth,
+                        ),
+                        borderRadius: BorderRadius.circular(AppDimens.radius),
+                      ),
+                      child: const Text(
+                        'Selecciona un grupo para agendar una reunión.',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.mutedStrong,
+                        ),
+                      ),
+                    ),
+                  ],
+                  if (_isRealGroup) ...[
+                    const SizedBox(height: AppDimens.spaceXl),
+                    const AppFieldLabel('PRÓXIMAS REUNIONES'),
+                    const SizedBox(height: AppDimens.spaceSm),
+                    if (_loadingUpcoming)
+                      const Center(
+                        child: SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    else if (_upcoming.isEmpty)
+                      const Text(
+                        'Aún no hay reuniones agendadas.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.mutedStrong,
+                        ),
+                      )
+                    else
+                      for (final m in _upcoming)
+                        Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: AppColors.bg,
+                            border: Border.all(
+                              color: AppColors.border,
+                              width: AppDimens.borderWidth,
+                            ),
+                            borderRadius: BorderRadius.circular(
+                              AppDimens.radius,
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                m.title,
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
+                                  color: AppColors.text,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                _formatWhen(m.scheduledAt),
+                                style: const TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.mutedStrong,
+                                ),
+                              ),
+                              if (m.description != null &&
+                                  m.description!.trim().isNotEmpty) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  m.description!.trim(),
+                                  maxLines: 3,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.text,
+                                    height: 1.35,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                  ],
                 ],
               ),
             ),
