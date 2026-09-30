@@ -299,10 +299,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
             priority: _capitalized(t.priority),
             status: _sprintStatusLabel(t.status),
             estimate: t.estimatedHours,
-            days: {
-              for (var i = 0; i < days.length; i++)
-                days[i]: (_hoursByTask[t.id]?[isoByDay[i]] ?? 0.0),
-            },
+            days: Map<String, double>.from(_hoursByTask[t.id] ?? const {}),
             backendId: t.id,
           ),
       ],
@@ -319,7 +316,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     DateTime.sunday: 'Domingo',
   };
 
-  /// Columnas de días: período real de la hoja (máx. 5) o semana actual.
+  /// Columnas de días corridos del período completo, o semana actual para hojas históricas.
   List<String> _realDayNames(SprintSheetInfo? sheet) =>
       _realDayPairs(sheet).map((p) => p.$1).toList();
 
@@ -333,9 +330,9 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     if (start != null && end != null && !end.isBefore(start)) {
       var d = DateTime(start.year, start.month, start.day);
       final last = DateTime(end.year, end.month, end.day);
-      while (!d.isAfter(last) && out.length < 5) {
+      while (!d.isAfter(last)) {
         out.add((_weekdayNames[d.weekday] ?? '', _iso(d)));
-        d = d.add(const Duration(days: 1));
+        d = DateTime(d.year, d.month, d.day + 1);
       }
     }
     if (out.isEmpty) {
@@ -790,7 +787,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
   static DateTime _nextTuesday(DateTime now) {
     var d = DateTime(now.year, now.month, now.day);
     while (d.weekday != DateTime.tuesday) {
-      d = d.add(const Duration(days: 1));
+      d = DateTime(d.year, d.month, d.day + 1);
     }
     return d;
   }
@@ -987,6 +984,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
   }
 
   List<String> get _days => _sprint.days;
+  List<String> get _dayKeys => _usingRealTable ? _sprint.dayIsoDates : _days;
   List<String> get _dayDates => _sprint.dayDates;
   List<_SprintTask> get _tasks => _sprint.tasks;
 
@@ -1106,10 +1104,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
 
   /// Imputa horas reales en la fecha ISO de la columna.
   Future<void> _imputeRealHours(_SprintTask task, String day) async {
-    final isoDates = _sprint.dayIsoDates;
-    final days = _sprint.days;
-    final idx = days.indexOf(day);
-    final iso = (idx >= 0 && idx < isoDates.length) ? isoDates[idx] : '';
+    final iso = day;
     if (iso.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -1254,7 +1249,10 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
               const SizedBox(height: 8),
               SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
-                child: SizedBox(width: 1200, child: _buildSprintTable()),
+                child: SizedBox(
+                  width: math.max(1200, 740 + 90.0 * _days.length),
+                  child: _buildSprintTable(),
+                ),
               ),
             ],
           ],
@@ -1577,7 +1575,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
   List<double> _cumulativeUsedByDay() {
     final result = <double>[];
     var acc = 0.0;
-    for (final day in _days) {
+    for (final day in _dayKeys) {
       acc += _tasks.fold(0.0, (sum, t) => sum + (t.days[day] ?? 0.0));
       result.add(acc);
     }
@@ -1625,6 +1623,25 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                 ),
               ),
             ),
+            Row(
+              children: [
+                for (var i = 0; i < _days.length; i++)
+                  SizedBox(
+                    width: 90,
+                    child: Padding(
+                      padding: const EdgeInsets.all(6),
+                      child: Text(
+                        '${_dayDates[i]}\n${_days[i].toUpperCase()}',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
             const Padding(
               padding: EdgeInsets.all(20),
               child: Text(
@@ -1654,6 +1671,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
       ),
       child: Table(
         border: TableBorder.all(color: AppColors.border, width: 2),
+        defaultColumnWidth: const FixedColumnWidth(90),
         columnWidths: const {
           0: FixedColumnWidth(220),
           1: FixedColumnWidth(90),
@@ -1851,7 +1869,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                       ),
                     ),
                   ),
-                  for (final day in _days)
+                  for (final day in _dayKeys)
                     _DayCell(
                       value: t.days[day] ?? 0.0,
                       onTap: () => _showImputeHours(t, day),
