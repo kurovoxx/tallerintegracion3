@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 
 // Local por defecto (http://localhost:8085) para `flutter run -d linux` y Docker local sin .env.
-// Para dominio ngrok/tunnel, build con --dart-define o .env.prod (ver front/.env.prod.example)
+// Para el dominio del Ingress, build con --dart-define o .env.prod (ver front/.env.prod.example)
 // Para web con nginx, también puedes usar relativo '/api-auth' -> _resolve lo convierte a origin.
 const _authBase =
     String.fromEnvironment('API_BASE_URL', defaultValue: 'http://localhost:8085');

@@ -234,6 +234,16 @@ func (h *NoteHandler) Get(c *gin.Context) {
 	if note.Content != nil {
 		resp["content"] = *note.Content
 	}
+	attachments, err := h.svc.ListAttachments(c.Request.Context(), note.ID)
+	if err != nil {
+		handleServiceError(c, service.ErrInternalDatabase)
+		return
+	}
+	if attachments == nil {
+		resp["attachments"] = []any{}
+	} else {
+		resp["attachments"] = attachments
+	}
 	c.JSON(http.StatusOK, resp)
 }
 

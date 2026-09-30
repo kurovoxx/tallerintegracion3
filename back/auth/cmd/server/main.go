@@ -53,8 +53,9 @@ func main() {
 	authMw := middleware.NewAuthMiddleware(jwtSvc)
 
 	// Profile: Handler → Service → Repository (Sprint 1)
+	// Con email de identity.users (fuente de verdad, best-effort).
 	profileRepo := repository.NewProfileRepository(pool)
-	profileSvc := service.NewProfileService(profileRepo)
+	profileSvc := service.NewProfileServiceWithUsers(profileRepo, userRepo)
 	profileH := httpHandler.NewProfileHandler(profileSvc)
 
 	// Drive OAuth: Handler → Service → Repository (google-drive/connect)
@@ -65,7 +66,7 @@ func main() {
 		RedirectURI:  cfg.GoogleRedirectURI,
 	}
 	driveSvc := service.NewDriveOAuthService(oauthRepo, driveProvider)
-	driveH := httpHandler.NewDriveHandler(driveSvc)
+	driveH := httpHandler.NewDriveHandlerWithGoogleConfig(driveSvc, cfg.GoogleClientID, cfg.GoogleRedirectURI)
 
 	// Calendar OAuth: Handler → Service → Repository (google-calendar/connect + interno para Social)
 	calendarProvider := &service.ConfigCalendarOAuthProvider{
@@ -76,6 +77,7 @@ func main() {
 	calendarSvc := service.NewCalendarOAuthService(oauthRepo, calendarProvider)
 	calendarH := httpHandler.NewCalendarHandler(calendarSvc)
 	internalOAuthH := httpHandler.NewInternalOAuthHandler(calendarSvc)
+	internalUsersH := httpHandler.NewInternalUsersHandler(service.NewUsersService(userRepo))
 
 	r := gin.Default()
 
@@ -85,6 +87,7 @@ func main() {
 	r.POST("/auth/refresh", authH.Refresh)
 	r.POST("/auth/logout", authH.Logout)
 	r.POST("/auth/google-drive/connect", authMw.RequireAuth(), driveH.Connect)
+	r.GET("/auth/google-drive/status", authMw.RequireAuth(), driveH.Status)
 	r.POST("/auth/google-calendar/connect", authMw.RequireAuth(), calendarH.Connect)
 
 	// Interno servicio-a-servicio (Social → Auth): secreto compartido, sin JWT de usuario
@@ -93,6 +96,7 @@ func main() {
 	{
 		internal.GET("/oauth/calendar-token", internalOAuthH.GetCalendarToken)
 		internal.POST("/oauth/calendar-revoked", internalOAuthH.ReportCalendarRevoked)
+		internal.GET("/users/lookup", internalUsersH.Lookup)
 	}
 
 	// Protegido: middleware valida firma+expiración, inyecta solo user_id (sin role global)
@@ -118,12 +122,7 @@ func main() {
 	// Config pública de Google OAuth para el front: el client ID es público
 	// por diseño (viaja en URLs visibles); el secret jamás sale del backend.
 	// Así ningún cliente necesita --dart-define ni IDs quemados.
-	r.GET("/auth/google-config", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"client_id":    cfg.GoogleClientID,
-			"redirect_uri": cfg.GoogleRedirectURI,
-		})
-	})
+	r.GET("/auth/google-config", driveH.GetGoogleConfig)
 
 	r.GET("/health/db", func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)

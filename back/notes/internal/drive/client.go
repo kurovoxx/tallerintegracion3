@@ -55,6 +55,7 @@ func IsForbidden(err error) bool {
 // En producción delega a google.golang.org/api/drive/v3 con token OAuth desde identity.oauth_connections.
 // En tests se usa MockClient.
 type Client interface {
+	DownloadAttachment(ctx context.Context, ownerID, fileID string) ([]byte, string, error)
 	// CreateFile crea archivo .md en carpeta designada del autor, retorna driveFileID.
 	// El archivo se indexa con appProperties (notes_note_id, notes_owner_user_id)
 	// para poder recuperarlo si el proceso crashea antes de persistir el fileID.
@@ -126,6 +127,7 @@ type MockClient struct {
 }
 
 type mockFile struct {
+	Data          []byte
 	ID            string
 	OwnerID       string
 	Title         string
@@ -306,7 +308,7 @@ func (m *MockClient) UploadAttachment(ctx context.Context, userID string, noteID
 	fileType = DetectMimeType(fileName, fileType, data)
 	id := "att_" + uuid.NewString()
 	url := fmt.Sprintf("https://drive.google.com/file/d/%s/view", id)
-	m.files[id] = &mockFile{ID: id, OwnerID: userID, Title: fileName, Content: string(data), MimeType: fileType, Folder: noteID}
+	m.files[id] = &mockFile{ID: id, OwnerID: userID, Title: fileName, Data: append([]byte(nil), data...), MimeType: fileType, Folder: noteID}
 	return id, url, nil
 }
 

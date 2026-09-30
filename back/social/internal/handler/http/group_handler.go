@@ -182,12 +182,14 @@ func (h *GroupHandler) RegenerateInvite(c *gin.Context) {
 }
 
 // ListMembers maneja GET /groups/{id}/members
+// Responde miembros con display_name/email cuando Identity los resuelve
+// (campos omitidos si no, backward-compatible).
 func (h *GroupHandler) ListMembers(c *gin.Context) {
 	userID, ok := requireUser(c)
 	if !ok {
 		return
 	}
-	members, err := h.svc.ListMembers(c.Request.Context(), c.Param("id"), userID)
+	members, err := h.svc.ListMembersEnriched(c.Request.Context(), c.Param("id"), userID)
 	if err != nil {
 		respondGroupError(c, err, "Acceso denegado: debes ser miembro del grupo para ver los integrantes")
 		return

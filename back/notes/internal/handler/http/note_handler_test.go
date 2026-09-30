@@ -66,6 +66,7 @@ func setupRouter() (*gin.Engine, *service.NoteService, *drive.MockClient, *servi
 		prot.POST("/notes/upload", h.UploadFile)
 		prot.GET("/notes/:id/access", h.GetAccess)
 		prot.POST("/notes/:id/attachments", h.UploadAttachment)
+		prot.GET("/notes/:id/attachments/:attachmentId/content", h.AttachmentContent)
 		prot.DELETE("/notes/:id/attachments/:attachmentId", h.DeleteAttachment)
 		prot.POST("/notes/:id/save", h.Save)
 		prot.POST("/notes/:id/copy", h.Copy)

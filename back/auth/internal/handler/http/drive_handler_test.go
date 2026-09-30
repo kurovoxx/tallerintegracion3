@@ -21,6 +21,7 @@ func init() { gin.SetMode(gin.TestMode) }
 type mockDriveRepo struct {
 	upsertCalled bool
 	upsertErr    error
+	connections  map[string]*model.OAuthConnection
 }
 
 func (m *mockDriveRepo) UpsertGoogleDriveConnection(ctx context.Context, userID, accessToken string, refreshToken *string, expiresAt *time.Time, externalEmail *string) error {
@@ -28,7 +29,7 @@ func (m *mockDriveRepo) UpsertGoogleDriveConnection(ctx context.Context, userID,
 	return m.upsertErr
 }
 func (m *mockDriveRepo) GetByUserIDAndProvider(ctx context.Context, userID, provider string) (*model.OAuthConnection, error) {
-	return nil, nil
+	return m.connections[userID], nil
 }
 func (m *mockDriveRepo) UpdateGoogleDriveAccessToken(ctx context.Context, userID, accessToken string, refreshToken *string, expiresAt time.Time) error {
 	return nil
@@ -264,6 +265,55 @@ func TestDriveHandler_Connect_NoExponeTokens(t *testing.T) {
 // Evitar imports no usados
 var _ = repository.NewOAuthRepository
 
+func TestDriveHandler_GetGoogleConfig_200(t *testing.T) {
+	const wantClientID = "client-123.apps.googleusercontent.com"
+	const wantRedirect = "http://localhost:8081/auth/google/callback"
+	h := NewDriveHandlerWithGoogleConfig(nil, wantClientID, wantRedirect)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/auth/google-config", nil)
+	h.GetGoogleConfig(c)
+
+	if w.Code != 200 {
+		t.Fatalf("esperado 200, got %d %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("respuesta no es JSON: %v (%s)", err, w.Body.String())
+	}
+	if resp["client_id"] != wantClientID {
+		t.Fatalf("client_id esperado %q, got %q", wantClientID, resp["client_id"])
+	}
+	if resp["redirect_uri"] != wantRedirect {
+		t.Fatalf("redirect_uri esperado %q, got %q", wantRedirect, resp["redirect_uri"])
+	}
+	if len(resp) != 2 {
+		t.Fatalf("respuesta debe tener solo client_id y redirect_uri, got %v", resp)
+	}
+	if containsDrive(w.Body.String(), "client_secret") {
+		t.Fatalf("la respuesta no debe exponer client_secret, got %s", w.Body.String())
+	}
+}
+
+func TestDriveHandler_GetGoogleConfig_RutaPublica(t *testing.T) {
+	h := NewDriveHandlerWithGoogleConfig(nil, "cid.apps.googleusercontent.com", "http://localhost:8081/auth/google/callback")
+	r := gin.New()
+	// Registro público: sin middleware de auth, como en cmd/server/main.go.
+	r.GET("/auth/google-config", h.GetGoogleConfig)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/auth/google-config", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("GET /auth/google-config debe ser público y responder 200, got %d %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "client_id") || !strings.Contains(w.Body.String(), "redirect_uri") {
+		t.Fatalf("respuesta debe incluir client_id y redirect_uri, got %s", w.Body.String())
+	}
+}
+
 func TestDriveHandler_Connect_EmailMismatch_400(t *testing.T) {
 	repo := &mockDriveRepo{}
 	real := "real@gmail.com"
@@ -280,5 +330,46 @@ func TestDriveHandler_Connect_EmailMismatch_400(t *testing.T) {
 	}
 	if repo.upsertCalled {
 		t.Fatal("mismatch no debe guardar nada")
+	}
+}
+
+func TestDriveStatusIsAuthenticatedAndScoped(t *testing.T) {
+	repo := &mockDriveRepo{connections: map[string]*model.OAuthConnection{
+		"A": {AccessToken: "must-not-leak"},
+	}}
+	h := newDriveHandlerWithMocks(repo, &mockDriveProvider{})
+	for _, user := range []string{"A", "B", "A", ""} {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest("GET", "/auth/google-drive/status?user_id=A", nil)
+		if user != "" {
+			c.Set(middleware.ContextUserIDKey, user)
+		}
+		h.Status(c)
+		if user == "" {
+			if w.Code != 401 {
+				t.Fatal(w.Code)
+			}
+			continue
+		}
+		if w.Code != 200 {
+			t.Fatal(w.Code)
+		}
+		var body map[string]bool
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if body["connected"] != (user == "A") {
+			t.Fatalf("wrong state for %s", user)
+		}
+		if len(body) != 2 || strings.Contains(w.Body.String(), "must-not-leak") {
+			t.Fatal("unexpected data")
+		}
+		if w.Header().Get("Cache-Control") != "private, no-store" {
+			t.Fatal("cacheable private state")
+		}
+	}
+	if repo.upsertCalled {
+		t.Fatal("status changed OAuth connection")
 	}
 }

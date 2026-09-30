@@ -1,7 +1,6 @@
-﻿import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/common_widgets.dart';
 import '../../core/models/profile_models.dart';
@@ -33,19 +32,29 @@ String formatRole(String rawRole) {
   }
 }
 
-double? computeAttendance({required int? totalClasses, required int unjustifiedAbsences}) {
+double? computeAttendance({
+  required int? totalClasses,
+  required int unjustifiedAbsences,
+}) {
   if (totalClasses == null || totalClasses <= 0) return null;
   final ratio = 1 - (unjustifiedAbsences / totalClasses);
   return (ratio * 100).clamp(0, 100).toDouble();
 }
 
-enum _DriveStatus { idle, connecting, connected, disconnecting, error }
+enum _DriveStatus {
+  checking,
+  idle,
+  connecting,
+  connected,
+  disconnecting,
+  error,
+}
 
 class ProfileScreen extends StatefulWidget {
   final Map<String, dynamic>? userData;
 
   const ProfileScreen({super.key, this.userData, ProfileService? service})
-      : _serviceOverride = service;
+    : _serviceOverride = service;
 
   final ProfileService? _serviceOverride;
 
@@ -54,8 +63,6 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  static const String _googleDrivePrefKey = 'profile_google_drive_connected';
-
   bool _isLoading = true;
   bool _isSaving = false;
   bool _hasError = false;
@@ -81,26 +88,53 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void initState() {
     super.initState();
     _service = widget._serviceOverride ?? ProfileService();
+    SessionManager.revision.addListener(_sessionChanged);
     _restoreDriveStatus();
     _loadProfile();
   }
 
-  Future<void> _restoreDriveStatus() async {
-    final preferences = await SharedPreferences.getInstance();
-    final wasConnected = preferences.getBool(_googleDrivePrefKey) ?? false;
-    if (!mounted) return;
+  bool _sameSession(int revision) =>
+      mounted && revision == SessionManager.revision.value;
+
+  void _sessionChanged() {
     setState(() {
-      _driveStatus = wasConnected ? _DriveStatus.connected : _DriveStatus.idle;
+      _profile = null;
+      _driveStatus = _DriveStatus.checking;
+      _isLoading = true;
+      _isEditing = false;
+      _isSaving = false;
+      _googleEmailController.clear();
+      _nameController.clear();
+      _phoneController.clear();
+      _institutionController.clear();
+      _descriptionController.clear();
     });
+    if (SessionManager.isLoggedIn) {
+      _restoreDriveStatus();
+      _loadProfile();
+    }
   }
 
-  Future<void> _persistDriveStatus(bool connected) async {
-    final preferences = await SharedPreferences.getInstance();
-    await preferences.setBool(_googleDrivePrefKey, connected);
+  Future<void> _restoreDriveStatus() async {
+    final revision = SessionManager.revision.value;
+    setState(() => _driveStatus = _DriveStatus.checking);
+    try {
+      final connected = await _service.getDriveStatus();
+      if (!mounted || !_sameSession(revision)) return;
+      setState(
+        () => _driveStatus = connected
+            ? _DriveStatus.connected
+            : _DriveStatus.idle,
+      );
+    } catch (_) {
+      if (!mounted || !_sameSession(revision)) return;
+      setState(() => _driveStatus = _DriveStatus.error);
+    }
   }
 
   @override
   void dispose() {
+    SessionManager.revision.removeListener(_sessionChanged);
     _nameController.dispose();
     _phoneController.dispose();
     _institutionController.dispose();
@@ -113,6 +147,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // Contrato real: GET /profile/me (Auth).
   // Ver back/auth/cmd/server/main.go:107 y profile_handler.go:46.
   Future<void> _loadProfile() async {
+    final revision = SessionManager.revision.value;
     setState(() {
       _isLoading = true;
       _hasError = false;
@@ -122,24 +157,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     try {
       final p = await _service.getProfile();
-      if (!mounted) return;
+      if (!mounted || !_sameSession(revision)) return;
       setState(() {
         _profile = p;
         _isLoading = false;
       });
-    } on ProfileApiException catch (e) {
-      if (!mounted) return;
+    } on ProfileApiException catch (_) {
+      if (!mounted || !_sameSession(revision)) return;
       setState(() {
         _isLoading = false;
         _hasError = true;
-        _errorMessage = e.toString();
+        _errorMessage = 'No se pudo cargar tu perfil. Revisa tu conexión.';
       });
-    } catch (e) {
-      if (!mounted) return;
+    } catch (_) {
+      if (!mounted || !_sameSession(revision)) return;
       setState(() {
         _isLoading = false;
         _hasError = true;
-        _errorMessage = 'No se pudo cargar tu perfil: $e';
+        _errorMessage = 'No se pudo cargar tu perfil. Revisa tu conexión.';
       });
     }
   }
@@ -173,6 +208,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // Contrato real: PATCH /profile/me (parcial).
   // Campos omitidos no cambian; vacíos borran a NULL (salvo display_name).
   Future<void> _handleSave() async {
+    final revision = SessionManager.revision.value;
     if (_profile == null || _isSaving) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
@@ -186,7 +222,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         'visibility': _draftVisibility,
       };
       final updated = await _service.patchProfile(patch);
-      if (!mounted) return;
+      if (!mounted || !_sameSession(revision)) return;
       setState(() {
         _profile = updated;
         _isEditing = false;
@@ -194,33 +230,40 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Cambios guardados en backend (real)',
-              style: TextStyle(fontWeight: FontWeight.w700)),
+          content: Text(
+            'Cambios guardados.',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
           backgroundColor: AppColors.border,
         ),
       );
-    } on ProfileApiException catch (e) {
-      if (!mounted) return;
+    } on ProfileApiException catch (_) {
+      if (!mounted || !_sameSession(revision)) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('No se pudo guardar: $e'),
+        const SnackBar(
+          content: Text(
+            'No se pudo guardar. Revisa los datos e inténtalo de nuevo.',
+          ),
           backgroundColor: AppColors.error,
         ),
       );
-    } catch (e) {
-      if (!mounted) return;
+    } catch (_) {
+      if (!mounted || !_sameSession(revision)) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('No se pudo guardar: $e'),
+        const SnackBar(
+          content: Text(
+            'No se pudo guardar. Revisa los datos e inténtalo de nuevo.',
+          ),
           backgroundColor: AppColors.error,
         ),
       );
     } finally {
-      if (mounted) setState(() => _isSaving = false);
+      if (_sameSession(revision)) setState(() => _isSaving = false);
     }
   }
 
   Future<void> _handleConnectDrive() async {
+    final revision = SessionManager.revision.value;
     if (_driveStatus == _DriveStatus.connecting ||
         _driveStatus == _DriveStatus.disconnecting) {
       return;
@@ -228,7 +271,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final messenger = ScaffoldMessenger.of(context);
     final declaredEmail = _googleEmailController.text.trim();
     if (declaredEmail.isEmpty) {
-      messenger.showSnackBar(const SnackBar(content: Text('Escribe tu correo de Google para conectar Drive')));
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Escribe tu correo de Google para conectar Drive'),
+        ),
+      );
       return;
     }
     setState(() => _driveStatus = _DriveStatus.connecting);
@@ -236,45 +283,63 @@ class _ProfileScreenState extends State<ProfileScreen> {
     try {
       // Config OAuth desde el backend (.env raíz como única fuente).
       await GoogleDriveService.ensureConfigured(backendBaseUrl: authApiBaseUrl);
+      if (!mounted || !_sameSession(revision)) return;
       // En web no hay localhost que capture el code: diálogo pegar-código.
       final String? code = kIsWeb
           ? await _askWebAuthCode(messenger, declaredEmail)
-          : await GoogleDriveService().getServerAuthCode(loginHint: declaredEmail);
+          : await GoogleDriveService().getServerAuthCode(
+              loginHint: declaredEmail,
+            );
       if (code == null) {
-        if (!mounted) return;
+        if (!mounted || !_sameSession(revision)) return;
         setState(() => _driveStatus = _DriveStatus.idle);
-        messenger.showSnackBar(const SnackBar(content: Text('Conexión con Drive cancelada')));
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Conexión con Drive cancelada')),
+        );
+        await _restoreDriveStatus();
         return;
       }
+      if (!mounted || !_sameSession(revision)) return;
       final token = SessionManager.token;
       if (token == null) {
-        if (!mounted) return;
+        if (!mounted || !_sameSession(revision)) return;
         setState(() => _driveStatus = _DriveStatus.idle);
         messenger.showSnackBar(const SnackBar(content: Text('No hay sesión')));
         return;
       }
-      debugPrint('[FRONT DEBUG] Drive callback: endpoint auth=$authApiBaseUrl/auth/google-drive/connect');
-      final ok = await GoogleDriveService().connectDrive(
+      final result = await GoogleDriveService().connectDrive(
         backendBaseUrl: authApiBaseUrl,
         appAccessToken: token,
         oauthCode: code,
         expectedEmail: declaredEmail,
       );
-      await _persistDriveStatus(ok);
-      if (!mounted) return;
-      setState(() => _driveStatus = ok ? _DriveStatus.connected : _DriveStatus.error);
-      messenger.showSnackBar(SnackBar(content: Text(ok ? 'Drive conectado (200)' : 'No se pudo conectar Drive')));
-    } catch (e) {
-      if (!mounted) return;
+      if (!mounted || !_sameSession(revision)) return;
+      setState(
+        () => _driveStatus = result.ok
+            ? _DriveStatus.connected
+            : _DriveStatus.error,
+      );
+      messenger.showSnackBar(SnackBar(content: Text(result.message)));
+    } catch (_) {
+      if (!mounted || !_sameSession(revision)) return;
       setState(() => _driveStatus = _DriveStatus.error);
-      messenger.showSnackBar(SnackBar(content: Text('Error al conectar Drive: $e')));
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No se pudo conectar con Google Drive. Inténtalo nuevamente más tarde.',
+          ),
+        ),
+      );
     }
   }
 
   /// Flujo web: abre Google en pestaña externa y pide pegar el ?code=
   /// de la URL de retorno (nada escucha localhost en el navegador).
   /// Retorna null si el usuario cancela.
-  Future<String?> _askWebAuthCode(ScaffoldMessengerState messenger, String declaredEmail) async {
+  Future<String?> _askWebAuthCode(
+    ScaffoldMessengerState messenger,
+    String declaredEmail,
+  ) async {
     final codeController = TextEditingController();
     try {
       await GoogleDriveService().openWebAuthUrl(loginHint: declaredEmail);
@@ -322,20 +387,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _handleDisconnectDrive() async {
-    if (_driveStatus == _DriveStatus.connecting ||
-        _driveStatus == _DriveStatus.disconnecting) {
-      return;
-    }
-    final messenger = ScaffoldMessenger.of(context);
-    setState(() => _driveStatus = _DriveStatus.disconnecting);
-
-    try {
-      await GoogleDriveService().signOut();
-    } catch (_) {}
-    await _persistDriveStatus(false);
-    if (!mounted) return;
-    setState(() => _driveStatus = _DriveStatus.idle);
-    messenger.showSnackBar(const SnackBar(content: Text('Google Drive desconectado')));
+    // El cierre local de Google no revoca la conexión que conserva el servidor.
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Para desconectar Drive, revoca el acceso desde tu cuenta de Google.',
+        ),
+      ),
+    );
+    await _restoreDriveStatus();
   }
 
   void _handleShare() {
@@ -415,7 +475,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
         const SizedBox(height: 2),
         const Text(
           'Tu identidad académica dentro de Sigma Academy',
-          style: TextStyle(color: AppColors.muted, fontWeight: FontWeight.w700, fontSize: 12.5),
+          style: TextStyle(
+            color: AppColors.muted,
+            fontWeight: FontWeight.w700,
+            fontSize: 12.5,
+          ),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
@@ -487,14 +551,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Widget _buildIdentityCard(bool isDesktop) {
     final p = _profile!;
-    final name = p.displayName.trim().isEmpty ? 'Sin nombre' : p.displayName.trim();
+    final name = p.displayName.trim().isEmpty
+        ? 'Sin nombre'
+        : p.displayName.trim();
     final isPublic = p.visibility == 'public';
     final description = (p.description == null || p.description!.trim().isEmpty)
         ? 'Sin descripción. Agrega una presentación desde Editar perfil.'
         : p.description!.trim();
 
     final identityText = Column(
-      crossAxisAlignment: isDesktop ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+      crossAxisAlignment: isDesktop
+          ? CrossAxisAlignment.start
+          : CrossAxisAlignment.center,
       children: [
         Text(
           name,
@@ -510,7 +578,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
         NeobrutalistBadge(
           label: isPublic ? 'Perfil público' : 'Perfil privado',
           tone: isPublic ? NeobrutalistTone.info : NeobrutalistTone.pending,
-          icon: isPublic ? Icons.visibility_rounded : Icons.visibility_off_rounded,
+          icon: isPublic
+              ? Icons.visibility_rounded
+              : Icons.visibility_off_rounded,
         ),
         const SizedBox(height: AppDimens.spaceMd),
         Text(
@@ -526,11 +596,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ],
     );
 
-    final avatar = _Avatar(name: name, photoUrl: p.photoUrl ?? '', size: isDesktop ? 112 : 88);
+    final avatar = _Avatar(
+      name: name,
+      photoUrl: p.photoUrl ?? '',
+      size: isDesktop ? 112 : 88,
+    );
 
     return _ProfileCard(
       title: 'Avatar e identidad',
-      trailing: const NeobrutalistBadge(label: 'Datos reales', tone: NeobrutalistTone.neutral),
       child: isDesktop
           ? Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -569,50 +642,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     return _ProfileCard(
       title: 'Datos personales',
-      trailing: const _EndpointTag('GET /profile/me'),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _SummaryRow(icon: Icons.apartment_rounded, label: 'INSTITUCIÓN', value: institution),
+          _SummaryRow(
+            icon: Icons.apartment_rounded,
+            label: 'INSTITUCIÓN',
+            value: institution,
+          ),
           const SizedBox(height: AppDimens.spaceMd),
-          _SummaryRow(icon: Icons.phone_rounded, label: 'TELÉFONO', value: phone),
+          _SummaryRow(
+            icon: Icons.phone_rounded,
+            label: 'TELÉFONO',
+            value: phone,
+          ),
           const SizedBox(height: AppDimens.spaceMd),
-          const _SummaryRow(
+          _SummaryRow(
             icon: Icons.email_rounded,
-            label: 'CORREO INSTITUCIONAL',
-            value: 'No entregado por /profile/me',
+            label: 'CORREO',
+            value: (p.email == null || p.email!.trim().isEmpty)
+                ? 'No informado'
+                : p.email!.trim(),
           ),
           const SizedBox(height: AppDimens.spaceLg),
-          const Divider(color: AppColors.border, thickness: AppDimens.borderWidth, height: 1),
+          const Divider(
+            color: AppColors.border,
+            thickness: AppDimens.borderWidth,
+            height: 1,
+          ),
           const SizedBox(height: AppDimens.spaceMd),
-          Container(
-            padding: const EdgeInsets.all(AppDimens.spaceMd),
-            decoration: BoxDecoration(
-              color: AppColors.bg,
-              border: Border.all(color: AppColors.border, width: 1.5),
-              borderRadius: BorderRadius.circular(AppDimens.radius),
-            ),
-            child: const Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(Icons.info_outline_rounded, size: 16, color: AppColors.mutedStrong),
-                SizedBox(width: AppDimens.spaceSm),
-                Expanded(
-                  child: Text(
-                    'El backend solo entrega display_name, photo_url, phone, institution, description y visibility. '
-                    'Notas, grupos, tareas, promedios, asistencia y seguidores no forman parte de GET /profile/me.',
-                    style: TextStyle(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.mutedStrong,
-                      height: 1.35,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: AppDimens.spaceLg),
           isDesktop
               ? Align(
                   alignment: Alignment.centerRight,
@@ -628,7 +686,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final connecting = _driveStatus == _DriveStatus.connecting;
     final connected = _driveStatus == _DriveStatus.connected;
     final disconnecting = _driveStatus == _DriveStatus.disconnecting;
-    final busy = connecting || disconnecting;
+    final busy =
+        connecting || disconnecting || _driveStatus == _DriveStatus.checking;
 
     final connectButton = NeobrutalistButton(
       label: connecting ? 'CONECTANDO...' : 'CONECTAR DRIVE',
@@ -695,11 +754,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: AppColors.accentYellow,
-                  border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+                  border: Border.all(
+                    color: AppColors.border,
+                    width: AppDimens.borderWidth,
+                  ),
                   borderRadius: BorderRadius.circular(AppDimens.radius),
                   boxShadow: AppShadows.badge,
                 ),
-                child: const Icon(Icons.cloud_rounded, size: 22, color: AppColors.text),
+                child: const Icon(
+                  Icons.cloud_rounded,
+                  size: 22,
+                  color: AppColors.text,
+                ),
               ),
               const SizedBox(width: AppDimens.spaceMd),
               const Expanded(
@@ -725,7 +791,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
               decoration: const InputDecoration(
                 labelText: 'TU CORREO DE GOOGLE',
                 hintText: 'tucorreo@gmail.com',
-                helperText: 'Se usa para abrir tu cuenta y verificar la conexión. Nunca se comparte.',
+                helperText:
+                    'Se usa para abrir tu cuenta y verificar la conexión. Nunca se comparte.',
                 helperMaxLines: 2,
               ),
             ),
@@ -739,6 +806,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Widget _buildDriveBadge() {
     switch (_driveStatus) {
+      case _DriveStatus.checking:
+        return const NeobrutalistBadge(
+          label: 'Consultando',
+          tone: NeobrutalistTone.pending,
+          icon: Icons.sync_rounded,
+        );
       case _DriveStatus.connecting:
         return const NeobrutalistBadge(
           label: 'Conectando',
@@ -778,7 +851,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget _buildEditMode(bool isDesktop) {
     final formCard = _ProfileCard(
       title: 'Editar perfil',
-      trailing: const _EndpointTag('PATCH /profile/me'),
       child: Form(
         key: _formKey,
         child: Column(
@@ -807,7 +879,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
               textInputAction: TextInputAction.next,
               maxLength: 200,
               validator: (value) {
-                if ((value?.trim().length ?? 0) > 200) return 'Máximo 200 caracteres';
+                if ((value?.trim().length ?? 0) > 200)
+                  return 'Máximo 200 caracteres';
                 return null;
               },
             ),
@@ -821,7 +894,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
               textInputAction: TextInputAction.next,
               maxLength: 30,
               validator: (value) {
-                if ((value?.trim().length ?? 0) > 30) return 'Máximo 30 caracteres';
+                if ((value?.trim().length ?? 0) > 30)
+                  return 'Máximo 30 caracteres';
                 return null;
               },
             ),
@@ -839,7 +913,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
             const SizedBox(height: AppDimens.spaceSm),
             _VisibilitySelector(
               value: _draftVisibility,
-              onChanged: _isSaving ? (_) {} : (v) => setState(() => _draftVisibility = v),
+              onChanged: _isSaving
+                  ? (_) {}
+                  : (v) => setState(() => _draftVisibility = v),
             ),
           ],
         ),
@@ -889,7 +965,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
       padding: const EdgeInsets.all(AppDimens.spaceMd),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
         boxShadow: AppShadows.button,
       ),
@@ -922,7 +1001,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: AppColors.surface,
-        border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
         boxShadow: AppShadows.card,
       ),
@@ -952,12 +1034,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.error_outline_rounded, size: 48, color: AppColors.text),
+            const Icon(
+              Icons.error_outline_rounded,
+              size: 48,
+              color: AppColors.text,
+            ),
             const SizedBox(height: AppDimens.spaceMd),
             const Text(
-              'NO SE PUDO CARGAR TU PERFIL (REAL)',
+              'NO SE PUDO CARGAR TU PERFIL',
               textAlign: TextAlign.center,
-              style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: AppColors.text),
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                fontSize: 16,
+                color: AppColors.text,
+              ),
             ),
             if (_errorMessage != null) ...[
               const SizedBox(height: AppDimens.spaceSm),
@@ -1005,7 +1095,10 @@ class _ProfileCard extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surface,
-        border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
         boxShadow: AppShadows.card,
       ),
@@ -1037,7 +1130,11 @@ class _ProfileCard extends StatelessWidget {
               ],
             ),
           ),
-          const Divider(color: AppColors.border, thickness: AppDimens.borderWidth, height: 1),
+          const Divider(
+            color: AppColors.border,
+            thickness: AppDimens.borderWidth,
+            height: 1,
+          ),
           Padding(
             padding: const EdgeInsets.all(AppDimens.spaceLg),
             child: child,
@@ -1110,26 +1207,6 @@ class _ProfileTextField extends StatelessWidget {
   }
 }
 
-class _EndpointTag extends StatelessWidget {
-  const _EndpointTag(this.text);
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: const TextStyle(
-        fontSize: 11,
-        fontWeight: FontWeight.w800,
-        color: AppColors.muted,
-        fontFamily: 'monospace',
-        letterSpacing: 0.3,
-      ),
-    );
-  }
-}
-
 class _Avatar extends StatelessWidget {
   final String name;
   final String photoUrl;
@@ -1148,7 +1225,11 @@ class _Avatar extends StatelessWidget {
 
     final fallback = Text(
       initials.isEmpty ? 'U' : initials,
-      style: TextStyle(fontSize: size * 0.32, fontWeight: FontWeight.w900, color: AppColors.text),
+      style: TextStyle(
+        fontSize: size * 0.32,
+        fontWeight: FontWeight.w900,
+        color: AppColors.text,
+      ),
     );
 
     return Container(
@@ -1158,7 +1239,10 @@ class _Avatar extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: AppColors.accentYellow,
-        border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
         borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
         boxShadow: AppShadows.badge,
       ),
@@ -1237,7 +1321,10 @@ class _VisibilityOption extends StatelessWidget {
             padding: const EdgeInsets.symmetric(vertical: AppDimens.spaceMd),
             decoration: BoxDecoration(
               color: active ? AppColors.accentYellow : AppColors.bg,
-              border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+              border: Border.all(
+                color: AppColors.border,
+                width: AppDimens.borderWidth,
+              ),
               borderRadius: BorderRadius.circular(AppDimens.radius),
               boxShadow: active ? AppShadows.badge : null,
             ),
@@ -1268,7 +1355,11 @@ class _SummaryRow extends StatelessWidget {
   final IconData icon;
   final String label;
   final String value;
-  const _SummaryRow({required this.icon, required this.label, required this.value});
+  const _SummaryRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1281,7 +1372,10 @@ class _SummaryRow extends StatelessWidget {
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: AppColors.bg,
-            border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+            border: Border.all(
+              color: AppColors.border,
+              width: AppDimens.borderWidth,
+            ),
             borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
           ),
           child: Icon(icon, size: 16, color: AppColors.text),
@@ -1303,7 +1397,11 @@ class _SummaryRow extends StatelessWidget {
               const SizedBox(height: 2),
               Text(
                 value,
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.text),
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.text,
+                ),
               ),
             ],
           ),

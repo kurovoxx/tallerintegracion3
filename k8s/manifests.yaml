@@ -131,6 +131,9 @@ spec:
         - name: front
           image: ghcr.io/kurovoxx/tallerintegracion3-front:latest
           ports: [{containerPort: 80}]
+          env:
+            # FQDN para el resolver de nginx (no usa los search de resolv.conf).
+            - {name: UPSTREAM_SUFFIX, value: ".student-brojas.svc.cluster.local"}
           resources:
             requests: {cpu: 25m, memory: 64Mi}
             limits: {cpu: 100m, memory: 128Mi}

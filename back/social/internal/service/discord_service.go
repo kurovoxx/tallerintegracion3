@@ -12,9 +12,10 @@ import (
 )
 
 var (
-	ErrInvalidWebhookURL = errors.New("invalid webhook_url: must be a https://discord.com/api/webhooks/... URL")
-	ErrServerNameEmpty   = errors.New("server_name cannot be empty")
-	ErrInviteURLEmpty    = errors.New("invite_url cannot be empty")
+	ErrInvalidWebhookURL   = errors.New("invalid webhook_url: must be a https://discord.com/api/webhooks/... URL")
+	ErrServerNameEmpty     = errors.New("server_name cannot be empty")
+	ErrInviteURLEmpty      = errors.New("invite_url cannot be empty")
+	ErrDiscordNotConfigured = errors.New("discord not configured for this group")
 )
 
 // Hosts válidos de webhooks de Discord (prod + clientes de prueba).
@@ -35,6 +36,7 @@ type DiscordRepo interface {
 	GetGroupByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialGroup, error)
 	GetMemberRole(ctx context.Context, groupID, userID pgtype.UUID) (string, error)
 	UpsertConfig(ctx context.Context, arg sqlc.UpsertDiscordConfigParams) (sqlc.SocialDiscordIntegration, error)
+	GetConfigByGroup(ctx context.Context, groupID pgtype.UUID) (sqlc.SocialDiscordIntegration, error)
 }
 
 func NewDiscordService(repo DiscordRepo) *DiscordService {
@@ -145,4 +147,37 @@ func (s *DiscordService) PutConfig(ctx context.Context, groupID, userID, serverN
 		InviteUrl:  textOrNull(invite),
 		WebhookUrl: webhook,
 	})
+}
+
+// GetConfig devuelve la integración de Discord del grupo para cualquier
+// miembro (lectura). 404 discord_not_configured si nunca se configuró.
+func (s *DiscordService) GetConfig(ctx context.Context, groupID, userID string) (sqlc.SocialDiscordIntegration, error) {
+	gid, err := parseGroupUUID(groupID)
+	if err != nil {
+		return sqlc.SocialDiscordIntegration{}, err
+	}
+	uid, err := parseMeetingUserUUID(userID)
+	if err != nil {
+		return sqlc.SocialDiscordIntegration{}, err
+	}
+	if _, err := s.repo.GetGroupByID(ctx, gid); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return sqlc.SocialDiscordIntegration{}, ErrGroupNotFound
+		}
+		return sqlc.SocialDiscordIntegration{}, err
+	}
+	if _, err := s.repo.GetMemberRole(ctx, gid, uid); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return sqlc.SocialDiscordIntegration{}, ErrForbidden
+		}
+		return sqlc.SocialDiscordIntegration{}, err
+	}
+	cfg, err := s.repo.GetConfigByGroup(ctx, gid)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return sqlc.SocialDiscordIntegration{}, ErrDiscordNotConfigured
+		}
+		return sqlc.SocialDiscordIntegration{}, err
+	}
+	return cfg, nil
 }

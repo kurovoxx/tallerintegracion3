@@ -44,6 +44,7 @@ func newServiceError(code string) *ServiceError {
 // memoria) aplican las reglas de autorización de cada operación y devuelven
 // errores con los textos de storeErrors.
 type GroupStore interface {
+	LeaveGroup(ctx context.Context, groupID, userID string) (model.SuccessionResult, error)
 	CreateWithOwner(ctx context.Context, name string, description *string, ownerUserID string) (*model.Group, error)
 	GetByID(ctx context.Context, id string) (*model.Group, error)
 	ListMyGroups(ctx context.Context, userID string) ([]*model.MyGroup, error)
@@ -104,6 +105,9 @@ type GroupService struct {
 	groups       GroupStore
 	notifier     GroupCreatedNotifier
 	notesBaseURL string
+	// users es opcional: directorio Identity para enriquecer miembros.
+	// Nil = respuesta sin nombres (comportamiento anterior).
+	users UserDirectory
 }
 
 func NewGroupService(groups GroupStore, notifier GroupCreatedNotifier) *GroupService {
@@ -120,6 +124,11 @@ func NewGroupService(groups GroupStore, notifier GroupCreatedNotifier) *GroupSer
 // SetNotesBaseURL cambia la URL base del servicio Notes (usado por tests).
 func (s *GroupService) SetNotesBaseURL(url string) {
 	s.notesBaseURL = strings.TrimRight(url, "/")
+}
+
+// SetUserDirectory inyecta el directorio Identity (usado por tests y main).
+func (s *GroupService) SetUserDirectory(d UserDirectory) {
+	s.users = d
 }
 
 func validateName(name string) error {
@@ -303,6 +312,53 @@ func (s *GroupService) ListMembers(ctx context.Context, groupID string, userID s
 	return members, nil
 }
 
+// ListMembersEnriched igual que ListMembers pero con display_name/email
+// resueltos vía Identity cuando el directorio está configurado.
+// Best-effort: si el directorio falla, devuelve miembros sin nombres
+// (campos omitidos por omitempty, backward-compatible).
+func (s *GroupService) ListMembersEnriched(ctx context.Context, groupID string, userID string) ([]model.MemberView, error) {
+	members, err := s.ListMembers(ctx, groupID, userID)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]model.MemberView, 0, len(members))
+	if len(members) == 0 {
+		return views, nil
+	}
+	var names map[string]UserPublic
+	if s.users != nil {
+		ids := make([]string, 0, len(members))
+		for _, m := range members {
+			if m != nil {
+				ids = append(ids, m.UserID)
+			}
+		}
+		if got, derr := s.users.LookupUsers(ctx, ids); derr == nil {
+			names = got
+		}
+	}
+	for _, m := range members {
+		if m == nil {
+			continue
+		}
+		v := model.MemberView{
+			ID:       m.ID,
+			GroupID:  m.GroupID,
+			UserID:   m.UserID,
+			Role:     m.Role,
+			JoinedAt: m.JoinedAt,
+		}
+		if p, ok := names[m.UserID]; ok {
+			v.DisplayName = p.DisplayName
+			if strings.TrimSpace(p.Email) != "" {
+				v.Email = &p.Email
+			}
+		}
+		views = append(views, v)
+	}
+	return views, nil
+}
+
 // checkAdminAction valida los ids comunes a las acciones administrativas sobre
 // un miembro (expulsar, banear, cambiar rol, transferir).
 func checkAdminAction(groupID, adminID, targetUserID string) error {
@@ -348,9 +404,7 @@ func (s *GroupService) TransferAdmin(ctx context.Context, groupID, currentAdminI
 	return mapStoreErr(s.groups.TransferAdmin(ctx, groupID, currentAdminID, newAdminID))
 }
 
-// LeaveGroup permite abandonar el grupo, validando orfandad y limpiando apuntes compartidos.
-// Un admin único no puede irse si quedan otros miembros (debe transferir antes);
-// si es el último miembro, el grupo se elimina.
+// LeaveGroup realiza la salida y sucesión atómicas antes del cleanup best-effort.
 func (s *GroupService) LeaveGroup(ctx context.Context, groupID string, userID string, cleanupSharedNotes bool, token string) error {
 	if userID == "" {
 		return ErrUnauthorized
@@ -358,40 +412,13 @@ func (s *GroupService) LeaveGroup(ctx context.Context, groupID string, userID st
 	if !utils.ValidateUUID(groupID) {
 		return ErrNotFound
 	}
-	role, err := s.groups.GetMemberRole(ctx, groupID, userID)
-	if err != nil {
+	if _, err := s.groups.LeaveGroup(ctx, groupID, userID); err != nil {
 		return mapStoreErr(err)
 	}
-
-	lastMember := false
-	if role == model.RoleAdmin {
-		// ponytail: conteo y borrado no son atómicos; dos admins saliendo a la vez
-		// podrían dejar el grupo sin admin. Mover a una transacción con FOR UPDATE
-		// (como HandleAccountDeletion) si se vuelve un caso real.
-		admins, err := s.groups.CountAdmins(ctx, groupID)
-		if err != nil {
-			return err
-		}
-		if admins <= 1 {
-			members, err := s.groups.ListMembers(ctx, groupID)
-			if err != nil {
-				return mapStoreErr(err)
-			}
-			if len(members) > 1 {
-				return ErrCannotLeaveOnlyAdmin
-			}
-			lastMember = true
-		}
-	}
-
 	if cleanupSharedNotes {
 		go s.unshareNotes(userID, groupID, token)
 	}
-
-	if lastMember {
-		return mapStoreErr(s.groups.DeleteGroup(ctx, groupID))
-	}
-	return mapStoreErr(s.groups.RemoveMember(ctx, groupID, userID))
+	return nil
 }
 
 // unshareNotes pide a Notes retirar los apuntes que el usuario compartió en el

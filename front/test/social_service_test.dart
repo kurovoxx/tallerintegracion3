@@ -3,11 +3,16 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taller_integracion_front/core/models/social_models.dart';
 import 'package:taller_integracion_front/core/services/session_manager.dart';
 import 'package:taller_integracion_front/core/services/social_service.dart';
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
   test('getOverview parsea contrato real GET /me/overview', () async {
     SessionManager.saveSession('jwt-test', {'id': 'u'});
     addTearDown(SessionManager.clear);
@@ -66,8 +71,11 @@ void main() {
         expect(body['scheduled_at'], contains('T'));
         expect(body.containsKey('members'), isFalse);
         checked = true;
-        return http.Response(jsonEncode({'meeting_id': 'm1'}), 201,
-            headers: {'content-type': 'application/json'});
+        return http.Response(
+          jsonEncode({'meeting_id': 'm1'}),
+          201,
+          headers: {'content-type': 'application/json'},
+        );
       }),
     );
     addTearDown(service.dispose);

@@ -24,6 +24,19 @@ type GroupMembership struct {
 	JoinedAt time.Time `json:"joined_at"`
 }
 
+// MemberView enriquece GroupMembership con datos públicos de Identity.
+// DisplayName/Email se omiten cuando no se pudieron resolver
+// (backward-compatible con clientes que solo esperan IDs+rol).
+type MemberView struct {
+	ID          string    `json:"id"`
+	GroupID     string    `json:"group_id"`
+	UserID      string    `json:"user_id"`
+	Role        string    `json:"role"`
+	JoinedAt    time.Time `json:"joined_at"`
+	DisplayName *string   `json:"display_name,omitempty"`
+	Email       *string   `json:"email,omitempty"`
+}
+
 type MyGroup struct {
 	GroupID string `json:"group_id"`
 	Name    string `json:"name"`
