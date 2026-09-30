@@ -17,6 +17,59 @@ class AuthService {
   static String get baseUrl => authApiBaseUrl;
   static const String loginPath = '/auth/login';
   static const String registerPath = '/auth/register';
+  static const String refreshPath = '/auth/refresh';
+  static const String logoutPath = '/auth/logout';
+
+  /// POST /auth/refresh {refresh_token} -> 200 {access_token, refresh_token?, expires_in?}.
+  /// El backend rota el refresh: si devuelve uno nuevo debe guardarse.
+  /// Nunca lanza: toda falla se reporta como RefreshResult.failure.
+  Future<RefreshResult> refresh(String refreshToken) async {
+    try {
+      final response = await _client
+          .post(
+            Uri.parse('$baseUrl$refreshPath'),
+            headers: const {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: jsonEncode({'refresh_token': refreshToken}),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (response.body.isEmpty) {
+        return RefreshResult.failure('Sesión inválida.');
+      }
+      final body = jsonDecode(response.body);
+      if (response.statusCode == 200 && body is Map<String, dynamic>) {
+        final access = body['access_token'] as String?;
+        if (access != null && access.isNotEmpty) {
+          return RefreshResult.success(
+            accessToken: access,
+            refreshToken: body['refresh_token'] as String?,
+          );
+        }
+      }
+      return RefreshResult.failure('Sesión inválida.');
+    } catch (_) {
+      return RefreshResult.failure('Sesión inválida.');
+    }
+  }
+
+  /// POST /auth/logout {refresh_token} — best-effort, nunca lanza.
+  Future<void> logout(String? refreshToken) async {
+    if (refreshToken == null || refreshToken.isEmpty) return;
+    try {
+      await _client
+          .post(
+            Uri.parse('$baseUrl$logoutPath'),
+            headers: const {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: jsonEncode({'refresh_token': refreshToken}),
+          )
+          .timeout(const Duration(seconds: 10));
+    } catch (_) {}
+  }
 
   Future<LoginResult> login({
     required String email,
@@ -52,7 +105,9 @@ class AuthService {
         return LoginResult.success(responseBody);
       }
 
-      return LoginResult.failure(_extractErrorMessage(responseBody, response.statusCode));
+      return LoginResult.failure(
+        _extractErrorMessage(responseBody, response.statusCode),
+      );
     } on FormatException {
       return LoginResult.failure('La API respondió con un JSON inválido.');
     } on Exception {
@@ -83,14 +138,19 @@ class AuthService {
       'password': password,
       'role': role,
       'display_name': displayName.trim(),
-      if (institution != null && institution.trim().isNotEmpty) 'institution': institution.trim(),
-      if (photoUrl != null && photoUrl.trim().isNotEmpty) 'photo_url': photoUrl.trim(),
+      if (institution != null && institution.trim().isNotEmpty)
+        'institution': institution.trim(),
+      if (photoUrl != null && photoUrl.trim().isNotEmpty)
+        'photo_url': photoUrl.trim(),
       if (phone != null && phone.trim().isNotEmpty) 'phone': phone.trim(),
-      if (description != null && description.trim().isNotEmpty) 'description': description.trim(),
+      if (description != null && description.trim().isNotEmpty)
+        'description': description.trim(),
       if (visibility != null) 'visibility': visibility,
     };
 
-    debugPrint('Payload register: email=${email.trim()}, display_name=${displayName.trim()}, role=$role');
+    debugPrint(
+      'Payload register: email=${email.trim()}, display_name=${displayName.trim()}, role=$role',
+    );
 
     try {
       final response = await _client
@@ -115,7 +175,9 @@ class AuthService {
         return RegisterResult.success(responseBody);
       }
 
-      return RegisterResult.failure(_extractErrorMessage(responseBody, response.statusCode));
+      return RegisterResult.failure(
+        _extractErrorMessage(responseBody, response.statusCode),
+      );
     } on FormatException {
       return RegisterResult.failure('La API respondió con un JSON inválido.');
     } on Exception {
@@ -175,11 +237,7 @@ class AuthService {
 
 /// Resultado login
 class LoginResult {
-  const LoginResult._({
-    required this.success,
-    this.data,
-    this.message,
-  });
+  const LoginResult._({required this.success, this.data, this.message});
 
   final bool success;
   final Map<String, dynamic>? data;
@@ -194,13 +252,37 @@ class LoginResult {
   }
 }
 
+/// Resultado refresh
+class RefreshResult {
+  const RefreshResult._({
+    required this.success,
+    this.accessToken,
+    this.refreshToken,
+  });
+
+  final bool success;
+  final String? accessToken;
+  final String? refreshToken;
+
+  factory RefreshResult.success({
+    required String accessToken,
+    String? refreshToken,
+  }) {
+    return RefreshResult._(
+      success: true,
+      accessToken: accessToken,
+      refreshToken: refreshToken,
+    );
+  }
+
+  factory RefreshResult.failure(String message) {
+    return RefreshResult._(success: false);
+  }
+}
+
 /// Resultado registro
 class RegisterResult {
-  const RegisterResult._({
-    required this.success,
-    this.data,
-    this.message,
-  });
+  const RegisterResult._({required this.success, this.data, this.message});
 
   final bool success;
   final Map<String, dynamic>? data;

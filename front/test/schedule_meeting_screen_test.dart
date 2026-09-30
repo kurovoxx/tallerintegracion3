@@ -12,7 +12,7 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('renderiza el formulario neobrutalista en desktop', (
+  testWidgets('renderiza el formulario en desktop sin campos fantasma', (
     tester,
   ) async {
     await pumpMeeting(tester, const Size(1280, 900));
@@ -20,12 +20,14 @@ void main() {
     expect(find.text('TÍTULO DE LA REUNIÓN'), findsOneWidget);
     expect(find.text('FECHA'), findsOneWidget);
     expect(find.text('HORA'), findsOneWidget);
-    expect(find.text('MIEMBROS INVITADOS (LOCAL)'), findsOneWidget);
-    expect(find.text('AGENDAR REUNIÓN'), findsOneWidget);
+    expect(find.text('AGENDAR REUNIÓN'), findsWidgets);
     expect(find.textContaining('AGENDAR'), findsWidgets);
-    expect(find.text('SOFÍA'), findsOneWidget);
-    // Sin vinculación simulada: el backend sincroniza en background.
-    expect(find.textContaining('Sin vinculación simulada'), findsOneWidget);
+    // Sin mocks ni campos que el backend ignora.
+    expect(find.textContaining('MIEMBROS INVITADOS'), findsNothing);
+    expect(find.textContaining('ENLACE / SALA'), findsNothing);
+    expect(find.textContaining('Sofía'), findsNothing);
+    expect(find.textContaining('POST real'), findsNothing);
+    expect(find.textContaining('LOCAL, NO SE ENV'), findsNothing);
     expect(find.text('Vincular con Google Calendar'), findsNothing);
     expect(tester.takeException(), isNull);
   });
@@ -36,21 +38,10 @@ void main() {
     await pumpMeeting(tester, const Size(320, 800));
 
     expect(find.text('AGENDAR REUNIÓN'), findsWidgets);
-    expect(find.textContaining('ENLACE / SALA'), findsOneWidget);
-    expect(find.text('MIEMBROS INVITADOS (LOCAL)'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('alterna la seleccion de integrantes con chips sticker', (
-    tester,
-  ) async {
-    await pumpMeeting(tester, const Size(1280, 900));
-
-    final matias = find.text('MATÍAS');
-    await tester.ensureVisible(matias);
-    await tester.pumpAndSettle();
-    await tester.tap(matias);
-    await tester.pumpAndSettle();
+    expect(
+      find.text('Selecciona un grupo para agendar una reunión.'),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 }

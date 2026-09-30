@@ -15,7 +15,7 @@ import '../../core/widgets/neobrutalism.dart';
 
 class ScheduleMeetingScreen extends StatefulWidget {
   const ScheduleMeetingScreen({super.key, this.groupId, SocialService? service})
-      : _serviceOverride = service;
+    : _serviceOverride = service;
 
   final String? groupId;
   final SocialService? _serviceOverride;
@@ -27,28 +27,27 @@ class ScheduleMeetingScreen extends StatefulWidget {
 class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
   final _formKey = GlobalKey<FormState>();
   final _titleCtrl = TextEditingController();
-  final _linkCtrl = TextEditingController(text: 'https://meet.google.com/');
   final _descCtrl = TextEditingController();
   DateTime _selectedDate = DateTime.now().add(const Duration(days: 1));
   TimeOfDay _selectedTime = const TimeOfDay(hour: 10, minute: 0);
-  final List<String> _members = ['Sofía', 'Matías', 'Ana', 'Tú'];
-  final Set<String> _selectedMembers = {'Sofía', 'Tú'};
 
   late final SocialService _social;
   bool _isSubmitting = false;
   String? _createdMeetingId;
   String? _submitError;
+  List<MeetingItem> _upcoming = const [];
+  bool _loadingUpcoming = false;
 
   @override
   void initState() {
     super.initState();
     _social = widget._serviceOverride ?? SocialService();
+    if (_isRealGroup) _loadUpcoming();
   }
 
   @override
   void dispose() {
     _titleCtrl.dispose();
-    _linkCtrl.dispose();
     _descCtrl.dispose();
     if (widget._serviceOverride == null) _social.dispose();
     super.dispose();
@@ -57,8 +56,34 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
   bool get _isRealGroup {
     final id = widget.groupId?.trim() ?? '';
     final uuid = RegExp(
-        r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$');
+      r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+    );
     return id.isNotEmpty && uuid.hasMatch(id);
+  }
+
+  /// Próximas reuniones desde GET /groups/:id/workspace.meetings.upcoming.
+  /// Best-effort: si falla, el formulario sigue funcionando.
+  Future<void> _loadUpcoming() async {
+    if (!_isRealGroup || !mounted) return;
+    setState(() => _loadingUpcoming = true);
+    try {
+      final ws = await _social.getWorkspace(widget.groupId!.trim());
+      if (!mounted) return;
+      setState(() => _upcoming = ws.upcomingMeetings);
+    } catch (_) {
+      // Silencioso: la creación no depende del listado.
+    } finally {
+      if (mounted) setState(() => _loadingUpcoming = false);
+    }
+  }
+
+  static String _formatWhen(DateTime when) {
+    final local = when.toLocal();
+    final date =
+        '${local.day.toString().padLeft(2, '0')}/${local.month.toString().padLeft(2, '0')}/${local.year}';
+    final time =
+        '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+    return '$date · $time';
   }
 
   Future<void> _pickDate() async {
@@ -91,25 +116,14 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
     if (t != null) setState(() => _selectedTime = t);
   }
 
-  // POST real: POST /groups/:id/meetings
-  // {title, description?, scheduled_at RFC3339} -> 201 {meeting_id}.
-  // Ver back/social/cmd/server/main.go:198 y meeting_handler.go:32.
-  // No existe GET /groups/:id/meetings: no se inventa listado.
-  // No se envían reuniones de prueba sin autorización: solo envía al pulsar.
+  // POST /groups/:id/meetings {title, description?, scheduled_at}.
+  // Solo esos campos tienen efecto en el backend.
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
-    if (_selectedMembers.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Selecciona al menos un miembro (local)'),
-          backgroundColor: AppColors.error,
-        ),
-      );
-      return;
-    }
     if (!_isRealGroup) {
-      setState(() => _submitError =
-          'Sin grupo real (UUID): selecciona un grupo para POST /groups/:id/meetings. No se envió nada.');
+      setState(
+        () => _submitError = 'Selecciona un grupo para agendar una reunión.',
+      );
       return;
     }
     setState(() {
@@ -134,18 +148,21 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
       );
       if (!mounted) return;
       setState(() => _createdMeetingId = id);
+      // Refresca el listado para que la reunión quede visible de inmediato.
+      await _loadUpcoming();
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Reunión creada (real): $id'),
+        const SnackBar(
+          content: Text('Reunión agendada.'),
           backgroundColor: AppColors.border,
         ),
       );
-    } on SocialApiException catch (e) {
+    } on SocialApiException catch (_) {
       if (!mounted) return;
-      setState(() => _submitError = 'No se pudo crear: $e');
-    } catch (e) {
+      setState(() => _submitError = 'No se pudo agendar la reunión.');
+    } catch (_) {
       if (!mounted) return;
-      setState(() => _submitError = 'No se pudo crear: $e');
+      setState(() => _submitError = 'No se pudo agendar la reunión.');
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
@@ -196,8 +213,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                               decoration: appInputDecoration(
                                 'Ej. Repaso Cálculo II',
                               ),
-                              validator: (v) =>
-                                  (v == null || v.trim().isEmpty)
+                              validator: (v) => (v == null || v.trim().isEmpty)
                                   ? 'Requerido'
                                   : null,
                               style: const TextStyle(
@@ -249,55 +265,6 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                             ],
                           ),
                           const SizedBox(height: AppDimens.spaceMd),
-                          const AppFieldLabel('ENLACE / SALA (LOCAL, NO SE ENVÍA)'),
-                          const SizedBox(height: AppDimens.spaceSm),
-                          _FieldShell(
-                            child: TextFormField(
-                              controller: _linkCtrl,
-                              decoration: appInputDecoration(
-                                'https://meet.google.com/... (solo nota local)',
-                              ),
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                                fontSize: 13,
-                                color: AppColors.text,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          const Text(
-                            'El contrato POST /groups/:id/meetings solo acepta title, description y scheduled_at. El enlace no se envía.',
-                            style: TextStyle(
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.muted,
-                            ),
-                          ),
-                          const SizedBox(height: AppDimens.spaceMd),
-                          const AppFieldLabel('GOOGLE CALENDAR (BACKEND)'),
-                          const SizedBox(height: AppDimens.spaceSm),
-                          Container(
-                            padding: const EdgeInsets.all(AppDimens.spaceMd),
-                            decoration: BoxDecoration(
-                              color: AppColors.bg,
-                              border: Border.all(
-                                color: AppColors.border,
-                                width: AppDimens.borderWidth,
-                              ),
-                              borderRadius: BorderRadius.circular(
-                                AppDimens.radius,
-                              ),
-                            ),
-                            child: const Text(
-                              'Sin vinculación simulada aquí. Tras el POST real, el backend sincroniza con Calendar/Discord/Stream en background (best-effort).',
-                              style: TextStyle(
-                                fontSize: 11.5,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.mutedStrong,
-                                height: 1.35,
-                              ),
-                            ),
-                          ),
                           if (_createdMeetingId != null) ...[
                             const SizedBox(height: AppDimens.spaceSm),
                             Container(
@@ -312,9 +279,9 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                                   AppDimens.radius,
                                 ),
                               ),
-                              child: Text(
-                                'Reunión creada (real): $_createdMeetingId',
-                                style: const TextStyle(
+                              child: const Text(
+                                'Reunión agendada.',
+                                style: TextStyle(
                                   fontSize: 12,
                                   fontWeight: FontWeight.w800,
                                   color: AppColors.text,
@@ -347,37 +314,6 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                             ),
                           ],
                           const SizedBox(height: AppDimens.spaceMd),
-                          const AppFieldLabel('MIEMBROS INVITADOS (LOCAL)'),
-                          const SizedBox(height: 4),
-                          const Text(
-                            'Selección local: el contrato no recibe miembros.',
-                            style: TextStyle(
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.muted,
-                            ),
-                          ),
-                          const SizedBox(height: AppDimens.spaceSm),
-                          Wrap(
-                            spacing: AppDimens.spaceSm,
-                            runSpacing: AppDimens.spaceSm,
-                            children: [
-                              for (final member in _members)
-                                _MemberStickerChip(
-                                  label: member,
-                                  selected: _selectedMembers.contains(member),
-                                  onTap: () {
-                                    setState(() {
-                                      if (_selectedMembers.contains(member)) {
-                                        _selectedMembers.remove(member);
-                                      } else {
-                                        _selectedMembers.add(member);
-                                      }
-                                    });
-                                  },
-                                ),
-                            ],
-                          ),
                           if (!_isRealGroup) ...[
                             const SizedBox(height: AppDimens.spaceSm),
                             Container(
@@ -393,7 +329,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                                 ),
                               ),
                               child: const Text(
-                                'Sin grupo real: el botón no envía nada. Abre esta vista desde un grupo real para POST /groups/:id/meetings.',
+                                'Selecciona un grupo para agendar una reunión.',
                                 style: TextStyle(
                                   fontSize: 11.5,
                                   fontWeight: FontWeight.w700,
@@ -405,13 +341,91 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                           const SizedBox(height: AppDimens.spaceXl),
                           NeobrutalistButton(
                             label: _isSubmitting
-                                ? 'Enviando POST real...'
-                                : 'Agendar reunión (POST real)',
+                                ? 'Agendando...'
+                                : 'Agendar reunión',
                             icon: Icons.calendar_month_rounded,
                             variant: NeobrutalistButtonVariant.accent,
                             expand: true,
                             onPressed: _isSubmitting ? null : _submit,
                           ),
+                          if (_isRealGroup) ...[
+                            const SizedBox(height: AppDimens.spaceXl),
+                            const AppFieldLabel('PRÓXIMAS REUNIONES'),
+                            const SizedBox(height: AppDimens.spaceSm),
+                            if (_loadingUpcoming)
+                              const Center(
+                                child: SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                ),
+                              )
+                            else if (_upcoming.isEmpty)
+                              const Text(
+                                'Aún no hay reuniones agendadas.',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.mutedStrong,
+                                ),
+                              )
+                            else
+                              for (final m in _upcoming)
+                                Container(
+                                  margin: const EdgeInsets.only(bottom: 8),
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.bg,
+                                    border: Border.all(
+                                      color: AppColors.border,
+                                      width: AppDimens.borderWidth,
+                                    ),
+                                    borderRadius: BorderRadius.circular(
+                                      AppDimens.radius,
+                                    ),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        m.title,
+                                        style: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w800,
+                                          color: AppColors.text,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        _formatWhen(m.scheduledAt),
+                                        style: const TextStyle(
+                                          fontSize: 11.5,
+                                          fontWeight: FontWeight.w700,
+                                          color: AppColors.mutedStrong,
+                                        ),
+                                      ),
+                                      if (m.description != null &&
+                                          m.description!.trim().isNotEmpty) ...[
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          m.description!.trim(),
+                                          maxLines: 3,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                            color: AppColors.text,
+                                            height: 1.35,
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                          ],
                         ],
                       ),
                     ),
@@ -440,7 +454,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
         ),
         const SizedBox(height: AppDimens.spaceXs),
         const Text(
-          'POST real /groups/:id/meetings. No hay GET de reuniones: no se lista aquí.',
+          'Elige fecha y hora para reunir al grupo.',
           style: TextStyle(
             fontSize: 12.5,
             fontWeight: FontWeight.w700,
@@ -522,93 +536,6 @@ class _FieldShell extends StatelessWidget {
     return Container(
       decoration: const BoxDecoration(boxShadow: AppShadows.badge),
       child: child,
-    );
-  }
-}
-
-/// Chip sticker de integrante: borde de 2 px, sombra dura cuando está libre y
-/// fondo resaltador (invertido) al seleccionarse.
-class _MemberStickerChip extends StatefulWidget {
-  const _MemberStickerChip({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  State<_MemberStickerChip> createState() => _MemberStickerChipState();
-}
-
-class _MemberStickerChipState extends State<_MemberStickerChip> {
-  bool _pressed = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final pressed = _pressed;
-    final selected = widget.selected;
-    return Semantics(
-      button: true,
-      selected: selected,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTapDown: (_) => setState(() => _pressed = true),
-          onTapUp: (_) => setState(() => _pressed = false),
-          onTapCancel: () => setState(() => _pressed = false),
-          onTap: widget.onTap,
-          child: AnimatedContainer(
-            duration: AppMotion.press,
-            curve: AppMotion.standard,
-            transform: Matrix4.translationValues(
-              pressed ? AppShadows.offsetBadge.dx : 0,
-              pressed ? AppShadows.offsetBadge.dy : 0,
-              0,
-            ),
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppDimens.spaceMd,
-              vertical: 7,
-            ),
-            decoration: BoxDecoration(
-              color: selected ? AppColors.accentYellow : AppColors.surface,
-              border: Border.all(
-                color: AppColors.border,
-                width: AppDimens.borderWidth,
-              ),
-              borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-              boxShadow: selected || pressed
-                  ? const <BoxShadow>[]
-                  : AppShadows.badge,
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  selected
-                      ? Icons.check_box_rounded
-                      : Icons.check_box_outline_blank_rounded,
-                  size: 13,
-                  color: AppColors.text,
-                ),
-                const SizedBox(width: AppDimens.spaceXs),
-                Text(
-                  widget.label.toUpperCase(),
-                  style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0.6,
-                    color: AppColors.text,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
     );
   }
 }

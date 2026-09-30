@@ -104,6 +104,9 @@ type GroupService struct {
 	groups       GroupStore
 	notifier     GroupCreatedNotifier
 	notesBaseURL string
+	// users es opcional: directorio Identity para enriquecer miembros.
+	// Nil = respuesta sin nombres (comportamiento anterior).
+	users UserDirectory
 }
 
 func NewGroupService(groups GroupStore, notifier GroupCreatedNotifier) *GroupService {
@@ -120,6 +123,11 @@ func NewGroupService(groups GroupStore, notifier GroupCreatedNotifier) *GroupSer
 // SetNotesBaseURL cambia la URL base del servicio Notes (usado por tests).
 func (s *GroupService) SetNotesBaseURL(url string) {
 	s.notesBaseURL = strings.TrimRight(url, "/")
+}
+
+// SetUserDirectory inyecta el directorio Identity (usado por tests y main).
+func (s *GroupService) SetUserDirectory(d UserDirectory) {
+	s.users = d
 }
 
 func validateName(name string) error {
@@ -301,6 +309,53 @@ func (s *GroupService) ListMembers(ctx context.Context, groupID string, userID s
 		return nil, mapStoreErr(err)
 	}
 	return members, nil
+}
+
+// ListMembersEnriched igual que ListMembers pero con display_name/email
+// resueltos vía Identity cuando el directorio está configurado.
+// Best-effort: si el directorio falla, devuelve miembros sin nombres
+// (campos omitidos por omitempty, backward-compatible).
+func (s *GroupService) ListMembersEnriched(ctx context.Context, groupID string, userID string) ([]model.MemberView, error) {
+	members, err := s.ListMembers(ctx, groupID, userID)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]model.MemberView, 0, len(members))
+	if len(members) == 0 {
+		return views, nil
+	}
+	var names map[string]UserPublic
+	if s.users != nil {
+		ids := make([]string, 0, len(members))
+		for _, m := range members {
+			if m != nil {
+				ids = append(ids, m.UserID)
+			}
+		}
+		if got, derr := s.users.LookupUsers(ctx, ids); derr == nil {
+			names = got
+		}
+	}
+	for _, m := range members {
+		if m == nil {
+			continue
+		}
+		v := model.MemberView{
+			ID:       m.ID,
+			GroupID:  m.GroupID,
+			UserID:   m.UserID,
+			Role:     m.Role,
+			JoinedAt: m.JoinedAt,
+		}
+		if p, ok := names[m.UserID]; ok {
+			v.DisplayName = p.DisplayName
+			if strings.TrimSpace(p.Email) != "" {
+				v.Email = &p.Email
+			}
+		}
+		views = append(views, v)
+	}
+	return views, nil
 }
 
 // checkAdminAction valida los ids comunes a las acciones administrativas sobre

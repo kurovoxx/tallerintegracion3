@@ -27,6 +27,9 @@ type profileResponse struct {
 	Institution *string `json:"institution"`
 	Description *string `json:"description"`
 	Visibility  string  `json:"visibility"`
+	// Email (identity.users) agregado de forma backward-compatible:
+	// clientes viejos lo ignoran; se omite si no se pudo resolver.
+	Email *string `json:"email,omitempty"`
 }
 
 // patchProfileRequest acepta actualización parcial.
@@ -74,6 +77,7 @@ func (h *ProfileHandler) GetProfile(c *gin.Context) {
 		Institution: profile.Institution,
 		Description: profile.Description,
 		Visibility:  profile.Visibility,
+		Email:       profile.Email,
 	})
 }
 
@@ -144,5 +148,6 @@ func (h *ProfileHandler) PatchProfile(c *gin.Context) {
 		Institution: updated.Institution,
 		Description: updated.Description,
 		Visibility:  updated.Visibility,
+		Email:       updated.Email,
 	})
 }

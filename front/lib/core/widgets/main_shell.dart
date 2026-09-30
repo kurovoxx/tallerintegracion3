@@ -9,6 +9,7 @@ import '../../features/academic/schedule_screen.dart';
 import '../../features/groups/groups_screen.dart';
 import '../../features/notes/all_notes_screen.dart';
 import '../models/social_models.dart';
+import '../services/profile_service.dart';
 import '../services/social_service.dart';
 import '../theme/app_theme.dart';
 import 'neobrutalism.dart';
@@ -23,13 +24,19 @@ import 'neobrutalism.dart';
 /// FAB, visible solo cuando la pestaña activa es Notas. El shell no intercepta
 /// atajos de teclado: Ctrl+N (Cmd+N) lo gestiona AllNotesScreen localmente.
 class MainShell extends StatefulWidget {
-  const MainShell(
-      {super.key, this.initialIndex = 5, this.userData, SocialService? service})
-      : _serviceOverride = service;
+  const MainShell({
+    super.key,
+    this.initialIndex = 5,
+    this.userData,
+    SocialService? service,
+    ProfileService? profileService,
+  }) : _serviceOverride = service,
+       _profileOverride = profileService;
 
   final int initialIndex;
   final Map<String, dynamic>? userData;
   final SocialService? _serviceOverride;
+  final ProfileService? _profileOverride;
 
   @override
   State<MainShell> createState() => _MainShellState();
@@ -46,6 +53,7 @@ class _MainShellState extends State<MainShell> {
       GlobalKey<AllNotesScreenState>();
 
   late final SocialService _social;
+  late final ProfileService _profiles;
   Overview? _overview;
   String? _sidebarError;
   bool _loadingSidebar = false;
@@ -55,13 +63,42 @@ class _MainShellState extends State<MainShell> {
     super.initState();
     _selectedIndex = widget.initialIndex;
     _social = widget._serviceOverride ?? SocialService();
+    _profiles = widget._profileOverride ?? ProfileService();
+    // Fuente única reactiva: cualquier GET/PATCH exitoso actualiza el pie
+    // sin logout/login.
+    ProfileService.current.addListener(_onProfileChanged);
+    // Sidebar reactivo: create/join/leave invalidan overview automáticamente.
+    SocialService.groupsChanged.addListener(_onGroupsChanged);
+    _loadSidebar();
+    _loadProfile();
+  }
+
+  void _onProfileChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _onGroupsChanged() {
     _loadSidebar();
   }
 
   @override
   void dispose() {
+    ProfileService.current.removeListener(_onProfileChanged);
+    SocialService.groupsChanged.removeListener(_onGroupsChanged);
     if (widget._serviceOverride == null) _social.dispose();
+    if (widget._profileOverride == null) _profiles.dispose();
     super.dispose();
+  }
+
+  /// Perfil para el pie del sidebar (nombre + institución/correo reales).
+  /// Best-effort: si falla, el pie muestra solo el avatar.
+  Future<void> _loadProfile() async {
+    try {
+      await _profiles.getProfile();
+      // El servicio publica en ProfileService.current; el listener repinta.
+    } catch (_) {
+      // Silencioso: el perfil tiene su propia pantalla con reintento.
+    }
   }
 
   Future<void> _loadSidebar() async {
@@ -77,16 +114,16 @@ class _MainShellState extends State<MainShell> {
         _overview = ov;
         _loadingSidebar = false;
       });
-    } on SocialApiException catch (e) {
+    } on SocialApiException catch (_) {
       if (!mounted) return;
       setState(() {
-        _sidebarError = e.toString();
+        _sidebarError = 'No se pudieron cargar tus grupos.';
         _loadingSidebar = false;
       });
-    } catch (e) {
+    } catch (_) {
       if (!mounted) return;
       setState(() {
-        _sidebarError = 'Sin conexión: $e';
+        _sidebarError = 'No se pudieron cargar tus grupos.';
         _loadingSidebar = false;
       });
     }
@@ -94,62 +131,62 @@ class _MainShellState extends State<MainShell> {
 
   // Pantallas del shell global: 5 académicas + 3 de espacio general.
   List<Widget> get _pages => <Widget>[
-        const CurriculumScreen(),
-        const CoursesScreen(),
-        const ScheduleScreen(),
-        const AttendanceScreen(),
-        const GradeCalculatorScreen(),
-        AllNotesScreen(key: _notesKey),
-        const GroupsScreen(),
-        ProfileScreen(userData: widget.userData),
-      ];
+    const CurriculumScreen(),
+    const CoursesScreen(),
+    const ScheduleScreen(),
+    const AttendanceScreen(),
+    const GradeCalculatorScreen(),
+    AllNotesScreen(key: _notesKey),
+    const GroupsScreen(),
+    ProfileScreen(userData: widget.userData),
+  ];
 
   List<_NavItem> get _navItems => const <_NavItem>[
-        _NavItem(
-          icon: Icons.account_tree_rounded,
-          label: 'Malla Curricular',
-          short: 'Malla',
-          section: 'MÓDULO ACADÉMICO',
-        ),
-        _NavItem(
-          icon: Icons.menu_book_rounded,
-          label: 'Cursos',
-          short: 'Cursos',
-          section: 'MÓDULO ACADÉMICO',
-        ),
-        _NavItem(
-          icon: Icons.calendar_month_rounded,
-          label: 'Horarios',
-          short: 'Horarios',
-          section: 'MÓDULO ACADÉMICO',
-        ),
-        _NavItem(
-          icon: Icons.fact_check_rounded,
-          label: 'Asistencia',
-          section: 'MÓDULO ACADÉMICO',
-        ),
-        _NavItem(
-          icon: Icons.calculate_rounded,
-          label: 'Calculadora de Notas',
-          section: 'MÓDULO ACADÉMICO',
-        ),
-        _NavItem(
-          icon: Icons.description_rounded,
-          label: 'Todas las Notas',
-          short: 'Notas',
-          section: 'ESPACIO DE TRABAJO GENERAL',
-        ),
-        _NavItem(
-          icon: Icons.groups_rounded,
-          label: 'Grupos Académicos',
-          section: 'ESPACIO DE TRABAJO GENERAL',
-        ),
-        _NavItem(
-          icon: Icons.person_rounded,
-          label: 'Perfil de Usuario',
-          section: 'ESPACIO DE TRABAJO GENERAL',
-        ),
-      ];
+    _NavItem(
+      icon: Icons.account_tree_rounded,
+      label: 'Malla Curricular',
+      short: 'Malla',
+      section: 'MÓDULO ACADÉMICO',
+    ),
+    _NavItem(
+      icon: Icons.menu_book_rounded,
+      label: 'Cursos',
+      short: 'Cursos',
+      section: 'MÓDULO ACADÉMICO',
+    ),
+    _NavItem(
+      icon: Icons.calendar_month_rounded,
+      label: 'Horarios',
+      short: 'Horarios',
+      section: 'MÓDULO ACADÉMICO',
+    ),
+    _NavItem(
+      icon: Icons.fact_check_rounded,
+      label: 'Asistencia',
+      section: 'MÓDULO ACADÉMICO',
+    ),
+    _NavItem(
+      icon: Icons.calculate_rounded,
+      label: 'Calculadora de Notas',
+      section: 'MÓDULO ACADÉMICO',
+    ),
+    _NavItem(
+      icon: Icons.description_rounded,
+      label: 'Todas las Notas',
+      short: 'Notas',
+      section: 'ESPACIO DE TRABAJO GENERAL',
+    ),
+    _NavItem(
+      icon: Icons.groups_rounded,
+      label: 'Grupos Académicos',
+      section: 'ESPACIO DE TRABAJO GENERAL',
+    ),
+    _NavItem(
+      icon: Icons.person_rounded,
+      label: 'Perfil de Usuario',
+      section: 'ESPACIO DE TRABAJO GENERAL',
+    ),
+  ];
 
   /// Selecciona una sección y cierra el drawer si está abierto.
   void _onSelectPage(int index) {
@@ -179,10 +216,7 @@ class _MainShellState extends State<MainShell> {
       drawer: isDesktop ? null : _buildDrawer(),
       // El FAB de creación es contextual: solo en la pestaña de Notas.
       floatingActionButton: isCompact && _selectedIndex == _notesIndex
-          ? NeobrutalistFab(
-              tooltip: 'Nueva Nota',
-              onPressed: _openNoteDialog,
-            )
+          ? NeobrutalistFab(tooltip: 'Nueva Nota', onPressed: _openNoteDialog)
           : null,
       body: _buildBody(
         isDesktop: isDesktop,
@@ -310,14 +344,9 @@ class _MainShellState extends State<MainShell> {
       elevation: 0,
       backgroundColor: AppColors.surface,
       shape: const RoundedRectangleBorder(
-        side: BorderSide(
-          color: AppColors.border,
-          width: AppDimens.borderWidth,
-        ),
+        side: BorderSide(color: AppColors.border, width: AppDimens.borderWidth),
       ),
-      child: SafeArea(
-        child: _buildSidebarContent(isCollapsed: false),
-      ),
+      child: SafeArea(child: _buildSidebarContent(isCollapsed: false)),
     );
   }
 
@@ -379,7 +408,7 @@ class _MainShellState extends State<MainShell> {
     );
   }
 
-  // Barra lateral global real: GET /me/overview.sidebar.groups.
+  // Barra lateral global: grupos del overview.
   // Ver back/social/internal/handler/http/view_handler.go:29 y model/views.go.
   Widget _buildGroupsFooter({required bool isCollapsed}) {
     if (isCollapsed) {
@@ -391,23 +420,30 @@ class _MainShellState extends State<MainShell> {
               ? const SizedBox(
                   width: 18,
                   height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2))
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
               : InkWell(
                   onTap: () => _onSelectPage(_groupsIndex),
                   child: Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 4),
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: AppColors.accentYellow,
                       border: Border.all(
-                          color: AppColors.border,
-                          width: AppDimens.borderWidth),
-                      borderRadius:
-                          BorderRadius.circular(AppDimens.radiusChip),
+                        color: AppColors.border,
+                        width: AppDimens.borderWidth,
+                      ),
+                      borderRadius: BorderRadius.circular(AppDimens.radiusChip),
                     ),
-                    child: Text('${count ?? '·'}',
-                        style: const TextStyle(
-                            fontWeight: FontWeight.w900, fontSize: 11)),
+                    child: Text(
+                      '${count ?? '·'}',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 11,
+                      ),
+                    ),
                   ),
                 ),
         ),
@@ -418,8 +454,10 @@ class _MainShellState extends State<MainShell> {
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: AppColors.bg,
-        border:
-            Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
       ),
       child: Column(
@@ -429,48 +467,70 @@ class _MainShellState extends State<MainShell> {
           Row(
             children: [
               const Expanded(
-                child: Text('MIS GRUPOS (REAL)',
-                    style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 0.6,
-                        color: AppColors.muted)),
+                child: Text(
+                  'MIS GRUPOS',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.6,
+                    color: AppColors.muted,
+                  ),
+                ),
               ),
               InkWell(
                 onTap: _loadingSidebar ? null : _loadSidebar,
-                child: const Icon(Icons.refresh_rounded,
-                    size: 14, color: AppColors.text),
+                child: const Icon(
+                  Icons.refresh_rounded,
+                  size: 14,
+                  color: AppColors.text,
+                ),
               ),
             ],
           ),
           const SizedBox(height: 6),
           if (_loadingSidebar)
             const Center(
-                child: SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2)))
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
           else if (_sidebarError != null)
-            Text(_sidebarError!,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.mutedStrong))
-          else if (_overview == null || _overview!.sidebarGroups.isEmpty)
-            const Text('Sin grupos. Crea uno en Grupos.',
-                style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.mutedStrong))
-          else ...[
             Text(
-                '${_overview!.groupsCount} grupos · ${_overview!.adminGroupsCount} admin (real)',
-                style: const TextStyle(
+              _sidebarError!,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: AppColors.mutedStrong,
+              ),
+            )
+          else if (_overview == null || _overview!.sidebarGroups.isEmpty)
+            const Text(
+              'Sin grupos. Crea uno en Grupos.',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: AppColors.mutedStrong,
+              ),
+            )
+          else ...[
+            Builder(
+              builder: (context) {
+                final o = _overview!;
+                return Text(
+                  '${o.groupsCount} ${o.groupsCount == 1 ? 'grupo' : 'grupos'} · '
+                  '${o.adminGroupsCount} como admin',
+                  style: const TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w800,
-                    color: AppColors.text)),
+                    color: AppColors.text,
+                  ),
+                );
+              },
+            ),
             const SizedBox(height: 6),
             for (final g in _overview!.sidebarGroups.take(5))
               InkWell(
@@ -479,23 +539,32 @@ class _MainShellState extends State<MainShell> {
                   padding: const EdgeInsets.symmetric(vertical: 2),
                   child: Row(
                     children: [
-                      const Icon(Icons.groups_rounded,
-                          size: 13, color: AppColors.text),
+                      const Icon(
+                        Icons.groups_rounded,
+                        size: 13,
+                        color: AppColors.text,
+                      ),
                       const SizedBox(width: 6),
                       Expanded(
-                        child: Text(g.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.text)),
-                      ),
-                      Text(g.role,
+                        child: Text(
+                          g.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w800,
-                              color: AppColors.mutedStrong)),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.text,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        g.role,
+                        style: const TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.mutedStrong,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -507,6 +576,16 @@ class _MainShellState extends State<MainShell> {
   }
 
   Widget _buildProfileFooter({required bool isCollapsed}) {
+    // Lee la fuente reactiva única (se actualiza con cada PATCH exitoso).
+    final profile = ProfileService.current.value;
+    final name = (profile?.displayName.trim().isNotEmpty ?? false)
+        ? profile!.displayName.trim()
+        : null;
+    final second = (profile?.institution?.trim().isNotEmpty ?? false)
+        ? profile!.institution!.trim()
+        : (profile?.email?.trim().isNotEmpty ?? false)
+        ? profile!.email!.trim()
+        : null;
     return Padding(
       padding: EdgeInsets.all(
         isCollapsed ? AppDimens.spaceSm : AppDimens.spaceMd,
@@ -535,26 +614,31 @@ class _MainShellState extends State<MainShell> {
               ),
               if (!isCollapsed) ...<Widget>[
                 const SizedBox(width: AppDimens.spaceSm),
-                const Expanded(
+                Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
                       Text(
-                        'Estudiante',
-                        style: TextStyle(
+                        name ?? 'Mi cuenta',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
                           fontWeight: FontWeight.w900,
                           fontSize: 12,
                           color: AppColors.text,
                         ),
                       ),
-                      Text(
-                        'Sigma',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 11,
-                          color: AppColors.muted,
+                      if (second != null)
+                        Text(
+                          second,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 11,
+                            color: AppColors.muted,
+                          ),
                         ),
-                      ),
                     ],
                   ),
                 ),
@@ -565,7 +649,6 @@ class _MainShellState extends State<MainShell> {
       ),
     );
   }
-
 }
 
 class _NavItem {
@@ -634,8 +717,9 @@ class _SidebarTile extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontSize: 12.5,
-                      fontWeight:
-                          isSelected ? FontWeight.w900 : FontWeight.w700,
+                      fontWeight: isSelected
+                          ? FontWeight.w900
+                          : FontWeight.w700,
                       color: AppColors.text,
                     ),
                   ),

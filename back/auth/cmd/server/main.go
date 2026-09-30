@@ -53,8 +53,9 @@ func main() {
 	authMw := middleware.NewAuthMiddleware(jwtSvc)
 
 	// Profile: Handler → Service → Repository (Sprint 1)
+	// Con email de identity.users (fuente de verdad, best-effort).
 	profileRepo := repository.NewProfileRepository(pool)
-	profileSvc := service.NewProfileService(profileRepo)
+	profileSvc := service.NewProfileServiceWithUsers(profileRepo, userRepo)
 	profileH := httpHandler.NewProfileHandler(profileSvc)
 
 	// Drive OAuth: Handler → Service → Repository (google-drive/connect)
@@ -76,6 +77,7 @@ func main() {
 	calendarSvc := service.NewCalendarOAuthService(oauthRepo, calendarProvider)
 	calendarH := httpHandler.NewCalendarHandler(calendarSvc)
 	internalOAuthH := httpHandler.NewInternalOAuthHandler(calendarSvc)
+	internalUsersH := httpHandler.NewInternalUsersHandler(service.NewUsersService(userRepo))
 
 	r := gin.Default()
 
@@ -93,6 +95,7 @@ func main() {
 	{
 		internal.GET("/oauth/calendar-token", internalOAuthH.GetCalendarToken)
 		internal.POST("/oauth/calendar-revoked", internalOAuthH.ReportCalendarRevoked)
+		internal.GET("/users/lookup", internalUsersH.Lookup)
 	}
 
 	// Protegido: middleware valida firma+expiración, inyecta solo user_id (sin role global)

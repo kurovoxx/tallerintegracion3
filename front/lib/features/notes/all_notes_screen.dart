@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show File, Platform, Process;
 
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
@@ -13,6 +14,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/database/app_database.dart';
 import '../../core/database/local_notes_repository.dart';
 import '../../core/services/api_config.dart';
+import '../../core/services/authed_client.dart';
 import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
@@ -33,7 +35,9 @@ http.Client? notesHttpClientOverride;
 
 /// Ejecuta [run] con el cliente inyectado o con uno nuevo que se cierra al
 /// terminar, para no filtrar conexiones en la subida de adjuntos.
-Future<T> _withNotesClient<T>(Future<T> Function(http.Client client) run) async {
+Future<T> _withNotesClient<T>(
+  Future<T> Function(http.Client client) run,
+) async {
   final client = notesHttpClientOverride ?? http.Client();
   try {
     return await run(client);
@@ -85,6 +89,13 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   };
 
   bool _isKnownDemo(LocalNote n) => _kDemoTitles[n.id] == n.title;
+  // Dueño para aislamiento por cuenta: user_id del JWT activo (solo scoping
+  // local; el backend sigue siendo la autoridad). Null sin sesión.
+  String? _ownerId() => SessionManager.currentUserId;
+  // Sellado de dueño en notas que pertenecen a la cuenta activa.
+  LocalNote _stampOwner(LocalNote n) => n.ownerUserId == _ownerId()
+      ? n
+      : n.copyWith(ownerUserId: Value(_ownerId()));
   // Ids de notas del backend que pertenecen al usuario (GET /notes/me + POST 201).
   // El modelo local no guarda autor: un id con formato UUID no listado aquí se
   // trata como ajeno (solo lectura); los ids locales (dígitos) son del dispositivo.
@@ -193,7 +204,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       try {
         _db = AppDatabase();
         _repo = LocalNotesRepository(_db!);
-        await _repo!.getAllNotes();
+        await _repo!.getAllNotes(ownerId: _ownerId());
       } catch (e) {
         debugPrint('Drift init falló, fallback a memoria: $e');
         final token = SessionManager.token;
@@ -230,7 +241,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         return _filtered;
       }
 
-      final existing = await _repo!.getAllNotes();
+      final existing = await _repo!.getAllNotes(ownerId: _ownerId());
       if (existing.isEmpty) {
         final token = SessionManager.token;
         final hasSession = token != null && token.isNotEmpty;
@@ -307,15 +318,15 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         if (mounted) setState(() => _showingLocalExample = true);
         return;
       }
-      final headers = <String, String>{
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $token',
-      };
-      final res = await _withNotesClient(
-        (client) => client
-            .get(Uri.parse('$notesBaseUrl/notes/me?limit=50'),
-                headers: headers)
-            .timeout(const Duration(seconds: 5)),
+      final res = await AuthedHttp.run(
+        () => _withNotesClient(
+          (client) => client
+              .get(
+                Uri.parse('$notesBaseUrl/notes/me?limit=50'),
+                headers: _authHeaders(),
+              )
+              .timeout(const Duration(seconds: 5)),
+        ),
       );
       if (res.statusCode == 200) {
         if (mounted) {
@@ -333,15 +344,18 @@ class AllNotesScreenState extends State<AllNotesScreen> {
               _ownedNoteIds.add(remoteId);
             }
             await _repo!.upsertNote(
-              LocalNote(
-                id: n['id'] as String,
-                title: n['title'] as String? ?? 'Sin título',
-                content: n['content'] as String? ?? '',
-                visibility: n['visibility'] as String? ?? 'private',
-                updatedAt: n['updated_at'] != null
-                    ? DateTime.tryParse(n['updated_at'].toString()) ??
-                          DateTime.now()
-                    : DateTime.now(),
+              _stampOwner(
+                LocalNote(
+                  id: n['id'] as String,
+                  title: n['title'] as String? ?? 'Sin título',
+                  content: n['content'] as String? ?? '',
+                  visibility: n['visibility'] as String? ?? 'private',
+                  updatedAt: n['updated_at'] != null
+                      ? DateTime.tryParse(n['updated_at'].toString()) ??
+                            DateTime.now()
+                      : DateTime.now(),
+                  ownerUserId: _ownerId(),
+                ),
               ),
             );
           } catch (_) {}
@@ -356,18 +370,22 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           }
         } catch (_) {}
         if (mounted) {
-          setState(() => _backendError =
-              'No se pudo cargar tus notas (GET /notes/me): $detail');
+          setState(
+            () => _backendError =
+                'No pudimos sincronizar tus notas. Puedes seguir usando las notas guardadas en este equipo.',
+          );
         }
         debugPrint('Backend sync error real: $detail');
       }
-    } catch (e) {
-      debugPrint('Backend sync falló (offline): $e');
+    } catch (_) {
+      debugPrint('Backend sync falló (offline)');
       if (mounted) {
         final token = SessionManager.token;
         if (token != null && token.isNotEmpty) {
-          setState(() => _backendError =
-              'No se pudo cargar tus notas (GET /notes/me): $e');
+          setState(
+            () => _backendError =
+                'No pudimos sincronizar tus notas. Puedes seguir usando las notas guardadas en este equipo.',
+          );
         } else {
           setState(() => _showingLocalExample = true);
         }
@@ -392,14 +410,15 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     };
     debugPrint('[FRONT DEBUG] Enviando POST /notes a $url con body: $body');
     try {
-      final token = SessionManager.token;
-      final headers = <String, String>{'Content-Type': 'application/json'};
-      if (token != null && token.isNotEmpty) {
-        headers['Authorization'] = 'Bearer $token';
-      }
-      final res = await http
-          .post(Uri.parse(url), headers: headers, body: jsonEncode(body))
-          .timeout(const Duration(seconds: 8));
+      final res = await AuthedHttp.run(
+        () => http
+            .post(
+              Uri.parse(url),
+              headers: _authHeaders(),
+              body: jsonEncode(body),
+            )
+            .timeout(const Duration(seconds: 8)),
+      );
       debugPrint(
         '[FRONT DEBUG] Respuesta POST /notes: status=${res.statusCode} body=${utf8.decode(res.bodyBytes)}',
       );
@@ -433,7 +452,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       current = _memoryFallback[i];
     } else {
       try {
-        final all = await _repo!.getAllNotes();
+        final all = await _repo!.getAllNotes(ownerId: _ownerId());
         for (final n in all) {
           if (n.id == tempId) {
             current = n;
@@ -449,6 +468,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       content: current.content,
       visibility: current.visibility,
       updatedAt: current.updatedAt,
+      ownerUserId: current.ownerUserId,
     );
     if (!mounted) return;
     setState(() {
@@ -506,20 +526,22 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       final externalId = att.externalFileId;
       if (externalId == null || externalId.isEmpty) continue;
       try {
-        final res = await _withNotesClient(
-          (client) => client
-              .post(
-                Uri.parse('$notesBaseUrl/notes/$noteId/attachments'),
-                headers: _authHeaders(),
-                body: jsonEncode(<String, dynamic>{
-                  'external_file_id': externalId,
-                  'file_name': att.fileName,
-                  'file_type': att.fileType,
-                  'file_size_bytes': att.fileSizeBytes,
-                  'is_inline': att.isInline,
-                }),
-              )
-              .timeout(const Duration(seconds: 8)),
+        final res = await AuthedHttp.run(
+          () => _withNotesClient(
+            (client) => client
+                .post(
+                  Uri.parse('$notesBaseUrl/notes/$noteId/attachments'),
+                  headers: _authHeaders(),
+                  body: jsonEncode(<String, dynamic>{
+                    'external_file_id': externalId,
+                    'file_name': att.fileName,
+                    'file_type': att.fileType,
+                    'file_size_bytes': att.fileSizeBytes,
+                    'is_inline': att.isInline,
+                  }),
+                )
+                .timeout(const Duration(seconds: 8)),
+          ),
         );
         if (res.statusCode != 201) {
           debugPrint(
@@ -537,9 +559,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   Future<_RemoteResult> _fetchHybridContent(LocalNote note) async {
     final url = '$notesBaseUrl/notes/${note.id}';
     try {
-      final res = await http
-          .get(Uri.parse(url), headers: _authHeaders())
-          .timeout(const Duration(seconds: 8));
+      final res = await AuthedHttp.run(
+        () => http
+            .get(Uri.parse(url), headers: _authHeaders())
+            .timeout(const Duration(seconds: 8)),
+      );
       if (res.statusCode == 200) {
         final data =
             jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
@@ -566,13 +590,15 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     final url = '$notesBaseUrl/notes/${note.id}';
     final body = {'title': title, 'content': content};
     try {
-      final res = await http
-          .patch(
-            Uri.parse(url),
-            headers: _authHeaders(),
-            body: jsonEncode(body),
-          )
-          .timeout(const Duration(seconds: 8));
+      final res = await AuthedHttp.run(
+        () => http
+            .patch(
+              Uri.parse(url),
+              headers: _authHeaders(),
+              body: jsonEncode(body),
+            )
+            .timeout(const Duration(seconds: 8)),
+      );
       if (res.statusCode == 200) {
         return const _RemoteResult(ok: true, status: 200);
       }
@@ -592,9 +618,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   Future<_RemoteResult> _deleteNoteRemote(LocalNote note) async {
     final url = '$notesBaseUrl/notes/${note.id}';
     try {
-      final res = await http
-          .delete(Uri.parse(url), headers: _authHeaders())
-          .timeout(const Duration(seconds: 8));
+      final res = await AuthedHttp.run(
+        () => http
+            .delete(Uri.parse(url), headers: _authHeaders())
+            .timeout(const Duration(seconds: 8)),
+      );
       if (res.statusCode == 200 || res.statusCode == 204) {
         return _RemoteResult(ok: true, status: res.statusCode);
       }
@@ -638,7 +666,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       });
     } else {
       try {
-        await _repo!.upsertNote(note);
+        await _repo!.upsertNote(_stampOwner(note));
       } catch (_) {}
     }
     await _applySearch(_currentQuery);
@@ -693,9 +721,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   Future<_RemoteResult> _cloneFlow(LocalNote note) async {
     final url = '$notesBaseUrl/notes/${note.id}/copy';
     try {
-      final res = await http
-          .post(Uri.parse(url), headers: _authHeaders())
-          .timeout(const Duration(seconds: 8));
+      final res = await AuthedHttp.run(
+        () => http
+            .post(Uri.parse(url), headers: _authHeaders())
+            .timeout(const Duration(seconds: 8)),
+      );
       if (res.statusCode == 201) {
         try {
           final data = jsonDecode(utf8.decode(res.bodyBytes));
@@ -764,10 +794,10 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       if (_useMemoryFallback) {
         base = List.from(_memoryFallback);
       } else {
-        base = await _repo!.searchNotesFts(query);
+        base = await _repo!.searchNotesFts(query, ownerId: _ownerId());
         // Si la búsqueda FTS devuelve vacío con query vacío, usar getAll
         if (query.trim().isEmpty) {
-          base = await _repo!.getAllNotes();
+          base = await _repo!.getAllNotes(ownerId: _ownerId());
         }
       }
       final filtered = _applyFilters(base, query, _selectedFilter);
@@ -1086,13 +1116,15 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                         border: Border.all(color: Colors.black, width: 2),
                       ),
                       child: Text(
-                          _hiddenDemoCount > 0
-                              ? '${_backendError!} Se ocultaron $_hiddenDemoCount ejemplos locales; no se muestran como reales.'
-                              : _backendError!,
-                          style: const TextStyle(
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.black)),
+                        _hiddenDemoCount > 0
+                            ? '${_backendError!} Se ocultaron $_hiddenDemoCount ejemplos locales; no se muestran como reales.'
+                            : _backendError!,
+                        style: const TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.black,
+                        ),
+                      ),
                     ),
                   ],
                   if (_backendError == null &&
@@ -1105,11 +1137,13 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                         border: Border.all(color: Colors.black, width: 2),
                       ),
                       child: const Text(
-                          'Modo local sin sesión: se muestran datos de ejemplo, no son tus notas reales. Inicia sesión para GET /notes/me.',
-                          style: TextStyle(
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.black)),
+                        'Modo local sin sesión: se muestran datos de ejemplo. Inicia sesión para sincronizar tus notas.',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.black,
+                        ),
+                      ),
                     ),
                   ],
                   const SizedBox(height: 12),
@@ -1140,6 +1174,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             content: content,
             visibility: visibility,
             updatedAt: DateTime.now(),
+            ownerUserId: _ownerId(),
           );
           _noteTags[note.id] = visibility == 'public' ? 'General' : 'Privado';
           final tempId = note.id;
@@ -1205,7 +1240,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                 children: <Widget>[
                   const Expanded(
                     child: Text(
-                      'Búsqueda offline instantánea con FTS5',
+                      'Busca y organiza tus apuntes',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -1559,7 +1594,9 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                       label: const Text(
                         'CREAR PRIMERA NOTA',
                         style: TextStyle(
-                            fontWeight: FontWeight.w900, fontSize: 12),
+                          fontWeight: FontWeight.w900,
+                          fontSize: 12,
+                        ),
                       ),
                     ),
                   ],
@@ -2141,6 +2178,25 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     super.dispose();
   }
 
+  /// Aviso humano según el estado REAL:
+  /// - id local (timestamp, sin '-') que nunca se sincronizó → pendiente;
+  /// - id backend (UUID) ilegible → fallo del servidor, sin tecnicismos.
+  String _remoteWarningFor(String noteId, _RemoteResult res) {
+    final neverSynced = !noteId.contains('-');
+    if (res.code == 'note_unavailable' ||
+        (res.message ?? '').contains('no disponible') ||
+        res.status == 404) {
+      if (neverSynced) {
+        return 'Esta nota todavía no se ha sincronizado con Google Drive.';
+      }
+      return 'No pudimos abrir la versión guardada. Inténtalo más tarde.';
+    }
+    if (res.status == 403) {
+      return 'No tienes acceso a esta nota.';
+    }
+    return 'No se pudo cargar la versión del servidor. Se muestra la copia local.';
+  }
+
   Future<void> _loadRemote() async {
     final res = await widget.onFetchRemote();
     if (!mounted) return;
@@ -2154,31 +2210,26 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
         if (rt is String && rt.isNotEmpty) _title = rt;
       } else if (res.status == -1) {
         // Offline: se mantiene el contenido local como fallback.
-      } else if (res.code == 'note_unavailable' ||
-          (res.message ?? '').contains('no disponible') ||
-          res.status == 404) {
-        _driveWarning =
-            '⚠️ Nota no disponible en almacenamiento remoto (Google Drive)';
-      } else if (res.status == 403) {
-        _driveWarning = 'Acceso denegado a esta nota en el servidor.';
       } else {
-        _driveWarning =
-            'No se pudo cargar la versión del servidor (${res.status}). Se muestra la copia local.';
+        _driveWarning = _remoteWarningFor(widget.note.id, res);
       }
     });
   }
 
-  /// Editar solo si la lectura remota no reportó error: con el banner de
-  /// advertencia visible (Drive no disponible) se bloquea con aviso.
+  /// Editar solo si la lectura remota no reportó error: con el aviso
+  /// visible se bloquea mostrando el mismo motivo.
   /// Eliminar permanece habilitado para limpiar la referencia local.
   void _onEditTap() {
     if (_driveWarning != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           backgroundColor: Colors.black,
           content: Text(
-            'No se puede editar: la nota no existe en Google Drive.',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+            _driveWarning!,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+            ),
           ),
         ),
       );
@@ -2249,7 +2300,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
         break;
       case _EditSaveOutcome.unavailable:
         _editError =
-            '⚠️ Nota no disponible en almacenamiento remoto (Google Drive)';
+            'Esta nota todavía no se ha sincronizado con Google Drive.';
         break;
       case _EditSaveOutcome.offline:
         _editError = 'Sin conexión: se mantiene el contenido local.';
@@ -2323,7 +2374,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
           content: Text(
             res.status == -1
                 ? 'Sin conexión: no se pudo eliminar.'
-                : 'No se pudo eliminar (${res.status}).',
+                : 'No se pudo eliminar. Inténtalo más tarde.',
             style: const TextStyle(
               color: Colors.white,
               fontWeight: FontWeight.w800,
@@ -2339,8 +2390,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
 
   String _cloneErrorText(_RemoteResult res) {
     if (res.status == -1) return 'Sin conexión: no se pudo guardar la copia.';
-    if (res.message != null && res.message!.isNotEmpty) return res.message!;
-    return 'No se pudo guardar la copia (${res.status}).';
+    return 'No se pudo guardar la copia. Inténtalo más tarde.';
   }
 
   Future<void> _confirmClone() async {
@@ -2406,7 +2456,8 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
   Future<void> _onAttachmentUploadedInEdit(_DriveUploadResult result) async {
     if (mounted) {
       setState(() {
-        _attachNotice = 'Subido a Google Drive: ${result.fileName ?? 'adjunto'}';
+        _attachNotice =
+            'Subido a Google Drive: ${result.fileName ?? 'adjunto'}';
         _attachNoticeOk = true;
       });
     }
@@ -2416,20 +2467,22 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     // Los ids locales (solo dígitos) aún no existen en el backend.
     if (noteId.isEmpty || int.tryParse(noteId) != null) return;
     try {
-      final res = await _withNotesClient(
-        (client) => client
-            .post(
-              Uri.parse('$notesBaseUrl/notes/$noteId/attachments'),
-              headers: _notesAuthHeaders(),
-              body: jsonEncode(<String, dynamic>{
-                'external_file_id': externalId,
-                'file_name': result.fileName,
-                'file_type': result.fileType,
-                'file_size_bytes': result.fileSizeBytes,
-                'is_inline': result.isInline,
-              }),
-            )
-            .timeout(const Duration(seconds: 8)),
+      final res = await AuthedHttp.run(
+        () => _withNotesClient(
+          (client) => client
+              .post(
+                Uri.parse('$notesBaseUrl/notes/$noteId/attachments'),
+                headers: _notesAuthHeaders(),
+                body: jsonEncode(<String, dynamic>{
+                  'external_file_id': externalId,
+                  'file_name': result.fileName,
+                  'file_type': result.fileType,
+                  'file_size_bytes': result.fileSizeBytes,
+                  'is_inline': result.isInline,
+                }),
+              )
+              .timeout(const Duration(seconds: 8)),
+        ),
       );
       if (res.statusCode != 201) {
         debugPrint(
@@ -2810,7 +2863,11 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                   const SizedBox(height: 14),
                   const Row(
                     children: [
-                      Icon(Icons.folder_open_rounded, size: 16, color: Colors.black),
+                      Icon(
+                        Icons.folder_open_rounded,
+                        size: 16,
+                        color: Colors.black,
+                      ),
                       SizedBox(width: 6),
                       Text(
                         'RECURSOS ADJUNTOS',
@@ -2898,7 +2955,8 @@ class _CreateNoteDialog extends StatefulWidget {
     String content,
     String visibility,
     List<_DriveUploadResult> attachments,
-  ) onCreate;
+  )
+  onCreate;
 
   const _CreateNoteDialog({required this.onCreate});
 
@@ -2957,8 +3015,7 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
     _pendingAttachments.add(result);
     if (!mounted) return;
     setState(() {
-      _attachNotice =
-          'Subido a Google Drive: ${result.fileName ?? 'adjunto'}';
+      _attachNotice = 'Subido a Google Drive: ${result.fileName ?? 'adjunto'}';
       _attachNoticeOk = true;
     });
   }
@@ -3110,10 +3167,7 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
           onPressed: _submitting ? null : () => Navigator.pop(context),
           child: const Text(
             'CANCELAR',
-            style: TextStyle(
-              color: Colors.black,
-              fontWeight: FontWeight.w800,
-            ),
+            style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800),
           ),
         ),
         ElevatedButton(
@@ -3150,7 +3204,8 @@ void _insertSnippetAtCursor(TextEditingController controller, String snippet) {
     final after = text.substring(end);
     final needsLeadingNewline = before.isNotEmpty && !before.endsWith('\n');
     final needsTrailingNewline = after.isNotEmpty && !after.startsWith('\n');
-    final insertion = '${needsLeadingNewline ? '\n' : ''}$snippet${needsTrailingNewline ? '\n' : ''}';
+    final insertion =
+        '${needsLeadingNewline ? '\n' : ''}$snippet${needsTrailingNewline ? '\n' : ''}';
     newText = '$before$insertion$after';
     newOffset = start + insertion.length;
   } else {
@@ -3170,8 +3225,17 @@ void _insertSnippetAtCursor(TextEditingController controller, String snippet) {
 void _removeAttachmentUrl(TextEditingController controller, String url) {
   final text = controller.text;
   final escaped = RegExp.escape(url);
-  final pattern = RegExp(r'(\n?!\[[^\]]*\]\(' + escaped + r'\)\n?|\n?\[[^\]]+\]\(' + escaped + r'\)\n?)');
-  final newText = text.replaceAll(pattern, '\n').replaceAll(RegExp(r'\n{3,}'), '\n\n').trim();
+  final pattern = RegExp(
+    r'(\n?!\[[^\]]*\]\(' +
+        escaped +
+        r'\)\n?|\n?\[[^\]]+\]\(' +
+        escaped +
+        r'\)\n?)',
+  );
+  final newText = text
+      .replaceAll(pattern, '\n')
+      .replaceAll(RegExp(r'\n{3,}'), '\n\n')
+      .trim();
   controller.value = TextEditingValue(
     text: newText,
     selection: TextSelection.collapsed(offset: newText.length),
@@ -3277,8 +3341,8 @@ Future<_DriveUploadResult> _uploadAttachmentToDrive({
   required String fileName,
   required bool isInline,
 }) async {
-  final token = SessionManager.token;
-  if (token == null || token.isEmpty) {
+  final sessionToken = SessionManager.token;
+  if (sessionToken == null || sessionToken.isEmpty) {
     return const _DriveUploadResult(
       ok: false,
       message: 'Sin sesión activa: el adjunto quedó como referencia local.',
@@ -3306,20 +3370,27 @@ Future<_DriveUploadResult> _uploadAttachmentToDrive({
         message: 'El archivo supera el límite de 10 MB.',
       );
     }
-    final request =
-        http.MultipartRequest('POST', Uri.parse('$notesBaseUrl/notes/upload'))
-          ..headers['Authorization'] = 'Bearer $token'
-          ..files.add(
-            http.MultipartFile.fromBytes('file', bytes, filename: fileName),
-          );
-    final res = await _withNotesClient((client) async {
-      final streamed = await client
-          .send(request)
-          .timeout(const Duration(seconds: 30));
-      return http.Response.fromStream(
-        streamed,
-      ).timeout(const Duration(seconds: 30));
-    });
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('$notesBaseUrl/notes/upload'),
+    );
+    final res = await AuthedHttp.run(
+      () => _withNotesClient((client) async {
+        // Se reconstruye por intento: un MultipartRequest finalizado no se
+        // puede reenviar tras un refresh.
+        request.headers['Authorization'] = 'Bearer ${SessionManager.token}';
+        request.files.clear();
+        request.files.add(
+          http.MultipartFile.fromBytes('file', bytes, filename: fileName),
+        );
+        final streamed = await client
+            .send(request)
+            .timeout(const Duration(seconds: 30));
+        return http.Response.fromStream(
+          streamed,
+        ).timeout(const Duration(seconds: 30));
+      }),
+    );
     final rawBody = utf8.decode(res.bodyBytes);
     if (res.statusCode == 201) {
       final data = jsonDecode(rawBody) as Map<String, dynamic>;
@@ -3352,12 +3423,14 @@ Future<_DriveUploadResult> _uploadAttachmentToDrive({
   } on TimeoutException {
     return const _DriveUploadResult(
       ok: false,
-      message: 'Sin conexión con el servidor: el adjunto quedó como referencia local.',
+      message:
+          'Sin conexión con el servidor: el adjunto quedó como referencia local.',
     );
   } catch (_) {
     return const _DriveUploadResult(
       ok: false,
-      message: 'No se pudo subir a Drive: el adjunto quedó como referencia local.',
+      message:
+          'No se pudo subir a Drive: el adjunto quedó como referencia local.',
     );
   }
 }
@@ -3600,7 +3673,9 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final title = widget.isImage ? 'ADJUNTAR IMAGEN' : 'ADJUNTAR DOCUMENTO / PDF';
+    final title = widget.isImage
+        ? 'ADJUNTAR IMAGEN'
+        : 'ADJUNTAR DOCUMENTO / PDF';
     final isImage = widget.isImage;
 
     return AlertDialog(
@@ -3657,7 +3732,9 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
                   child: Container(
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: isImage ? AppColors.subjectMint : AppColors.accentYellow,
+                      color: isImage
+                          ? AppColors.subjectMint
+                          : AppColors.accentYellow,
                       border: Border.all(color: AppColors.border, width: 2),
                       borderRadius: BorderRadius.circular(AppDimens.radius),
                       boxShadow: AppShadows.badge,
@@ -3665,7 +3742,9 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
                     child: Row(
                       children: [
                         Icon(
-                          isImage ? Icons.pets_rounded : Icons.description_rounded,
+                          isImage
+                              ? Icons.pets_rounded
+                              : Icons.description_rounded,
                           size: 20,
                           color: AppColors.text,
                         ),
@@ -3700,10 +3779,15 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
                           ),
                         ),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 3,
+                          ),
                           decoration: BoxDecoration(
                             color: AppColors.border,
-                            borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+                            borderRadius: BorderRadius.circular(
+                              AppDimens.radiusChip,
+                            ),
                           ),
                           child: _uploading
                               ? const SizedBox(
@@ -3731,7 +3815,9 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
               const SizedBox(height: 16),
               const Row(
                 children: [
-                  Expanded(child: Divider(color: AppColors.border, thickness: 1)),
+                  Expanded(
+                    child: Divider(color: AppColors.border, thickness: 1),
+                  ),
                   Padding(
                     padding: EdgeInsets.symmetric(horizontal: 8),
                     child: Text(
@@ -3743,15 +3829,21 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
                       ),
                     ),
                   ),
-                  Expanded(child: Divider(color: AppColors.border, thickness: 1)),
+                  Expanded(
+                    child: Divider(color: AppColors.border, thickness: 1),
+                  ),
                 ],
               ),
               const SizedBox(height: 12),
               TextField(
                 controller: _nameCtrl,
                 decoration: InputDecoration(
-                  labelText: isImage ? 'Texto alternativo / Nombre' : 'Nombre del documento',
-                  hintText: isImage ? 'Ej. Diagrama de arquitectura' : 'Ej. Guía semana 3',
+                  labelText: isImage
+                      ? 'Texto alternativo / Nombre'
+                      : 'Nombre del documento',
+                  hintText: isImage
+                      ? 'Ej. Diagrama de arquitectura'
+                      : 'Ej. Guía semana 3',
                   filled: true,
                   fillColor: AppColors.surfaceLow,
                   border: const OutlineInputBorder(
@@ -3764,8 +3856,12 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
               TextField(
                 controller: _urlCtrl,
                 decoration: InputDecoration(
-                  labelText: isImage ? 'Ruta local o URL web de imagen' : 'Ruta local o URL web del PDF',
-                  hintText: isImage ? 'conejita.jpg o https://...' : 'prueba.pdf o https://...',
+                  labelText: isImage
+                      ? 'Ruta local o URL web de imagen'
+                      : 'Ruta local o URL web del PDF',
+                  hintText: isImage
+                      ? 'conejita.jpg o https://...'
+                      : 'prueba.pdf o https://...',
                   filled: true,
                   fillColor: AppColors.surfaceLow,
                   border: const OutlineInputBorder(
@@ -3783,14 +3879,19 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
           onPressed: _uploading ? null : () => Navigator.of(context).pop(),
           child: const Text(
             'CANCELAR',
-            style: TextStyle(fontWeight: FontWeight.w800, color: AppColors.text),
+            style: TextStyle(
+              fontWeight: FontWeight.w800,
+              color: AppColors.text,
+            ),
           ),
         ),
         ElevatedButton(
           style: ElevatedButton.styleFrom(
             backgroundColor: AppColors.border,
             foregroundColor: AppColors.surface,
-            shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+            shape: const RoundedRectangleBorder(
+              borderRadius: BorderRadius.zero,
+            ),
           ),
           onPressed: _uploading
               ? null
@@ -3850,7 +3951,11 @@ class _DetectedAttachmentsPreview extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(Icons.attach_file_rounded, size: 14, color: AppColors.text),
+              const Icon(
+                Icons.attach_file_rounded,
+                size: 14,
+                color: AppColors.text,
+              ),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
@@ -3928,7 +4033,9 @@ class _DetectedAttachmentChip extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(
-                      isImage ? Icons.image_rounded : Icons.picture_as_pdf_rounded,
+                      isImage
+                          ? Icons.image_rounded
+                          : Icons.picture_as_pdf_rounded,
                       size: 13,
                       color: AppColors.text,
                     ),
@@ -3957,7 +4064,11 @@ class _DetectedAttachmentChip extends StatelessWidget {
               onTap: onRemove,
               child: const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                child: Icon(Icons.close_rounded, size: 13, color: AppColors.text),
+                child: Icon(
+                  Icons.close_rounded,
+                  size: 13,
+                  color: AppColors.text,
+                ),
               ),
             ),
           ),
@@ -4001,12 +4112,7 @@ List<Map<String, dynamic>> _resourcesFromMarkdown(String content) {
     final label = (m.group(1) ?? '').trim();
     var name = label.isEmpty ? url : label;
     if (!name.toLowerCase().endsWith('.pdf')) name = '$name.pdf';
-    result.add({
-      'type': 'pdf',
-      'name': name,
-      'url': url,
-      'size': 'PDF',
-    });
+    result.add({'type': 'pdf', 'name': name, 'url': url, 'size': 'PDF'});
   }
   return result;
 }
@@ -4193,7 +4299,10 @@ class _ResourceImageThumb extends StatelessWidget {
           clipBehavior: Clip.hardEdge,
           decoration: BoxDecoration(
             color: AppColors.surface,
-            border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+            border: Border.all(
+              color: AppColors.border,
+              width: AppDimens.borderWidth,
+            ),
             borderRadius: BorderRadius.circular(AppDimens.radius),
             boxShadow: AppShadows.badge,
           ),
@@ -4209,7 +4318,10 @@ class _ResourceImageThumb extends StatelessWidget {
                 child: const SizedBox(
                   width: 18,
                   height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2.5, color: AppColors.border),
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.5,
+                    color: AppColors.border,
+                  ),
                 ),
               );
             },
@@ -4243,7 +4355,10 @@ class _ResourceDocTile extends StatelessWidget {
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
         boxShadow: AppShadows.badge,
       ),
@@ -4470,7 +4585,10 @@ class _ResourceViewerDialog extends StatelessWidget {
                 clipBehavior: Clip.hardEdge,
                 decoration: BoxDecoration(
                   color: AppColors.surfaceLow,
-                  border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+                  border: Border.all(
+                    color: AppColors.border,
+                    width: AppDimens.borderWidth,
+                  ),
                   borderRadius: BorderRadius.circular(AppDimens.radius),
                   boxShadow: AppShadows.dialog,
                 ),
@@ -4486,7 +4604,11 @@ class _ResourceViewerDialog extends StatelessWidget {
                       child: const Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.broken_image_rounded, size: 40, color: AppColors.muted),
+                          Icon(
+                            Icons.broken_image_rounded,
+                            size: 40,
+                            color: AppColors.muted,
+                          ),
                           SizedBox(height: 8),
                           Text(
                             'IMAGEN NO DISPONIBLE',
@@ -4504,7 +4626,9 @@ class _ResourceViewerDialog extends StatelessWidget {
                       return Container(
                         color: AppColors.bg,
                         alignment: Alignment.center,
-                        child: const CircularProgressIndicator(color: AppColors.border),
+                        child: const CircularProgressIndicator(
+                          color: AppColors.border,
+                        ),
                       );
                     },
                   ),
@@ -4517,7 +4641,10 @@ class _ResourceViewerDialog extends StatelessWidget {
           onPressed: () => Navigator.of(context).pop(),
           child: const Text(
             'CERRAR',
-            style: TextStyle(fontWeight: FontWeight.w800, color: AppColors.text),
+            style: TextStyle(
+              fontWeight: FontWeight.w800,
+              color: AppColors.text,
+            ),
           ),
         ),
         if (!isImage)
@@ -4565,20 +4692,21 @@ class _ResourceViewerDialog extends StatelessWidget {
     final sizeLabel = info.sizeBytes != null
         ? _formatFileSize(info.sizeBytes!)
         : info.isRemote
-            ? 'Remoto'
-            : '${resource['size'] ?? '—'}';
-    final pathLabel = info.absolutePath ??
+        ? 'Remoto'
+        : '${resource['size'] ?? '—'}';
+    final pathLabel =
+        info.absolutePath ??
         (info.isRemote ? _url : 'No se encontró el archivo en disco');
     final badgeLabel = info.exists
         ? 'DOCUMENTO LISTO'
         : info.isRemote
-            ? 'DOCUMENTO REMOTO'
-            : 'ARCHIVO NO ENCONTRADO';
+        ? 'DOCUMENTO REMOTO'
+        : 'ARCHIVO NO ENCONTRADO';
     final badgeColor = info.exists
         ? AppColors.subjectMint
         : info.isRemote
-            ? AppColors.accentYellow
-            : const Color(0xFFFFD6D2);
+        ? AppColors.accentYellow
+        : const Color(0xFFFFD6D2);
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -4633,8 +4761,8 @@ class _ResourceViewerDialog extends StatelessWidget {
             info.exists
                 ? 'Archivo local verificado en disco'
                 : info.isRemote
-                    ? 'URL remota (visor/descarga externa)'
-                    : 'Sin archivo asociado en disco',
+                ? 'URL remota (visor/descarga externa)'
+                : 'Sin archivo asociado en disco',
           ),
           const SizedBox(height: 2),
           Container(
@@ -4739,16 +4867,23 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
       final standaloneImg = RegExp(r'^!\[(.*?)\]\((.*?)\)$').firstMatch(line);
       if (standaloneImg != null) {
         flushParagraph();
-        widgets.add(_blockImage(standaloneImg.group(1) ?? '', standaloneImg.group(2)!));
+        widgets.add(
+          _blockImage(standaloneImg.group(1) ?? '', standaloneImg.group(2)!),
+        );
         i++;
         continue;
       }
 
       // Documento standalone [label](url.pdf).
-      final standaloneDoc = RegExp(r'^\[(.*?)\]\((.*?\.pdf)\)$', caseSensitive: false).firstMatch(line);
+      final standaloneDoc = RegExp(
+        r'^\[(.*?)\]\((.*?\.pdf)\)$',
+        caseSensitive: false,
+      ).firstMatch(line);
       if (standaloneDoc != null) {
         flushParagraph();
-        widgets.add(_blockDoc(standaloneDoc.group(1) ?? '', standaloneDoc.group(2)!));
+        widgets.add(
+          _blockDoc(standaloneDoc.group(1) ?? '', standaloneDoc.group(2)!),
+        );
         i++;
         continue;
       }
@@ -4822,8 +4957,8 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
     final fontSize = level == 1
         ? 20.0
         : level == 2
-            ? 17.0
-            : 15.0;
+        ? 17.0
+        : 15.0;
     final weight = level <= 2 ? FontWeight.w900 : FontWeight.w800;
     return Padding(
       padding: const EdgeInsets.only(top: 6, bottom: 8),
@@ -4832,7 +4967,11 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
         children: [
           Text.rich(
             TextSpan(
-              style: TextStyle(fontSize: fontSize, fontWeight: weight, color: AppColors.text),
+              style: TextStyle(
+                fontSize: fontSize,
+                fontWeight: weight,
+                color: AppColors.text,
+              ),
               children: _parseInlineSpans(text),
             ),
           ),
@@ -4862,7 +5001,10 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
           ),
           Expanded(
             child: Text.rich(
-              TextSpan(style: _paragraphStyle, children: _parseInlineSpans(text)),
+              TextSpan(
+                style: _paragraphStyle,
+                children: _parseInlineSpans(text),
+              ),
             ),
           ),
         ],
@@ -4933,7 +5075,11 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
                         child: const Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.broken_image_rounded, size: 36, color: AppColors.muted),
+                            Icon(
+                              Icons.broken_image_rounded,
+                              size: 36,
+                              color: AppColors.muted,
+                            ),
                             SizedBox(height: 6),
                             Text(
                               'IMAGEN NO DISPONIBLE',
@@ -4968,17 +5114,29 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
                       bottom: 6,
                       right: 6,
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 4,
+                        ),
                         decoration: BoxDecoration(
                           color: AppColors.accentYellow,
-                          border: Border.all(color: AppColors.border, width: 1.5),
-                          borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+                          border: Border.all(
+                            color: AppColors.border,
+                            width: 1.5,
+                          ),
+                          borderRadius: BorderRadius.circular(
+                            AppDimens.radiusChip,
+                          ),
                           boxShadow: AppShadows.badge,
                         ),
                         child: const Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.zoom_in_rounded, size: 13, color: AppColors.text),
+                            Icon(
+                              Icons.zoom_in_rounded,
+                              size: 13,
+                              color: AppColors.text,
+                            ),
                             SizedBox(width: 4),
                             Text(
                               'AMPLIAR',
@@ -4997,11 +5155,19 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
                         top: 6,
                         left: 6,
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 7,
+                            vertical: 3,
+                          ),
                           decoration: BoxDecoration(
                             color: AppColors.surface,
-                            border: Border.all(color: AppColors.border, width: 1.5),
-                            borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+                            border: Border.all(
+                              color: AppColors.border,
+                              width: 1.5,
+                            ),
+                            borderRadius: BorderRadius.circular(
+                              AppDimens.radiusChip,
+                            ),
                           ),
                           child: Text(
                             alt,
@@ -5055,7 +5221,11 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
                     border: Border.all(color: AppColors.border, width: 1.5),
                     borderRadius: BorderRadius.circular(AppDimens.radius),
                   ),
-                  child: const Icon(Icons.picture_as_pdf_rounded, size: 18, color: Colors.white),
+                  child: const Icon(
+                    Icons.picture_as_pdf_rounded,
+                    size: 18,
+                    color: Colors.white,
+                  ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
@@ -5084,7 +5254,10 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
                   ),
                 ),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 5,
+                  ),
                   decoration: BoxDecoration(
                     color: AppColors.accentYellow,
                     border: Border.all(color: AppColors.border, width: 1.5),
@@ -5125,11 +5298,17 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: const BoxDecoration(
               color: AppColors.surfaceLow,
-              border: Border(bottom: BorderSide(color: AppColors.border, width: 1.5)),
+              border: Border(
+                bottom: BorderSide(color: AppColors.border, width: 1.5),
+              ),
             ),
             child: Row(
               children: [
-                const Icon(Icons.terminal_rounded, size: 14, color: AppColors.text),
+                const Icon(
+                  Icons.terminal_rounded,
+                  size: 14,
+                  color: AppColors.text,
+                ),
                 const SizedBox(width: 6),
                 const Text(
                   'CÓDIGO',
@@ -5151,7 +5330,10 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
                           duration: Duration(seconds: 1),
                           content: Text(
                             'Código copiado al portapapeles',
-                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                            ),
                           ),
                         ),
                       );
@@ -5159,7 +5341,11 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
                     child: const Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.copy_rounded, size: 12, color: AppColors.text),
+                        Icon(
+                          Icons.copy_rounded,
+                          size: 12,
+                          color: AppColors.text,
+                        ),
                         SizedBox(width: 4),
                         Text(
                           'COPIAR',
@@ -5211,40 +5397,58 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
       }
       final token = m.group(0)!;
       if (token.startsWith('**')) {
-        spans.add(TextSpan(
-          text: token.substring(2, token.length - 2),
-          style: const TextStyle(fontWeight: FontWeight.w900, color: AppColors.text),
-        ));
-      } else if (token.startsWith('*')) {
-        spans.add(TextSpan(
-          text: token.substring(1, token.length - 1),
-          style: const TextStyle(fontStyle: FontStyle.italic, color: AppColors.text),
-        ));
-      } else if (token.startsWith('`')) {
-        spans.add(TextSpan(
-          text: token.substring(1, token.length - 1),
-          style: const TextStyle(
-            fontFamily: 'monospace',
-            fontSize: 12,
-            backgroundColor: Color(0xFFF4F4F0),
-            color: AppColors.text,
+        spans.add(
+          TextSpan(
+            text: token.substring(2, token.length - 2),
+            style: const TextStyle(
+              fontWeight: FontWeight.w900,
+              color: AppColors.text,
+            ),
           ),
-        ));
+        );
+      } else if (token.startsWith('*')) {
+        spans.add(
+          TextSpan(
+            text: token.substring(1, token.length - 1),
+            style: const TextStyle(
+              fontStyle: FontStyle.italic,
+              color: AppColors.text,
+            ),
+          ),
+        );
+      } else if (token.startsWith('`')) {
+        spans.add(
+          TextSpan(
+            text: token.substring(1, token.length - 1),
+            style: const TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 12,
+              backgroundColor: Color(0xFFF4F4F0),
+              color: AppColors.text,
+            ),
+          ),
+        );
       } else if (token.startsWith('![')) {
         final img = RegExp(r'!\[([^\]]*)\]\(([^)\s]+)\)').firstMatch(token);
         if (img != null) {
-          spans.add(WidgetSpan(
-            alignment: PlaceholderAlignment.middle,
-            child: _inlineImage(img.group(1) ?? '', img.group(2)!),
-          ));
+          spans.add(
+            WidgetSpan(
+              alignment: PlaceholderAlignment.middle,
+              child: _inlineImage(img.group(1) ?? '', img.group(2)!),
+            ),
+          );
         }
       } else if (token.startsWith('[')) {
-        final link = RegExp(r'\[([^\]]+)\]\(([^)\s]+\.pdf)\)').firstMatch(token);
+        final link = RegExp(
+          r'\[([^\]]+)\]\(([^)\s]+\.pdf)\)',
+        ).firstMatch(token);
         if (link != null) {
-          spans.add(WidgetSpan(
-            alignment: PlaceholderAlignment.middle,
-            child: _pdfChip(link.group(1)!, link.group(2)!),
-          ));
+          spans.add(
+            WidgetSpan(
+              alignment: PlaceholderAlignment.middle,
+              child: _pdfChip(link.group(1)!, link.group(2)!),
+            ),
+          );
         }
       }
       last = m.end;
@@ -5272,7 +5476,10 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
           clipBehavior: Clip.hardEdge,
           decoration: BoxDecoration(
             color: AppColors.surfaceLow,
-            border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+            border: Border.all(
+              color: AppColors.border,
+              width: AppDimens.borderWidth,
+            ),
             borderRadius: BorderRadius.circular(AppDimens.radius),
             boxShadow: AppShadows.badge,
           ),
@@ -5280,7 +5487,11 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
             url: url,
             fit: BoxFit.contain,
             fallback: () => const Center(
-              child: Icon(Icons.broken_image_rounded, size: 24, color: AppColors.muted),
+              child: Icon(
+                Icons.broken_image_rounded,
+                size: 24,
+                color: AppColors.muted,
+              ),
             ),
           ),
         ),
@@ -5311,7 +5522,11 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.picture_as_pdf_rounded, size: 14, color: AppColors.text),
+              const Icon(
+                Icons.picture_as_pdf_rounded,
+                size: 14,
+                color: AppColors.text,
+              ),
               const SizedBox(width: 5),
               Flexible(
                 child: Text(
@@ -5325,7 +5540,11 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 4),
-              const Icon(Icons.open_in_new_rounded, size: 12, color: AppColors.text),
+              const Icon(
+                Icons.open_in_new_rounded,
+                size: 12,
+                color: AppColors.text,
+              ),
             ],
           ),
         ),
@@ -5333,4 +5552,3 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
     );
   }
 }
-
