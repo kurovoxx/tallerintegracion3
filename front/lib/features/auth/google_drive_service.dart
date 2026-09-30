@@ -14,7 +14,7 @@ class GoogleDriveService {
   // GET /auth/google-config (o por --dart-define=GOOGLE_CLIENT_ID). Nunca quemado.
   static const _serverClientId = String.fromEnvironment(
     'GOOGLE_CLIENT_ID',
-    defaultValue: '',
+    defaultValue: '920602669668-abfen7v0mh23d2gsebvot0r413j90gnh.apps.googleusercontent.com',
   );
 
   static const _redirectUri = String.fromEnvironment(
