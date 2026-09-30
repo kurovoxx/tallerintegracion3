@@ -581,9 +581,9 @@ void main() {
       );
       expect(find.text('AGENDAR REUNIÓN'), findsWidgets);
       expect(find.text('Reunión Real'), findsOneWidget);
-      // Sin campos fantasma históricos.
-      expect(find.text('Vincular Google Calendar'), findsNothing);
-      expect(find.text('MIEMBROS INVITADOS'), findsNothing);
+      // Secciones completas; Calendar no simula una conexión.
+      expect(find.text('VINCULAR CON GOOGLE CALENDAR'), findsOneWidget);
+      expect(find.text('MIEMBROS INVITADOS'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   });

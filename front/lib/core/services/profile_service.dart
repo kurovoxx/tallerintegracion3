@@ -22,7 +22,35 @@ class ProfileService {
   /// Último perfil conocido en el proceso (única fuente reactiva).
   /// Se actualiza en cada GET/PATCH exitoso; MainShell lo escucha para
   /// refrescar el sidebar sin logout/login.
-  static final ValueNotifier<UserProfile?> current = ValueNotifier(null);
+  static final ValueNotifier<UserProfile?> current = _sessionProfile();
+
+  static ValueNotifier<UserProfile?> _sessionProfile() {
+    final value = ValueNotifier<UserProfile?>(null);
+    SessionManager.revision.addListener(() => value.value = null);
+    return value;
+  }
+
+  void _checkSession(int revision) {
+    if (SessionManager.revision.value != revision) {
+      throw ProfileApiException('La sesión cambió.', code: 'session_changed');
+    }
+  }
+
+  Future<bool> getDriveStatus() async {
+    final revision = SessionManager.revision.value;
+    final res = await AuthedHttp.run(() {
+      _checkSession(revision);
+      return _client
+          .get(
+            Uri.parse('$baseUrl/auth/google-drive/status'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10));
+    });
+    _checkSession(revision);
+    if (res.statusCode != 200) throw _toError(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['connected'] == true;
+  }
 
   Map<String, String> _headers({bool json = false}) {
     final token = SessionManager.token;
@@ -65,11 +93,13 @@ class ProfileService {
 
   // GET /profile/me -> 200 {display_name, photo_url, phone, institution, description, visibility}
   Future<UserProfile> getProfile() async {
+    final revision = SessionManager.revision.value;
     final res = await AuthedHttp.run(
       () => _client
           .get(Uri.parse('$baseUrl/profile/me'), headers: _headers())
           .timeout(const Duration(seconds: 10)),
     );
+    _checkSession(revision);
     if (res.statusCode != 200) throw _toError(res);
     final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
     final profile = UserProfile.fromJson(body);
@@ -80,6 +110,7 @@ class ProfileService {
   // PATCH /profile/me (parcial) -> 200 perfil actualizado.
   // Body vacío -> 400. user_id prohibido -> 400.
   Future<UserProfile> patchProfile(Map<String, dynamic> patch) async {
+    final revision = SessionManager.revision.value;
     final res = await AuthedHttp.run(
       () => _client
           .patch(
@@ -91,6 +122,7 @@ class ProfileService {
     );
     if (res.statusCode != 200) throw _toError(res);
     final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    _checkSession(revision);
     final updated = UserProfile.fromJson(body);
     current.value = updated;
     return updated;

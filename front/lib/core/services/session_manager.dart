@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -14,6 +15,8 @@ class SessionManager {
   static String? _refreshToken;
   static Map<String, dynamic>? _user;
   static bool _rememberMe = false;
+  // Cambia sin esperar almacenamiento. Un refresh no cambia la identidad.
+  static final ValueNotifier<int> revision = ValueNotifier(0);
 
   /// Se invoca cuando la sesión muere definitivamente (refresh inválido).
   /// La app lo asigna al arrancar para navegar a Login (ver main.dart).
@@ -28,9 +31,8 @@ class SessionManager {
     _token = token;
     _user = user;
     _rememberMe = rememberMe;
-    if (refreshToken != null && refreshToken.isNotEmpty) {
-      _refreshToken = refreshToken;
-    }
+    _refreshToken = refreshToken;
+    revision.value++;
 
     final preferences = await SharedPreferences.getInstance();
     await _clearPersistence(preferences);
@@ -73,6 +75,7 @@ class SessionManager {
     _refreshToken = null;
     _user = null;
     _rememberMe = false;
+    revision.value++;
     final preferences = await SharedPreferences.getInstance();
     await _clearPersistence(preferences);
   }
@@ -105,6 +108,7 @@ class SessionManager {
           _refreshToken = preferences.getString(_refreshKey);
           _user = user as Map<String, dynamic>?;
           _rememberMe = true;
+          revision.value++;
           return true;
         }
       }
@@ -117,6 +121,7 @@ class SessionManager {
     _refreshToken = null;
     _user = null;
     _rememberMe = false;
+    revision.value++;
     await _clearPersistence(preferences);
     return false;
   }

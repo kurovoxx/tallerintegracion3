@@ -44,6 +44,7 @@ func newServiceError(code string) *ServiceError {
 // memoria) aplican las reglas de autorización de cada operación y devuelven
 // errores con los textos de storeErrors.
 type GroupStore interface {
+	LeaveGroup(ctx context.Context, groupID, userID string) (model.SuccessionResult, error)
 	CreateWithOwner(ctx context.Context, name string, description *string, ownerUserID string) (*model.Group, error)
 	GetByID(ctx context.Context, id string) (*model.Group, error)
 	ListMyGroups(ctx context.Context, userID string) ([]*model.MyGroup, error)
@@ -403,9 +404,7 @@ func (s *GroupService) TransferAdmin(ctx context.Context, groupID, currentAdminI
 	return mapStoreErr(s.groups.TransferAdmin(ctx, groupID, currentAdminID, newAdminID))
 }
 
-// LeaveGroup permite abandonar el grupo, validando orfandad y limpiando apuntes compartidos.
-// Un admin único no puede irse si quedan otros miembros (debe transferir antes);
-// si es el último miembro, el grupo se elimina.
+// LeaveGroup realiza la salida y sucesión atómicas antes del cleanup best-effort.
 func (s *GroupService) LeaveGroup(ctx context.Context, groupID string, userID string, cleanupSharedNotes bool, token string) error {
 	if userID == "" {
 		return ErrUnauthorized
@@ -413,40 +412,13 @@ func (s *GroupService) LeaveGroup(ctx context.Context, groupID string, userID st
 	if !utils.ValidateUUID(groupID) {
 		return ErrNotFound
 	}
-	role, err := s.groups.GetMemberRole(ctx, groupID, userID)
-	if err != nil {
+	if _, err := s.groups.LeaveGroup(ctx, groupID, userID); err != nil {
 		return mapStoreErr(err)
 	}
-
-	lastMember := false
-	if role == model.RoleAdmin {
-		// ponytail: conteo y borrado no son atómicos; dos admins saliendo a la vez
-		// podrían dejar el grupo sin admin. Mover a una transacción con FOR UPDATE
-		// (como HandleAccountDeletion) si se vuelve un caso real.
-		admins, err := s.groups.CountAdmins(ctx, groupID)
-		if err != nil {
-			return err
-		}
-		if admins <= 1 {
-			members, err := s.groups.ListMembers(ctx, groupID)
-			if err != nil {
-				return mapStoreErr(err)
-			}
-			if len(members) > 1 {
-				return ErrCannotLeaveOnlyAdmin
-			}
-			lastMember = true
-		}
-	}
-
 	if cleanupSharedNotes {
 		go s.unshareNotes(userID, groupID, token)
 	}
-
-	if lastMember {
-		return mapStoreErr(s.groups.DeleteGroup(ctx, groupID))
-	}
-	return mapStoreErr(s.groups.RemoveMember(ctx, groupID, userID))
+	return nil
 }
 
 // unshareNotes pide a Notes retirar los apuntes que el usuario compartió en el

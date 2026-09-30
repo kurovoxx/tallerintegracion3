@@ -28,6 +28,11 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
   final _formKey = GlobalKey<FormState>();
   final _titleCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
+  final _linkCtrl = TextEditingController();
+  List<GroupMember> _members = const [];
+  final Map<String, GroupMember> _selectedMembers = {};
+  bool _loadingMembers = false;
+  String? _membersError;
   DateTime _selectedDate = DateTime.now().add(const Duration(days: 1));
   TimeOfDay _selectedTime = const TimeOfDay(hour: 10, minute: 0);
 
@@ -42,13 +47,17 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
   void initState() {
     super.initState();
     _social = widget._serviceOverride ?? SocialService();
-    if (_isRealGroup) _loadUpcoming();
+    if (_isRealGroup) {
+      _loadUpcoming();
+      _loadMembers();
+    }
   }
 
   @override
   void dispose() {
     _titleCtrl.dispose();
     _descCtrl.dispose();
+    _linkCtrl.dispose();
     if (widget._serviceOverride == null) _social.dispose();
     super.dispose();
   }
@@ -75,6 +84,36 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
     } finally {
       if (mounted) setState(() => _loadingUpcoming = false);
     }
+  }
+
+  Future<void> _loadMembers() async {
+    setState(() => _loadingMembers = true);
+    try {
+      final members = await _social.listMembers(widget.groupId!.trim());
+      if (!mounted) return;
+      setState(() => _members = members);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _membersError = 'No se pudieron cargar los integrantes.');
+    } finally {
+      if (mounted) setState(() => _loadingMembers = false);
+    }
+  }
+
+  String _memberLabel(GroupMember member) {
+    if (member.displayName?.trim().isNotEmpty == true) {
+      return member.displayName!.trim();
+    }
+    if (member.email?.trim().isNotEmpty == true) return member.email!.trim();
+    return 'Integrante';
+  }
+
+  void _linkGoogleCalendar() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Esta función estará disponible próximamente.'),
+      ),
+    );
   }
 
   static String _formatWhen(DateTime when) {
@@ -262,6 +301,65 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                                   onTap: _pickTime,
                                 ),
                               ),
+                            ],
+                          ),
+                          const SizedBox(height: AppDimens.spaceMd),
+                          const AppFieldLabel('ENLACE / SALA'),
+                          const SizedBox(height: AppDimens.spaceSm),
+                          _FieldShell(
+                            child: TextFormField(
+                              controller: _linkCtrl,
+                              decoration: appInputDecoration(
+                                'https://meet.google.com/...',
+                              ),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13,
+                                color: AppColors.text,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: AppDimens.spaceMd),
+                          const AppFieldLabel('GOOGLE CALENDAR'),
+                          const SizedBox(height: AppDimens.spaceSm),
+                          NeobrutalistButton(
+                            label: 'Vincular con Google Calendar',
+                            icon: Icons.calendar_today_rounded,
+                            variant: NeobrutalistButtonVariant.info,
+                            expand: true,
+                            borderWidth: AppDimens.borderWidthAction,
+                            onPressed: _linkGoogleCalendar,
+                          ),
+                          const SizedBox(height: AppDimens.spaceMd),
+                          const AppFieldLabel('MIEMBROS INVITADOS'),
+                          const SizedBox(height: AppDimens.spaceSm),
+                          if (_loadingMembers) const LinearProgressIndicator(),
+                          if (_membersError != null) Text(_membersError!),
+                          if (!_loadingMembers &&
+                              _membersError == null &&
+                              _members.isEmpty)
+                            const Text('No hay integrantes disponibles.'),
+                          Wrap(
+                            spacing: AppDimens.spaceSm,
+                            runSpacing: AppDimens.spaceSm,
+                            children: [
+                              for (final member in _members)
+                                _MemberStickerChip(
+                                  label: _memberLabel(member),
+                                  selected: _selectedMembers.containsKey(
+                                    member.userId,
+                                  ),
+                                  onTap: () => setState(() {
+                                    if (_selectedMembers.containsKey(
+                                      member.userId,
+                                    )) {
+                                      _selectedMembers.remove(member.userId);
+                                    } else {
+                                      // Conserva también el email real para la integración futura.
+                                      _selectedMembers[member.userId] = member;
+                                    }
+                                  }),
+                                ),
                             ],
                           ),
                           const SizedBox(height: AppDimens.spaceXl),
@@ -526,6 +624,93 @@ class _FieldShell extends StatelessWidget {
     return Container(
       decoration: const BoxDecoration(boxShadow: AppShadows.badge),
       child: child,
+    );
+  }
+}
+
+/// Chip sticker de integrante: borde de 2 px, sombra dura cuando está libre y
+/// fondo resaltador (invertido) al seleccionarse.
+class _MemberStickerChip extends StatefulWidget {
+  const _MemberStickerChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  State<_MemberStickerChip> createState() => _MemberStickerChipState();
+}
+
+class _MemberStickerChipState extends State<_MemberStickerChip> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final pressed = _pressed;
+    final selected = widget.selected;
+    return Semantics(
+      button: true,
+      selected: selected,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (_) => setState(() => _pressed = true),
+          onTapUp: (_) => setState(() => _pressed = false),
+          onTapCancel: () => setState(() => _pressed = false),
+          onTap: widget.onTap,
+          child: AnimatedContainer(
+            duration: AppMotion.press,
+            curve: AppMotion.standard,
+            transform: Matrix4.translationValues(
+              pressed ? AppShadows.offsetBadge.dx : 0,
+              pressed ? AppShadows.offsetBadge.dy : 0,
+              0,
+            ),
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppDimens.spaceMd,
+              vertical: 7,
+            ),
+            decoration: BoxDecoration(
+              color: selected ? AppColors.accentYellow : AppColors.surface,
+              border: Border.all(
+                color: AppColors.border,
+                width: AppDimens.borderWidth,
+              ),
+              borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+              boxShadow: selected || pressed
+                  ? const <BoxShadow>[]
+                  : AppShadows.badge,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  selected
+                      ? Icons.check_box_rounded
+                      : Icons.check_box_outline_blank_rounded,
+                  size: 13,
+                  color: AppColors.text,
+                ),
+                const SizedBox(width: AppDimens.spaceXs),
+                Text(
+                  widget.label.toUpperCase(),
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.6,
+                    color: AppColors.text,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

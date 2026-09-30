@@ -54,6 +54,22 @@ type driveConnectResponse struct {
 	Connected bool `json:"connected"`
 }
 
+// Status consulta únicamente la conexión del usuario autenticado; nunca expone tokens.
+func (h *DriveHandler) Status(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok || userID == "" {
+		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		return
+	}
+	status, err := h.svc.GetGoogleDriveConnectionStatus(c.Request.Context(), userID)
+	if err != nil {
+		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "No se pudo consultar Drive")
+		return
+	}
+	c.Header("Cache-Control", "private, no-store")
+	c.JSON(http.StatusOK, gin.H{"connected": status.Connected, "reconnect_required": status.ReconnectRequired})
+}
+
 // Connect maneja POST /auth/google-drive/connect
 // Requiere Authorization: Bearer <access_token> (via middleware)
 // Body {oauth_code}

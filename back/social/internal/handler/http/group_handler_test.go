@@ -302,9 +302,8 @@ func TestLeaveContract(t *testing.T) {
 	path := "/groups/" + gid + "/leave"
 
 	expect(t, e.do(http.MethodPost, path, hStrang, nil), http.StatusForbidden)
-	expect(t, e.do(http.MethodPost, path, hAdmin, nil), http.StatusBadRequest) // único admin con otros miembros
+	expect(t, e.do(http.MethodPost, path, hAdmin, nil), http.StatusNoContent)  // sucesión automática
 	expect(t, e.do(http.MethodPost, path, hMember, nil), http.StatusNoContent) // body vacío permitido
-	expect(t, e.do(http.MethodPost, path, hAdmin, map[string]bool{"cleanup_shared_notes": false}), http.StatusNoContent)
 	if e.store.GroupExists(gid) {
 		t.Fatal("el último miembro al salir elimina el grupo")
 	}

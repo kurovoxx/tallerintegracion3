@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -130,6 +131,33 @@ void main() {
     expect(refreshCalls, 1);
     // El refresh funcionó: la sesión sigue viva con el token nuevo.
     expect(SessionManager.token, 'access-nuevo');
+  });
+
+  test('refresh tardío de A no reemplaza sesión B', () async {
+    await SessionManager.saveSession('A', {
+      'id': 'A',
+    }, refreshToken: 'refresh-A');
+    final pending = Completer<RefreshResult>();
+    final started = Completer<void>();
+    AuthedHttp.refreshOverride = (_) {
+      started.complete();
+      return pending.future;
+    };
+    final request = AuthedHttp.run(
+      () async => _json({'error': 'unauthorized'}, 401),
+    );
+    await started.future;
+    await SessionManager.clear();
+    await SessionManager.saveSession('B', {'id': 'B'});
+    pending.complete(
+      RefreshResult.success(
+        accessToken: 'A-new',
+        refreshToken: 'refresh-A-new',
+      ),
+    );
+    await request;
+    expect(SessionManager.token, 'B');
+    expect(SessionManager.refreshToken, isNull);
   });
 
   test('AuthService.refresh parsea rotación y logout no lanza', () async {
