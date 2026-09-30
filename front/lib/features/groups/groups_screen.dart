@@ -572,7 +572,7 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
         ),
         content: Text(
           '¿Abandonar "${widget.group.name}"? Si eres el único admin con más '
-          'miembros deberás transferir antes.',
+          'miembros, la administración pasará automáticamente al integrante más antiguo.',
         ),
         actions: [
           TextButton(
@@ -599,13 +599,9 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
           backgroundColor: AppColors.border,
         ),
       );
-    } on SocialApiException catch (e) {
+    } on SocialApiException catch (_) {
       if (!mounted) return;
-      final msg =
-          (e.code == 'cannot_leave_only_admin' ||
-              (e.message.contains('único administrador')))
-          ? 'Eres el único admin. Transfiere la administración antes de salir.'
-          : 'No se pudo abandonar el grupo.';
+      const msg = 'No se pudo abandonar el grupo. Inténtalo nuevamente.';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(msg), backgroundColor: AppColors.error),
       );

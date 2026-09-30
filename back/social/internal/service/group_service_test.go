@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -453,6 +454,7 @@ func TestLeave(t *testing.T) {
 	t.Run("admin con co-admin sale", func(t *testing.T) {
 		svc, store := newTestSvc()
 		g := newGroup(t, svc, uAdmin)
+		store.AddMember(g.ID, uMember, model.RoleMember)
 		joinAs(t, svc, store, g.ID, uAdmin2)
 		_ = svc.ChangeRole(ctx, g.ID, uAdmin, uAdmin2, model.RoleAdmin)
 		if err := svc.LeaveGroup(ctx, g.ID, uAdmin, false, ""); err != nil {
@@ -461,14 +463,23 @@ func TestLeave(t *testing.T) {
 		if n, _ := store.CountAdmins(ctx, g.ID); n != 1 {
 			t.Fatalf("debe quedar 1 admin, hay %d", n)
 		}
+		updated, _ := store.GetByID(ctx, g.ID)
+		if updated.OwnerUserID != uAdmin2 {
+			t.Fatal("owner must become existing admin")
+		}
+		if roleOf(t, store, g.ID, uMember) != model.RoleMember {
+			t.Fatal("unnecessary promotion")
+		}
 	})
-	t.Run("admin único con otros miembros no puede irse", func(t *testing.T) {
+	t.Run("admin único promueve al miembro restante", func(t *testing.T) {
 		svc, store := newTestSvc()
 		g := newGroup(t, svc, uAdmin)
 		joinAs(t, svc, store, g.ID, uMember)
-		wantErr(t, svc.LeaveGroup(ctx, g.ID, uAdmin, false, ""), ErrCannotLeaveOnlyAdmin)
-		if roleOf(t, store, g.ID, uAdmin) != model.RoleAdmin {
-			t.Fatal("el admin debe seguir en el grupo")
+		if err := svc.LeaveGroup(ctx, g.ID, uAdmin, false, ""); err != nil {
+			t.Fatal(err)
+		}
+		if roleOf(t, store, g.ID, uMember) != model.RoleAdmin {
+			t.Fatal("el miembro restante debe ser admin")
 		}
 	})
 	t.Run("admin único que transfiere primero sí puede irse", func(t *testing.T) {
@@ -732,4 +743,70 @@ func TestAccountDeletionRequiresUser(t *testing.T) {
 	svc, _ := newTestSvc()
 	_, err := svc.HandleAccountDeletion(ctx, "")
 	wantErr(t, err, ErrUnauthorized)
+}
+
+func TestLeaveSuccessionOrderAndOwner(t *testing.T) {
+	for _, tied := range []bool{false, true} {
+		t.Run(fmtBool(tied), func(t *testing.T) {
+			svc, store := newTestSvc()
+			g := newGroup(t, svc, uAdmin)
+			store.AddMember(g.ID, uOther, model.RoleMember)
+			store.AddMember(g.ID, uMember, model.RoleMember)
+			oldest := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+			store.find(g.ID, uMember).JoinedAt = oldest
+			store.find(g.ID, uOther).JoinedAt = oldest.Add(time.Hour)
+			if tied {
+				store.find(g.ID, uOther).JoinedAt = oldest
+			}
+			if err := svc.LeaveGroup(ctx, g.ID, uAdmin, false, ""); err != nil {
+				t.Fatal(err)
+			}
+			if roleOf(t, store, g.ID, uMember) != model.RoleAdmin {
+				t.Fatal("oldest/tie winner not promoted")
+			}
+			if roleOf(t, store, g.ID, uOther) != model.RoleMember {
+				t.Fatal("unnecessary promotion")
+			}
+			updated, _ := store.GetByID(ctx, g.ID)
+			if updated.OwnerUserID != uMember {
+				t.Fatal("owner still references departing user")
+			}
+			if roleOf(t, store, g.ID, uAdmin) != "" {
+				t.Fatal("departing admin remains")
+			}
+		})
+	}
+}
+func fmtBool(tied bool) string {
+	if tied {
+		return "equal joined_at uses user_id"
+	}
+	return "oldest joined_at"
+}
+
+func TestConcurrentAdminLeaveRetainsAdminAndOwner(t *testing.T) {
+	svc, store := newTestSvc()
+	g := newGroup(t, svc, uAdmin)
+	store.AddMember(g.ID, uAdmin2, model.RoleAdmin)
+	store.AddMember(g.ID, uMember, model.RoleMember)
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, id := range []string{uAdmin, uAdmin2} {
+		wg.Add(1)
+		go func(id string) { defer wg.Done(); errs <- svc.LeaveGroup(ctx, g.ID, id, false, "") }(id)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if roleOf(t, store, g.ID, uMember) != model.RoleAdmin {
+		t.Fatal("remaining group has no admin")
+	}
+	updated, _ := store.GetByID(ctx, g.ID)
+	if updated.OwnerUserID != uMember {
+		t.Fatal("owner not transferred")
+	}
 }
