@@ -18,6 +18,7 @@ import '../../core/services/authed_client.dart';
 import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import 'attachment_resources.dart';
 
 /// Base URL del microservicio de notas. En el emulador Android `localhost` es
 /// el propio dispositivo, por eso se usa la alias 10.0.2.2 hacia el host.
@@ -2424,8 +2425,10 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
           ? 'Documento copiado a descargas: $dest'
           : 'El archivo ya está en disco: ${info.localFile!.absolute.path}';
     } else if (info.isRemote) {
-      unawaited(_openResourceExternally(url));
-      message = 'Descarga iniciada: ${resource['name']}';
+      final opened = await _openResourceExternally(url);
+      message = opened
+          ? 'Abriendo el archivo…'
+          : 'No se pudo abrir el archivo.';
     } else {
       message = 'No se encontró el archivo para descargar: ${resource['name']}';
     }
@@ -3410,7 +3413,9 @@ Future<_DriveUploadResult> _uploadAttachmentToDrive({
         fileType: (data['file_type'] as String?) ?? '',
         fileSizeBytes:
             (data['file_size_bytes'] as num?)?.toInt() ?? bytes.length,
-        isInline: isInline,
+        isInline: (data['file_type'] as String?)?.isNotEmpty == true
+            ? (data['file_type'] as String).toLowerCase().startsWith('image/')
+            : isInline,
       );
     }
     return _DriveUploadResult(
@@ -3643,7 +3648,12 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
       );
       if (!mounted) return;
       if (result.ok && result.fileUrl != null) {
-        widget.onInsert(snippetFor(result.fileUrl!));
+        final uploadedLabel = result.isInline
+            ? label
+            : (result.fileName ?? label);
+        widget.onInsert(
+          '${result.isInline ? '!' : ''}[$uploadedLabel](${result.fileUrl!})',
+        );
         widget.onUploaded?.call(result);
         Navigator.of(context).pop();
         return;
@@ -4035,7 +4045,9 @@ class _DetectedAttachmentChip extends StatelessWidget {
                     Icon(
                       isImage
                           ? Icons.image_rounded
-                          : Icons.picture_as_pdf_rounded,
+                          : resource['type'] == 'pdf'
+                          ? Icons.picture_as_pdf_rounded
+                          : Icons.description_rounded,
                       size: 13,
                       color: AppColors.text,
                     ),
@@ -4081,40 +4093,7 @@ class _DetectedAttachmentChip extends StatelessWidget {
 /// Detecta adjuntos desde el contenido Markdown de una nota: imágenes en
 /// formato `![alt](ruta)` y documentos PDF en `[etiqueta](ruta.pdf)`.
 List<Map<String, dynamic>> _resourcesFromMarkdown(String content) {
-  final result = <Map<String, dynamic>>[];
-  final seen = <String>{};
-
-  final imageRe = RegExp(r'!\[(.*?)\]\((.*?)\)');
-  for (final m in imageRe.allMatches(content)) {
-    final url = (m.group(2) ?? '').trim();
-    if (url.isEmpty) continue;
-    if (!seen.add('img::$url')) continue;
-    final alt = (m.group(1) ?? '').trim();
-    result.add({
-      'type': 'image',
-      'name': alt.isEmpty ? url : alt,
-      'url': url,
-      'size': 'Adjunto',
-    });
-  }
-
-  // Documentos: rutas terminadas en .pdf o enlaces de archivo de Google Drive
-  // (los adjuntos subidos con /notes/upload usan la URL webViewLink de Drive,
-  // que no expone la extensión en la URL).
-  final docRe = RegExp(
-    r'\[(.*?)\]\((.*?\.pdf|https?://drive\.google\.com/file/d/[^\s)]+)\)',
-    caseSensitive: false,
-  );
-  for (final m in docRe.allMatches(content)) {
-    final url = (m.group(2) ?? '').trim();
-    if (url.isEmpty) continue;
-    if (!seen.add('doc::$url')) continue;
-    final label = (m.group(1) ?? '').trim();
-    var name = label.isEmpty ? url : label;
-    if (!name.toLowerCase().endsWith('.pdf')) name = '$name.pdf';
-    result.add({'type': 'pdf', 'name': name, 'url': url, 'size': 'PDF'});
-  }
-  return result;
+  return resourcesFromMarkdown(content);
 }
 
 /// Resolución robusta de rutas de archivo locales: directa (relativa al cwd,
@@ -4235,6 +4214,34 @@ Widget _buildResourceImage({
   required Widget Function() fallback,
   Widget Function(BuildContext, Widget, ImageChunkEvent?)? loadingBuilder,
 }) {
+  if (isDriveViewerUrl(url)) {
+    return Center(
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Vista previa no disponible aquí.',
+              textAlign: TextAlign.center,
+            ),
+            Builder(
+              builder: (context) => TextButton(
+                onPressed: () async {
+                  final ok = await _openResourceExternally(url);
+                  if (!ok && context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('No se pudo abrir el archivo. Inténtalo de nuevo.')),
+                    );
+                  }
+                },
+                child: const Text('ABRIR EN DRIVE'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
   final local = _resolveLocalFile(url);
   if (local != null) {
     return Image.file(
@@ -4412,7 +4419,7 @@ class _ResourceDocTile extends StatelessWidget {
           _DocAction(label: 'VER', onTap: onView, fill: AppColors.accentYellow),
           const SizedBox(width: 6),
           _DocAction(
-            label: 'DESCARGAR',
+            label: info.localFile != null ? 'DESCARGAR' : 'ABRIR',
             onTap: () => onDownload(resource),
             fill: AppColors.border,
             foreground: AppColors.surface,
@@ -4518,7 +4525,7 @@ class _ResourceViewerDialog extends StatelessWidget {
         content: Text(
           ok
               ? 'Abriendo ${resource['name']} en el visor del sistema…'
-              : 'No se pudo abrir el documento. Verifica que el archivo exista en disco.',
+              : 'No se pudo abrir el archivo. Comprueba tu acceso e inténtalo de nuevo.',
           style: const TextStyle(
             color: Colors.white,
             fontWeight: FontWeight.w800,
@@ -4536,8 +4543,10 @@ class _ResourceViewerDialog extends StatelessWidget {
           ? 'Documento copiado a descargas: $dest'
           : 'El archivo ya está en disco: ${info.localFile!.absolute.path}';
     } else if (info.isRemote) {
-      unawaited(_openResourceExternally(_url));
-      message = 'Descarga iniciada: ${resource['name']}';
+      final opened = await _openResourceExternally(_url);
+      message = opened
+          ? 'Abriendo el archivo…'
+          : 'No se pudo abrir el archivo.';
     } else {
       message = 'No se encontró el archivo para descargar: ${resource['name']}';
     }
@@ -4647,7 +4656,7 @@ class _ResourceViewerDialog extends StatelessWidget {
             ),
           ),
         ),
-        if (!isImage)
+        if (!isImage && info.localFile != null)
           TextButton(
             onPressed: () => _download(context, info),
             child: const Text(
@@ -4669,11 +4678,13 @@ class _ResourceViewerDialog extends StatelessWidget {
               borderRadius: BorderRadius.circular(AppDimens.radius),
             ),
           ),
-          onPressed: () => isImage
+          onPressed: () => isImage && info.localFile != null
               ? _download(context, info)
               : _openInSystemViewer(context, _url),
           child: Text(
-            isImage
+            info.isRemote
+                ? (isDriveViewerUrl(_url) ? 'ABRIR EN DRIVE' : 'ABRIR')
+                : isImage
                 ? 'DESCARGAR'
                 : (_isWindows
                       ? 'ABRIR EN VISOR DE WINDOWS'
@@ -4876,10 +4887,10 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
 
       // Documento standalone [label](url.pdf).
       final standaloneDoc = RegExp(
-        r'^\[(.*?)\]\((.*?\.pdf)\)$',
+        r'^\[(.*?)\]\((.*?)\)$',
         caseSensitive: false,
       ).firstMatch(line);
-      if (standaloneDoc != null) {
+      if (standaloneDoc != null && resourcesFromMarkdown(line).isNotEmpty) {
         flushParagraph();
         widgets.add(
           _blockDoc(standaloneDoc.group(1) ?? '', standaloneDoc.group(2)!),
@@ -5190,18 +5201,15 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
   }
 
   Widget _blockDoc(String label, String url) {
-    final name = label.toLowerCase().endsWith('.pdf') ? label : '$label.pdf';
+    final resource = resourcesFromMarkdown('[$label]($url)').single;
+    final name = resource['name'] as String;
+    final isPdf = resource['type'] == 'pdf';
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
         child: GestureDetector(
-          onTap: () => onOpenResource({
-            'type': 'pdf',
-            'name': name,
-            'url': url,
-            'size': 'PDF',
-          }),
+          onTap: () => onOpenResource(resource),
           child: Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
@@ -5221,8 +5229,10 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
                     border: Border.all(color: AppColors.border, width: 1.5),
                     borderRadius: BorderRadius.circular(AppDimens.radius),
                   ),
-                  child: const Icon(
-                    Icons.picture_as_pdf_rounded,
+                  child: Icon(
+                    isPdf
+                        ? Icons.picture_as_pdf_rounded
+                        : Icons.description_rounded,
                     size: 18,
                     color: Colors.white,
                   ),
@@ -5243,7 +5253,7 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
                         ),
                       ),
                       const Text(
-                        'Documento PDF adjunto · Toca para abrir visor',
+                        'Documento adjunto · Toca para abrir',
                         style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.w700,
@@ -5387,7 +5397,7 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
   List<InlineSpan> _parseInlineSpans(String text) {
     final spans = <InlineSpan>[];
     final re = RegExp(
-      r'(\*\*.+?\*\*|\*[^*\n]+?\*|!\[[^\]]*\]\([^)\s]+\)|\[[^\]]+\]\([^)\s]+\.pdf\)|`[^`\n]+`)',
+      r'(\*\*.+?\*\*|\*[^*\n]+?\*|!\[[^\]]*\]\([^)\s]+\)|\[[^\]]+\]\([^)\s]+\)|`[^`\n]+`)',
       caseSensitive: false,
     );
     var last = 0;
@@ -5439,16 +5449,16 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
           );
         }
       } else if (token.startsWith('[')) {
-        final link = RegExp(
-          r'\[([^\]]+)\]\(([^)\s]+\.pdf)\)',
-        ).firstMatch(token);
-        if (link != null) {
+        final link = RegExp(r'\[([^\]]+)\]\(([^)\s]+)\)').firstMatch(token);
+        if (link != null && resourcesFromMarkdown(token).isNotEmpty) {
           spans.add(
             WidgetSpan(
               alignment: PlaceholderAlignment.middle,
               child: _pdfChip(link.group(1)!, link.group(2)!),
             ),
           );
+        } else {
+          spans.add(TextSpan(text: token));
         }
       }
       last = m.end;
@@ -5500,16 +5510,12 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
   }
 
   Widget _pdfChip(String label, String url) {
-    final name = label.toLowerCase().endsWith('.pdf') ? label : '$label.pdf';
+    final resource = resourcesFromMarkdown('[$label]($url)').single;
+    final name = resource['name'] as String;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
-        onTap: () => onOpenResource({
-          'type': 'pdf',
-          'name': name,
-          'url': url,
-          'size': 'PDF',
-        }),
+        onTap: () => onOpenResource(resource),
         child: Container(
           margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
@@ -5522,8 +5528,10 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
-                Icons.picture_as_pdf_rounded,
+              Icon(
+                resource['type'] == 'pdf'
+                    ? Icons.picture_as_pdf_rounded
+                    : Icons.description_rounded,
                 size: 14,
                 color: AppColors.text,
               ),

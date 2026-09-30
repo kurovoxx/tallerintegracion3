@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taller_integracion_front/core/services/session_manager.dart';
 import 'package:taller_integracion_front/core/widgets/neobrutalism.dart';
 import 'package:taller_integracion_front/features/notes/all_notes_screen.dart';
+import 'package:taller_integracion_front/features/notes/attachment_resources.dart';
 
 void main() {
   // Fixture mínimo para garantizar la resolución real de 'prueba.pdf' en la
@@ -327,6 +328,71 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
   }
 
+  testWidgets(
+    'imagen subida conserva un recurso y ofrece abrir Drive sin cargar HTML como imagen',
+    (tester) async {
+      final directory = Directory.systemTemp.createTempSync(
+        'notes-image-test-',
+      );
+      final fixture = File('${directory.path}/foto.png');
+      fixture.writeAsBytesSync(
+        base64Decode(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=',
+        ),
+      );
+      await SessionManager.saveSession('jwt-image-test', {'id': 'u-image'});
+      const url =
+          'https://drive.google.com/file/d/private-image/view?usp=drivesdk';
+      notesHttpClientOverride = MockClient((request) async {
+        if (request.method == 'POST' && request.url.path == '/notes/upload') {
+          return http.Response(
+            jsonEncode({
+              'external_file_id': 'private-image',
+              'file_url': url,
+              'file_name': 'foto.png',
+              'file_type': 'image/png',
+              'file_size_bytes': fixture.lengthSync(),
+            }),
+            201,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('{}', 404);
+      });
+      addTearDown(() async {
+        notesHttpClientOverride = null;
+        await SessionManager.clear();
+        fixture.deleteSync();
+        directory.deleteSync();
+      });
+      await pumpNotes(tester, const Size(1440, 900));
+      await openAttachmentDialog(tester, kind: 'IMAGEN');
+      final source = find.widgetWithText(
+        TextField,
+        'Ruta local o URL web de imagen',
+      );
+      await tester.enterText(source, fixture.path);
+      await tester.tap(find.text('SUBIR E INSERTAR'));
+      await settleRealAsync(tester);
+      expect(find.text('ADJUNTOS VINCULADOS (1)'), findsOneWidget);
+      final markdown = tester
+          .widgetList<TextField>(find.byType(TextField))
+          .map((field) => field.controller?.text ?? '')
+          .firstWhere((value) => value.contains(url));
+      expect(resourcesFromMarkdown(markdown).single['type'], 'image');
+      await tester.tap(find.text('Conejita'));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('Vista previa no disponible aquí.'), findsOneWidget);
+      expect(find.text('ABRIR EN DRIVE'), findsWidgets);
+      expect(
+        find.byWidgetPredicate((w) => w is Image && w.image is NetworkImage),
+        findsNothing,
+      );
+      expect(find.text('DOCUMENTOS'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('adjunto con JWT sube los bytes reales a /notes/upload y usa la URL de Drive', (
     tester,
   ) async {
@@ -374,6 +440,11 @@ void main() {
     expect(upload.headers['Authorization'], 'Bearer jwt-stage2-test');
     expect(upload.body, contains('name="file"'));
     expect(upload.body, contains('filename="prueba.pdf"'));
+    expect(find.text('ADJUNTOS VINCULADOS (1)'), findsOneWidget);
+    await tester.tap(find.text('prueba.pdf'));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('ABRIR EN DRIVE'), findsOneWidget);
+    expect(find.text('DESCARGAR'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
