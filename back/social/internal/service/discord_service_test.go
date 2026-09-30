@@ -44,6 +44,30 @@ func TestDiscordPutConfig_AdminGuarda(t *testing.T) {
 	}
 }
 
+func TestDiscordGetConfig_MiembroLeeYExtranoNo(t *testing.T) {
+	gid, admin, member, stranger := discordSeamSetup()
+	store := NewMemoryMeetingStore()
+	store.AddGroup(gid, admin, member)
+	svc := NewDiscordService(store)
+
+	if _, err := svc.GetConfig(context.Background(), gid, member); err != ErrDiscordNotConfigured {
+		t.Fatalf("sin configurar debe dar ErrDiscordNotConfigured, got %v", err)
+	}
+	if _, err := svc.PutConfig(context.Background(), gid, admin, testServerName, testInviteURL, testWebhookURL); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	cfg, err := svc.GetConfig(context.Background(), gid, member)
+	if err != nil {
+		t.Fatalf("miembro debe leer: %v", err)
+	}
+	if !cfg.InviteUrl.Valid || cfg.InviteUrl.String != testInviteURL {
+		t.Fatalf("invite inesperada: %+v", cfg.InviteUrl)
+	}
+	if _, err := svc.GetConfig(context.Background(), gid, stranger); err != ErrForbidden {
+		t.Fatalf("extraño debe dar ErrForbidden, got %v", err)
+	}
+}
+
 func TestDiscordPutConfig_Permisos(t *testing.T) {
 	gid, admin, member, stranger := discordSeamSetup()
 	store := NewMemoryMeetingStore()

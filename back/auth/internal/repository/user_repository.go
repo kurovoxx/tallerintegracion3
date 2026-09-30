@@ -148,3 +148,60 @@ func (r *UserRepository) ExistsByEmail(ctx context.Context, email string) (bool,
 	}
 	return exists, nil
 }
+
+// GetEmailByID retorna el email de identity.users por id.
+// Retorna ("", nil) si no existe — el Service decide cómo presentarlo.
+func (r *UserRepository) GetEmailByID(ctx context.Context, userID string) (string, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return "", fmt.Errorf("user_id vacío")
+	}
+	var email string
+	err := r.pool.QueryRow(ctx, `SELECT email FROM identity.users WHERE id = $1`, userID).Scan(&email)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return "", nil
+		}
+		return "", fmt.Errorf("get email by id: %w", err)
+	}
+	return email, nil
+}
+
+// GetPublicByIDs resuelve datos públicos mínimos (email + display_name) para
+// una lista de user_ids. Una sola query (sin N+1): join users + profiles.
+// IDs inválidos o inexistentes simplemente no aparecen en el resultado.
+func (r *UserRepository) GetPublicByIDs(ctx context.Context, userIDs []string) ([]model.PublicUser, error) {
+	clean := make([]string, 0, len(userIDs))
+	seen := make(map[string]struct{}, len(userIDs))
+	for _, id := range userIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		clean = append(clean, id)
+	}
+	if len(clean) == 0 {
+		return []model.PublicUser{}, nil
+	}
+	rows, err := r.pool.Query(ctx, `SELECT u.id, u.email, p.display_name FROM identity.users u LEFT JOIN identity.profiles p ON p.user_id = u.id WHERE u.id = ANY($1::uuid[])`, clean)
+	if err != nil {
+		return nil, fmt.Errorf("get public by ids: %w", err)
+	}
+	defer rows.Close()
+	out := make([]model.PublicUser, 0, len(clean))
+	for rows.Next() {
+		var pu model.PublicUser
+		if err := rows.Scan(&pu.UserID, &pu.Email, &pu.DisplayName); err != nil {
+			return nil, fmt.Errorf("get public by ids: %w", err)
+		}
+		out = append(out, pu)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("get public by ids: %w", err)
+	}
+	return out, nil
+}

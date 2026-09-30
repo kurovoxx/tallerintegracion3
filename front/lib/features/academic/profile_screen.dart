@@ -1,4 +1,4 @@
-﻿import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -33,7 +33,10 @@ String formatRole(String rawRole) {
   }
 }
 
-double? computeAttendance({required int? totalClasses, required int unjustifiedAbsences}) {
+double? computeAttendance({
+  required int? totalClasses,
+  required int unjustifiedAbsences,
+}) {
   if (totalClasses == null || totalClasses <= 0) return null;
   final ratio = 1 - (unjustifiedAbsences / totalClasses);
   return (ratio * 100).clamp(0, 100).toDouble();
@@ -45,7 +48,7 @@ class ProfileScreen extends StatefulWidget {
   final Map<String, dynamic>? userData;
 
   const ProfileScreen({super.key, this.userData, ProfileService? service})
-      : _serviceOverride = service;
+    : _serviceOverride = service;
 
   final ProfileService? _serviceOverride;
 
@@ -127,19 +130,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _profile = p;
         _isLoading = false;
       });
-    } on ProfileApiException catch (e) {
+    } on ProfileApiException catch (_) {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
         _hasError = true;
-        _errorMessage = e.toString();
+        _errorMessage = 'No se pudo cargar tu perfil. Revisa tu conexión.';
       });
-    } catch (e) {
+    } catch (_) {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
         _hasError = true;
-        _errorMessage = 'No se pudo cargar tu perfil: $e';
+        _errorMessage = 'No se pudo cargar tu perfil. Revisa tu conexión.';
       });
     }
   }
@@ -194,24 +197,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Cambios guardados en backend (real)',
-              style: TextStyle(fontWeight: FontWeight.w700)),
+          content: Text(
+            'Cambios guardados.',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
           backgroundColor: AppColors.border,
         ),
       );
-    } on ProfileApiException catch (e) {
+    } on ProfileApiException catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('No se pudo guardar: $e'),
+        const SnackBar(
+          content: Text(
+            'No se pudo guardar. Revisa los datos e inténtalo de nuevo.',
+          ),
           backgroundColor: AppColors.error,
         ),
       );
-    } catch (e) {
+    } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('No se pudo guardar: $e'),
+        const SnackBar(
+          content: Text(
+            'No se pudo guardar. Revisa los datos e inténtalo de nuevo.',
+          ),
           backgroundColor: AppColors.error,
         ),
       );
@@ -243,7 +252,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
       if (code == null) {
         if (!mounted) return;
         setState(() => _driveStatus = _DriveStatus.idle);
-        messenger.showSnackBar(const SnackBar(content: Text('Conexión con Drive cancelada')));
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Conexión con Drive cancelada')),
+        );
         return;
       }
       final token = SessionManager.token;
@@ -253,21 +264,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
         messenger.showSnackBar(const SnackBar(content: Text('No hay sesión')));
         return;
       }
-      debugPrint('[FRONT DEBUG] Drive callback: endpoint auth=$authApiBaseUrl/auth/google-drive/connect');
-      final ok = await GoogleDriveService().connectDrive(
+      final result = await GoogleDriveService().connectDrive(
         backendBaseUrl: authApiBaseUrl,
         appAccessToken: token,
         oauthCode: code,
         expectedEmail: declaredEmail,
       );
-      await _persistDriveStatus(ok);
+      await _persistDriveStatus(result.ok);
       if (!mounted) return;
-      setState(() => _driveStatus = ok ? _DriveStatus.connected : _DriveStatus.error);
-      messenger.showSnackBar(SnackBar(content: Text(ok ? 'Drive conectado (200)' : 'No se pudo conectar Drive')));
-    } catch (e) {
+      setState(
+        () => _driveStatus = result.ok
+            ? _DriveStatus.connected
+            : _DriveStatus.error,
+      );
+      messenger.showSnackBar(SnackBar(content: Text(result.message)));
+    } catch (_) {
       if (!mounted) return;
       setState(() => _driveStatus = _DriveStatus.error);
-      messenger.showSnackBar(SnackBar(content: Text('Error al conectar Drive: $e')));
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No se pudo conectar con Google Drive. Inténtalo nuevamente más tarde.',
+          ),
+        ),
+      );
     }
   }
 
@@ -335,7 +355,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     await _persistDriveStatus(false);
     if (!mounted) return;
     setState(() => _driveStatus = _DriveStatus.idle);
-    messenger.showSnackBar(const SnackBar(content: Text('Google Drive desconectado')));
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Google Drive desconectado')),
+    );
   }
 
   void _handleShare() {
@@ -415,7 +437,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
         const SizedBox(height: 2),
         const Text(
           'Tu identidad académica dentro de Sigma Academy',
-          style: TextStyle(color: AppColors.muted, fontWeight: FontWeight.w700, fontSize: 12.5),
+          style: TextStyle(
+            color: AppColors.muted,
+            fontWeight: FontWeight.w700,
+            fontSize: 12.5,
+          ),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
@@ -487,14 +513,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Widget _buildIdentityCard(bool isDesktop) {
     final p = _profile!;
-    final name = p.displayName.trim().isEmpty ? 'Sin nombre' : p.displayName.trim();
+    final name = p.displayName.trim().isEmpty
+        ? 'Sin nombre'
+        : p.displayName.trim();
     final isPublic = p.visibility == 'public';
     final description = (p.description == null || p.description!.trim().isEmpty)
         ? 'Sin descripción. Agrega una presentación desde Editar perfil.'
         : p.description!.trim();
 
     final identityText = Column(
-      crossAxisAlignment: isDesktop ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+      crossAxisAlignment: isDesktop
+          ? CrossAxisAlignment.start
+          : CrossAxisAlignment.center,
       children: [
         Text(
           name,
@@ -510,7 +540,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
         NeobrutalistBadge(
           label: isPublic ? 'Perfil público' : 'Perfil privado',
           tone: isPublic ? NeobrutalistTone.info : NeobrutalistTone.pending,
-          icon: isPublic ? Icons.visibility_rounded : Icons.visibility_off_rounded,
+          icon: isPublic
+              ? Icons.visibility_rounded
+              : Icons.visibility_off_rounded,
         ),
         const SizedBox(height: AppDimens.spaceMd),
         Text(
@@ -526,11 +558,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ],
     );
 
-    final avatar = _Avatar(name: name, photoUrl: p.photoUrl ?? '', size: isDesktop ? 112 : 88);
+    final avatar = _Avatar(
+      name: name,
+      photoUrl: p.photoUrl ?? '',
+      size: isDesktop ? 112 : 88,
+    );
 
     return _ProfileCard(
       title: 'Avatar e identidad',
-      trailing: const NeobrutalistBadge(label: 'Datos reales', tone: NeobrutalistTone.neutral),
       child: isDesktop
           ? Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -569,50 +604,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     return _ProfileCard(
       title: 'Datos personales',
-      trailing: const _EndpointTag('GET /profile/me'),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _SummaryRow(icon: Icons.apartment_rounded, label: 'INSTITUCIÓN', value: institution),
+          _SummaryRow(
+            icon: Icons.apartment_rounded,
+            label: 'INSTITUCIÓN',
+            value: institution,
+          ),
           const SizedBox(height: AppDimens.spaceMd),
-          _SummaryRow(icon: Icons.phone_rounded, label: 'TELÉFONO', value: phone),
+          _SummaryRow(
+            icon: Icons.phone_rounded,
+            label: 'TELÉFONO',
+            value: phone,
+          ),
           const SizedBox(height: AppDimens.spaceMd),
-          const _SummaryRow(
+          _SummaryRow(
             icon: Icons.email_rounded,
-            label: 'CORREO INSTITUCIONAL',
-            value: 'No entregado por /profile/me',
+            label: 'CORREO',
+            value: (p.email == null || p.email!.trim().isEmpty)
+                ? 'No informado'
+                : p.email!.trim(),
           ),
           const SizedBox(height: AppDimens.spaceLg),
-          const Divider(color: AppColors.border, thickness: AppDimens.borderWidth, height: 1),
+          const Divider(
+            color: AppColors.border,
+            thickness: AppDimens.borderWidth,
+            height: 1,
+          ),
           const SizedBox(height: AppDimens.spaceMd),
-          Container(
-            padding: const EdgeInsets.all(AppDimens.spaceMd),
-            decoration: BoxDecoration(
-              color: AppColors.bg,
-              border: Border.all(color: AppColors.border, width: 1.5),
-              borderRadius: BorderRadius.circular(AppDimens.radius),
-            ),
-            child: const Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(Icons.info_outline_rounded, size: 16, color: AppColors.mutedStrong),
-                SizedBox(width: AppDimens.spaceSm),
-                Expanded(
-                  child: Text(
-                    'El backend solo entrega display_name, photo_url, phone, institution, description y visibility. '
-                    'Notas, grupos, tareas, promedios, asistencia y seguidores no forman parte de GET /profile/me.',
-                    style: TextStyle(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.mutedStrong,
-                      height: 1.35,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: AppDimens.spaceLg),
           isDesktop
               ? Align(
                   alignment: Alignment.centerRight,
@@ -695,11 +715,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: AppColors.accentYellow,
-                  border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+                  border: Border.all(
+                    color: AppColors.border,
+                    width: AppDimens.borderWidth,
+                  ),
                   borderRadius: BorderRadius.circular(AppDimens.radius),
                   boxShadow: AppShadows.badge,
                 ),
-                child: const Icon(Icons.cloud_rounded, size: 22, color: AppColors.text),
+                child: const Icon(
+                  Icons.cloud_rounded,
+                  size: 22,
+                  color: AppColors.text,
+                ),
               ),
               const SizedBox(width: AppDimens.spaceMd),
               const Expanded(
@@ -778,7 +805,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget _buildEditMode(bool isDesktop) {
     final formCard = _ProfileCard(
       title: 'Editar perfil',
-      trailing: const _EndpointTag('PATCH /profile/me'),
       child: Form(
         key: _formKey,
         child: Column(
@@ -807,7 +833,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
               textInputAction: TextInputAction.next,
               maxLength: 200,
               validator: (value) {
-                if ((value?.trim().length ?? 0) > 200) return 'Máximo 200 caracteres';
+                if ((value?.trim().length ?? 0) > 200)
+                  return 'Máximo 200 caracteres';
                 return null;
               },
             ),
@@ -821,7 +848,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
               textInputAction: TextInputAction.next,
               maxLength: 30,
               validator: (value) {
-                if ((value?.trim().length ?? 0) > 30) return 'Máximo 30 caracteres';
+                if ((value?.trim().length ?? 0) > 30)
+                  return 'Máximo 30 caracteres';
                 return null;
               },
             ),
@@ -839,7 +867,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
             const SizedBox(height: AppDimens.spaceSm),
             _VisibilitySelector(
               value: _draftVisibility,
-              onChanged: _isSaving ? (_) {} : (v) => setState(() => _draftVisibility = v),
+              onChanged: _isSaving
+                  ? (_) {}
+                  : (v) => setState(() => _draftVisibility = v),
             ),
           ],
         ),
@@ -889,7 +919,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
       padding: const EdgeInsets.all(AppDimens.spaceMd),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
         boxShadow: AppShadows.button,
       ),
@@ -922,7 +955,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: AppColors.surface,
-        border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
         boxShadow: AppShadows.card,
       ),
@@ -952,12 +988,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.error_outline_rounded, size: 48, color: AppColors.text),
+            const Icon(
+              Icons.error_outline_rounded,
+              size: 48,
+              color: AppColors.text,
+            ),
             const SizedBox(height: AppDimens.spaceMd),
             const Text(
-              'NO SE PUDO CARGAR TU PERFIL (REAL)',
+              'NO SE PUDO CARGAR TU PERFIL',
               textAlign: TextAlign.center,
-              style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: AppColors.text),
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                fontSize: 16,
+                color: AppColors.text,
+              ),
             ),
             if (_errorMessage != null) ...[
               const SizedBox(height: AppDimens.spaceSm),
@@ -1005,7 +1049,10 @@ class _ProfileCard extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surface,
-        border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
         boxShadow: AppShadows.card,
       ),
@@ -1037,7 +1084,11 @@ class _ProfileCard extends StatelessWidget {
               ],
             ),
           ),
-          const Divider(color: AppColors.border, thickness: AppDimens.borderWidth, height: 1),
+          const Divider(
+            color: AppColors.border,
+            thickness: AppDimens.borderWidth,
+            height: 1,
+          ),
           Padding(
             padding: const EdgeInsets.all(AppDimens.spaceLg),
             child: child,
@@ -1110,26 +1161,6 @@ class _ProfileTextField extends StatelessWidget {
   }
 }
 
-class _EndpointTag extends StatelessWidget {
-  const _EndpointTag(this.text);
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: const TextStyle(
-        fontSize: 11,
-        fontWeight: FontWeight.w800,
-        color: AppColors.muted,
-        fontFamily: 'monospace',
-        letterSpacing: 0.3,
-      ),
-    );
-  }
-}
-
 class _Avatar extends StatelessWidget {
   final String name;
   final String photoUrl;
@@ -1148,7 +1179,11 @@ class _Avatar extends StatelessWidget {
 
     final fallback = Text(
       initials.isEmpty ? 'U' : initials,
-      style: TextStyle(fontSize: size * 0.32, fontWeight: FontWeight.w900, color: AppColors.text),
+      style: TextStyle(
+        fontSize: size * 0.32,
+        fontWeight: FontWeight.w900,
+        color: AppColors.text,
+      ),
     );
 
     return Container(
@@ -1158,7 +1193,10 @@ class _Avatar extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: AppColors.accentYellow,
-        border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
         borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
         boxShadow: AppShadows.badge,
       ),
@@ -1237,7 +1275,10 @@ class _VisibilityOption extends StatelessWidget {
             padding: const EdgeInsets.symmetric(vertical: AppDimens.spaceMd),
             decoration: BoxDecoration(
               color: active ? AppColors.accentYellow : AppColors.bg,
-              border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+              border: Border.all(
+                color: AppColors.border,
+                width: AppDimens.borderWidth,
+              ),
               borderRadius: BorderRadius.circular(AppDimens.radius),
               boxShadow: active ? AppShadows.badge : null,
             ),
@@ -1268,7 +1309,11 @@ class _SummaryRow extends StatelessWidget {
   final IconData icon;
   final String label;
   final String value;
-  const _SummaryRow({required this.icon, required this.label, required this.value});
+  const _SummaryRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1281,7 +1326,10 @@ class _SummaryRow extends StatelessWidget {
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: AppColors.bg,
-            border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+            border: Border.all(
+              color: AppColors.border,
+              width: AppDimens.borderWidth,
+            ),
             borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
           ),
           child: Icon(icon, size: 16, color: AppColors.text),
@@ -1303,7 +1351,11 @@ class _SummaryRow extends StatelessWidget {
               const SizedBox(height: 2),
               Text(
                 value,
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.text),
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.text,
+                ),
               ),
             ],
           ),

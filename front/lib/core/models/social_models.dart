@@ -68,21 +68,17 @@ class GroupCard {
 }
 
 class SidebarGroup {
-  SidebarGroup({
-    required this.groupId,
-    required this.name,
-    required this.role,
-  });
+  SidebarGroup({required this.groupId, required this.name, required this.role});
 
   final String groupId;
   final String name;
   final String role;
 
   factory SidebarGroup.fromJson(Map<String, dynamic> j) => SidebarGroup(
-        groupId: _str(j, 'group_id'),
-        name: _str(j, 'name', 'Grupo'),
-        role: _str(j, 'role', 'member'),
-      );
+    groupId: _str(j, 'group_id'),
+    name: _str(j, 'name', 'Grupo'),
+    role: _str(j, 'role', 'member'),
+  );
 }
 
 class Overview {
@@ -111,8 +107,9 @@ class Overview {
       userId: _str(j, 'user_id'),
       sidebarGroups: sideRaw
           .whereType<Map>()
-          .map((e) =>
-              SidebarGroup.fromJson(Map<String, dynamic>.from(e as Map)))
+          .map(
+            (e) => SidebarGroup.fromJson(Map<String, dynamic>.from(e as Map)),
+          )
           .toList(),
       groups: groupsRaw
           .whereType<Map>()
@@ -159,8 +156,7 @@ class GroupDetail {
       name: _str(j, 'name', 'Grupo'),
       description: j['description'] as String?,
       ownerUserId: _str(j, 'owner_user_id'),
-      notesRestrictedToStaff:
-          notesRestricted is bool ? notesRestricted : false,
+      notesRestrictedToStaff: notesRestricted is bool ? notesRestricted : false,
       inviteToken: j['invite_token'] as String?,
       createdAt: created,
       role: _str(j, 'role', 'member'),
@@ -182,11 +178,11 @@ class WorkspaceGroup {
   final String role;
 
   factory WorkspaceGroup.fromJson(Map<String, dynamic> j) => WorkspaceGroup(
-        id: _str(j, 'id'),
-        name: _str(j, 'name', 'Grupo'),
-        description: j['description'] as String?,
-        role: _str(j, 'role', 'member'),
-      );
+    id: _str(j, 'id'),
+    name: _str(j, 'name', 'Grupo'),
+    description: j['description'] as String?,
+    role: _str(j, 'role', 'member'),
+  );
 }
 
 class TodoTask {
@@ -215,17 +211,17 @@ class TodoTask {
   final String? updatedAt;
 
   factory TodoTask.fromJson(Map<String, dynamic> j) => TodoTask(
-        id: _str(j, 'id'),
-        groupId: _str(j, 'group_id'),
-        boardId: _str(j, 'board_id'),
-        boardName: _str(j, 'board_name', 'General'),
-        title: _str(j, 'title', 'Sin título'),
-        status: _str(j, 'status', 'todo'),
-        assignedTo: j['assigned_to'] as String?,
-        dueDate: j['due_date'] as String?,
-        createdAt: j['created_at'] as String?,
-        updatedAt: j['updated_at'] as String?,
-      );
+    id: _str(j, 'id'),
+    groupId: _str(j, 'group_id'),
+    boardId: _str(j, 'board_id'),
+    boardName: _str(j, 'board_name', 'General'),
+    title: _str(j, 'title', 'Sin título'),
+    status: _str(j, 'status', 'todo'),
+    assignedTo: j['assigned_to'] as String?,
+    dueDate: j['due_date'] as String?,
+    createdAt: j['created_at'] as String?,
+    updatedAt: j['updated_at'] as String?,
+  );
 }
 
 class SprintSheetInfo {
@@ -241,13 +237,12 @@ class SprintSheetInfo {
   final String? periodStart;
   final String? periodEnd;
 
-  factory SprintSheetInfo.fromJson(Map<String, dynamic> j) =>
-      SprintSheetInfo(
-        id: _str(j, 'id'),
-        name: _str(j, 'name', 'Sprint'),
-        periodStart: j['period_start'] as String?,
-        periodEnd: j['period_end'] as String?,
-      );
+  factory SprintSheetInfo.fromJson(Map<String, dynamic> j) => SprintSheetInfo(
+    id: _str(j, 'id'),
+    name: _str(j, 'name', 'Sprint'),
+    periodStart: j['period_start'] as String?,
+    periodEnd: j['period_end'] as String?,
+  );
 }
 
 class SprintTask {
@@ -295,6 +290,143 @@ class SprintTask {
       updatedAt: j['updated_at'] as String?,
     );
   }
+}
+
+// GET /groups/:id/members -> lista directa de GroupMembership,
+// enriquecida con display_name/email cuando Identity los resuelve
+// (campos omitidos si no).
+class GroupMember {
+  GroupMember({
+    required this.id,
+    required this.groupId,
+    required this.userId,
+    required this.role,
+    this.joinedAt,
+    this.displayName,
+    this.email,
+  });
+
+  final String id;
+  final String groupId;
+  final String userId;
+  final String role;
+  final DateTime? joinedAt;
+  final String? displayName;
+  final String? email;
+
+  /// Nombre humano sin inventar: display_name, email o id corto.
+  /// Nunca es un UUID desnudo como etiqueta principal.
+  String get displayLabel {
+    final name = displayName?.trim() ?? '';
+    if (name.isNotEmpty) return name;
+    final mail = email?.trim() ?? '';
+    if (mail.isNotEmpty) return mail;
+    return shortLabel;
+  }
+
+  /// Etiqueta mínima cuando no hay nombre ni correo.
+  String get shortLabel {
+    final short = userId.length > 8 ? '${userId.substring(0, 8)}…' : userId;
+    return '$short · $role';
+  }
+
+  factory GroupMember.fromJson(Map<String, dynamic> j) {
+    DateTime? joined;
+    final raw = j['joined_at'];
+    if (raw is String) joined = DateTime.tryParse(raw);
+    String? name = j['display_name'] as String?;
+    if (name != null && name.trim().isEmpty) name = null;
+    String? mail = j['email'] as String?;
+    if (mail != null && mail.trim().isEmpty) mail = null;
+    return GroupMember(
+      id: _str(j, 'id'),
+      groupId: _str(j, 'group_id'),
+      userId: _str(j, 'user_id'),
+      role: _str(j, 'role', 'member'),
+      joinedAt: joined,
+      displayName: name,
+      email: mail,
+    );
+  }
+}
+
+// GET /groups/:id/stream-token -> 200 {token, channel_id, api_key?}.
+// api_key es pública por diseño de Stream; el secret jamás sale del backend.
+class StreamToken {
+  StreamToken({required this.token, required this.channelId, this.apiKey});
+
+  final String token;
+  final String channelId;
+  final String? apiKey;
+
+  factory StreamToken.fromJson(Map<String, dynamic> j) {
+    String? key = j['api_key'] as String?;
+    if (key != null && key.trim().isEmpty) key = null;
+    return StreamToken(
+      token: _str(j, 'token'),
+      channelId: _str(j, 'channel_id'),
+      apiKey: key,
+    );
+  }
+}
+
+// Horas de una tarea de sprint en una fecha (YYYY-MM-DD).
+// Ver back/social/internal/handler/http/hours_handler.go:131 dailyHoursToJSON.
+class SprintHours {
+  SprintHours({required this.taskId, this.logDate, required this.hours});
+
+  final String taskId;
+  final String? logDate;
+  final double hours;
+
+  factory SprintHours.fromJson(Map<String, dynamic> j) {
+    final raw = j['hours'];
+    double h = 0;
+    if (raw is num) h = raw.toDouble();
+    return SprintHours(
+      taskId: _str(j, 'task_id'),
+      logDate: j['log_date'] as String?,
+      hours: h,
+    );
+  }
+}
+
+// GET /sprint-sheet/:taskId/hours -> 200 {data: [...], total_hours}.
+class SprintHoursList {
+  SprintHoursList({required this.entries, required this.totalHours});
+
+  final List<SprintHours> entries;
+  final double totalHours;
+
+  factory SprintHoursList.fromJson(Map<String, dynamic> j) {
+    final raw = (j['data'] as List?) ?? const [];
+    final total = j['total_hours'];
+    double t = 0;
+    if (total is num) t = total.toDouble();
+    return SprintHoursList(
+      entries: raw
+          .whereType<Map>()
+          .map((e) => SprintHours.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
+      totalHours: t,
+    );
+  }
+}
+
+// GET /groups/:id/discord-config -> 200 {server_name, invite_url,
+// webhook_url?}. 404 discord_not_configured si nunca se configuró.
+class DiscordConfig {
+  DiscordConfig({required this.serverName, required this.inviteUrl, this.webhookUrl});
+
+  final String serverName;
+  final String inviteUrl;
+  final String? webhookUrl;
+
+  factory DiscordConfig.fromJson(Map<String, dynamic> j) => DiscordConfig(
+        serverName: _str(j, 'server_name'),
+        inviteUrl: _str(j, 'invite_url'),
+        webhookUrl: j['webhook_url'] as String?,
+      );
 }
 
 class MeetingItem {
@@ -352,7 +484,8 @@ class Workspace {
     final kanban =
         (j['kanban'] as Map<String, dynamic>?) ?? const <String, dynamic>{};
     final sprint =
-        (j['sprint_sheet'] as Map<String, dynamic>?) ?? const <String, dynamic>{};
+        (j['sprint_sheet'] as Map<String, dynamic>?) ??
+        const <String, dynamic>{};
     final meetings =
         (j['meetings'] as Map<String, dynamic>?) ?? const <String, dynamic>{};
     final chat =
@@ -377,8 +510,10 @@ class Workspace {
       done: todos('done'),
       sheets: sheetsRaw
           .whereType<Map>()
-          .map((e) =>
-              SprintSheetInfo.fromJson(Map<String, dynamic>.from(e as Map)))
+          .map(
+            (e) =>
+                SprintSheetInfo.fromJson(Map<String, dynamic>.from(e as Map)),
+          )
           .toList(),
       sprintTasks: tasksRaw
           .whereType<Map>()

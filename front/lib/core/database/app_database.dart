@@ -2,7 +2,8 @@ import 'package:drift/drift.dart';
 
 import 'connection/stub.dart'
     if (dart.library.io) 'connection/native.dart'
-    if (dart.library.html) 'connection/web.dart' as connection;
+    if (dart.library.html) 'connection/web.dart'
+    as connection;
 
 part 'app_database.g.dart';
 
@@ -10,8 +11,13 @@ class LocalNotes extends Table {
   TextColumn get id => text()();
   TextColumn get title => text().withLength(min: 1, max: 300)();
   TextColumn get content => text()();
-  TextColumn get visibility => text().withLength(min: 1, max: 20).withDefault(const Constant('private'))();
+  TextColumn get visibility => text()
+      .withLength(min: 1, max: 20)
+      .withDefault(const Constant('private'))();
   DateTimeColumn get updatedAt => dateTime()();
+  // ownerUserId aisla notas por cuenta (ver §10 informe): NULL = fila legacy
+  // o creada sin sesión (visible solo sin sesión, nunca como ajena).
+  TextColumn get ownerUserId => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -36,8 +42,8 @@ class LocalNotesFts extends Table {
   @override
   // ignore: override_on_non_overriding_member
   List<String> get customConstraints => const [
-        "USING fts5(title, content, content='local_notes', content_rowid='rowid', tokenize='porter unicode61')"
-      ];
+    "USING fts5(title, content, content='local_notes', content_rowid='rowid', tokenize='porter unicode61')",
+  ];
 
   // Para FTS5, Drift requiere definir qué columnas existen; no necesitamos PK.
 }
@@ -49,7 +55,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.e);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   /// Bandera de disponibilidad del motor FTS5.
   /// true si la tabla virtual y sus triggers se crearon correctamente
@@ -58,89 +64,98 @@ class AppDatabase extends _$AppDatabase {
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
-        onCreate: (Migrator m) async {
-          // Intentar creación via drift; en drift 2.34+ la generación de
-          // tablas virtuales via Dart puede fallar (warning Could not parse),
-          // por lo que hacemos fallback manual robusto.
-          try {
-            await m.createAll();
-          } catch (e) {
-            // Fallback si FTS5 no está disponible o drift falló al generar
-            // CREATE VIRTUAL TABLE (syntax error). Crear base manualmente.
-            try {
-              await m.createTable(localNotes);
-            } catch (_) {}
-            // Crear virtual FTS5 manualmente de forma robusta
-            try {
-              await customStatement(
-                  "CREATE VIRTUAL TABLE IF NOT EXISTS local_notes_fts USING fts5(title, content, content='local_notes', content_rowid='rowid', tokenize='porter unicode61')");
-            } catch (_) {}
-          }
+    onCreate: (Migrator m) async {
+      // Intentar creación via drift; en drift 2.34+ la generación de
+      // tablas virtuales via Dart puede fallar (warning Could not parse),
+      // por lo que hacemos fallback manual robusto.
+      try {
+        await m.createAll();
+      } catch (e) {
+        // Fallback si FTS5 no está disponible o drift falló al generar
+        // CREATE VIRTUAL TABLE (syntax error). Crear base manualmente.
+        try {
+          await m.createTable(localNotes);
+        } catch (_) {}
+        // Crear virtual FTS5 manualmente de forma robusta
+        try {
+          await customStatement(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS local_notes_fts USING fts5(title, content, content='local_notes', content_rowid='rowid', tokenize='porter unicode61')",
+          );
+        } catch (_) {}
+      }
 
-          // Verificar que local_notes_fts sea realmente una tabla virtual FTS5
-          // y no una tabla regular mal generada por drift.
-          // Si la verificación falla, recrear como virtual.
-          try {
-            await customStatement('SELECT * FROM local_notes_fts LIMIT 0');
-          } catch (_) {
-            try {
-              await customStatement('DROP TABLE IF EXISTS local_notes_fts');
-            } catch (_) {}
-            try {
-              await customStatement(
-                  "CREATE VIRTUAL TABLE IF NOT EXISTS local_notes_fts USING fts5(title, content, content='local_notes', content_rowid='rowid', tokenize='porter unicode61')");
-            } catch (_) {
-              ftsAvailable = false;
-              return;
-            }
-          }
+      // Verificar que local_notes_fts sea realmente una tabla virtual FTS5
+      // y no una tabla regular mal generada por drift.
+      // Si la verificación falla, recrear como virtual.
+      try {
+        await customStatement('SELECT * FROM local_notes_fts LIMIT 0');
+      } catch (_) {
+        try {
+          await customStatement('DROP TABLE IF EXISTS local_notes_fts');
+        } catch (_) {}
+        try {
+          await customStatement(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS local_notes_fts USING fts5(title, content, content='local_notes', content_rowid='rowid', tokenize='porter unicode61')",
+          );
+        } catch (_) {
+          ftsAvailable = false;
+          return;
+        }
+      }
 
-          // Crear triggers de sincronización para tabla FTS5 de contenido externo.
-          // Sin estos triggers el índice permanece vacío (bug silencioso).
-          try {
-            await customStatement('''
+      // Crear triggers de sincronización para tabla FTS5 de contenido externo.
+      // Sin estos triggers el índice permanece vacío (bug silencioso).
+      try {
+        await customStatement('''
 CREATE TRIGGER local_notes_ai AFTER INSERT ON local_notes BEGIN
   INSERT INTO local_notes_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content);
 END
 ''');
-            await customStatement('''
+        await customStatement('''
 CREATE TRIGGER local_notes_ad AFTER DELETE ON local_notes BEGIN
   INSERT INTO local_notes_fts(local_notes_fts, rowid, title, content) VALUES('delete', old.rowid, old.title, old.content);
 END
 ''');
-            await customStatement('''
+        await customStatement('''
 CREATE TRIGGER local_notes_au AFTER UPDATE ON local_notes BEGIN
   INSERT INTO local_notes_fts(local_notes_fts, rowid, title, content) VALUES('delete', old.rowid, old.title, old.content);
   INSERT INTO local_notes_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content);
 END
 ''');
-            await customStatement(
-                "INSERT INTO local_notes_fts(local_notes_fts) VALUES('rebuild')");
-            ftsAvailable = true;
-          } catch (_) {
-            // Si falla la creación de triggers o rebuild, marcar no disponible
-            // pero mantener la tabla base operativa.
-            ftsAvailable = false;
-          }
-        },
-        onUpgrade: (m, from, to) async {},
-        beforeOpen: (details) async {
-          // Verificar FTS5 en caliente, si falla, no bloquear
-          try {
-            await customStatement('SELECT * FROM local_notes_fts LIMIT 0');
-            ftsAvailable = true;
-          } catch (_) {
-            ftsAvailable = false;
-          }
-        },
-      );
+        await customStatement(
+          "INSERT INTO local_notes_fts(local_notes_fts) VALUES('rebuild')",
+        );
+        ftsAvailable = true;
+      } catch (_) {
+        // Si falla la creación de triggers o rebuild, marcar no disponible
+        // pero mantener la tabla base operativa.
+        ftsAvailable = false;
+      }
+    },
+    onUpgrade: (m, from, to) async {
+      // v1 -> v2: aislamiento por cuenta sin borrar datos legacy.
+      if (from < 2) {
+        await m.addColumn(localNotes, localNotes.ownerUserId);
+      }
+    },
+    beforeOpen: (details) async {
+      // Verificar FTS5 en caliente, si falla, no bloquear
+      try {
+        await customStatement('SELECT * FROM local_notes_fts LIMIT 0');
+        ftsAvailable = true;
+      } catch (_) {
+        ftsAvailable = false;
+      }
+    },
+  );
 
   /// Reconstruye el índice FTS5 desde el contenido actual de `local_notes`.
   /// Útil para mantenimiento o tras importaciones masivas.
   Future<void> rebuildFtsIndex() async {
     try {
       await customStatement(
-          "INSERT INTO local_notes_fts(local_notes_fts) VALUES('rebuild')");
+        "INSERT INTO local_notes_fts(local_notes_fts) VALUES('rebuild')",
+      );
       ftsAvailable = true;
     } catch (_) {
       ftsAvailable = false;

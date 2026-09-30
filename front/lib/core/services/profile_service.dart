@@ -1,9 +1,11 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/profile_models.dart';
 import 'api_config.dart';
+import 'authed_client.dart';
 import 'session_manager.dart';
 
 // Cliente SOLO para Perfil (Auth/Identity).
@@ -16,6 +18,11 @@ class ProfileService {
   final http.Client _client;
 
   static String get baseUrl => authApiBaseUrl;
+
+  /// Último perfil conocido en el proceso (única fuente reactiva).
+  /// Se actualiza en cada GET/PATCH exitoso; MainShell lo escucha para
+  /// refrescar el sidebar sin logout/login.
+  static final ValueNotifier<UserProfile?> current = ValueNotifier(null);
 
   Map<String, String> _headers({bool json = false}) {
     final token = SessionManager.token;
@@ -53,33 +60,40 @@ class ProfileService {
       message = 'No autorizado (401). Revisa tu sesión.';
       code ??= 'unauthorized';
     }
-    return ProfileApiException(message,
-        statusCode: res.statusCode, code: code);
+    return ProfileApiException(message, statusCode: res.statusCode, code: code);
   }
 
   // GET /profile/me -> 200 {display_name, photo_url, phone, institution, description, visibility}
   Future<UserProfile> getProfile() async {
-    final res = await _client
-        .get(Uri.parse('$baseUrl/profile/me'), headers: _headers())
-        .timeout(const Duration(seconds: 10));
+    final res = await AuthedHttp.run(
+      () => _client
+          .get(Uri.parse('$baseUrl/profile/me'), headers: _headers())
+          .timeout(const Duration(seconds: 10)),
+    );
     if (res.statusCode != 200) throw _toError(res);
     final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-    return UserProfile.fromJson(body);
+    final profile = UserProfile.fromJson(body);
+    current.value = profile;
+    return profile;
   }
 
   // PATCH /profile/me (parcial) -> 200 perfil actualizado.
   // Body vacío -> 400. user_id prohibido -> 400.
   Future<UserProfile> patchProfile(Map<String, dynamic> patch) async {
-    final res = await _client
-        .patch(
-          Uri.parse('$baseUrl/profile/me'),
-          headers: _headers(json: true),
-          body: jsonEncode(patch),
-        )
-        .timeout(const Duration(seconds: 10));
+    final res = await AuthedHttp.run(
+      () => _client
+          .patch(
+            Uri.parse('$baseUrl/profile/me'),
+            headers: _headers(json: true),
+            body: jsonEncode(patch),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
     if (res.statusCode != 200) throw _toError(res);
     final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-    return UserProfile.fromJson(body);
+    final updated = UserProfile.fromJson(body);
+    current.value = updated;
+    return updated;
   }
 
   void dispose() {

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taller_integracion_front/core/services/session_manager.dart';
 import 'package:taller_integracion_front/core/services/social_service.dart';
 import 'package:taller_integracion_front/core/widgets/neobrutalism.dart';
@@ -15,50 +16,49 @@ Map<String, dynamic> _overviewJson(List<Map<String, dynamic>> groups) {
     'sidebar': {
       'groups': [
         for (final g in groups)
-          {
-            'group_id': g['group_id'],
-            'name': g['name'],
-            'role': g['role'],
-          },
+          {'group_id': g['group_id'], 'name': g['name'], 'role': g['role']},
       ],
     },
     'groups': groups,
     'stats': {
       'groups_count': groups.length,
-      'admin_groups_count':
-          groups.where((g) => g['role'] == 'admin').length,
+      'admin_groups_count': groups.where((g) => g['role'] == 'admin').length,
     },
   };
 }
 
 List<Map<String, dynamic>> _baseGroups() => <Map<String, dynamic>>[
-      <String, dynamic>{
-        'group_id': '11111111-1111-1111-1111-111111111111',
-        'name': 'Cálculo II - Grupo Alpha',
-        'description': 'MAT1002',
-        'role': 'admin',
-        'member_count': 5,
-        'joined_at': '2026-08-11T12:00:00Z',
-      },
-      <String, dynamic>{
-        'group_id': '22222222-2222-2222-2222-222222222222',
-        'name': 'Bases de Datos - Proyecto',
-        'description': 'INF220',
-        'role': 'member',
-        'member_count': 4,
-        'joined_at': '2026-08-12T12:00:00Z',
-      },
-      <String, dynamic>{
-        'group_id': '33333333-3333-3333-3333-333333333333',
-        'name': 'Taller Integración III',
-        'description': 'INF-360',
-        'role': 'member',
-        'member_count': 6,
-        'joined_at': '2026-08-13T12:00:00Z',
-      },
-    ];
+  <String, dynamic>{
+    'group_id': '11111111-1111-1111-1111-111111111111',
+    'name': 'Cálculo II - Grupo Alpha',
+    'description': 'MAT1002',
+    'role': 'admin',
+    'member_count': 5,
+    'joined_at': '2026-08-11T12:00:00Z',
+  },
+  <String, dynamic>{
+    'group_id': '22222222-2222-2222-2222-222222222222',
+    'name': 'Bases de Datos - Proyecto',
+    'description': 'INF220',
+    'role': 'member',
+    'member_count': 4,
+    'joined_at': '2026-08-12T12:00:00Z',
+  },
+  <String, dynamic>{
+    'group_id': '33333333-3333-3333-3333-333333333333',
+    'name': 'Taller Integración III',
+    'description': 'INF-360',
+    'role': 'member',
+    'member_count': 6,
+    'joined_at': '2026-08-13T12:00:00Z',
+  },
+];
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
   Future<void> pumpGroups(
     WidgetTester tester,
     Size size, {
@@ -72,8 +72,9 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('renderiza grupos reales de GET /me/overview en desktop',
-      (tester) async {
+  testWidgets('renderiza grupos reales de GET /me/overview en desktop', (
+    tester,
+  ) async {
     SessionManager.saveSession('jwt-groups-test', {'id': 'u-test'});
     addTearDown(SessionManager.clear);
     final groups = _baseGroups();
@@ -81,8 +82,11 @@ void main() {
       client: MockClient((request) async {
         if (request.method == 'GET' && request.url.path == '/me/overview') {
           expect(request.headers['Authorization'], 'Bearer jwt-groups-test');
-          return http.Response(jsonEncode(_overviewJson(groups)), 200,
-              headers: {'content-type': 'application/json'});
+          return http.Response(
+            jsonEncode(_overviewJson(groups)),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
         }
         return http.Response('{}', 404);
       }),
@@ -98,7 +102,9 @@ void main() {
     expect(find.text('INF-360'), findsOneWidget);
     expect(find.textContaining('5 integrantes'), findsOneWidget);
     expect(find.text('ABRIR'), findsNWidgets(3));
-    expect(find.text('INFO'), findsNWidgets(3));
+    // INVITAR solo admin real (1 admin), INFO para miembros (2).
+    expect(find.text('INVITAR'), findsOneWidget);
+    expect(find.text('INFO'), findsNWidgets(2));
     expect(find.textContaining('3 grupos'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -110,8 +116,11 @@ void main() {
     final service = SocialService(
       client: MockClient((request) async {
         if (request.method == 'GET' && request.url.path == '/me/overview') {
-          return http.Response(jsonEncode(_overviewJson(groups)), 200,
-              headers: {'content-type': 'application/json'});
+          return http.Response(
+            jsonEncode(_overviewJson(groups)),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
         }
         if (request.method == 'POST' && request.url.path == '/groups') {
           final body = jsonDecode(request.body) as Map<String, dynamic>;
@@ -128,10 +137,10 @@ void main() {
             },
           ];
           return http.Response(
-              jsonEncode(
-                  {'group_id': '44444444-4444-4444-4444-444444444444'}),
-              201,
-              headers: {'content-type': 'application/json'});
+            jsonEncode({'group_id': '44444444-4444-4444-4444-444444444444'}),
+            201,
+            headers: {'content-type': 'application/json'},
+          );
         }
         return http.Response('{}', 404);
       }),
@@ -143,14 +152,14 @@ void main() {
     expect(find.byType(NeobrutalistFab), findsOneWidget);
     await tester.tap(find.byType(NeobrutalistFab));
     await tester.pumpAndSettle();
-    expect(find.text('CREAR GRUPO (REAL)'), findsOneWidget);
+    expect(find.text('CREAR GRUPO'), findsOneWidget);
 
     await tester.enterText(find.byType(TextField).first, 'Equipo Física');
-    await tester.tap(find.text('CREAR GRUPO'));
+    await tester.tap(find.text('CREAR'));
     await tester.pumpAndSettle();
 
     expect(find.text('Equipo Física'), findsOneWidget);
-    expect(find.textContaining('Grupo creado:'), findsOneWidget);
+    expect(find.text('Grupo creado.'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -159,8 +168,11 @@ void main() {
     addTearDown(SessionManager.clear);
     final service = SocialService(
       client: MockClient((request) async {
-        return http.Response(jsonEncode(_overviewJson(_baseGroups())), 200,
-            headers: {'content-type': 'application/json'});
+        return http.Response(
+          jsonEncode(_overviewJson(_baseGroups())),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
       }),
     );
     addTearDown(service.dispose);
