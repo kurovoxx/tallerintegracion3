@@ -554,6 +554,9 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     if (!mounted) return;
     if (members == null) return;
     final titleCtrl = TextEditingController(text: row.task);
+    final estimateCtrl = TextEditingController(
+      text: row.estimate.toStringAsFixed(1),
+    );
     // userId estable: la lista puede reconstruirse sin romper la selección.
     String? selectedUserId;
     for (final m in members) {
@@ -604,6 +607,20 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                       onChanged: (v) =>
                           setDialogState(() => selectedUserId = v),
                     ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Horas asignadas',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    TextField(
+                      controller: estimateCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Horas asignadas',
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -624,11 +641,25 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     );
     final title = titleCtrl.text.trim();
     titleCtrl.dispose();
+    // Misma regla que al crear: número válido >= 0 (estimated_hours real).
+    final estimate = double.tryParse(
+      estimateCtrl.text.trim().replaceAll(',', '.'),
+    );
+    estimateCtrl.dispose();
     if (ok != true || !mounted) return;
     if (title.isEmpty || selectedUserId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Título y responsable son requeridos.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+    if (estimate == null || estimate < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Horas asignadas inválidas.'),
           backgroundColor: AppColors.error,
         ),
       );
@@ -642,6 +673,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
         assignedTo: selectedUserId!,
         priority: priority.toLowerCase(),
         status: _sprintStatusBackend(status),
+        estimatedHours: estimate,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
