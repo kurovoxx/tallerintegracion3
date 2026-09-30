@@ -12,7 +12,7 @@ echo "  1) linux         - nativo Linux local (http://localhost:8085, requiere a
 echo "  2) windows       - build Windows (solo Windows + Visual Studio)"
 echo "  3) web           - flutter run -d chrome (http://localhost:8085)"
 echo "  4) docker        - docker compose up front (web via nginx http://localhost:8086)"
-echo "  5) linux-deploy  - nativo Linux contra dominio ngrok (front/.env.prod.example, sin auth local)"
+echo "  5) linux-deploy  - nativo Linux contra dominio del Ingress (front/.env.prod.example, sin auth local)"
 echo ""
 read -p "Elige [1-5] (default 1): " CHOICE
 CHOICE=${CHOICE:-1}
@@ -72,7 +72,7 @@ case "$CHOICE" in
     docker compose up --build front
     ;;
   5|linux-deploy|deploy)
-    echo ">> Linux nativo contra dominio ngrok (sin auth local)"
+    echo ">> Linux nativo contra dominio del Ingress (sin auth local)"
     check_fedora_deps
     if ! command -v flutter >/dev/null 2>&1; then echo "Flutter no encontrado"; exit 1; fi
     # Lee dominio de .env.prod o front/.env.prod.example
@@ -81,9 +81,9 @@ case "$CHOICE" in
     if [ ! -f "$DEPLOY_ENV" ]; then echo "No se encontró .env.prod ni front/.env.prod.example"; exit 1; fi
     # shellcheck disable=SC1090
     set -a; source "$DEPLOY_ENV"; set +a
-    API_URL="${API_BASE_URL:-https://dotted-unaudited-liking.ngrok-free.dev/api-auth}"
-    NOTES_URL="${NOTES_BASE_URL:-https://dotted-unaudited-liking.ngrok-free.dev/api-notes}"
-    SOCIAL_URL="${SOCIAL_BASE_URL:-https://dotted-unaudited-liking.ngrok-free.dev/api-social}"
+    API_URL="${API_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-auth}"
+    NOTES_URL="${NOTES_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-notes}"
+    SOCIAL_URL="${SOCIAL_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-social}"
     echo "API: $API_URL"
     cd "$FRONT_DIR"
     flutter pub get
