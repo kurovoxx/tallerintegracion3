@@ -334,6 +334,55 @@ class SocialService {
     if (res.statusCode != 200) throw _toError(res);
   }
 
+  Future<List<SprintSheetInfo>> listSprintSheets(String groupId) async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .get(
+            Uri.parse('$baseUrl/groups/$groupId/sprint-sheets'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) throw _toError(res);
+    final data = (jsonDecode(res.body) as Map<String, dynamic>)['data'] as List;
+    return data
+        .map((e) => SprintSheetInfo.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<SprintSheetInfo> saveSprintSheet({
+    required String groupId,
+    String? sheetId,
+    required String name,
+    required String start,
+    required String end,
+  }) async {
+    final url = Uri.parse(
+      '$baseUrl/groups/$groupId/sprint-sheets${sheetId == null ? '' : '/$sheetId'}',
+    );
+    final body = jsonEncode({
+      'name': name.trim(),
+      'period_start': start,
+      'period_end': end,
+    });
+    final res = await AuthedHttp.run(
+      () =>
+          (sheetId == null
+                  ? _client.post(url, headers: _headers(json: true), body: body)
+                  : _client.patch(
+                      url,
+                      headers: _headers(json: true),
+                      body: body,
+                    ))
+              .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200 && res.statusCode != 201) throw _toError(res);
+    return SprintSheetInfo.fromJson(
+      (jsonDecode(res.body) as Map<String, dynamic>)['data']
+          as Map<String, dynamic>,
+    );
+  }
+
   // GET /groups/:id/sprint-sheet?status=&priority=&sheet_id=
   Future<List<SprintTask>> listSprintTasks(String groupId) async {
     final id = groupId.trim();
@@ -359,6 +408,7 @@ class SocialService {
   // OJO: assigned_to es requerido por el backend (sprint_handler.go:27).
   Future<SprintTask> createSprintTask({
     required String groupId,
+    String? sheetId,
     required String title,
     required String assignedTo,
     String? priority,
@@ -367,6 +417,7 @@ class SocialService {
   }) async {
     final payload = <String, dynamic>{
       'title': title.trim(),
+      'sheet_id': ?sheetId,
       'assigned_to': assignedTo.trim(),
       if (priority != null && priority.isNotEmpty) 'priority': priority,
       if (status != null && status.isNotEmpty) 'status': status,

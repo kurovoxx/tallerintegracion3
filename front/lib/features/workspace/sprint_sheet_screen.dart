@@ -8,6 +8,7 @@ import '../../core/models/social_models.dart';
 import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import 'sprint_editor_dialog.dart';
 
 // ---------------------------------------------------------------------------
 // Modelo de datos (tipeado + store estático en memoria para aguantar el hot
@@ -152,43 +153,40 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
 
   // Lectura: GET /groups/:id/workspace (sprint_sheet) con fallback a
   // GET /groups/:id/sprint-sheet. Luego miembros (nombres) y horas por tarea.
-  Future<void> _loadReal() async {
-    if (!_isRealGroup) return;
-    if (!mounted) return;
+  SprintSheetInfo? get _activeSheet => _realSheets.isEmpty
+      ? null
+      : _realSheets[_realSheetIndex.clamp(0, _realSheets.length - 1)];
+
+  Future<void> _loadReal({String? selectId}) async {
+    if (!_isRealGroup || !mounted) return;
+    final groupId = widget.groupId!.trim();
+    final selected = selectId ?? _activeSheet?.id;
     setState(() {
       _loadingReal = true;
       _realError = null;
     });
     try {
-      final ws = await _social.getWorkspace(widget.groupId!.trim());
-      if (!mounted) return;
+      List<SprintSheetInfo> sheets;
+      List<SprintTask> tasks;
+      try {
+        final ws = await _social.getWorkspace(groupId);
+        sheets = ws.sheets;
+        tasks = ws.sprintTasks;
+      } on SocialApiException {
+        sheets = await _social.listSprintSheets(groupId);
+        tasks = await _social.listSprintTasks(groupId);
+      }
+      if (!mounted || groupId != widget.groupId?.trim()) return;
       setState(() {
-        _realSheets = ws.sheets;
-        _realTasks = ws.sprintTasks;
-        _realSheetIndex = 0;
+        _realSheets = sheets;
+        _realTasks = tasks;
+        final index = sheets.indexWhere((s) => s.id == selected);
+        _realSheetIndex = index < 0 ? 0 : index;
         _loadingReal = false;
       });
       await _loadRealSupport();
-    } on SocialApiException catch (_) {
-      // Fallback a endpoint directo.
-      try {
-        final tasks = await _social.listSprintTasks(widget.groupId!.trim());
-        if (!mounted) return;
-        setState(() {
-          _realTasks = tasks;
-          _realSheetIndex = 0;
-          _loadingReal = false;
-        });
-        await _loadRealSupport();
-      } catch (_) {
-        if (!mounted) return;
-        setState(() {
-          _realError = 'No se pudo cargar la hoja de sprint.';
-          _loadingReal = false;
-        });
-      }
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || groupId != widget.groupId?.trim()) return;
       setState(() {
         _realError = 'No se pudo cargar la hoja de sprint.';
         _loadingReal = false;
@@ -196,40 +194,67 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     }
   }
 
-  /// Miembros y horas que acompañan la vista real (best-effort: si fallan,
-  /// la tabla igual se muestra con ids cortos y horas en cero).
   Future<void> _loadRealSupport() async {
+    final groupId = widget.groupId?.trim();
     if (!_isRealGroup || !mounted) return;
     try {
-      final members = await _social.listMembers(widget.groupId!.trim());
-      if (!mounted) return;
-      setState(() {
-        _memberById = {for (final m in members) m.userId: m};
-      });
+      final members = await _social.listMembers(groupId!);
+      if (!mounted || groupId != widget.groupId?.trim()) return;
+      setState(() => _memberById = {for (final m in members) m.userId: m});
     } catch (_) {}
+    final results = await Future.wait(
+      _realTasks.map((t) async {
+        try {
+          return MapEntry(t.id, await _social.listHours(t.id));
+        } catch (_) {
+          return MapEntry<String, SprintHoursList?>(t.id, null);
+        }
+      }),
+    );
+    if (!mounted || groupId != widget.groupId?.trim()) return;
+    setState(
+      () => _hoursByTask = {
+        for (final e in results)
+          if (e.value != null)
+            e.key: {
+              for (final h in e.value!.entries)
+                if ((h.logDate ?? '').isNotEmpty) h.logDate!: h.hours,
+            },
+      },
+    );
+  }
+
+  Future<void> _manageSprint({bool edit = false}) async {
+    final groupId = widget.groupId!.trim();
+    final sheet = edit ? _activeSheet : null;
+    final result = await showDialog<SprintDraft>(
+      context: context,
+      builder: (_) => SprintEditorDialog(
+        sheet: sheet,
+        suggestedName: 'Sprint ${_realSheets.length + 1}',
+      ),
+    );
+    if (result == null || !mounted || groupId != widget.groupId?.trim()) return;
     try {
-      final results = await Future.wait(
-        _realTasks.map((t) async {
-          try {
-            final h = await _social.listHours(t.id);
-            return MapEntry(t.id, h);
-          } catch (_) {
-            return MapEntry(t.id, null);
-          }
-        }),
+      final saved = await _social.saveSprintSheet(
+        groupId: groupId,
+        sheetId: sheet?.id,
+        name: result.name,
+        start: result.start,
+        end: result.end,
       );
-      if (!mounted) return;
-      setState(() {
-        _hoursByTask = {
-          for (final e in results)
-            if (e.value != null)
-              e.key: {
-                for (final h in e.value!.entries)
-                  if ((h.logDate ?? '').isNotEmpty) h.logDate!: h.hours,
-              },
-        };
-      });
-    } catch (_) {}
+      if (!mounted || groupId != widget.groupId?.trim()) return;
+      await _loadReal(selectId: saved.id);
+    } catch (_) {
+      if (!mounted || groupId != widget.groupId?.trim()) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No se pudo guardar el sprint. Revisa las fechas e inténtalo de nuevo.',
+          ),
+        ),
+      );
+    }
   }
 
   /// Vista rica construida con datos reales (hojas, tareas, horas, nombres).
@@ -244,9 +269,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
         ? sheets[_realSheetIndex.clamp(0, sheets.length - 1)]
         : null;
     final sheetId = sheet?.id ?? '';
-    final tasks = _realTasks
-        .where((t) => sheetId.isEmpty || t.sheetId == sheetId)
-        .toList();
+    final tasks = _realTasks.where((t) => t.sheetId == sheetId).toList();
     if (tasks.isEmpty && sheets.isNotEmpty) {
       // La hoja elegida no tiene tareas: igual se muestra su cabecera.
     }
@@ -517,8 +540,22 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     }
     setState(() => _creatingReal = true);
     try {
+      var sheet = _activeSheet;
+      if (sheet == null) {
+        // La primera tarea conserva la compatibilidad con grupos sin hoja.
+        final now = DateTime.now();
+        sheet = await _social.saveSprintSheet(
+          groupId: widget.groupId!.trim(),
+          name: 'Sprint 1',
+          start: _iso(now),
+          end: _iso(now.add(const Duration(days: 4))),
+        );
+        _realSheets = [sheet];
+        _realSheetIndex = 0;
+      }
       await _social.createSprintTask(
         groupId: widget.groupId!.trim(),
+        sheetId: sheet.id,
         title: title,
         assignedTo: selectedUserId!,
         priority: priority,
@@ -1380,6 +1417,20 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                   .where((t) => t.sheetId == sheets[i].id)
                   .length,
               onTap: () => setState(() => _realSheetIndex = i),
+            ),
+          ],
+          const SizedBox(width: 8),
+          NeobrutalistButton(
+            label: '+ NUEVO SPRINT',
+            icon: Icons.add_circle_outline_rounded,
+            onPressed: _loadingReal ? null : () => _manageSprint(),
+          ),
+          if (_activeSheet != null) ...[
+            const SizedBox(width: 8),
+            NeobrutalistButton(
+              label: 'EDITAR SPRINT',
+              icon: Icons.edit_outlined,
+              onPressed: _loadingReal ? null : () => _manageSprint(edit: true),
             ),
           ],
           const SizedBox(width: 8),

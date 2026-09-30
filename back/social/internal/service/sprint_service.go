@@ -46,6 +46,7 @@ type SprintService struct {
 // *repository.SprintRepository es la implementación real (Postgres);
 // MemoryTasksStore, la de tests.
 type SprintRepo interface {
+	UpdateSheet(ctx context.Context, arg sqlc.UpdateSheetParams) (sqlc.SocialSprintSheet, error)
 	GetGroupByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialGroup, error)
 	IsMember(ctx context.Context, groupID, userID pgtype.UUID) (bool, error)
 	GetSheetByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialSprintSheet, error)
