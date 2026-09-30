@@ -608,10 +608,6 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                           setDialogState(() => selectedUserId = v),
                     ),
                     const SizedBox(height: 8),
-                    const Text(
-                      'Horas asignadas',
-                      style: TextStyle(fontSize: 12),
-                    ),
                     TextField(
                       controller: estimateCtrl,
                       keyboardType: const TextInputType.numberWithOptions(
@@ -656,7 +652,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
       );
       return;
     }
-    if (estimate == null || estimate < 0) {
+    if (estimate == null || !estimate.isFinite || estimate < 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Horas asignadas inválidas.'),

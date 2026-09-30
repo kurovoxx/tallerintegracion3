@@ -134,7 +134,7 @@ void main() {
     await _openEditDialog(tester);
 
     expect(find.text('EDITAR TAREA'), findsOneWidget);
-    expect(find.text('Horas asignadas'), findsWidgets);
+    expect(find.text('Horas asignadas'), findsOneWidget);
     // Precargado con las horas actuales (estimated_hours real).
     expect(find.text('2.0'), findsOneWidget);
 
