@@ -19,6 +19,7 @@ import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 import 'attachment_resources.dart';
+import 'authenticated_attachment_image.dart';
 
 /// Base URL del microservicio de notas. En el emulador Android `localhost` es
 /// el propio dispositivo, por eso se usa la alias 10.0.2.2 hacia el host.
@@ -561,9 +562,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     final url = '$notesBaseUrl/notes/${note.id}';
     try {
       final res = await AuthedHttp.run(
-        () => http
-            .get(Uri.parse(url), headers: _authHeaders())
-            .timeout(const Duration(seconds: 8)),
+        () => _withNotesClient(
+          (client) => client
+              .get(Uri.parse(url), headers: _authHeaders())
+              .timeout(const Duration(seconds: 8)),
+        ),
       );
       if (res.statusCode == 200) {
         final data =
@@ -2145,6 +2148,7 @@ class _NoteDetailSheet extends StatefulWidget {
 }
 
 class _NoteDetailSheetState extends State<_NoteDetailSheet> {
+  List<Map<String, dynamic>> _attachments = [];
   late String _title;
   late String _content;
   late int _likes;
@@ -2205,6 +2209,10 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
       _loadingRemote = false;
       if (res.ok) {
         final d = res.data ?? {};
+        _attachments = attachmentResources(
+          widget.note.id,
+          (d['attachments'] as List?) ?? [],
+        );
         final rc = d['content'];
         if (rc is String) _content = rc;
         final rt = d['title'];
@@ -2448,9 +2456,14 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
   }
 
   void _showResourceDialog(Map<String, dynamic> resource) {
+    final identity = resourceIdentity(resource['url'] as String? ?? '');
+    final matched = _mergedResources.where(
+      (r) => resourceIdentity(r['url'] as String? ?? '') == identity,
+    );
+    final resolved = matched.isEmpty ? resource : matched.first;
     showDialog<void>(
       context: context,
-      builder: (_) => _ResourceViewerDialog(resource: resource),
+      builder: (_) => _ResourceViewerDialog(resource: resolved),
     );
   }
 
@@ -2487,7 +2500,24 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
               .timeout(const Duration(seconds: 8)),
         ),
       );
-      if (res.statusCode != 201) {
+      if (res.statusCode == 201 && mounted) {
+        final payload =
+            jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+        setState(
+          () => _attachments.addAll(
+            attachmentResources(noteId, [
+              {
+                'id': payload['attachment_id'],
+                'note_id': noteId,
+                'file_url': result.fileUrl,
+                'file_name': result.fileName,
+                'file_type': result.fileType,
+                'external_file_id': externalId,
+              },
+            ]),
+          ),
+        );
+      } else if (res.statusCode != 201) {
         debugPrint(
           '[FRONT DEBUG] No se pudo registrar adjunto $externalId en '
           'nota $noteId: status=${res.statusCode} '
@@ -2501,13 +2531,14 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
 
   List<Map<String, dynamic>> get _mergedResources {
     final merged = <Map<String, dynamic>>[
+      ..._attachments,
       ...widget.resources,
       ..._resourcesFromMarkdown(_content),
     ];
     final seen = <String>{};
     final out = <Map<String, dynamic>>[];
     for (final r in merged) {
-      final key = '${r['type']}::${r['url'] ?? r['name']}';
+      final key = resourceIdentity((r['url'] ?? r['name']) as String);
       if (seen.add(key)) out.add(r);
     }
     return out;
@@ -2857,6 +2888,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                   const SizedBox(height: 16),
                   _NeobrutalistMarkdownBody(
                     content: _content,
+                    resources: _mergedResources,
                     onOpenResource: _showResourceDialog,
                   ),
                 ],
@@ -3595,12 +3627,8 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
   @override
   void initState() {
     super.initState();
-    _nameCtrl = TextEditingController(
-      text: widget.isImage ? 'Conejita' : 'Documento Prueba',
-    );
-    _urlCtrl = TextEditingController(
-      text: widget.isImage ? 'conejita.jpg' : 'prueba.pdf',
-    );
+    _nameCtrl = TextEditingController();
+    _urlCtrl = TextEditingController();
   }
 
   @override
@@ -3719,132 +3747,6 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text(
-                'PRESET RÁPIDO DISPONIBLE:',
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w900,
-                  color: AppColors.muted,
-                  letterSpacing: 0.5,
-                ),
-              ),
-              const SizedBox(height: 6),
-              MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: GestureDetector(
-                  onTap: _uploading
-                      ? null
-                      : () => _attach(
-                          name: isImage ? 'Conejita' : 'Prueba PDF',
-                          source: isImage ? 'conejita.jpg' : 'prueba.pdf',
-                          isImage: isImage,
-                        ),
-                  child: Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: isImage
-                          ? AppColors.subjectMint
-                          : AppColors.accentYellow,
-                      border: Border.all(color: AppColors.border, width: 2),
-                      borderRadius: BorderRadius.circular(AppDimens.radius),
-                      boxShadow: AppShadows.badge,
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          isImage
-                              ? Icons.pets_rounded
-                              : Icons.description_rounded,
-                          size: 20,
-                          color: AppColors.text,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                isImage
-                                    ? 'Conejita de prueba (conejita.jpg)'
-                                    : 'PDF de prueba (prueba.pdf)',
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w900,
-                                  color: AppColors.text,
-                                ),
-                              ),
-                              Text(
-                                _uploading
-                                    ? 'Subiendo a Google Drive…'
-                                    : isImage
-                                    ? 'Imagen local · se sube a tu Drive al usar'
-                                    : 'PDF local · se sube a tu Drive al usar',
-                                style: const TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppColors.muted,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 3,
-                          ),
-                          decoration: BoxDecoration(
-                            color: AppColors.border,
-                            borderRadius: BorderRadius.circular(
-                              AppDimens.radiusChip,
-                            ),
-                          ),
-                          child: _uploading
-                              ? const SizedBox(
-                                  width: 10,
-                                  height: 10,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
-                                  ),
-                                )
-                              : const Text(
-                                  '+ USAR',
-                                  style: TextStyle(
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.w900,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              const Row(
-                children: [
-                  Expanded(
-                    child: Divider(color: AppColors.border, thickness: 1),
-                  ),
-                  Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 8),
-                    child: Text(
-                      'O PERSONALIZADO',
-                      style: TextStyle(
-                        fontSize: 9,
-                        fontWeight: FontWeight.w900,
-                        color: AppColors.muted,
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    child: Divider(color: AppColors.border, thickness: 1),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
               TextField(
                 controller: _nameCtrl,
                 decoration: InputDecoration(
@@ -3870,8 +3772,8 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
                       ? 'Ruta local o URL web de imagen'
                       : 'Ruta local o URL web del PDF',
                   hintText: isImage
-                      ? 'conejita.jpg o https://...'
-                      : 'prueba.pdf o https://...',
+                      ? 'Selecciona una imagen o pega una URL'
+                      : 'Ruta de un documento o URL',
                   filled: true,
                   fillColor: AppColors.surfaceLow,
                   border: const OutlineInputBorder(
@@ -4210,10 +4112,26 @@ Future<String?> _copyLocalResourceToDownloads(File source) async {
 /// para URLs http/https y fallback neobrutalista si nada aplica o falla.
 Widget _buildResourceImage({
   required String url,
+  Map<String, dynamic>? resource,
   required BoxFit fit,
   required Widget Function() fallback,
   Widget Function(BuildContext, Widget, ImageChunkEvent?)? loadingBuilder,
 }) {
+  if (resource?['note_id'] is String && resource?['attachment_id'] is String) {
+    final noteId = Uri.encodeComponent(resource!['note_id'] as String);
+    final attachmentId = Uri.encodeComponent(
+      resource['attachment_id'] as String,
+    );
+    return AuthenticatedAttachmentImage(
+      key: ValueKey('$noteId/$attachmentId/${SessionManager.user?['id']}'),
+      contentUri: Uri.parse(
+        '$notesBaseUrl/notes/$noteId/attachments/$attachmentId/content',
+      ),
+      fit: fit,
+      client: notesHttpClientOverride,
+      onOpenDrive: () => _openResourceExternally(url),
+    );
+  }
   if (isDriveViewerUrl(url)) {
     return Center(
       child: SingleChildScrollView(
@@ -4230,7 +4148,11 @@ Widget _buildResourceImage({
                   final ok = await _openResourceExternally(url);
                   if (!ok && context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('No se pudo abrir el archivo. Inténtalo de nuevo.')),
+                      const SnackBar(
+                        content: Text(
+                          'No se pudo abrir el archivo. Inténtalo de nuevo.',
+                        ),
+                      ),
                     );
                   }
                 },
@@ -4315,6 +4237,7 @@ class _ResourceImageThumb extends StatelessWidget {
           ),
           child: _buildResourceImage(
             url: (resource['url'] ?? '') as String,
+            resource: resource,
             fit: BoxFit.cover,
             fallback: fallback,
             loadingBuilder: (context, child, progress) {
@@ -4606,6 +4529,7 @@ class _ResourceViewerDialog extends StatelessWidget {
                   maxScale: 4.0,
                   child: _buildResourceImage(
                     url: _url,
+                    resource: resource,
                     fit: BoxFit.contain,
                     fallback: () => Container(
                       color: AppColors.surfaceLow,
@@ -4805,11 +4729,21 @@ class _ResourceViewerDialog extends StatelessWidget {
 /// imágenes embebidas (archivo local o URL remota) y chips de PDF.
 class _NeobrutalistMarkdownBody extends StatelessWidget {
   final String content;
+  final List<Map<String, dynamic>> resources;
   final ValueChanged<Map<String, dynamic>> onOpenResource;
   const _NeobrutalistMarkdownBody({
     required this.content,
     required this.onOpenResource,
+    this.resources = const [],
   });
+
+  Map<String, dynamic>? _attachmentFor(String url) {
+    final identity = resourceIdentity(url);
+    final matches = resources.where(
+      (r) => resourceIdentity(r['url'] as String? ?? '') == identity,
+    );
+    return matches.isEmpty ? null : matches.first;
+  }
 
   static const TextStyle _paragraphStyle = TextStyle(
     fontSize: 14,
@@ -5077,6 +5011,7 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
                   children: [
                     _buildResourceImage(
                       url: url,
+                      resource: _attachmentFor(url),
                       fit: BoxFit.contain,
                       fallback: () => Container(
                         width: 420,
@@ -5495,6 +5430,7 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
           ),
           child: _buildResourceImage(
             url: url,
+            resource: _attachmentFor(url),
             fit: BoxFit.contain,
             fallback: () => const Center(
               child: Icon(

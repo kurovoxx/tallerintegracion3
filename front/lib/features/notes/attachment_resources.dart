@@ -6,6 +6,46 @@ bool isDriveViewerUrl(String url) {
       uri.host.toLowerCase() == 'drive.google.com';
 }
 
+String resourceIdentity(String url) {
+  final uri = Uri.tryParse(url);
+  if (isDriveViewerUrl(url) && uri != null) {
+    final parts = uri.pathSegments;
+    final index = parts.indexOf('d');
+    if (index >= 0 && index + 1 < parts.length) {
+      return 'drive:${parts[index + 1]}';
+    }
+    final id = uri.queryParameters['id'];
+    if (id != null) return 'drive:$id';
+  }
+  return url;
+}
+
+List<Map<String, dynamic>> attachmentResources(
+  String noteId,
+  List<dynamic> attachments,
+) {
+  return attachments
+      .whereType<Map>()
+      .where((a) => a['id'] is String && a['note_id'] == noteId)
+      .map((a) {
+        final mime = (a['file_type'] as String? ?? '').toLowerCase();
+        final type = mime.startsWith('image/')
+            ? 'image'
+            : (mime == 'application/pdf' ? 'pdf' : 'doc');
+        return <String, dynamic>{
+          'type': type,
+          'name': a['file_name'] ?? 'Adjunto',
+          'url':
+              a['file_url'] ??
+              'https://drive.google.com/file/d/${a['external_file_id']}/view',
+          'size': type == 'pdf' ? 'PDF' : 'Adjunto',
+          'note_id': noteId,
+          'attachment_id': a['id'],
+        };
+      })
+      .toList();
+}
+
 /// Clasifica cada referencia una sola vez, incluyendo enlaces sin extensión.
 /// La marca ! distingue una imagen de un documento con la misma clase de URL.
 List<Map<String, dynamic>> resourcesFromMarkdown(String content) {

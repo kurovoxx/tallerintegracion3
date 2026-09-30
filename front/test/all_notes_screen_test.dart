@@ -218,7 +218,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('dialogo de nueva nota incluye barra de adjuntos e inserta preset rapido', (
+  testWidgets('dialogo de adjuntos abre vacío y permite insertar una imagen propia', (
     tester,
   ) async {
     await pumpNotes(tester, const Size(1440, 900));
@@ -238,9 +238,12 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.text('ADJUNTAR IMAGEN'), findsOneWidget);
-    expect(find.text('Conejita de prueba (conejita.jpg)'), findsOneWidget);
-
-    await tester.tap(find.text('+ USAR'));
+    expect(find.textContaining('PRESET RÁPIDO'), findsNothing);
+    expect(find.text('Conejita'), findsNothing);
+    final imageSource = find.widgetWithText(TextField, 'Ruta local o URL web de imagen');
+    expect(tester.widget<TextField>(imageSource).controller!.text, isEmpty);
+    await tester.enterText(imageSource, 'https://example.com/diagrama.png');
+    await tester.tap(find.text('SUBIR E INSERTAR'));
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.textContaining('ADJUNTOS VINCULADOS'), findsOneWidget);
@@ -326,7 +329,55 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     await tester.tap(find.text(kind));
     await tester.pump(const Duration(milliseconds: 300));
+    if (kind == 'PDF / DOC') {
+      expect(find.textContaining('PRESET RÁPIDO'), findsNothing);
+      final source = find.widgetWithText(TextField, 'Ruta local o URL web del PDF');
+      expect(tester.widget<TextField>(source).controller!.text, isEmpty);
+      await tester.enterText(source, pdfFixture.absolute.path);
+    }
   }
+
+  testWidgets('detalle de nota usa metadata y bytes privados dentro del Markdown', (tester) async {
+    const noteId = '12345678-1234-4234-8234-123456789abc';
+    const attachmentId = 'abcdefab-1234-4234-8234-123456789abc';
+    const driveUrl = 'https://drive.google.com/file/d/private-picture/view';
+    final png = base64Decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=');
+    final contentPaths = <String>[];
+    await SessionManager.saveSession('jwt-private-note', {'id': 'private-note-owner'});
+    notesHttpClientOverride = MockClient((request) async {
+      expect(request.headers['Authorization'], 'Bearer jwt-private-note');
+      if (request.url.path == '/notes/me') {
+        return http.Response(jsonEncode({'notes': [{
+          'id': noteId, 'title': 'Imagen privada integrada', 'visibility': 'private',
+        }]}), 200, headers: {'content-type':'application/json'});
+      }
+      if (request.url.path == '/notes/$noteId') {
+        return http.Response(jsonEncode({
+          'content': '![Diagrama]($driveUrl?usp=drivesdk)',
+          'attachments': [{
+            'id': attachmentId, 'note_id': noteId, 'file_type': 'image/png',
+            'file_name': 'diagrama.png', 'file_url': driveUrl,
+          }],
+        }),200,headers:{'content-type':'application/json'});
+      }
+      if (request.url.path.endsWith('/content')) {
+        contentPaths.add(request.url.path);
+        return http.Response.bytes(png,200,headers:{'content-type':'image/png'});
+      }
+      return http.Response('{}',404);
+    });
+    addTearDown(() async { notesHttpClientOverride = null; await SessionManager.clear(); });
+    await pumpNotes(tester,const Size(1440,900));
+    await settleRealAsync(tester);
+    await tester.tap(find.text('Imagen privada integrada'));
+    await settleRealAsync(tester);
+    expect(contentPaths,isNotEmpty);
+    expect(contentPaths.every((path) => path == '/notes/$noteId/attachments/$attachmentId/content'),isTrue);
+    expect(find.byWidgetPredicate((w) => w is Image && w.image is MemoryImage),findsWidgets);
+    expect(find.text('DOCUMENTOS'),findsNothing);
+    expect(find.text('Imagen no disponible'),findsNothing);
+    expect(tester.takeException(),isNull);
+  });
 
   testWidgets(
     'imagen subida conserva un recurso y ofrece abrir Drive sin cargar HTML como imagen',
@@ -380,7 +431,7 @@ void main() {
           .map((field) => field.controller?.text ?? '')
           .firstWhere((value) => value.contains(url));
       expect(resourcesFromMarkdown(markdown).single['type'], 'image');
-      await tester.tap(find.text('Conejita'));
+      await tester.tap(find.text('Imagen'));
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.text('Vista previa no disponible aquí.'), findsOneWidget);
       expect(find.text('ABRIR EN DRIVE'), findsWidgets);
@@ -423,9 +474,9 @@ void main() {
 
     await pumpNotes(tester, const Size(1440, 900));
     await openAttachmentDialog(tester, kind: 'PDF / DOC');
-    expect(find.text('PDF de prueba (prueba.pdf)'), findsOneWidget);
+    expect(find.text('PDF de prueba (prueba.pdf)'), findsNothing);
 
-    await tester.tap(find.text('+ USAR'));
+    await tester.tap(find.text('SUBIR E INSERTAR'));
     await tester.pump();
     await settleRealAsync(tester);
 
@@ -465,7 +516,7 @@ void main() {
     await pumpNotes(tester, const Size(1440, 900));
     await openAttachmentDialog(tester, kind: 'PDF / DOC');
 
-    await tester.tap(find.text('+ USAR'));
+    await tester.tap(find.text('SUBIR E INSERTAR'));
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.textContaining('Sin sesión activa'), findsOneWidget);
@@ -500,7 +551,7 @@ void main() {
     await pumpNotes(tester, const Size(1440, 900));
     await openAttachmentDialog(tester, kind: 'PDF / DOC');
 
-    await tester.tap(find.text('+ USAR'));
+    await tester.tap(find.text('SUBIR E INSERTAR'));
     await tester.pump();
     await settleRealAsync(tester);
 
