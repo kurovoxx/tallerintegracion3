@@ -49,15 +49,23 @@ func (m *mockOAuthRepo) MarkGoogleDriveConnectionRevoked(ctx context.Context, us
 }
 
 type mockProvider struct {
-	result   *DriveOAuthResult
-	err      error
-	called   bool
-	lastCode string
+	result       *DriveOAuthResult
+	err          error
+	called       bool
+	lastCode     string
+	lastRedirect string
 }
 
 func (m *mockProvider) Exchange(ctx context.Context, code string) (*DriveOAuthResult, error) {
 	m.called = true
 	m.lastCode = code
+	return m.result, m.err
+}
+
+func (m *mockProvider) ExchangeWithRedirect(ctx context.Context, code, redirectURI string) (*DriveOAuthResult, error) {
+	m.called = true
+	m.lastCode = code
+	m.lastRedirect = redirectURI
 	return m.result, m.err
 }
 
@@ -75,7 +83,7 @@ func TestDriveConnect_ConexionInicialValida(t *testing.T) {
 		},
 	}
 	svc := NewDriveOAuthService(repo, provider)
-	err := svc.Connect(context.Background(), "user-1", "code123", nil)
+	err := svc.Connect(context.Background(), "user-1", "code123", nil, "")
 	if err != nil {
 		t.Fatalf("esperado éxito, got %v", err)
 	}
@@ -99,11 +107,11 @@ func TestDriveConnect_ReconexionValida(t *testing.T) {
 	refresh1 := "refresh1"
 	provider1 := &mockProvider{result: &DriveOAuthResult{AccessToken: "access1", RefreshToken: &refresh1, ExpiresAt: &exp, ExternalEmail: &email}}
 	svc1 := NewDriveOAuthService(repo, provider1)
-	svc1.Connect(context.Background(), "user-1", "code1", nil)
+	svc1.Connect(context.Background(), "user-1", "code1", nil, "")
 	// Segunda conexión sin refresh_token (Google no lo reenvía si ya consintió)
 	provider2 := &mockProvider{result: &DriveOAuthResult{AccessToken: "access2", RefreshToken: nil, ExpiresAt: &exp, ExternalEmail: &email}}
 	svc2 := NewDriveOAuthService(repo, provider2)
-	err := svc2.Connect(context.Background(), "user-1", "code2", nil)
+	err := svc2.Connect(context.Background(), "user-1", "code2", nil, "")
 	if err != nil {
 		t.Fatalf("reconexión debe ser éxito, got %v", err)
 	}
@@ -126,7 +134,7 @@ func TestDriveConnect_CodigoVacio_BadRequest(t *testing.T) {
 	provider := &mockProvider{}
 	svc := NewDriveOAuthService(repo, provider)
 	for _, code := range []string{"", "   ", "\t\n"} {
-		err := svc.Connect(context.Background(), "user-1", code, nil)
+		err := svc.Connect(context.Background(), "user-1", code, nil, "")
 		if err == nil {
 			t.Fatalf("esperado bad_request para %q", code)
 		}
@@ -144,7 +152,7 @@ func TestDriveConnect_CodigoInvalido_InvalidOAuthCode(t *testing.T) {
 	repo := &mockOAuthRepo{}
 	provider := &mockProvider{err: ErrInvalidOAuthCode}
 	svc := NewDriveOAuthService(repo, provider)
-	err := svc.Connect(context.Background(), "user-1", "invalid-code", nil)
+	err := svc.Connect(context.Background(), "user-1", "invalid-code", nil, "")
 	if err == nil {
 		t.Fatal("esperado invalid_oauth_code")
 	}
@@ -161,7 +169,7 @@ func TestDriveConnect_ErrorTemporal_GoogleUnavailable(t *testing.T) {
 	repo := &mockOAuthRepo{}
 	provider := &mockProvider{err: ErrGoogleUnavailable}
 	svc := NewDriveOAuthService(repo, provider)
-	err := svc.Connect(context.Background(), "user-1", "code123", nil)
+	err := svc.Connect(context.Background(), "user-1", "code123", nil, "")
 	if err == nil {
 		t.Fatal("esperado google_unavailable")
 	}
@@ -175,7 +183,7 @@ func TestDriveConnect_ErrorObteniendoDatos_NoUpsert(t *testing.T) {
 	repo := &mockOAuthRepo{}
 	provider := &mockProvider{err: errors.New("network error")}
 	svc := NewDriveOAuthService(repo, provider)
-	err := svc.Connect(context.Background(), "user-1", "code123", nil)
+	err := svc.Connect(context.Background(), "user-1", "code123", nil, "")
 	if err == nil {
 		t.Fatal("esperado internal_error")
 	}
@@ -195,7 +203,7 @@ func TestDriveConnect_ErrorRepositorio_InternalError(t *testing.T) {
 	refresh := "refresh123"
 	provider := &mockProvider{result: &DriveOAuthResult{AccessToken: "access123", RefreshToken: &refresh, ExpiresAt: &exp, ExternalEmail: &email}}
 	svc := NewDriveOAuthService(repo, provider)
-	err := svc.Connect(context.Background(), "user-1", "code123", nil)
+	err := svc.Connect(context.Background(), "user-1", "code123", nil, "")
 	if err == nil {
 		t.Fatal("esperado internal_error por repo")
 	}
@@ -209,7 +217,7 @@ func TestDriveConnect_AccessTokenVacio_InternalError(t *testing.T) {
 	repo := &mockOAuthRepo{}
 	provider := &mockProvider{result: &DriveOAuthResult{AccessToken: "", RefreshToken: nil}}
 	svc := NewDriveOAuthService(repo, provider)
-	err := svc.Connect(context.Background(), "user-1", "code123", nil)
+	err := svc.Connect(context.Background(), "user-1", "code123", nil, "")
 	if err == nil {
 		t.Fatal("esperado internal_error si access_token vacío")
 	}
@@ -945,7 +953,7 @@ func TestDriveConnect_ExpectedEmailCoincide(t *testing.T) {
 		result: &DriveOAuthResult{AccessToken: "access123", ExternalEmail: &email},
 	}
 	svc := NewDriveOAuthService(repo, provider)
-	if err := svc.Connect(context.Background(), "user-1", "code123", &declared); err != nil {
+	if err := svc.Connect(context.Background(), "user-1", "code123", &declared, ""); err != nil {
 		t.Fatalf("email coincidente (case-insensitive) no debe fallar: %v", err)
 	}
 	if !repo.upsertCalled {
@@ -961,7 +969,7 @@ func TestDriveConnect_ExpectedEmailDifiere_Mismatch(t *testing.T) {
 		result: &DriveOAuthResult{AccessToken: "access123", ExternalEmail: &real},
 	}
 	svc := NewDriveOAuthService(repo, provider)
-	err := svc.Connect(context.Background(), "user-1", "code123", &declared)
+	err := svc.Connect(context.Background(), "user-1", "code123", &declared, "")
 	if se, ok := err.(*ServiceError); !ok || se.Code != "email_mismatch" {
 		t.Fatalf("se esperaba email_mismatch, got %v", err)
 	}
@@ -977,7 +985,7 @@ func TestDriveConnect_SinExpectedEmail_OmiteChequeo(t *testing.T) {
 		result: &DriveOAuthResult{AccessToken: "access123", ExternalEmail: &email},
 	}
 	svc := NewDriveOAuthService(repo, provider)
-	if err := svc.Connect(context.Background(), "user-1", "code123", nil); err != nil {
+	if err := svc.Connect(context.Background(), "user-1", "code123", nil, ""); err != nil {
 		t.Fatalf("sin expected no debe chequear: %v", err)
 	}
 }

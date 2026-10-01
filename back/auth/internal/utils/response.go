@@ -38,6 +38,7 @@ const (
 	ErrInvalidToken       = "invalid_token"
 	ErrTokenExpired       = "token_expired"
 	ErrEmailMismatch      = "email_mismatch"
+	ErrInvalidRedirect    = "invalid_redirect_uri"
 )
 
 func MessageForCode(code string) string {
@@ -64,6 +65,8 @@ func MessageForCode(code string) string {
 		return "Token expirado"
 	case ErrEmailMismatch:
 		return "El correo declarado no coincide con la cuenta de Google conectada"
+	case ErrInvalidRedirect:
+		return "redirect_uri no permitido para este cliente"
 	default:
 		return "Error"
 	}
@@ -72,7 +75,8 @@ func MessageForCode(code string) string {
 // Helper para mapear errores de Service a HTTP status
 func StatusForCode(code string) int {
 	switch code {
-	case ErrInvalidEmail, ErrWeakPassword, ErrInvalidDisplayName, ErrInvalidVisibility:
+	case ErrInvalidEmail, ErrWeakPassword, ErrInvalidDisplayName, ErrInvalidVisibility,
+		ErrEmailMismatch, ErrInvalidRedirect:
 		return http.StatusBadRequest
 	case ErrEmailTaken:
 		return http.StatusConflict

@@ -285,11 +285,32 @@ class _ProfileScreenState extends State<ProfileScreen> {
       await GoogleDriveService.ensureConfigured(backendBaseUrl: authApiBaseUrl);
       if (!mounted || !_sameSession(revision)) return;
       // En web no hay localhost que capture el code: diálogo pegar-código.
-      final String? code = kIsWeb
-          ? await _askWebAuthCode(messenger, declaredEmail)
-          : await GoogleDriveService().getServerAuthCode(
-              loginHint: declaredEmail,
-            );
+      String? code;
+      String? desktopRedirect;
+      if (kIsWeb) {
+        code = await _askWebAuthCode(messenger, declaredEmail);
+      } else {
+        try {
+          final auth = await GoogleDriveService().getDesktopAuthCode(
+            loginHint: declaredEmail,
+          );
+          code = auth?.code;
+          desktopRedirect = auth?.redirectUri;
+        } on LocalPortBusyException {
+          // Puerto ocupado: fallback manual con mensaje claro (no genérico).
+          if (!mounted || !_sameSession(revision)) return;
+          setState(() => _driveStatus = _DriveStatus.idle);
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Puerto local ocupado por otra app: autoriza con el flujo manual.',
+              ),
+            ),
+          );
+          code = await _askWebAuthCode(messenger, declaredEmail);
+          desktopRedirect = null;
+        }
+      }
       if (code == null) {
         if (!mounted || !_sameSession(revision)) return;
         setState(() => _driveStatus = _DriveStatus.idle);
@@ -312,6 +333,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         appAccessToken: token,
         oauthCode: code,
         expectedEmail: declaredEmail,
+        redirectUri: desktopRedirect,
       );
       if (!mounted || !_sameSession(revision)) return;
       setState(

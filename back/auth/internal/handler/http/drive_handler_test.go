@@ -39,11 +39,17 @@ func (m *mockDriveRepo) MarkGoogleDriveConnectionRevoked(ctx context.Context, us
 }
 
 type mockDriveProvider struct {
-	result *service.DriveOAuthResult
-	err    error
+	result       *service.DriveOAuthResult
+	err          error
+	lastRedirect string
 }
 
 func (m *mockDriveProvider) Exchange(ctx context.Context, code string) (*service.DriveOAuthResult, error) {
+	return m.result, m.err
+}
+
+func (m *mockDriveProvider) ExchangeWithRedirect(ctx context.Context, code, redirectURI string) (*service.DriveOAuthResult, error) {
+	m.lastRedirect = redirectURI
 	return m.result, m.err
 }
 
