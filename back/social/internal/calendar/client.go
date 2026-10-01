@@ -36,6 +36,9 @@ type Event struct {
 	Description string
 	Start       time.Time
 	End         time.Time
+	// Attendees son emails invitados (selección del creador en la agenda).
+	// Van como attendees del evento de Google; vacía = sin invitados.
+	Attendees []string
 }
 
 // Client abstrae Google Calendar del creador de la reunión.
@@ -104,11 +107,16 @@ type calendarDateTime struct {
 	DateTime string `json:"dateTime"`
 }
 
+type calendarAttendee struct {
+	Email string `json:"email"`
+}
+
 type createEventRequest struct {
-	Summary     string           `json:"summary"`
-	Description string           `json:"description,omitempty"`
-	Start       calendarDateTime `json:"start"`
-	End         calendarDateTime `json:"end"`
+	Summary     string             `json:"summary"`
+	Description string             `json:"description,omitempty"`
+	Start       calendarDateTime   `json:"start"`
+	End         calendarDateTime   `json:"end"`
+	Attendees   []calendarAttendee `json:"attendees,omitempty"`
 }
 
 func (c *RESTClient) CreateEvent(ctx context.Context, accessToken string, event Event) (string, error) {
@@ -122,11 +130,16 @@ func (c *RESTClient) CreateEvent(ctx context.Context, accessToken string, event 
 	if end.IsZero() || !end.After(event.Start) {
 		end = event.Start.Add(1 * time.Hour) // default: 1h
 	}
+	attendees := make([]calendarAttendee, 0, len(event.Attendees))
+	for _, email := range event.Attendees {
+		attendees = append(attendees, calendarAttendee{Email: email})
+	}
 	body, err := json.Marshal(createEventRequest{
 		Summary:     event.Summary,
 		Description: event.Description,
 		Start:       calendarDateTime{DateTime: event.Start.Format(time.RFC3339)},
 		End:         calendarDateTime{DateTime: end.Format(time.RFC3339)},
+		Attendees:   attendees,
 	})
 	if err != nil {
 		return "", err

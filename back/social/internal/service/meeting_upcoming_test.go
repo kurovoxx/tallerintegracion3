@@ -20,13 +20,13 @@ func TestMeetingUpcoming_VisibilidadYExpiracion(t *testing.T) {
 
 	future := now.Add(48 * time.Hour).UTC().Format(time.RFC3339)
 	past := now.Add(-48 * time.Hour).UTC().Format(time.RFC3339)
-	if _, err := svc.CreateMeeting(ctx, gid, admin, "Futura", nil, future, nil); err != nil {
+	if _, err := svc.CreateMeeting(ctx, gid, admin, "Futura", nil, future, nil, nil); err != nil {
 		t.Fatalf("crear futura: %v", err)
 	}
-	if _, err := svc.CreateMeeting(ctx, gid, admin, "Pasada", nil, past, nil); err != nil {
+	if _, err := svc.CreateMeeting(ctx, gid, admin, "Pasada", nil, past, nil, nil); err != nil {
 		t.Fatalf("crear pasada (permitida, se filtra al listar): %v", err)
 	}
-	if _, err := svc.CreateMeeting(ctx, other, admin, "Otra", nil, future, nil); err != nil {
+	if _, err := svc.CreateMeeting(ctx, other, admin, "Otra", nil, future, nil, nil); err != nil {
 		t.Fatalf("crear en otro grupo: %v", err)
 	}
 
