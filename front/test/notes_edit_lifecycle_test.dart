@@ -192,51 +192,29 @@ void main() {
       expect(stored.single.version, local ? isNull : 6);
       if (!local) {
         expect(sent, [4, 5]);
-        // 1. Lectura NO muestra botón quitar.
+        // Eliminación temporalmente oculta (kEnableAttachmentRemoval=false):
+        // ni lectura ni edición exponen QUITAR/X, y nada se borra.
         expect(find.byKey(ValueKey('remove-$image')), findsNothing);
         expect(find.byKey(ValueKey('remove-$pdf')), findsNothing);
-        // 2. Editar SÍ muestra quitar.
-        Future<void> openEdit() async {
-          await t.scrollUntilVisible(
-            find.text('Editar'),
-            250,
-            scrollable: find.byType(Scrollable).last,
-          );
-          await t.tap(find.text('Editar'));
-          await settle(t);
-        }
-        await openEdit();
-        expect(find.text('ADJUNTOS VINCULADOS (2)'), findsOneWidget);
-        expect(find.byKey(ValueKey('remove-$image')), findsOneWidget);
-        expect(find.byKey(ValueKey('remove-$pdf')), findsOneWidget);
-        // 3-4. Quitar en editar solo marca pending; CANCELAR conserva.
-        await t.tap(find.byKey(ValueKey('remove-$image')));
+        await t.scrollUntilVisible(
+          find.text('Editar'),
+          250,
+          scrollable: find.byType(Scrollable).last,
+        );
+        await t.tap(find.text('Editar'));
         await settle(t);
-        expect(find.textContaining('SE QUITARÁ'), findsOneWidget);
-        expect(deleted, isEmpty);
-        expect(content, contains('attachment:$image'));
+        expect(find.text('ADJUNTOS VINCULADOS (2)'), findsOneWidget);
+        expect(find.byKey(ValueKey('remove-$image')), findsNothing);
+        expect(find.byKey(ValueKey('remove-$pdf')), findsNothing);
+        expect(find.textContaining('SE QUITARÁ'), findsNothing);
         await t.tap(find.text('CANCELAR'));
         await settle(t);
         expect(find.text('Editar'), findsOneWidget);
-        expect(find.byKey(ValueKey('remove-$image')), findsNothing);
-        // 5-6-8. Guardar elimina attachment + referencia inline; el otro intacto.
-        await openEdit();
-        await t.tap(find.byKey(ValueKey('remove-$image')));
-        await settle(t);
-        await t.tap(find.byKey(ValueKey('remove-$pdf')));
-        await settle(t);
-        await t.ensureVisible(find.text('GUARDAR'));
-        await t.tap(find.text('GUARDAR'));
-        await settle(t);
-        expect(find.text('Editar'), findsOneWidget);
-        expect(sent, [4, 5, 6]);
-        expect(content, isNot(contains('attachment:$image')));
-        expect(content, isNot(contains('attachment:$pdf')));
-        expect(deleted, [image, pdf]);
-        // 9-11. Recarga confirma eliminación; inline ya no existe.
-        expect(find.byType(AuthenticatedAttachmentImage), findsNothing);
-        expect(find.byKey(ValueKey('remove-$image')), findsNothing);
-        expect(find.byKey(ValueKey('remove-$pdf')), findsNothing);
+        // Adjuntos e inline intactos tras el ciclo.
+        expect(deleted, isEmpty);
+        expect(content, contains('attachment:$image'));
+        expect(content, contains('attachment:$pdf'));
+        expect(find.byType(AuthenticatedAttachmentImage), findsWidgets);
       } else {
         expect(attempts, 0);
       }

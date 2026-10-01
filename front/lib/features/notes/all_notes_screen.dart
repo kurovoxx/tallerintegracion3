@@ -2921,13 +2921,16 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
             runSpacing: 6,
             children: [
               for (final att in _attachments)
-                _EditAttachmentChip(
-                  resource: att,
-                  pending: _pendingRemovedIds.contains(
-                    att['attachment_id'],
-                  ),
-                  onToggle: () => _togglePendingRemove(att),
-                ),
+                if (kEnableAttachmentRemoval)
+                  _EditAttachmentChip(
+                    resource: att,
+                    pending: _pendingRemovedIds.contains(
+                      att['attachment_id'],
+                    ),
+                    onToggle: () => _togglePendingRemove(att),
+                  )
+                else
+                  _AttachedFileChip(resource: att),
             ],
           ),
           if (_pendingRemovedIds.isNotEmpty)
@@ -4413,6 +4416,11 @@ class _DetectedAttachmentChip extends StatelessWidget {
   }
 }
 
+/// TODO: reactivar eliminación de adjuntos tras validar DELETE E2E.
+/// Bandera temporal: la acción QUITAR falla en manual, así que no se expone
+/// en la UI hasta completar la validación. El backend DELETE se conserva.
+const bool kEnableAttachmentRemoval = false;
+
 /// Chip de ADJUNTOS VINCULADOS en modo Editar: X marca pending (no borra).
 /// Key `remove-<attachment_id>` preservada para tests y accesibilidad.
 class _EditAttachmentChip extends StatelessWidget {
@@ -4508,6 +4516,56 @@ class _EditAttachmentChip extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Chip informativo de archivo vinculado (sin acción de borrado).
+/// Se usa mientras la eliminación está deshabilitada (ver
+/// [kEnableAttachmentRemoval]).
+class _AttachedFileChip extends StatelessWidget {
+  final Map<String, dynamic> resource;
+
+  const _AttachedFileChip({required this.resource});
+
+  @override
+  Widget build(BuildContext context) {
+    final isImage = resource['type'] == 'image';
+    return Container(
+      decoration: BoxDecoration(
+        color: isImage ? AppColors.subjectMint : AppColors.accentYellow,
+        border: Border.all(color: AppColors.border, width: 1.5),
+        borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+        boxShadow: AppShadows.badge,
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            isImage
+                ? Icons.image_rounded
+                : resource['type'] == 'pdf'
+                ? Icons.picture_as_pdf_rounded
+                : Icons.description_rounded,
+            size: 13,
+            color: AppColors.text,
+          ),
+          const SizedBox(width: 4),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 140),
+            child: Text(
+              resource['name'] as String,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w900,
+                color: AppColors.text,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
