@@ -31,12 +31,12 @@ func NewSharedRepository(pool *pgxpool.Pool) *SharedRepository {
 }
 
 // WithNoteLock ejecuta fn sosteniendo un lock distribuido por nota
-// (pg_advisory_xact_lock(hashtextextended(noteID, 0))::bigint) durante toda la
+// (pg_advisory_xact_lock(hashtextextended(noteID, 0))) durante toda la
 // operación. Es la serialización multi-réplica de los cambios de ACL
 // Desired-State: Share, Unshare, Update y el reconciliador lo adquieren antes de
 // mutar notes.drive_managed_permissions o permission_sync_status, de modo que
 // dos instancias no intercalen lecturas/escrituras del estado deseado. La clave
-// se deriva con hashtextextended (bigint, 64 bits) y se castea a ::bigint para
+// se deriva con hashtextextended (bigint, 64 bits) para
 // ocupar el espacio de claves de 64 bits: hashtext (int4) reduce a 32 bits y
 // hace colisiones y bloqueos espurios mucho más frecuentes. El lock se libera
 // al terminar la transacción (commit o rollback), incluso si fn falla.
@@ -57,7 +57,7 @@ func (r *SharedRepository) WithNoteLock(ctx context.Context, noteID string, fn f
 		return fmt.Errorf("note lock: begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))::bigint`, noteID); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, noteID); err != nil {
 		return fmt.Errorf("note lock: acquire: %w", err)
 	}
 	if err := fn(ctx); err != nil {

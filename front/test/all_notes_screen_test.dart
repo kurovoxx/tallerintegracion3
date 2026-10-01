@@ -478,7 +478,8 @@ void main() {
       });
       await pumpNotes(tester, const Size(1440, 900));
       await openAttachmentDialog(tester, kind: 'IMAGEN');
-      NoteFilePicker.pickOverride = (_) async => XFile.fromData(fixture.readAsBytesSync(),path:fixture.path);
+      NoteFilePicker.pickOverride = (_) async =>
+          XFile.fromData(fixture.readAsBytesSync(), path: fixture.path);
       addTearDown(() => NoteFilePicker.pickOverride = null);
       await tester.tap(find.text('SELECCIONAR IMAGEN'));
       await settleRealAsync(tester);
@@ -503,94 +504,120 @@ void main() {
     },
   );
 
-  for (final scenario in [(false, false), (true, false), (false, true)]) {
+  for (final scenario in [
+    (false, false, false),
+    (true, false, false),
+    (false, true, false),
+    (false, false, true),
+  ]) {
     final fail = scenario.$1;
     final refresh = scenario.$2;
-    testWidgets('archivo nuevo espera UUID: fallo=$fail refresh=$refresh', (
-      tester,
-    ) async {
-      await SessionManager.saveSession('jwt-new', {
-        'id': 'u-new',
-      }, refreshToken: 'refresh-test');
-      var uploads = 0;
-      AuthedHttp.refreshOverride = (_) async =>
-          RefreshResult.success(accessToken: 'jwt-renovado');
-      const id = '12345678-1234-4234-8234-123456789abc';
-      final paths = <String>[];
-      var created = false;
-      notesHttpClientOverride = MockClient((r) async {
-        paths.add('${r.method} ${r.url.path}');
-        if (r.method == 'POST' && r.url.path == '/notes') {
-          created = true;
-          return http.Response('{"note_id":"$id"}', 201);
-        }
-        if (r.url.path == '/notes/upload') {
-          uploads++;
-          if (refresh && uploads == 1) {
-            return http.Response('{"error":"unauthorized"}', 401);
+    final image = scenario.$3;
+    final fileName = image ? 'foto.png' : 'guia.pdf';
+    testWidgets(
+      'archivo nuevo espera UUID: fallo=$fail refresh=$refresh imagen=$image',
+      (tester) async {
+        await SessionManager.saveSession('jwt-new', {
+          'id': 'u-new',
+        }, refreshToken: 'refresh-test');
+        var uploads = 0;
+        AuthedHttp.refreshOverride = (_) async =>
+            RefreshResult.success(accessToken: 'jwt-renovado');
+        const id = '12345678-1234-4234-8234-123456789abc';
+        final paths = <String>[];
+        var created = false;
+        notesHttpClientOverride = MockClient((r) async {
+          paths.add('${r.method} ${r.url.path}');
+          if (r.method == 'POST' && r.url.path == '/notes') {
+            created = true;
+            return http.Response('{"note_id":"$id"}', 201);
           }
-          expect(created, isTrue);
-          expect(r.body, contains('filename="guia.pdf"'));
-          if (fail) {
-            return http.Response('{"error":{"code":"drive_unavailable"}}', 500);
+          if (r.url.path == '/notes/upload') {
+            uploads++;
+            if (refresh && uploads == 1) {
+              return http.Response('{"error":"unauthorized"}', 401);
+            }
+            expect(created, isTrue);
+            // No acceder a r.body en multipart con binario PNG (falla UTF8).
+            // Se verifica el vínculo real vía POST attachments + PATCH.
+            if (fail) {
+              return http.Response(
+                '{"error":{"code":"drive_unavailable"}}',
+                500,
+              );
+            }
+            return http.Response(
+              jsonEncode({
+                'external_file_id': 'file1',
+                'file_url': 'https://drive.google.com/file/d/file1/view',
+                'file_name': fileName,
+                'file_type': image ? 'image/png' : 'application/pdf',
+                'file_size_bytes': 8,
+              }),
+              201,
+            );
           }
-          return http.Response(
-            jsonEncode({
-              'external_file_id': 'file1',
-              'file_url': 'https://drive.google.com/file/d/file1/view',
-              'file_name': 'guia.pdf',
-              'file_type': 'application/pdf',
-              'file_size_bytes': 8,
-            }),
-            201,
-          );
-        }
-        if (r.url.path == '/notes/$id/attachments') {
-          expect(created, isTrue);
-          return http.Response('{"attachment_id":"attachment1"}', 201);
-        }
-        if (r.method == 'PATCH') return http.Response('{}', 200);
-        return http.Response('{"notes":[]}', 200);
-      });
-      NoteFilePicker.pickOverride = (_) async => XFile.fromData(
-        Uint8List.fromList([37, 80, 68, 70, 45, 49, 46, 52]),
-        path: 'guia.pdf',
-      );
-      addTearDown(() async {
-        notesHttpClientOverride = null;
-        NoteFilePicker.pickOverride = null;
-        AuthedHttp.refreshOverride = null;
-        await SessionManager.clear();
-      });
-      await pumpNotes(tester, const Size(1440, 1000));
-      await openAttachmentDialog(tester, kind: 'PDF');
-      await tester.tap(find.text('SELECCIONAR PDF'));
-      await settleRealAsync(tester);
-      expect(find.textContaining('guia.pdf'), findsOneWidget);
-      expect(find.textContaining('C:\\Users'), findsNothing);
-      await tester.tap(find.text('SUBIR Y ADJUNTAR'));
-      await tester.pump();
-      expect(paths.where((p) => p.contains('/upload')), isEmpty);
-      expect(find.textContaining('Archivo preparado'), findsOneWidget);
-      final title = find.widgetWithText(TextField, 'Título');
-      await tester.enterText(title, 'Nota con archivo');
-      await tester.tap(find.text('GUARDAR'));
-      await settleRealAsync(tester);
-      expect(uploads, refresh ? 2 : 1);
-      if (!fail) expect(paths, contains('POST /notes/$id/attachments'));
-      if (fail) {
-        expect(
-          find.textContaining('no se pudo adjuntar guia.pdf'),
-          findsOneWidget,
+          if (r.url.path == '/notes/$id/attachments') {
+            expect(created, isTrue);
+            return http.Response('{"attachment_id":"attachment1"}', 201);
+          }
+          if (r.method == 'PATCH') {
+            final body = jsonDecode(r.body) as Map<String, dynamic>;
+            expect(body['version'], 1);
+            expect(body['content'], contains('(attachment:attachment1)'));
+            expect(body['content'], isNot(contains('drive.google.com')));
+            return http.Response('{"version":2}', 200);
+          }
+          return http.Response('{"notes":[]}', 200);
+        });
+        NoteFilePicker.pickOverride = (_) async => XFile.fromData(
+          image
+              ? base64Decode(
+                  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+                )
+              : Uint8List.fromList([37, 80, 68, 70, 45, 49, 46, 52]),
+          path: fileName,
         );
-      } else {
-        expect(paths, contains('PATCH /notes/$id'));
-      }
-      expect(
-        paths.where((p) => RegExp(r'/notes/\d{13}/attachments').hasMatch(p)),
-        isEmpty,
-      );
-      expect(tester.takeException(), isNull);
-    });
+        addTearDown(() async {
+          notesHttpClientOverride = null;
+          NoteFilePicker.pickOverride = null;
+          AuthedHttp.refreshOverride = null;
+          await SessionManager.clear();
+        });
+        await pumpNotes(tester, const Size(1440, 1000));
+        await openAttachmentDialog(tester, kind: image ? 'IMAGEN' : 'PDF');
+        await tester.tap(
+          find.text(image ? 'SELECCIONAR IMAGEN' : 'SELECCIONAR PDF'),
+        );
+        await settleRealAsync(tester);
+        expect(find.textContaining(fileName), findsOneWidget);
+        expect(find.textContaining('C:\\Users'), findsNothing);
+        await tester.tap(
+          find.text(image ? 'SUBIR E INSERTAR' : 'SUBIR Y ADJUNTAR'),
+        );
+        await tester.pump();
+        expect(paths.where((p) => p.contains('/upload')), isEmpty);
+        expect(find.textContaining('Archivo preparado'), findsOneWidget);
+        final title = find.widgetWithText(TextField, 'Título');
+        await tester.enterText(title, 'Nota con archivo');
+        await tester.tap(find.text('GUARDAR'));
+        await settleRealAsync(tester);
+        expect(uploads, refresh ? 2 : 1);
+        if (!fail) expect(paths, contains('POST /notes/$id/attachments'));
+        if (fail) {
+          expect(
+            find.textContaining('no se pudo adjuntar guia.pdf'),
+            findsOneWidget,
+          );
+        } else {
+          expect(paths, contains('PATCH /notes/$id'));
+        }
+        expect(
+          paths.where((p) => RegExp(r'/notes/\d{13}/attachments').hasMatch(p)),
+          isEmpty,
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
   }
 }

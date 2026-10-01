@@ -217,6 +217,7 @@ func (h *NoteHandler) Get(c *gin.Context) {
 		"title":       note.Title,
 		"visibility":  note.Visibility,
 		"likes_count": note.LikesCount,
+		"version":     note.Version,
 		"created_at":  note.CreatedAt.UTC().Format(time.RFC3339),
 		"updated_at":  note.UpdatedAt.UTC().Format(time.RFC3339),
 	}
@@ -276,6 +277,7 @@ func (h *NoteHandler) ListMy(c *gin.Context) {
 			"title":       n.Title,
 			"visibility":  n.Visibility,
 			"likes_count": n.LikesCount,
+			"version":     n.Version,
 			"created_at":  n.CreatedAt.UTC().Format(time.RFC3339),
 			"updated_at":  n.UpdatedAt.UTC().Format(time.RFC3339),
 		}
@@ -332,11 +334,14 @@ func (h *NoteHandler) Patch(c *gin.Context) {
 	if req.Version != nil {
 		expectedVersion = *req.Version
 	}
+	log.Printf("[Notes] PATCH id=%s owner=%s version=%d has_title=%t has_content=%t", id, userID, expectedVersion, req.Title != nil, req.Content != nil)
 	updated, err := h.svc.UpdateWithExpectedVersion(c.Request.Context(), userID, id, req.Title, req.Visibility, req.Content, expectedVersion, idemKey)
 	if err != nil {
 		handleServiceError(c, err)
+		log.Printf("[Notes] PATCH id=%s status=%d", id, c.Writer.Status())
 		return
 	}
+	log.Printf("[Notes] PATCH id=%s status=200 version=%d", id, updated.Version)
 	c.JSON(http.StatusOK, gin.H{
 		"id":         updated.ID,
 		"title":      updated.Title,
@@ -824,6 +829,7 @@ func (h *NoteHandler) ListGroupNotes(c *gin.Context) {
 		item := gin.H{
 			"id": n.ID, "user_id": n.UserID, "title": n.Title,
 			"visibility": n.Visibility, "likes_count": n.LikesCount,
+			"version":    n.Version,
 			"created_at": n.CreatedAt.UTC().Format(time.RFC3339), "updated_at": n.UpdatedAt.UTC().Format(time.RFC3339),
 		}
 		out = append(out, item)

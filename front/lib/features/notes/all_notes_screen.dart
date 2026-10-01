@@ -50,7 +50,8 @@ Future<T> _withNotesClient<T>(
 }
 
 class AllNotesScreen extends StatefulWidget {
-  const AllNotesScreen({super.key});
+  const AllNotesScreen({super.key, this.database});
+  final AppDatabase? database;
 
   @override
   State<AllNotesScreen> createState() => AllNotesScreenState();
@@ -103,6 +104,9 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   // El modelo local no guarda autor: un id con formato UUID no listado aquí se
   // trata como ajeno (solo lectura); los ids locales (dígitos) son del dispositivo.
   final Set<String> _ownedNoteIds = {};
+  final Map<String, int> _versions = {};
+  final Map<String, LocalNote> _latestNotes = {};
+  final Map<String, String> _remoteIds = {};
 
   // Estado interactivo por nota
   final Map<String, int> _likesCount = {};
@@ -205,7 +209,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     }
     try {
       try {
-        _db = AppDatabase();
+        _db = widget.database ?? AppDatabase();
         _repo = LocalNotesRepository(_db!);
         await _repo!.getAllNotes(ownerId: _ownerId());
       } catch (e) {
@@ -340,6 +344,10 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         }
         final data = jsonDecode(utf8.decode(res.bodyBytes));
         final List notes = data['notes'] ?? [];
+        final cached = {
+          for (final n in await _repo!.getAllNotes(ownerId: _ownerId()))
+            n.id: n,
+        };
         for (final n in notes) {
           try {
             final remoteId = n['id'] as String?;
@@ -350,8 +358,10 @@ class AllNotesScreenState extends State<AllNotesScreen> {
               _stampOwner(
                 LocalNote(
                   id: n['id'] as String,
+                  version: (n['version'] as num?)?.toInt(),
                   title: n['title'] as String? ?? 'Sin título',
-                  content: n['content'] as String? ?? '',
+                  content:
+                      n['content'] as String? ?? cached[n['id']]?.content ?? '',
                   visibility: n['visibility'] as String? ?? 'private',
                   updatedAt: n['updated_at'] != null
                       ? DateTime.tryParse(n['updated_at'].toString()) ??
@@ -411,7 +421,9 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       'content': content,
       'visibility': visibility,
     };
-    debugPrint('[FRONT DEBUG] Enviando POST /notes a $url con body: $body');
+    debugPrint(
+      '[Notes] POST titleChars=${title.length} contentChars=${content.length}',
+    );
     try {
       final res = await AuthedHttp.run(
         () => _withNotesClient(
@@ -425,7 +437,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         ),
       );
       debugPrint(
-        '[FRONT DEBUG] Respuesta POST /notes: status=${res.statusCode} body=${utf8.decode(res.bodyBytes)}',
+        '[FRONT DEBUG] Respuesta POST /notes: status=${res.statusCode}',
       );
       if (res.statusCode == 201) {
         try {
@@ -436,6 +448,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                 r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
               ).hasMatch(newId)) {
             _ownedNoteIds.add(newId);
+            _versions[newId] = (data['version'] as num?)?.toInt() ?? 1;
             debugPrint('[FRONT DEBUG] UUID real del backend: $newId');
             return newId;
           }
@@ -470,14 +483,17 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       } catch (_) {}
       if (current == null) return;
     }
+    _remoteIds[tempId] = realId;
     final renamed = LocalNote(
       id: realId,
+      version: _versions[realId],
       title: current.title,
       content: current.content,
       visibility: current.visibility,
       updatedAt: current.updatedAt,
       ownerUserId: current.ownerUserId,
     );
+    _latestNotes[realId] = renamed;
     if (!mounted) return;
     setState(() {
       if (_likesCount.containsKey(tempId)) {
@@ -525,15 +541,16 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   /// POST /notes/{id}/attachments con el external_file_id devuelto por
   /// /notes/upload. Best-effort: si falla, la URL de Drive ya quedó incrustada
   /// en el Markdown y el guardado local no se revierte.
-  Future<void> _linkAttachmentsToNote(
+  Future<Map<String, String>> _linkAttachmentsToNote(
     String noteId,
     List<_DriveUploadResult> attachments,
   ) async {
+    final references = <String, String>{};
     if (attachments.isEmpty ||
         !RegExp(
           r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
         ).hasMatch(noteId)) {
-      return;
+      return references;
     }
     for (final att in attachments) {
       final externalId = att.externalFileId;
@@ -556,7 +573,14 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                 .timeout(const Duration(seconds: 8)),
           ),
         );
-        if (res.statusCode != 201) {
+        if (res.statusCode == 201) {
+          final data =
+              jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+          final id = data['attachment_id'] as String?;
+          if (id != null && att.fileUrl != null) {
+            references[att.fileUrl!] = 'attachment:$id';
+          }
+        } else {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
@@ -568,7 +592,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           }
           debugPrint(
             '[FRONT DEBUG] No se pudo vincular adjunto $externalId: '
-            'status=${res.statusCode} body=${utf8.decode(res.bodyBytes)}',
+            'status=${res.statusCode}',
           );
         }
       } catch (e) {
@@ -583,10 +607,14 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         }
       }
     }
+    return references;
   }
 
   /// Lectura híbrida: GET /notes/:id. 200 trae content/title del Drive del autor.
   Future<_RemoteResult> _fetchHybridContent(LocalNote note) async {
+    if (!_isRemoteNote(note.id)) {
+      return const _RemoteResult(ok: true, status: 200);
+    }
     final url = '$notesBaseUrl/notes/${note.id}';
     try {
       final res = await AuthedHttp.run(
@@ -599,6 +627,18 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       if (res.statusCode == 200) {
         final data =
             jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+        final version = (data['version'] as num?)?.toInt();
+        if (version != null) _versions[note.id] = version;
+        await _applyLocalUpsert(
+          note.copyWith(
+            title: data['title'] as String? ?? note.title,
+            content: data['content'] as String? ?? note.content,
+            version: Value(version),
+          ),
+        );
+        debugPrint(
+          '[Notes] GET id=${note.id} owner=${data['user_id']} version=$version status=200',
+        );
         return _RemoteResult(ok: true, status: 200, data: data);
       }
       final parsed = _parseBackendError(utf8.decode(res.bodyBytes));
@@ -620,23 +660,46 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     String content,
   ) async {
     final url = '$notesBaseUrl/notes/${note.id}';
-    final body = {'title': title, 'content': content};
+    var version = _versions[note.id] ?? note.version;
+    if (version == null) {
+      final read = await _fetchHybridContent(note);
+      if (!read.ok) return read;
+      version = _versions[note.id];
+    }
+    if (version == null || version < 1) {
+      debugPrint('[Notes] PATCH blocked id=${note.id} code=missing_version');
+      return const _RemoteResult(ok: false, status: 0, code: 'missing_version');
+    }
+    final body = {'title': title, 'content': content, 'version': version};
+    final operationId =
+        'note-${note.id}-${DateTime.now().microsecondsSinceEpoch}';
+    debugPrint(
+      '[Notes] PATCH id=${note.id} owner=${note.ownerUserId} version=$version titleChars=${title.length} contentChars=${content.length}',
+    );
     try {
       final res = await AuthedHttp.run(
         () => _withNotesClient(
           (client) => client
               .patch(
                 Uri.parse(url),
-                headers: _authHeaders(),
+                headers: {..._authHeaders(), 'X-Idempotency-Key': operationId},
                 body: jsonEncode(body),
               )
-              .timeout(const Duration(seconds: 8)),
+              .timeout(const Duration(seconds: 30)),
         ),
       );
       if (res.statusCode == 200) {
-        return const _RemoteResult(ok: true, status: 200);
+        final data =
+            jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+        final next = (data['version'] as num?)?.toInt();
+        if (next != null) _versions[note.id] = next;
+        debugPrint('[Notes] PATCH id=${note.id} status=200 version=$next');
+        return _RemoteResult(ok: true, status: 200, data: data);
       }
       final parsed = _parseBackendError(utf8.decode(res.bodyBytes));
+      debugPrint(
+        '[Notes] PATCH id=${note.id} status=${res.statusCode} code=${parsed['code']} version=$version',
+      );
       return _RemoteResult(
         ok: false,
         status: res.statusCode,
@@ -689,6 +752,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
 
   Future<void> _applyLocalUpsert(LocalNote note) async {
     if (!mounted) return;
+    _latestNotes[note.id] = note;
     if (_useMemoryFallback || _repo == null) {
       final i = _memoryFallback.indexWhere((n) => n.id == note.id);
       setState(() {
@@ -728,12 +792,28 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     String title,
     String content,
   ) async {
+    final remoteId = _remoteIds[note.id];
+    if (remoteId != null) {
+      note = _latestNotes[remoteId] ?? note.copyWith(id: remoteId);
+    }
+    if (!_isRemoteNote(note.id)) {
+      await _applyLocalUpsert(
+        note.copyWith(
+          title: title,
+          content: content,
+          updatedAt: DateTime.now(),
+        ),
+      );
+      return _EditSaveOutcome.synced;
+    }
     final remote = await _patchNoteRemote(note, title, content);
     if (remote.ok) {
       await _applyLocalUpsert(
         LocalNote(
           id: note.id,
-          title: title,
+          version: _versions[note.id],
+          ownerUserId: note.ownerUserId,
+          title: remote.data?['title'] as String? ?? title,
           content: content,
           visibility: note.visibility,
           updatedAt: DateTime.now(),
@@ -741,6 +821,10 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       );
       if (mounted) setState(() {});
       return _EditSaveOutcome.synced;
+    }
+    if (remote.status == 409) return _EditSaveOutcome.conflict;
+    if (remote.code == 'missing_version') {
+      return _EditSaveOutcome.missingVersion;
     }
     if (remote.status == -1) return _EditSaveOutcome.offline;
     if (remote.status == 403 && remote.code == 'forbidden') {
@@ -764,7 +848,10 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         try {
           final data = jsonDecode(utf8.decode(res.bodyBytes));
           final newId = data['note_id'] as String?;
-          if (newId != null && newId.isNotEmpty) _ownedNoteIds.add(newId);
+          if (newId != null && newId.isNotEmpty) {
+            _ownedNoteIds.add(newId);
+            _versions[newId] = (data['version'] as num?)?.toInt() ?? 1;
+          }
         } catch (_) {}
         if (!_useMemoryFallback && _repo != null) {
           await _syncFromBackend();
@@ -1247,7 +1334,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                   realId.isNotEmpty &&
                   revision == SessionManager.revision.value) {
                 await _replaceLocalId(tempId, realId);
-                var finalContent = note.content;
+                var finalContent =
+                    _latestNotes[realId]?.content ?? note.content;
                 final uploaded = <_DriveUploadResult>[];
                 for (final pending in attachments) {
                   if (revision != SessionManager.revision.value) return;
@@ -1278,11 +1366,23 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                     );
                   }
                 }
+                final references = await _linkAttachmentsToNote(
+                  realId,
+                  uploaded,
+                );
+                for (final ref in references.entries) {
+                  finalContent = finalContent.replaceAll(
+                    '(${ref.key})',
+                    '(${ref.value})',
+                  );
+                }
                 finalContent = _withoutPendingAttachments(finalContent);
-                if (finalContent != note.content) {
+                if (finalContent != _withoutPendingAttachments(note.content) ||
+                    (_latestNotes[realId]?.title ?? note.title) != note.title) {
                   final remoteNote = LocalNote(
                     id: realId,
-                    title: note.title,
+                    version: _versions[realId],
+                    title: _latestNotes[realId]?.title ?? note.title,
                     content: finalContent,
                     visibility: note.visibility,
                     updatedAt: DateTime.now(),
@@ -1290,11 +1390,13 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                   );
                   final saved = await _patchNoteRemote(
                     remoteNote,
-                    note.title,
+                    remoteNote.title,
                     finalContent,
                   );
                   if (revision != SessionManager.revision.value) return;
-                  await _applyLocalUpsert(remoteNote);
+                  await _applyLocalUpsert(
+                    remoteNote.copyWith(version: Value(_versions[realId])),
+                  );
                   if (!saved.ok && mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
@@ -1306,7 +1408,6 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                   }
                 }
                 if (revision != SessionManager.revision.value) return;
-                await _linkAttachmentsToNote(realId, uploaded);
               } else if (mounted &&
                   attachments.isNotEmpty &&
                   revision == SessionManager.revision.value) {
@@ -2205,7 +2306,19 @@ class _RemoteResult {
   });
 }
 
-enum _EditSaveOutcome { synced, forbidden, unavailable, offline, error }
+bool _isRemoteNote(String id) => RegExp(
+  r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+).hasMatch(id);
+
+enum _EditSaveOutcome {
+  synced,
+  forbidden,
+  unavailable,
+  offline,
+  conflict,
+  missingVersion,
+  error,
+}
 
 /// Modal de detalle con lectura híbrida (GET /notes/:id), edición (PATCH) y
 /// borrado (DELETE). El contenido local se muestra de inmediato como fallback.
@@ -2251,6 +2364,9 @@ class _NoteDetailSheet extends StatefulWidget {
 
 class _NoteDetailSheetState extends State<_NoteDetailSheet> {
   List<Map<String, dynamic>> _attachments = [];
+  final Set<String> _removedResources = {};
+  bool _removingAttachment = false;
+  bool _linkingAttachment = false;
   late String _title;
   late String _content;
   late int _likes;
@@ -2416,6 +2532,14 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
       case _EditSaveOutcome.offline:
         _editError = 'Sin conexión: se mantiene el contenido local.';
         break;
+      case _EditSaveOutcome.conflict:
+        _editError =
+            'La nota cambió en otra sesión. Conserva tu texto y vuelve a abrirla antes de guardar.';
+        break;
+      case _EditSaveOutcome.missingVersion:
+        _editError =
+            'El servidor no entregó la versión de la nota. Actualiza Notes y vuelve a abrirla.';
+        break;
       case _EditSaveOutcome.error:
         _editError = 'No se pudo guardar la edición en el servidor.';
         break;
@@ -2560,7 +2684,9 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
   void _showResourceDialog(Map<String, dynamic> resource) {
     final identity = resourceIdentity(resource['url'] as String? ?? '');
     final matched = _mergedResources.where(
-      (r) => resourceIdentity(r['url'] as String? ?? '') == identity,
+      (r) =>
+          resourceIdentity(r['url'] as String? ?? '') == identity ||
+          urlMatchesAttachment(r, identity),
     );
     final resolved = matched.isEmpty ? resource : matched.first;
     showDialog<void>(
@@ -2584,6 +2710,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     if (externalId == null || externalId.isEmpty) return;
     // Los ids locales (solo dígitos) aún no existen en el backend.
     if (noteId.isEmpty || int.tryParse(noteId) != null) return;
+    setState(() => _linkingAttachment = true);
     try {
       final res = await AuthedHttp.run(
         () => _withNotesClient(
@@ -2605,6 +2732,13 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
       if (res.statusCode == 201 && mounted) {
         final payload =
             jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+        final id = payload['attachment_id'] as String?;
+        if (id != null && result.fileUrl != null && _contentCtrl != null) {
+          _contentCtrl!.text = _contentCtrl!.text.replaceAll(
+            '(${result.fileUrl})',
+            '(attachment:$id)',
+          );
+        }
         setState(
           () => _attachments.addAll(
             attachmentResources(noteId, [
@@ -2634,22 +2768,181 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
           _attachNoticeOk = false;
         });
       }
+    } finally {
+      if (mounted) setState(() => _linkingAttachment = false);
     }
   }
 
   List<Map<String, dynamic>> get _mergedResources {
-    final merged = <Map<String, dynamic>>[
-      ..._attachments,
+    // 1 attachment ID = 1 tarjeta. Las referencias inline `attachment:<uuid>`
+    // que resuelven al adjunto real no generan tarjeta extra; las stale se
+    // excluyen para no mostrar una tarjeta genérica duplicada.
+    final merged = mergeAttachmentResources(_attachments, [
       ...widget.resources,
       ..._resourcesFromMarkdown(_content),
-    ];
-    final seen = <String>{};
-    final out = <Map<String, dynamic>>[];
-    for (final r in merged) {
+    ]);
+    return merged.where((r) {
+      final id = r['attachment_id'] as String?;
+      if (id != null && id.isNotEmpty) {
+        if (_removedResources.contains('attachment:$id')) return false;
+      }
       final key = resourceIdentity((r['url'] ?? r['name']) as String);
-      if (seen.add(key)) out.add(r);
+      return !_removedResources.contains(key);
+    }).toList();
+  }
+
+  Future<void> _removeResource(Map<String, dynamic> resource) async {
+    if (_removingAttachment || !widget.isMine) return;
+    final id = resource['attachment_id'] as String?;
+    if (id == null) return;
+    setState(() => _removingAttachment = true);
+    final source = _editing ? (_contentCtrl?.text ?? _content) : _content;
+    final updated = removeAttachmentReferences(source, resource);
+    debugPrint('[Notes] ATTACHMENT remove attachment=$id refs=${source.length}->${updated.length}');
+    final outcome = await widget.onSaveEdit(
+      _editing ? (_titleCtrl?.text ?? _title) : _title,
+      updated,
+    );
+    debugPrint('[Notes] ATTACHMENT remove attachment=$id outcome=$outcome');
+    if (!mounted) return;
+    if (outcome != _EditSaveOutcome.synced) {
+      setState(() => _removingAttachment = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No se pudo actualizar la nota. El adjunto se conservó.',
+          ),
+        ),
+      );
+      return;
     }
-    return out;
+    setState(() {
+      _content = updated;
+      _contentCtrl?.text = updated;
+    });
+    try {
+      final response = await AuthedHttp.run(
+        () => _withNotesClient(
+          (client) => client
+              .delete(
+                Uri.parse(
+                  '$notesBaseUrl/notes/${widget.note.id}/attachments/$id',
+                ),
+                headers: _notesAuthHeaders(),
+              )
+              .timeout(const Duration(seconds: 30)),
+        ),
+      );
+      if (!mounted) return;
+      if (response.statusCode != 200 && response.statusCode != 204) {
+        throw const FormatException('delete failed');
+      }
+      setState(() {
+        _removedResources.add('attachment:$id');
+        _removedResources.add(resourceIdentity(resource['url'] as String? ?? ''));
+        _attachments.removeWhere((a) => a['attachment_id'] == id);
+      });
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No se pudo quitar el archivo. Puedes volver a intentarlo.',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _removingAttachment = false);
+    }
+  }
+
+  Widget _removableResource(Map<String, dynamic> resource, Widget child) {
+    final attachmentId = resource['attachment_id'] as String?;
+    final canRemove = widget.isMine && attachmentId != null;
+    if (!canRemove) return child;
+    final name = (resource['name'] ?? 'Adjunto') as String;
+    return Container(
+      width: 160,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: Colors.black, width: 2),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+        boxShadow: AppShadows.badge,
+      ),
+      clipBehavior: Clip.hardEdge,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          child,
+          Container(
+            decoration: const BoxDecoration(
+              border: Border(top: BorderSide(color: Colors.black, width: 2)),
+              color: Color(0xFFF5F0E8),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.black,
+                    ),
+                  ),
+                ),
+                MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: GestureDetector(
+                    key: ValueKey('remove-$attachmentId'),
+                    onTap: _removingAttachment
+                        ? null
+                        : () => _removeResource(resource),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE63B2E),
+                        border: Border.all(color: Colors.black, width: 1.5),
+                        borderRadius: BorderRadius.circular(
+                          AppDimens.radiusChip,
+                        ),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.delete_outline_rounded,
+                            size: 14,
+                            color: Colors.white,
+                          ),
+                          SizedBox(width: 2),
+                          Text(
+                            'QUITAR',
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   List<Widget> _buildResourceItems() {
@@ -2675,9 +2968,12 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
           runSpacing: 8,
           children: [
             for (final img in images)
-              _ResourceImageThumb(
-                resource: img,
-                onTap: () => _showResourceDialog(img),
+              _removableResource(
+                img,
+                _ResourceImageThumb(
+                  resource: img,
+                  onTap: () => _showResourceDialog(img),
+                ),
               ),
           ],
         ),
@@ -2695,10 +2991,13 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
         ),
         const SizedBox(height: 8),
         for (final doc in docs) ...[
-          _ResourceDocTile(
-            resource: doc,
-            onView: () => _showResourceDialog(doc),
-            onDownload: _downloadResource,
+          _removableResource(
+            doc,
+            _ResourceDocTile(
+              resource: doc,
+              onView: () => _showResourceDialog(doc),
+              onDownload: _downloadResource,
+            ),
           ),
           const SizedBox(height: 8),
         ],
@@ -2972,7 +3271,12 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                               borderRadius: BorderRadius.zero,
                             ),
                           ),
-                          onPressed: _saving ? null : _confirmEdit,
+                          onPressed:
+                              _saving ||
+                                  _linkingAttachment ||
+                                  _removingAttachment
+                              ? null
+                              : _confirmEdit,
                           child: Text(
                             _saving ? 'GUARDANDO…' : 'GUARDAR',
                             style: const TextStyle(fontWeight: FontWeight.w900),
@@ -4331,14 +4635,17 @@ Future<String?> _copyLocalResourceToDownloads(File source) async {
   }
 }
 
-/// Imagen de recurso: `Image.file` si la ruta existe en disco, `Image.network`
-/// para URLs http/https y fallback neobrutalista si nada aplica o falla.
+/// Imagen de recurso: endpoint autenticado `/content` si hay UUID real,
+/// `Image.file` si la ruta existe en disco, `Image.network` para URLs
+/// http/https y fallback neobrutalista si nada aplica o falla.
+/// `debugLabel` distingue INLINE vs ATTACHMENT en logs sin exponer secretos.
 Widget _buildResourceImage({
   required String url,
   Map<String, dynamic>? resource,
   required BoxFit fit,
   required Widget Function() fallback,
   Widget Function(BuildContext, Widget, ImageChunkEvent?)? loadingBuilder,
+  String debugLabel = 'ATTACHMENT',
 }) {
   if (resource?['note_id'] is String && resource?['attachment_id'] is String) {
     final noteId = Uri.encodeComponent(resource!['note_id'] as String);
@@ -4352,8 +4659,16 @@ Widget _buildResourceImage({
       ),
       fit: fit,
       client: notesHttpClientOverride,
+      debugLabel: debugLabel,
       onOpenDrive: () => _openResourceExternally(url),
     );
+  }
+  // Referencia inline `attachment:<uuid>` sin adjunto real resuelto:
+  // no intentar Drive ni red, mostrar fallback compacto directamente.
+  // Esto evita pedir un UUID stale y permite diagnosticar el mismatch.
+  if (url.trim().startsWith('attachment:')) {
+    debugPrint('[Notes] $debugLabel attachment=${url.trim()} status=unresolved mime=-');
+    return fallback();
   }
   if (isDriveViewerUrl(url)) {
     return Center(
@@ -4462,6 +4777,7 @@ class _ResourceImageThumb extends StatelessWidget {
             url: (resource['url'] ?? '') as String,
             resource: resource,
             fit: BoxFit.cover,
+            debugLabel: 'ATTACHMENT',
             fallback: fallback,
             loadingBuilder: (context, child, progress) {
               if (progress == null) return child;
@@ -4961,9 +5277,22 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
   });
 
   Map<String, dynamic>? _attachmentFor(String url) {
+    // Secuencia correcta: crear nota → UUID nota → subir → UUID REAL
+    // attachment → insertar `attachment:<uuid>` → PATCH → renderer resuelve
+    // UUID → endpoint autenticado content → Image.memory.
+    // Nunca usar ID temporal, timestamp, external_file_id, filename ni URL Drive.
+    final inlineId = attachmentIdFromUrl(url);
+    if (inlineId.isNotEmpty) {
+      for (final r in resources) {
+        if ((r['attachment_id'] as String?) == inlineId) return r;
+      }
+      return null;
+    }
     final identity = resourceIdentity(url);
     final matches = resources.where(
-      (r) => resourceIdentity(r['url'] as String? ?? '') == identity,
+      (r) =>
+          resourceIdentity(r['url'] as String? ?? '') == identity ||
+          urlMatchesAttachment(r, identity),
     );
     return matches.isEmpty ? null : matches.first;
   }
@@ -5203,6 +5532,7 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
   }
 
   Widget _blockImage(String alt, String url) {
+    final resolved = _attachmentFor(url);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Align(
@@ -5234,26 +5564,29 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
                   children: [
                     _buildResourceImage(
                       url: url,
-                      resource: _attachmentFor(url),
+                      resource: resolved,
                       fit: BoxFit.contain,
+                      debugLabel: 'INLINE',
                       fallback: () => Container(
-                        width: 420,
-                        height: 260,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
                         color: AppColors.surfaceLow,
                         alignment: Alignment.center,
-                        child: const Column(
+                        child: const Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Icon(
                               Icons.broken_image_rounded,
-                              size: 36,
+                              size: 16,
                               color: AppColors.muted,
                             ),
-                            SizedBox(height: 6),
+                            SizedBox(width: 6),
                             Text(
                               'IMAGEN NO DISPONIBLE',
                               style: TextStyle(
-                                fontSize: 10,
+                                fontSize: 9,
                                 fontWeight: FontWeight.w900,
                                 color: AppColors.muted,
                               ),
@@ -5264,8 +5597,8 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
                       loadingBuilder: (context, child, progress) {
                         if (progress == null) return child;
                         return Container(
-                          width: 420,
-                          height: 260,
+                          width: 200,
+                          height: 64,
                           color: AppColors.surfaceLow,
                           alignment: Alignment.center,
                           child: const SizedBox(
@@ -5655,11 +5988,26 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
             url: url,
             resource: _attachmentFor(url),
             fit: BoxFit.contain,
+            debugLabel: 'INLINE',
             fallback: () => const Center(
-              child: Icon(
-                Icons.broken_image_rounded,
-                size: 24,
-                color: AppColors.muted,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.broken_image_rounded,
+                    size: 16,
+                    color: AppColors.muted,
+                  ),
+                  SizedBox(width: 4),
+                  Text(
+                    'IMAGEN NO DISPONIBLE',
+                    style: TextStyle(
+                      fontSize: 8,
+                      fontWeight: FontWeight.w900,
+                      color: AppColors.muted,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),

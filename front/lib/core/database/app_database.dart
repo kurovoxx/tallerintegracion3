@@ -17,6 +17,7 @@ class LocalNotes extends Table {
   DateTimeColumn get updatedAt => dateTime()();
   // ownerUserId aisla notas por cuenta (ver §10 informe): NULL = fila legacy
   // o creada sin sesión (visible solo sin sesión, nunca como ajena).
+  IntColumn get version => integer().nullable()();
   TextColumn get ownerUserId => text().nullable()();
 
   @override
@@ -55,7 +56,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.e);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   /// Bandera de disponibilidad del motor FTS5.
   /// true si la tabla virtual y sus triggers se crearon correctamente
@@ -133,6 +134,7 @@ END
       }
     },
     onUpgrade: (m, from, to) async {
+      if (from < 3) await m.addColumn(localNotes, localNotes.version);
       // v1 -> v2: aislamiento por cuenta sin borrar datos legacy.
       if (from < 2) {
         await m.addColumn(localNotes, localNotes.ownerUserId);
