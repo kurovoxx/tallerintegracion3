@@ -600,11 +600,14 @@ class SocialService {
     required String title,
     String? description,
     required DateTime scheduledAtUtc,
+    List<String> attendees = const [],
   }) async {
     final payload = <String, dynamic>{
       'title': title.trim(),
       if (description != null && description.trim().isNotEmpty)
         'description': description.trim(),
+      if (attendees.isNotEmpty)
+        'attendees': normalizeMeetingAttendees(attendees),
       'scheduled_at': scheduledAtUtc.toUtc().toIso8601String(),
     };
     debugPrint('[Social] creando reunión en grupo $groupId');
@@ -683,4 +686,21 @@ class SocialService {
   void dispose() {
     _client.close();
   }
+}
+
+/// Mismo formato, normalización y máximo que parseAttendees del servicio Social.
+List<String> normalizeMeetingAttendees(Iterable<String> values) {
+  final emails = values
+      .map((e) => e.trim().toLowerCase())
+      .where((e) => e.isNotEmpty)
+      .toSet()
+      .toList();
+  final pattern = RegExp(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$');
+  if (emails.any((e) => e.length > 255 || !pattern.hasMatch(e))) {
+    throw const FormatException('Ingresa un correo válido.');
+  }
+  if (emails.length > 50) {
+    throw const FormatException('Puedes invitar hasta 50 personas.');
+  }
+  return emails;
 }

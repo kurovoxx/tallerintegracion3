@@ -122,7 +122,13 @@ void main() {
       expect(payload!['title'], 'Repaso');
       expect(payload!['description'], 'Unidad dos');
       expect(DateTime.parse(payload!['scheduled_at'] as String).isUtc, isTrue);
-      expect(payload!.keys.toSet(), {'title', 'description', 'scheduled_at'});
+      expect(payload!.keys.toSet(), {
+        'title',
+        'description',
+        'scheduled_at',
+        'attendees',
+      });
+      expect(payload!['attendees'], ['camila@example.com']);
       expect(loads, 2);
       expect(find.text('Repaso'), findsWidgets);
       expect(tester.takeException(), isNull);

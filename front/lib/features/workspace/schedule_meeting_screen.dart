@@ -28,9 +28,11 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
   final _formKey = GlobalKey<FormState>();
   final _titleCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController();
+  final Map<String, String> _guests = {};
+  String? _guestError;
   final _linkCtrl = TextEditingController();
   List<GroupMember> _members = const [];
-  final Map<String, GroupMember> _selectedMembers = {};
   bool _loadingMembers = false;
   String? _membersError;
   DateTime _selectedDate = DateTime.now().add(const Duration(days: 1));
@@ -58,6 +60,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
     _titleCtrl.dispose();
     _descCtrl.dispose();
     _linkCtrl.dispose();
+    _emailCtrl.dispose();
     if (widget._serviceOverride == null) _social.dispose();
     super.dispose();
   }
@@ -108,6 +111,23 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
     return 'Integrante';
   }
 
+  void _addGuest(String raw, [String? label]) {
+    try {
+      final email = raw.trim().toLowerCase();
+      if (email.isEmpty) {
+        throw const FormatException('Ingresa un correo válido.');
+      }
+      normalizeMeetingAttendees([..._guests.keys, email]);
+      setState(() {
+        _guests[email] = label ?? email;
+        _guestError = null;
+        _emailCtrl.clear();
+      });
+    } on FormatException catch (e) {
+      setState(() => _guestError = e.message);
+    }
+  }
+
   void _linkGoogleCalendar() {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
@@ -156,7 +176,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
   }
 
   // POST /groups/:id/meetings {title, description?, scheduled_at}.
-  // Solo esos campos tienen efecto en el backend.
+  // Invitados por email; enlace/sala continúa como dato local del formulario.
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     if (!_isRealGroup) {
@@ -184,6 +204,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
         title: _titleCtrl.text.trim(),
         description: desc.isEmpty ? null : desc,
         scheduledAtUtc: when,
+        attendees: _guests.keys.toList(),
       );
       if (!mounted) return;
       setState(() => _createdMeetingId = id);
@@ -196,9 +217,15 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
           backgroundColor: AppColors.border,
         ),
       );
-    } on SocialApiException catch (_) {
+    } on SocialApiException catch (e) {
       if (!mounted) return;
-      setState(() => _submitError = 'No se pudo agendar la reunión.');
+      setState(
+        () => _submitError = e.message.contains('invalid attendee email')
+            ? 'Ingresa un correo válido.'
+            : e.message.contains('too many attendees')
+            ? 'Puedes invitar hasta 50 personas.'
+            : 'No se pudo agendar la reunión.',
+      );
     } catch (_) {
       if (!mounted) return;
       setState(() => _submitError = 'No se pudo agendar la reunión.');
@@ -346,23 +373,53 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                               for (final member in _members)
                                 _MemberStickerChip(
                                   label: _memberLabel(member),
-                                  selected: _selectedMembers.containsKey(
-                                    member.userId,
+                                  selected: _guests.containsKey(
+                                    member.email?.trim().toLowerCase(),
                                   ),
-                                  onTap: () => setState(() {
-                                    if (_selectedMembers.containsKey(
-                                      member.userId,
-                                    )) {
-                                      _selectedMembers.remove(member.userId);
+                                  onTap: () {
+                                    final email =
+                                        member.email?.trim().toLowerCase() ??
+                                        '';
+                                    if (_guests.containsKey(email)) {
+                                      setState(() => _guests.remove(email));
+                                    } else if (email.isEmpty) {
+                                      setState(
+                                        () => _guestError =
+                                            'Este integrante no tiene correo disponible. Escríbelo abajo para invitarlo.',
+                                      );
                                     } else {
-                                      // Conserva también el email real para la integración futura.
-                                      _selectedMembers[member.userId] = member;
+                                      _addGuest(email, _memberLabel(member));
                                     }
-                                  }),
+                                  },
                                 ),
                             ],
                           ),
                           const SizedBox(height: AppDimens.spaceXl),
+                          TextField(
+                            controller: _emailCtrl,
+                            decoration: InputDecoration(
+                              labelText: 'Correo del invitado',
+                              errorText: _guestError,
+                            ),
+                            keyboardType: TextInputType.emailAddress,
+                            onSubmitted: (value) => _addGuest(value),
+                          ),
+                          TextButton(
+                            onPressed: () => _addGuest(_emailCtrl.text),
+                            child: const Text('Añadir invitado'),
+                          ),
+                          Wrap(
+                            spacing: 8,
+                            children: [
+                              for (final guest in _guests.entries)
+                                InputChip(
+                                  label: Text(guest.value),
+                                  onDeleted: () =>
+                                      setState(() => _guests.remove(guest.key)),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
                           NeobrutalistButton(
                             label: _isSubmitting
                                 ? 'Agendando...'
