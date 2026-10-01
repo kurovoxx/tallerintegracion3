@@ -48,6 +48,9 @@ type driveConnectRequest struct {
 	// expected_email opcional: correo declarado en la app; si difiere del
 	// email real de Google se rechaza con 400 email_mismatch.
 	ExpectedEmail *string `json:"expected_email"`
+	// redirect_uri opcional: flujo desktop RFC 8252 con puerto efímero.
+	// Se valida con allowlist; vacío = redirect configurado del servidor.
+	RedirectURI *string `json:"redirect_uri"`
 }
 
 type driveConnectResponse struct {
@@ -91,11 +94,15 @@ func (h *DriveHandler) Connect(c *gin.Context) {
 		return
 	}
 	// El Service hace TrimSpace y valida vacío
-	err := h.svc.Connect(c.Request.Context(), userID, req.OAuthCode, req.ExpectedEmail)
+	var redirectURI string
+	if req.RedirectURI != nil {
+		redirectURI = *req.RedirectURI
+	}
+	err := h.svc.Connect(c.Request.Context(), userID, req.OAuthCode, req.ExpectedEmail, redirectURI)
 	if err != nil {
 		if se, ok := err.(*service.ServiceError); ok {
 			switch se.Code {
-			case "bad_request", "email_mismatch":
+			case "bad_request", "email_mismatch", "invalid_redirect_uri":
 				utils.RespondError(c, http.StatusBadRequest, se.Code, se.Message)
 				return
 			case "invalid_oauth_code":
