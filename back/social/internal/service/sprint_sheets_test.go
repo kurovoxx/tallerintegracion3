@@ -74,3 +74,33 @@ func TestSprintSheetsLifecycleAndIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestLegacySprintAcceptsDatesWithoutReplacingSheet(t *testing.T) {
+	gid, admin, member, _, store := sprintSeamSetup()
+	svc := NewSprintService(store)
+	ctx := context.Background()
+	// Legacy default creation has NULL period_start/period_end.
+	task, err := svc.CreateSprintTask(ctx, gid, admin, "", "Legacy task", member, "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheetID := uuidStr(task.Task.SheetID)
+	hours := NewHoursService(store)
+	if _, _, err := hours.LogHours(ctx, admin, uuidStr(task.Task.ID), "2026-10-12", 3); err != nil {
+		t.Fatal(err)
+	}
+	for _, end := range []string{"2026-10-01", "2026-10-05", "2026-11-04"} {
+		sheet, err := svc.UpdateSprintSheet(ctx, gid, admin, sheetID, SheetPatch{Name: strptr("Sprint 1"), PeriodStart: strptr("2026-10-01"), PeriodEnd: &end})
+		if err != nil || uuidStr(sheet.ID) != sheetID || !sheet.PeriodStart.Valid || !sheet.PeriodEnd.Valid {
+			t.Fatalf("legacy dates: %v", err)
+		}
+		tasks, err := svc.ListSprintTasks(ctx, gid, admin, "", "", sheetID)
+		if err != nil || len(tasks) != 1 {
+			t.Fatal("tasks lost", err)
+		}
+	}
+	_, total, err := hours.ListHours(ctx, admin, uuidStr(task.Task.ID), "", "")
+	if err != nil || total != 3 {
+		t.Fatal("hours lost", err)
+	}
+}

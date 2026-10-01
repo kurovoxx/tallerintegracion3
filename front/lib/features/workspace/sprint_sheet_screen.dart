@@ -120,6 +120,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
 
   @override
   void dispose() {
+    _tableScroll.dispose();
     if (widget._serviceOverride == null) _social.dispose();
     super.dispose();
   }
@@ -223,6 +224,8 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
       },
     );
   }
+
+  final _tableScroll = ScrollController();
 
   Future<void> _manageSprint({bool edit = false}) async {
     final groupId = widget.groupId!.trim();
@@ -1247,13 +1250,25 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                 ),
               ],
               const SizedBox(height: 8),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: SizedBox(
-                  width: math.max(1200, 740 + 90.0 * _days.length),
-                  child: _buildSprintTable(),
+              if (_isRealGroup && _tasks.isEmpty)
+                _buildSprintTable()
+              else
+                Scrollbar(
+                  key: const ValueKey('sprint-date-scrollbar'),
+                  controller: _tableScroll,
+                  thumbVisibility: true,
+                  trackVisibility: true,
+                  scrollbarOrientation: ScrollbarOrientation.bottom,
+                  child: SingleChildScrollView(
+                    controller: _tableScroll,
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.only(bottom: 18),
+                    child: SizedBox(
+                      width: math.max(1200, 740 + 90.0 * _days.length),
+                      child: _buildSprintTable(),
+                    ),
+                  ),
                 ),
-              ),
             ],
           ],
         ),
@@ -1395,51 +1410,48 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     );
   }
 
-  /// Selector de hojas reales del grupo (sin alta: el backend no expone
-  /// crear hoja; las tareas crean la hoja por defecto).
+  /// Acciones visibles para todas las hojas, incluida la primera sin fechas.
   Widget _buildRealSheetSelector() {
     final sheets = _realSheets;
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      physics: const BouncingScrollPhysics(),
-      child: Row(
-        children: [
-          for (var i = 0; i < sheets.length; i++) ...[
-            if (i != 0) const SizedBox(width: 8),
-            _SprintChip(
-              label: sheets[i].name,
-              dates:
-                  '${_fmtDateLabel(sheets[i].periodStart)} → ${_fmtDateLabel(sheets[i].periodEnd)}',
-              selected: i == _realSheetIndex,
-              taskCount: _realTasks
-                  .where((t) => t.sheetId == sheets[i].id)
-                  .length,
-              onTap: () => setState(() => _realSheetIndex = i),
-            ),
-          ],
-          const SizedBox(width: 8),
-          NeobrutalistButton(
-            label: '+ NUEVO SPRINT',
-            icon: Icons.add_circle_outline_rounded,
-            onPressed: _loadingReal ? null : () => _manageSprint(),
-          ),
-          if (_activeSheet != null) ...[
-            const SizedBox(width: 8),
-            NeobrutalistButton(
-              label: 'EDITAR SPRINT',
-              icon: Icons.edit_outlined,
-              onPressed: _loadingReal ? null : () => _manageSprint(edit: true),
-            ),
-          ],
-          const SizedBox(width: 8),
-          NeobrutalistButton(
-            label: 'VER GRÁFICO BURNDOWN',
-            icon: Icons.show_chart_rounded,
-            variant: NeobrutalistButtonVariant.accent,
-            onPressed: _showBurndownDialog,
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (var i = 0; i < sheets.length; i++) ...[
+          if (i != 0) const SizedBox(width: 8),
+          _SprintChip(
+            label: sheets[i].name,
+            dates:
+                '${_fmtDateLabel(sheets[i].periodStart)} → ${_fmtDateLabel(sheets[i].periodEnd)}',
+            selected: i == _realSheetIndex,
+            taskCount: _realTasks
+                .where((t) => t.sheetId == sheets[i].id)
+                .length,
+            onTap: () => setState(() => _realSheetIndex = i),
           ),
         ],
-      ),
+        const SizedBox(width: 8),
+        NeobrutalistButton(
+          label: '+ NUEVO SPRINT',
+          icon: Icons.add_circle_outline_rounded,
+          onPressed: _loadingReal ? null : () => _manageSprint(),
+        ),
+        if (_activeSheet != null) ...[
+          const SizedBox(width: 8),
+          NeobrutalistButton(
+            label: 'EDITAR SPRINT',
+            icon: Icons.edit_outlined,
+            onPressed: _loadingReal ? null : () => _manageSprint(edit: true),
+          ),
+        ],
+        const SizedBox(width: 8),
+        NeobrutalistButton(
+          label: 'VER GRÁFICO BURNDOWN',
+          icon: Icons.show_chart_rounded,
+          variant: NeobrutalistButtonVariant.accent,
+          onPressed: _showBurndownDialog,
+        ),
+      ],
     );
   }
 
@@ -1622,25 +1634,6 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                   color: AppColors.text,
                 ),
               ),
-            ),
-            Row(
-              children: [
-                for (var i = 0; i < _days.length; i++)
-                  SizedBox(
-                    width: 90,
-                    child: Padding(
-                      padding: const EdgeInsets.all(6),
-                      child: Text(
-                        '${_dayDates[i]}\n${_days[i].toUpperCase()}',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
             ),
             const Padding(
               padding: EdgeInsets.all(20),
