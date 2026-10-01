@@ -109,10 +109,13 @@ void main() {
       expect(find.textContaining('hidden-uuid'), findsNothing);
       await tester.ensureVisible(find.text('CAMILA PÉREZ'));
       await tester.tap(find.text('CAMILA PÉREZ'));
+      // Calendar usa flujo real: sin config muestra error humano, nunca
+      // "próximamente", y no bloquea el agendado.
       await tester.tap(find.byType(NeobrutalistButton).first);
-      await tester.pump();
+      await tester.pumpAndSettle();
+      expect(find.textContaining('próximamente'), findsNothing);
       expect(
-        find.text('Esta función estará disponible próximamente.'),
+        find.textContaining('GOOGLE_CLIENT_ID'),
         findsOneWidget,
       );
       FocusManager.instance.primaryFocus?.unfocus();
@@ -166,7 +169,8 @@ void main() {
     expect(find.text('AGENDAR REUNIÓN'), findsWidgets);
     expect(find.textContaining('AGENDAR'), findsWidgets);
     // Campos visuales completos, sin integrantes inventados.
-    expect(find.textContaining('MIEMBROS INVITADOS'), findsOneWidget);
+    expect(find.textContaining('INVITAR MIEMBROS'), findsOneWidget);
+    expect(find.textContaining('INVITAR POR CORREO'), findsOneWidget);
     expect(find.textContaining('ENLACE / SALA'), findsOneWidget);
     expect(find.textContaining('Sofía'), findsNothing);
     expect(find.textContaining('POST real'), findsNothing);

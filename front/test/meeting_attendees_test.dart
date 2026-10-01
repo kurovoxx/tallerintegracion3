@@ -59,6 +59,11 @@ void main() {
   ) async {
     await t.pumpWidget(const MaterialApp(home: ScheduleMeetingScreen()));
     await t.pumpAndSettle();
+    // Calendar real: botón vincular visible, sin texto "próximamente".
+    expect(find.text('VINCULAR CON GOOGLE CALENDAR'), findsOneWidget);
+    expect(find.textContaining('próximamente'), findsNothing);
+    expect(find.textContaining('INVITAR MIEMBROS'), findsOneWidget);
+    expect(find.textContaining('INVITAR POR CORREO'), findsOneWidget);
     final field = find.widgetWithText(TextField, 'Correo del invitado');
     await t.ensureVisible(field);
     await t.enterText(field, 'Persona@Correo.cl');
