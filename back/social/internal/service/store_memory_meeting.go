@@ -24,6 +24,7 @@ type MemoryMeetingStore struct {
 	byGroup    map[string][]string // grupo -> ids de reuniones en orden
 	notifySeen map[string]int      // meeting_id -> notificaciones generadas
 	calEvents  map[string]string   // meeting_id -> google_calendar_event_id persistido
+	attendees  map[string][]string // meeting_id -> emails invitados persistidos
 	discordCfg map[string]sqlc.SocialDiscordIntegration
 	streamChan map[string]string // grupo -> channel_id de Stream registrado
 }
@@ -37,6 +38,7 @@ func NewMemoryMeetingStore() *MemoryMeetingStore {
 		byGroup:    map[string][]string{},
 		notifySeen: map[string]int{},
 		calEvents:  map[string]string{},
+		attendees:  map[string][]string{},
 		discordCfg: map[string]sqlc.SocialDiscordIntegration{},
 		streamChan: map[string]string{},
 	}
@@ -131,7 +133,7 @@ func (m *MemoryMeetingStore) IsMember(_ context.Context, groupID, userID pgtype.
 	return m.members[gid.String()][uid.String()], nil
 }
 
-func (m *MemoryMeetingStore) CreateMeetingWithNotifications(_ context.Context, arg sqlc.CreateMeetingParams) (sqlc.SocialMeeting, error) {
+func (m *MemoryMeetingStore) CreateMeetingWithNotifications(_ context.Context, arg sqlc.CreateMeetingParams, attendeeEmails []string) (sqlc.SocialMeeting, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	gid, err := uuid.FromBytes(arg.GroupID.Bytes[:])
@@ -165,7 +167,23 @@ func (m *MemoryMeetingStore) CreateMeetingWithNotifications(_ context.Context, a
 		}
 	}
 	m.notifySeen[midStr.String()] = count
+	m.attendees[midStr.String()] = append([]string{}, attendeeEmails...)
 	return meeting, nil
+}
+
+// ListAttendeesByMeeting responde los emails invitados (para MeetingCalendarStore).
+func (m *MemoryMeetingStore) ListAttendeesByMeeting(_ context.Context, meetingID pgtype.UUID) ([]sqlc.SocialMeetingAttendee, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	mid, err := uuid.FromBytes(meetingID.Bytes[:])
+	if err != nil || !meetingID.Valid {
+		return nil, pgx.ErrNoRows
+	}
+	var out []sqlc.SocialMeetingAttendee
+	for _, email := range m.attendees[mid.String()] {
+		out = append(out, sqlc.SocialMeetingAttendee{MeetingID: meetingID, Email: email})
+	}
+	return out, nil
 }
 
 func (m *MemoryMeetingStore) ListMeetingsByGroup(_ context.Context, groupID pgtype.UUID) ([]sqlc.SocialMeeting, error) {

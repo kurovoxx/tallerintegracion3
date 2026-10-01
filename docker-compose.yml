@@ -99,7 +99,7 @@ services:
       - ti3-net
     restart: unless-stopped
 
-  # Frontend Flutter Web (nginx) - estatico, apunta a los endpoints publicos de pillan (dominio ngrok)
+  # Frontend Flutter Web (nginx) - estatico, apunta a los endpoints publicos de pillan (Ingress ti3-brojas.dev.censei.cl)
   front:
     build:
       context: ./front

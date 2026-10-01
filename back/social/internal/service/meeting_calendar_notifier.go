@@ -12,9 +12,11 @@ import (
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository/sqlc"
 )
 
-// MeetingCalendarStore es lo mínimo que el notifier necesita para persistir el sync.
+// MeetingCalendarStore es lo mínimo que el notifier necesita: leer invitados
+// y persistir el sync.
 type MeetingCalendarStore interface {
 	SetCalendarEventID(ctx context.Context, meetingID pgtype.UUID, eventID string) (sqlc.SocialMeeting, error)
+	ListAttendeesByMeeting(ctx context.Context, meetingID pgtype.UUID) ([]sqlc.SocialMeetingAttendee, error)
 }
 
 // CalendarMeetingNotifier implementa MeetingCreatedNotifier con sync real a Google Calendar.
@@ -61,10 +63,21 @@ func (n *CalendarMeetingNotifier) OnMeetingCreated(ctx context.Context, meeting 
 	if meeting.ScheduledAt.Valid {
 		start = meeting.ScheduledAt.Time
 	}
+	// Invitados persistidos al agendar (best-effort: si la lectura falla,
+	// el evento se crea sin attendees en vez de abortar el sync).
+	var attendees []string
+	if rows, err := n.store.ListAttendeesByMeeting(ctx, meeting.ID); err != nil {
+		log.Printf("calendar sync: no se pudieron leer invitados: %v", err)
+	} else {
+		for _, r := range rows {
+			attendees = append(attendees, r.Email)
+		}
+	}
 	eventID, err := n.client.CreateEvent(ctx, token, calendar.Event{
 		Summary:     meeting.Title,
 		Description: description,
 		Start:       start,
+		Attendees:   attendees,
 	})
 	if err != nil {
 		if calendar.IsUnauthorized(err) {

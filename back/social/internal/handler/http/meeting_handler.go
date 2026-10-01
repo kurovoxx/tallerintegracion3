@@ -23,10 +23,11 @@ func NewMeetingHandler(svc *service.MeetingService) *MeetingHandler {
 // POST /groups/{id}/meetings — contrato: agentApiContract.md sección 5
 // Body: {title, description?, scheduled_at} → 201 {meeting_id}
 type CreateMeetingRequest struct {
-	Title         string  `json:"title" binding:"required,max=300"`
-	Description   *string `json:"description"`
-	ScheduledAt   string  `json:"scheduled_at" binding:"required"`
-	NotifyDiscord *bool   `json:"notify_discord"`
+	Title         string   `json:"title" binding:"required,max=300"`
+	Description   *string  `json:"description"`
+	ScheduledAt   string   `json:"scheduled_at" binding:"required"`
+	NotifyDiscord *bool    `json:"notify_discord"`
+	Attendees     []string `json:"attendees"`
 }
 
 func (h *MeetingHandler) CreateMeeting(c *gin.Context) {
@@ -60,6 +61,7 @@ func (h *MeetingHandler) CreateMeeting(c *gin.Context) {
 		req.Description,
 		req.ScheduledAt,
 		req.NotifyDiscord,
+		req.Attendees,
 	)
 	if err != nil {
 		switch {
@@ -74,7 +76,9 @@ func (h *MeetingHandler) CreateMeeting(c *gin.Context) {
 		case errors.Is(err, service.ErrInvalidTitle),
 			errors.Is(err, service.ErrTitleTooLong),
 			errors.Is(err, service.ErrScheduledAtRequired),
-			errors.Is(err, service.ErrInvalidScheduledAt):
+			errors.Is(err, service.ErrInvalidScheduledAt),
+			errors.Is(err, service.ErrInvalidAttendeeEmail),
+			errors.Is(err, service.ErrTooManyAttendees):
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_body"})
 		default:
 			log.Printf("CreateMeeting internal error: %v", err)

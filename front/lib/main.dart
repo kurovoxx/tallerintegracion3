@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'core/services/insecure_http.dart';
 import 'core/services/session_manager.dart';
 import 'core/theme/app_theme.dart';
 import 'core/widgets/main_shell.dart';
@@ -9,6 +10,9 @@ import 'features/auth/login_screen.dart';
 final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
+  // Solo-dev desktop: permite self-signed de pillan con ALLOW_INSECURE=true.
+  // En web es no-op. Debe ir antes de cualquier http.Client.
+  maybeAllowInsecureCerts();
   WidgetsFlutterBinding.ensureInitialized();
   SessionManager.onSessionExpired = () async {
     final nav = appNavigatorKey.currentState;

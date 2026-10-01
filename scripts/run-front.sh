@@ -9,12 +9,13 @@ echo "Detectando SO: $(uname -s)"
 echo ""
 echo "¿Quieres correr Flutter para Linux o Windows?"
 echo "  1) linux         - nativo Linux local (http://localhost:8085, requiere auth local)"
-echo "  2) windows       - build Windows (solo Windows + Visual Studio)"
+echo "  2) windows       - nativo Windows local (solo Windows + Visual Studio)"
 echo "  3) web           - flutter run -d chrome (http://localhost:8085)"
 echo "  4) docker        - docker compose up front (web via nginx http://localhost:8086)"
-echo "  5) linux-deploy  - nativo Linux contra dominio ngrok (front/.env.prod.example, sin auth local)"
+echo "  5) linux-deploy  - nativo Linux contra dominio del Ingress (front/.env.prod.example, sin auth local)"
+echo "  6) windows-deploy - nativo Windows contra dominio del Ingress (solo Windows + Visual Studio, sin auth local)"
 echo ""
-read -p "Elige [1-5] (default 1): " CHOICE
+read -p "Elige [1-6] (default 1): " CHOICE
 CHOICE=${CHOICE:-1}
 
 # Fedora deps check para linux
@@ -72,7 +73,8 @@ case "$CHOICE" in
     docker compose up --build front
     ;;
   5|linux-deploy|deploy)
-    echo ">> Linux nativo contra dominio ngrok (sin auth local)"
+    echo ">> Linux nativo contra dominio del Ingress (sin auth local)"
+    echo "   Ingress con Fake Certificate: se usa ALLOW_INSECURE=true solo-dev (solo ti3-brojas.dev.censei.cl)"
     check_fedora_deps
     if ! command -v flutter >/dev/null 2>&1; then echo "Flutter no encontrado"; exit 1; fi
     # Lee dominio de .env.prod o front/.env.prod.example
@@ -81,13 +83,36 @@ case "$CHOICE" in
     if [ ! -f "$DEPLOY_ENV" ]; then echo "No se encontró .env.prod ni front/.env.prod.example"; exit 1; fi
     # shellcheck disable=SC1090
     set -a; source "$DEPLOY_ENV"; set +a
-    API_URL="${API_BASE_URL:-https://dotted-unaudited-liking.ngrok-free.dev/api-auth}"
-    NOTES_URL="${NOTES_BASE_URL:-https://dotted-unaudited-liking.ngrok-free.dev/api-notes}"
-    SOCIAL_URL="${SOCIAL_BASE_URL:-https://dotted-unaudited-liking.ngrok-free.dev/api-social}"
+    API_URL="${API_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-auth}"
+    NOTES_URL="${NOTES_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-notes}"
+    SOCIAL_URL="${SOCIAL_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-social}"
     echo "API: $API_URL"
     cd "$FRONT_DIR"
     flutter pub get
-    flutter run -d linux --dart-define=API_BASE_URL="$API_URL" --dart-define=NOTES_BASE_URL="$NOTES_URL" --dart-define=SOCIAL_BASE_URL="$SOCIAL_URL"
+    flutter run -d linux --dart-define=API_BASE_URL="$API_URL" --dart-define=NOTES_BASE_URL="$NOTES_URL" --dart-define=SOCIAL_BASE_URL="$SOCIAL_URL" --dart-define=ALLOW_INSECURE=true
+    ;;
+  6|windows-deploy|wdeploy|windows_deploy)
+    echo ">> Windows nativo contra dominio del Ingress (sin auth local)"
+    echo "   Ingress con Fake Certificate: se usa ALLOW_INSECURE=true solo-dev (solo ti3-brojas.dev.censei.cl)"
+    if [[ "$(uname -s)" != *"NT"* && "$(uname -s)" != *"MINGW"* && "$(uname -s)" != *"MSYS"* ]]; then
+      echo "Estás en $(uname -s) (Linux). flutter run -d windows solo funciona en Windows."
+      echo "En este equipo usa opción 5 (linux-deploy). En Windows nativo elige 6."
+      exit 1
+    fi
+    if ! command -v flutter >/dev/null 2>&1; then echo "Flutter no encontrado"; exit 1; fi
+    # Lee dominio de .env.prod o front/.env.prod.example (igual que opción 5)
+    DEPLOY_ENV="$PROJECT_ROOT/.env.prod"
+    if [ ! -f "$DEPLOY_ENV" ]; then DEPLOY_ENV="$PROJECT_ROOT/front/.env.prod.example"; fi
+    if [ ! -f "$DEPLOY_ENV" ]; then echo "No se encontró .env.prod ni front/.env.prod.example"; exit 1; fi
+    # shellcheck disable=SC1090
+    set -a; source "$DEPLOY_ENV"; set +a
+    API_URL="${API_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-auth}"
+    NOTES_URL="${NOTES_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-notes}"
+    SOCIAL_URL="${SOCIAL_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-social}"
+    echo "API: $API_URL"
+    cd "$FRONT_DIR"
+    flutter pub get
+    flutter run -d windows --dart-define=API_BASE_URL="$API_URL" --dart-define=NOTES_BASE_URL="$NOTES_URL" --dart-define=SOCIAL_BASE_URL="$SOCIAL_URL" --dart-define=ALLOW_INSECURE=true
     ;;
   *)
     echo "Opción inválida"

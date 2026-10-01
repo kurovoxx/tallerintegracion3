@@ -33,6 +33,9 @@ RUN flutter build web --release \
 # Etapa 2: nginx para servir
 FROM nginx:alpine
 COPY --from=builder /app/build/web /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# El entrypoint de nginx:alpine pasa templates/*.template por envsubst hacia conf.d/.
+# NGINX_ENTRYPOINT_LOCAL_RESOLVERS llena NGINX_LOCAL_RESOLVERS desde /etc/resolv.conf.
+ENV NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1 UPSTREAM_SUFFIX=""
+COPY nginx.conf /etc/nginx/templates/default.conf.template
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
