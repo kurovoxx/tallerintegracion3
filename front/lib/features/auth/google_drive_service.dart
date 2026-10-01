@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -17,6 +18,17 @@ class DriveConnectResult {
 
   final bool ok;
   final String message;
+}
+
+/// Resultado del flujo desktop: código + redirect real usado (puerto efímero).
+typedef DriveDesktopAuth = ({String code, String redirectUri});
+
+/// El puerto loopback local está ocupado (ni efímero ni rango 8081-8090).
+/// El llamador debe caer al flujo manual pegar-código con mensaje claro.
+class LocalPortBusyException implements Exception {
+  const LocalPortBusyException();
+  @override
+  String toString() => 'Puerto local ocupado: cierra la otra instancia e inténtalo de nuevo, o pega el código manualmente.';
 }
 
 /// Servicio para POST /auth/google-drive/connect con Google real.
@@ -98,7 +110,8 @@ class GoogleDriveService {
     serverClientId: _clientId,
   );
 
-  /// Retorna serverAuthCode (oauth_code). En desktop abre navegador y escucha localhost.
+  /// Retorna serverAuthCode (oauth_code). En desktop abre navegador y escucha
+  /// en loopback (ver getDesktopAuthCode); en móvil usa google_sign_in.
   /// En web retorna null (sin localhost disponible): usar buildWebAuthUrl +
   /// diálogo pegar-código. Lanza StateError visible si GOOGLE_CLIENT_ID falta.
   Future<String?> getServerAuthCode({String? loginHint}) async {
@@ -109,7 +122,8 @@ class GoogleDriveService {
     }
     if (kIsWeb) return null;
     if (Platform.isWindows || Platform.isLinux) {
-      return _getServerAuthCodeDesktop(loginHint: loginHint);
+      final auth = await getDesktopAuthCode(loginHint: loginHint);
+      return auth?.code;
     }
     final account = await _googleSignIn.signIn();
     if (account == null) return null;
@@ -117,32 +131,73 @@ class GoogleDriveService {
     return account.serverAuthCode;
   }
 
-  Future<String?> _getServerAuthCodeDesktop({String? loginHint}) async {
-    // redirect_uri canónica (debe estar en Cloud Console): ver GOOGLE_REDIRECT_URI.
-    final redirectUri = _redirect;
+  /// Flujo desktop RFC 8252: puerto efímero en 127.0.0.1 (válido sin
+  /// pre-registro para clientes Desktop), fallback a rango 8081-8090.
+  /// Retorna código + redirect real usado, para enviarlo en connectDrive.
+  /// null = usuario canceló en Google (?error=) o cerró el navegador.
+  /// Lanza LocalPortBusyException si no hay puerto libre.
+  Future<DriveDesktopAuth?> getDesktopAuthCode({String? loginHint}) async {
+    if (!isConfigured) {
+      throw StateError(
+        'GOOGLE_CLIENT_ID no configurado: rebuild con --dart-define=GOOGLE_CLIENT_ID=... (ver front/Dockerfile)',
+      );
+    }
     final hintParam = (loginHint != null && loginHint.trim().isNotEmpty)
         ? '&login_hint=${Uri.encodeComponent(loginHint.trim())}'
         : '';
-    final authUrl =
-        'https://accounts.google.com/o/oauth2/v2/auth?response_type=code&scope=$_scopes&access_type=offline&prompt=consent&client_id=$_clientId&redirect_uri=$redirectUri$hintParam';
-    // Inicia servidor local para capturar code
-    final server = await HttpServer.bind('localhost', 8081);
-    if (!await launchUrl(
-      Uri.parse(authUrl),
-      mode: LaunchMode.externalApplication,
-    )) {
-      await server.close();
-      return null;
+
+    HttpServer? server;
+    int? port;
+    // 1) Efímero: el SO elige puerto libre en loopback.
+    try {
+      server = await HttpServer.bind('127.0.0.1', 0);
+      port = server.port;
+    } catch (_) {
+      server = null;
     }
-    final request = await server.first;
-    final code = request.uri.queryParameters['code'];
-    request.response
-      ..statusCode = 200
-      ..headers.contentType = ContentType.html
-      ..write('<h1>Drive conectado, vuelve a la app</h1>');
-    await request.response.close();
-    await server.close();
-    return code;
+    // 2) Fallback: rango fijo por si el efímero falla (sandbox raras).
+    if (server == null) {
+      for (var p = 8081; p <= 8090; p++) {
+        try {
+          server = await HttpServer.bind('127.0.0.1', p);
+          port = p;
+          break;
+        } catch (_) {
+          // Puerto ocupado: sigue al siguiente.
+        }
+      }
+    }
+    if (server == null || port == null) {
+      throw const LocalPortBusyException();
+    }
+    final bound = server;
+    try {
+      final redirectUri = 'http://127.0.0.1:$port/callback';
+      final authUrl =
+          'https://accounts.google.com/o/oauth2/v2/auth?response_type=code&scope=$_scopes&access_type=offline&prompt=consent&client_id=$_clientId&redirect_uri=$redirectUri$hintParam';
+      if (!await launchUrl(
+        Uri.parse(authUrl),
+        mode: LaunchMode.externalApplication,
+      )) {
+        return null;
+      }
+      // Espera el retorno con timeout; ?error=access_denied = cancelación.
+      final request = await bound.first.timeout(
+        const Duration(minutes: 3),
+        onTimeout: () => throw TimeoutException('Se agotó el tiempo de autorización en Google.'),
+      );
+      final params = request.uri.queryParameters;
+      request.response
+        ..statusCode = 200
+        ..headers.contentType = ContentType.html
+        ..write('<h1>Drive conectado, vuelve a la app</h1>');
+      await request.response.close();
+      final code = (params['code'] ?? '').trim();
+      if (code.isEmpty) return null;
+      return (code: code, redirectUri: redirectUri);
+    } finally {
+      await bound.close(force: true);
+    }
   }
 
   /// URL de autorización para flujo web manual (pegar-código):
@@ -173,6 +228,7 @@ class GoogleDriveService {
     required String appAccessToken,
     required String oauthCode,
     String? expectedEmail,
+    String? redirectUri,
   }) async {
     final revision = SessionManager.revision.value;
     final url = Uri.parse('$backendBaseUrl/auth/google-drive/connect');
@@ -180,6 +236,10 @@ class GoogleDriveService {
     final expected = expectedEmail?.trim() ?? '';
     if (expected.isNotEmpty) {
       payload['expected_email'] = expected;
+    }
+    final redirect = redirectUri?.trim() ?? '';
+    if (redirect.isNotEmpty) {
+      payload['redirect_uri'] = redirect;
     }
     http.Response resp;
     try {
