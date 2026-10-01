@@ -19,6 +19,7 @@ import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 import 'attachment_resources.dart';
+import 'note_file_picker.dart';
 import 'authenticated_attachment_image.dart';
 
 /// Base URL del microservicio de notas. En el emulador Android `localhost` es
@@ -413,13 +414,15 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     debugPrint('[FRONT DEBUG] Enviando POST /notes a $url con body: $body');
     try {
       final res = await AuthedHttp.run(
-        () => http
-            .post(
-              Uri.parse(url),
-              headers: _authHeaders(),
-              body: jsonEncode(body),
-            )
-            .timeout(const Duration(seconds: 8)),
+        () => _withNotesClient(
+          (client) => client
+              .post(
+                Uri.parse(url),
+                headers: _authHeaders(),
+                body: jsonEncode(body),
+              )
+              .timeout(const Duration(seconds: 8)),
+        ),
       );
       debugPrint(
         '[FRONT DEBUG] Respuesta POST /notes: status=${res.statusCode} body=${utf8.decode(res.bodyBytes)}',
@@ -428,7 +431,10 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         try {
           final data = jsonDecode(utf8.decode(res.bodyBytes));
           final newId = data['note_id'] as String?;
-          if (newId != null && newId.isNotEmpty) {
+          if (newId != null &&
+              RegExp(
+                r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+              ).hasMatch(newId)) {
             _ownedNoteIds.add(newId);
             debugPrint('[FRONT DEBUG] UUID real del backend: $newId');
             return newId;
@@ -523,7 +529,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     String noteId,
     List<_DriveUploadResult> attachments,
   ) async {
-    if (attachments.isEmpty) return;
+    if (attachments.isEmpty ||
+        !RegExp(
+          r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+        ).hasMatch(noteId)) {
+      return;
+    }
     for (final att in attachments) {
       final externalId = att.externalFileId;
       if (externalId == null || externalId.isEmpty) continue;
@@ -546,13 +557,30 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           ),
         );
         if (res.statusCode != 201) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'La nota se conservó, pero no se pudo vincular ${att.fileName ?? 'el archivo'}.',
+                ),
+              ),
+            );
+          }
           debugPrint(
             '[FRONT DEBUG] No se pudo vincular adjunto $externalId: '
             'status=${res.statusCode} body=${utf8.decode(res.bodyBytes)}',
           );
         }
       } catch (e) {
-        debugPrint('[FRONT DEBUG] Error vinculando adjunto $externalId: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'La nota se conservó, pero no se pudo vincular ${att.fileName ?? 'el archivo'}.',
+              ),
+            ),
+          );
+        }
       }
     }
   }
@@ -595,13 +623,15 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     final body = {'title': title, 'content': content};
     try {
       final res = await AuthedHttp.run(
-        () => http
-            .patch(
-              Uri.parse(url),
-              headers: _authHeaders(),
-              body: jsonEncode(body),
-            )
-            .timeout(const Duration(seconds: 8)),
+        () => _withNotesClient(
+          (client) => client
+              .patch(
+                Uri.parse(url),
+                headers: _authHeaders(),
+                body: jsonEncode(body),
+              )
+              .timeout(const Duration(seconds: 8)),
+        ),
       );
       if (res.statusCode == 200) {
         return const _RemoteResult(ok: true, status: 200);
@@ -1172,6 +1202,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       context: context,
       builder: (_) => _CreateNoteDialog(
         onCreate: (title, content, visibility, attachments) async {
+          final revision = SessionManager.revision.value;
           final note = LocalNote(
             id: DateTime.now().millisecondsSinceEpoch.toString(),
             title: title,
@@ -1209,12 +1240,83 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           unawaited(
             _createNoteOnBackend(
               title: note.title,
-              content: note.content,
+              content: _withoutPendingAttachments(note.content),
               visibility: note.visibility,
             ).then((realId) async {
-              if (realId != null && realId.isNotEmpty) {
+              if (realId != null &&
+                  realId.isNotEmpty &&
+                  revision == SessionManager.revision.value) {
                 await _replaceLocalId(tempId, realId);
-                await _linkAttachmentsToNote(realId, attachments);
+                var finalContent = note.content;
+                final uploaded = <_DriveUploadResult>[];
+                for (final pending in attachments) {
+                  if (revision != SessionManager.revision.value) return;
+                  if (pending.selectedFile == null) {
+                    uploaded.add(pending);
+                    continue;
+                  }
+                  final file = pending.selectedFile!;
+                  final result = await _uploadAttachmentToDrive(
+                    selectedBytes: file.bytes,
+                    fileName: file.name,
+                    isInline: file.isImage,
+                  );
+                  if (revision != SessionManager.revision.value) return;
+                  if (result.ok && result.fileUrl != null) {
+                    uploaded.add(result);
+                    finalContent = finalContent.replaceAll(
+                      pending.fileUrl!,
+                      result.fileUrl!,
+                    );
+                  } else if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'La nota se creó, pero no se pudo adjuntar ${file.name}. ${result.message ?? ''}',
+                        ),
+                      ),
+                    );
+                  }
+                }
+                finalContent = _withoutPendingAttachments(finalContent);
+                if (finalContent != note.content) {
+                  final remoteNote = LocalNote(
+                    id: realId,
+                    title: note.title,
+                    content: finalContent,
+                    visibility: note.visibility,
+                    updatedAt: DateTime.now(),
+                    ownerUserId: note.ownerUserId,
+                  );
+                  final saved = await _patchNoteRemote(
+                    remoteNote,
+                    note.title,
+                    finalContent,
+                  );
+                  if (revision != SessionManager.revision.value) return;
+                  await _applyLocalUpsert(remoteNote);
+                  if (!saved.ok && mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'La nota se creó, pero no se pudo actualizar el contenido de sus adjuntos.',
+                        ),
+                      ),
+                    );
+                  }
+                }
+                if (revision != SessionManager.revision.value) return;
+                await _linkAttachmentsToNote(realId, uploaded);
+              } else if (mounted &&
+                  attachments.isNotEmpty &&
+                  revision == SessionManager.revision.value) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'La nota quedó guardada localmente. No se pudieron subir sus archivos; vuelve a seleccionarlos cuando se recupere la conexión.',
+                    ),
+                  ),
+                );
               }
             }),
           );
@@ -2517,15 +2619,21 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
             ]),
           ),
         );
-      } else if (res.statusCode != 201) {
-        debugPrint(
-          '[FRONT DEBUG] No se pudo registrar adjunto $externalId en '
-          'nota $noteId: status=${res.statusCode} '
-          'body=${utf8.decode(res.bodyBytes)}',
-        );
+      } else if (res.statusCode != 201 && mounted) {
+        setState(() {
+          _attachNotice =
+              'La nota se conservó, pero no se pudo vincular ${result.fileName ?? 'el archivo'}.';
+          _attachNoticeOk = false;
+        });
       }
-    } catch (e) {
-      debugPrint('[FRONT DEBUG] Error registrando adjunto $externalId: $e');
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _attachNotice =
+              'La nota se conservó, pero no se pudo vincular ${result.fileName ?? 'el archivo'}.';
+          _attachNoticeOk = false;
+        });
+      }
     }
   }
 
@@ -3050,7 +3158,9 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
     _pendingAttachments.add(result);
     if (!mounted) return;
     setState(() {
-      _attachNotice = 'Subido a Google Drive: ${result.fileName ?? 'adjunto'}';
+      _attachNotice = result.selectedFile != null
+          ? 'Archivo preparado: ${result.fileName}. Se adjuntará al crear la nota.'
+          : 'Subido a Google Drive: ${result.fileName ?? 'adjunto'}';
       _attachNoticeOk = true;
     });
   }
@@ -3121,6 +3231,7 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
               ),
               const SizedBox(height: 8),
               _AttachmentToolbar(
+                queueUntilCreated: true,
                 controller: _contentCtrl,
                 onChanged: () => setState(() {}),
                 onUploaded: _onAttachmentUploaded,
@@ -3304,11 +3415,17 @@ Map<String, String> _notesAuthHeaders() {
   return headers;
 }
 
+String _withoutPendingAttachments(String content) => content.replaceAll(
+  RegExp(r'!?\[[^\]]*\]\(attachment-pending://[^)]+\)'),
+  '',
+);
+
 /// Adjunto ya subido a Google Drive mediante POST /notes/upload. Conserva el
 /// external_file_id para poder registrarlo luego contra la nota con
 /// POST /notes/{id}/attachments, además del enlace web incrustado en Markdown.
 class _DriveUploadResult {
   final bool ok;
+  final PickedNoteFile? selectedFile;
   final String? fileUrl;
   final String? externalFileId;
   final String? fileName;
@@ -3319,6 +3436,7 @@ class _DriveUploadResult {
 
   const _DriveUploadResult({
     required this.ok,
+    this.selectedFile,
     this.fileUrl,
     this.externalFileId,
     this.fileName,
@@ -3372,7 +3490,8 @@ String _uploadFailureMessage(int status, Map<String, String?> parsed) {
 /// Nunca lanza: ante cualquier fallo devuelve ok=false con un mensaje amigable
 /// para que el llamador conserve el fallback local sin romper la UI.
 Future<_DriveUploadResult> _uploadAttachmentToDrive({
-  required File file,
+  File? file,
+  List<int>? selectedBytes,
   required String fileName,
   required bool isInline,
 }) async {
@@ -3386,7 +3505,7 @@ Future<_DriveUploadResult> _uploadAttachmentToDrive({
   try {
     final List<int> bytes;
     try {
-      bytes = await file.readAsBytes();
+      bytes = selectedBytes ?? await file!.readAsBytes();
     } catch (_) {
       return _DriveUploadResult(
         ok: false,
@@ -3405,16 +3524,13 @@ Future<_DriveUploadResult> _uploadAttachmentToDrive({
         message: 'El archivo supera el límite de 10 MB.',
       );
     }
-    final request = http.MultipartRequest(
-      'POST',
-      Uri.parse('$notesBaseUrl/notes/upload'),
-    );
     final res = await AuthedHttp.run(
       () => _withNotesClient((client) async {
-        // Se reconstruye por intento: un MultipartRequest finalizado no se
-        // puede reenviar tras un refresh.
+        final request = http.MultipartRequest(
+          'POST',
+          Uri.parse('$notesBaseUrl/notes/upload'),
+        );
         request.headers['Authorization'] = 'Bearer ${SessionManager.token}';
-        request.files.clear();
         request.files.add(
           http.MultipartFile.fromBytes('file', bytes, filename: fileName),
         );
@@ -3474,12 +3590,14 @@ Future<_DriveUploadResult> _uploadAttachmentToDrive({
 
 /// Barra de botones de acción rápida para adjuntar imágenes o documentos.
 class _AttachmentToolbar extends StatelessWidget {
+  final bool queueUntilCreated;
   final TextEditingController controller;
   final VoidCallback onChanged;
   final ValueChanged<_DriveUploadResult>? onUploaded;
   final ValueChanged<String>? onWarning;
 
   const _AttachmentToolbar({
+    this.queueUntilCreated = false,
     required this.controller,
     required this.onChanged,
     this.onUploaded,
@@ -3522,7 +3640,7 @@ class _AttachmentToolbar extends StatelessWidget {
                 ),
                 _AttachmentToolbarBtn(
                   icon: Icons.picture_as_pdf_rounded,
-                  label: 'PDF / DOC',
+                  label: 'PDF',
                   fill: AppColors.accentYellow,
                   onTap: () => _openAttachmentDialog(context, isImage: false),
                 ),
@@ -3539,6 +3657,7 @@ class _AttachmentToolbar extends StatelessWidget {
       context: context,
       builder: (_) => _AddAttachmentDialog(
         isImage: isImage,
+        queueUntilCreated: queueUntilCreated,
         onInsert: (snippet) {
           _insertSnippetAtCursor(controller, snippet);
           onChanged();
@@ -3598,17 +3717,17 @@ class _AttachmentToolbarBtn extends StatelessWidget {
   }
 }
 
-/// Diálogo selector de adjunto: incluye preset rápido del repo (conejita.jpg o prueba.pdf)
-/// y campos para archivo/URL personalizado. Al confirmar, lee los bytes reales
-/// del archivo local y lo sube al Drive del usuario (POST /notes/upload);
-/// solo si la subida falla o no hay sesión se conserva la referencia local.
+/// Selector nativo de imágenes/PDF; conserva bytes en memoria hasta tener UUID.
+/// La alternativa manual acepta enlaces web válidos.
 class _AddAttachmentDialog extends StatefulWidget {
+  final bool queueUntilCreated;
   final bool isImage;
   final ValueChanged<String> onInsert;
   final ValueChanged<_DriveUploadResult>? onUploaded;
   final ValueChanged<String>? onWarning;
 
   const _AddAttachmentDialog({
+    this.queueUntilCreated = false,
     required this.isImage,
     required this.onInsert,
     this.onUploaded,
@@ -3623,6 +3742,9 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
   late final TextEditingController _nameCtrl;
   late final TextEditingController _urlCtrl;
   bool _uploading = false;
+  bool _manual = false;
+  PickedNoteFile? _selected;
+  String? _error;
 
   @override
   void initState() {
@@ -3709,11 +3831,74 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
     Navigator.of(context).pop();
   }
 
+  Future<void> _pick() async {
+    try {
+      final selected = await NoteFilePicker.pick(image: widget.isImage);
+      if (!mounted || selected == null) return;
+      setState(() {
+        _selected = selected;
+        _nameCtrl.text = selected.alt;
+        _error = null;
+      });
+    } on FormatException catch (e) {
+      if (mounted) setState(() => _error = e.message);
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => _error = 'No se pudo abrir el archivo. Inténtalo nuevamente.',
+        );
+      }
+    }
+  }
+
+  Future<void> _submitSelected() async {
+    final selected = _selected;
+    if (selected == null) return;
+    final label = _nameCtrl.text.trim().isEmpty
+        ? selected.alt
+        : _nameCtrl.text.trim();
+    if (widget.queueUntilCreated) {
+      final placeholder =
+          'attachment-pending://${DateTime.now().microsecondsSinceEpoch}';
+      widget.onInsert(
+        '${selected.isImage ? '!' : ''}[${selected.isImage ? label : selected.name}]($placeholder)',
+      );
+      widget.onUploaded?.call(
+        _DriveUploadResult(
+          ok: true,
+          selectedFile: selected,
+          fileUrl: placeholder,
+          fileName: selected.name,
+          fileType: selected.mime,
+          isInline: selected.isImage,
+          fileSizeBytes: selected.bytes.length,
+        ),
+      );
+      Navigator.pop(context);
+      return;
+    }
+    setState(() => _uploading = true);
+    final result = await _uploadAttachmentToDrive(
+      selectedBytes: selected.bytes,
+      fileName: selected.name,
+      isInline: selected.isImage,
+    );
+    if (!mounted) return;
+    if (!result.ok) {
+      setState(() {
+        _uploading = false;
+        _error = result.message ?? 'No se pudo subir el archivo.';
+      });
+      return;
+    }
+    widget.onInsert('${result.isInline ? '!' : ''}[$label](${result.fileUrl})');
+    widget.onUploaded?.call(result);
+    Navigator.pop(context);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final title = widget.isImage
-        ? 'ADJUNTAR IMAGEN'
-        : 'ADJUNTAR DOCUMENTO / PDF';
+    final title = widget.isImage ? 'ADJUNTAR IMAGEN' : 'ADJUNTAR PDF';
     final isImage = widget.isImage;
 
     return AlertDialog(
@@ -3747,6 +3932,28 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              if (!_manual) ...[
+                ElevatedButton(
+                  onPressed: _uploading ? null : _pick,
+                  child: Text(
+                    _selected == null
+                        ? (isImage ? 'SELECCIONAR IMAGEN' : 'SELECCIONAR PDF')
+                        : 'CAMBIAR',
+                  ),
+                ),
+                if (_selected != null)
+                  Text('${_selected!.name} · ${_selected!.sizeLabel}'),
+              ],
+              TextButton(
+                onPressed: _uploading
+                    ? null
+                    : () => setState(() => _manual = !_manual),
+                child: Text(
+                  _manual ? 'Usar selector de archivos' : 'Usar enlace manual',
+                ),
+              ),
+              if (_error != null)
+                Text(_error!, style: const TextStyle(color: AppColors.error)),
               TextField(
                 controller: _nameCtrl,
                 decoration: InputDecoration(
@@ -3765,23 +3972,24 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
                 ),
               ),
               const SizedBox(height: 10),
-              TextField(
-                controller: _urlCtrl,
-                decoration: InputDecoration(
-                  labelText: isImage
-                      ? 'Ruta local o URL web de imagen'
-                      : 'Ruta local o URL web del PDF',
-                  hintText: isImage
-                      ? 'Selecciona una imagen o pega una URL'
-                      : 'Ruta de un documento o URL',
-                  filled: true,
-                  fillColor: AppColors.surfaceLow,
-                  border: const OutlineInputBorder(
-                    borderRadius: BorderRadius.zero,
-                    borderSide: BorderSide(color: AppColors.border, width: 2),
+              if (_manual)
+                TextField(
+                  controller: _urlCtrl,
+                  decoration: InputDecoration(
+                    labelText: isImage
+                        ? 'Ruta local o URL web de imagen'
+                        : 'Ruta local o URL web del PDF',
+                    hintText: isImage
+                        ? 'Selecciona una imagen o pega una URL'
+                        : 'Ruta de un documento o URL',
+                    filled: true,
+                    fillColor: AppColors.surfaceLow,
+                    border: const OutlineInputBorder(
+                      borderRadius: BorderRadius.zero,
+                      borderSide: BorderSide(color: AppColors.border, width: 2),
+                    ),
                   ),
                 ),
-              ),
             ],
           ),
         ),
@@ -3810,7 +4018,22 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
               : () {
                   final name = _nameCtrl.text.trim();
                   final url = _urlCtrl.text.trim();
+                  if (!_manual) {
+                    _submitSelected();
+                    return;
+                  }
                   if (url.isEmpty) return;
+                  final uri = Uri.tryParse(url);
+                  if (uri == null ||
+                      !['http', 'https'].contains(uri.scheme) ||
+                      uri.host.isEmpty ||
+                      (isImage && isDriveViewerUrl(url))) {
+                    setState(
+                      () => _error =
+                          'Usa una URL http/https de imagen directa o selecciona un archivo.',
+                    );
+                    return;
+                  }
                   _attach(name: name, source: url, isImage: isImage);
                 },
           child: _uploading
@@ -3822,8 +4045,8 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
                     color: AppColors.surface,
                   ),
                 )
-              : const Text(
-                  'SUBIR E INSERTAR',
+              : Text(
+                  isImage ? 'SUBIR E INSERTAR' : 'SUBIR Y ADJUNTAR',
                   style: TextStyle(fontWeight: FontWeight.w900),
                 ),
         ),
