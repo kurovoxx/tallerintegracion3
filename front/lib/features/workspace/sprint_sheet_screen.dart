@@ -426,78 +426,62 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
         : null;
     String priority = 'media';
     String status = 'sin_empezar';
-    final ok = await showDialog<bool>(
+    final ok = await showNeobrutalistDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text(
-          'NUEVA TAREA',
-          style: TextStyle(fontWeight: FontWeight.w900),
-        ),
-        content: SingleChildScrollView(
-          child: Column(
+      dialog: StatefulBuilder(
+        builder: (dialogContext, setDialogState) => NeobrutalistDialog(
+          title: 'Nueva tarea',
+          content: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              const AppFieldLabel('TÍTULO (REQUERIDO)'),
+              const SizedBox(height: AppDimens.spaceSm),
               TextField(
                 controller: titleCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Título (requerido)',
-                ),
+                decoration: appInputDecoration('Ej. Endpoint POST /notes'),
               ),
-              const SizedBox(height: 8),
-              StatefulBuilder(
-                builder: (context, setDialogState) => Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'Responsable (requerido)',
-                      style: TextStyle(fontSize: 12),
+              const SizedBox(height: AppDimens.spaceMd),
+              const AppFieldLabel('RESPONSABLE (REQUERIDO)'),
+              const SizedBox(height: AppDimens.spaceSm),
+              _DialogDropdown<String>(
+                value: selectedUserId,
+                hint: 'Elige un miembro',
+                items: [
+                  for (final m in members)
+                    DropdownMenuItem<String>(
+                      value: m.userId,
+                      child: Text(m.displayLabel),
                     ),
-                    DropdownButton<String>(
-                      value: selectedUserId,
-                      hint: const Text('Elige un miembro'),
-                      isExpanded: true,
-                      items: [
-                        for (final m in members)
-                          DropdownMenuItem<String>(
-                            value: m.userId,
-                            child: Text(m.displayLabel),
-                          ),
-                      ],
-                      onChanged: (v) =>
-                          setDialogState(() => selectedUserId = v),
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: estimateCtrl,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: 'Horas estimadas',
-                      ),
-                    ),
-                  ],
-                ),
+                ],
+                onChanged: (v) => setDialogState(() => selectedUserId = v),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: AppDimens.spaceMd),
+              const AppFieldLabel('HORAS ESTIMADAS'),
+              const SizedBox(height: AppDimens.spaceSm),
+              TextField(
+                controller: estimateCtrl,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: appInputDecoration('Ej. 2.0'),
+              ),
+              const SizedBox(height: AppDimens.spaceMd),
               const Text(
                 'Prioridad: alta, media o baja. Estado inicial: sin empezar.',
-                style: TextStyle(fontSize: 11),
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.mutedStrong,
+                ),
               ),
             ],
           ),
+          cancelLabel: 'Cancelar',
+          confirmLabel: 'Crear',
+          closeOnConfirm: false,
+          onConfirm: () => Navigator.of(context).pop(true),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Crear'),
-          ),
-        ],
       ),
     );
     final title = titleCtrl.text.trim();
@@ -566,73 +550,53 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     }
     String priority = row.priority;
     String status = row.status;
-    final ok = await showDialog<bool>(
+    final ok = await showNeobrutalistDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text(
-          'EDITAR TAREA',
-          style: TextStyle(fontWeight: FontWeight.w900),
-        ),
-        content: SingleChildScrollView(
-          child: Column(
+      dialog: StatefulBuilder(
+        builder: (dialogContext, setDialogState) => NeobrutalistDialog(
+          title: 'Editar tarea',
+          content: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              const AppFieldLabel('TÍTULO (REQUERIDO)'),
+              const SizedBox(height: AppDimens.spaceSm),
               TextField(
                 controller: titleCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Título (requerido)',
-                ),
+                decoration: appInputDecoration('Título de la tarea'),
               ),
-              const SizedBox(height: 8),
-              StatefulBuilder(
-                builder: (context, setDialogState) => Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'Responsable (requerido)',
-                      style: TextStyle(fontSize: 12),
+              const SizedBox(height: AppDimens.spaceMd),
+              const AppFieldLabel('RESPONSABLE (REQUERIDO)'),
+              const SizedBox(height: AppDimens.spaceSm),
+              _DialogDropdown<String>(
+                value: selectedUserId,
+                hint: 'Elige un miembro',
+                items: [
+                  for (final m in members)
+                    DropdownMenuItem<String>(
+                      value: m.userId,
+                      child: Text(m.displayLabel),
                     ),
-                    DropdownButton<String>(
-                      value: selectedUserId,
-                      hint: const Text('Elige un miembro'),
-                      isExpanded: true,
-                      items: [
-                        for (final m in members)
-                          DropdownMenuItem<String>(
-                            value: m.userId,
-                            child: Text(m.displayLabel),
-                          ),
-                      ],
-                      onChanged: (v) =>
-                          setDialogState(() => selectedUserId = v),
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: estimateCtrl,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: 'Horas asignadas',
-                      ),
-                    ),
-                  ],
+                ],
+                onChanged: (v) => setDialogState(() => selectedUserId = v),
+              ),
+              const SizedBox(height: AppDimens.spaceMd),
+              const AppFieldLabel('HORAS ASIGNADAS'),
+              const SizedBox(height: AppDimens.spaceSm),
+              TextField(
+                controller: estimateCtrl,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
                 ),
+                decoration: appInputDecoration('Ej. 2.0'),
               ),
             ],
           ),
+          cancelLabel: 'Cancelar',
+          confirmLabel: 'Guardar',
+          closeOnConfirm: false,
+          onConfirm: () => Navigator.of(context).pop(true),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Guardar'),
-          ),
-        ],
       ),
     );
     final title = titleCtrl.text.trim();
@@ -692,24 +656,24 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
 
   Future<void> _deleteTableRow(_SprintTask row) async {
     if (!_isRealGroup || !row.isReal) return;
-    final ok = await showDialog<bool>(
+    final ok = await showNeobrutalistDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text(
-          'ELIMINAR TAREA',
-          style: TextStyle(fontWeight: FontWeight.w900),
+      dialog: NeobrutalistDialog(
+        title: 'Eliminar tarea',
+        content: Text(
+          '¿Eliminar "${row.task}"?',
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: AppColors.text,
+            height: 1.4,
+          ),
         ),
-        content: Text('¿Eliminar "${row.task}"?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Eliminar'),
-          ),
-        ],
+        cancelLabel: 'Cancelar',
+        confirmLabel: 'Eliminar',
+        confirmVariant: NeobrutalistButtonVariant.danger,
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop(true),
       ),
     );
     if (ok != true || !mounted) return;
@@ -979,11 +943,12 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     );
     final goalCtrl = TextEditingController();
 
-    await showDialog<void>(
+    await showNeobrutalistDialog<void>(
       context: context,
-      barrierColor: AppColors.scrim,
-      builder: (dialogContext) =>
-          _NewSprintDialog(nameController: nameCtrl, goalController: goalCtrl),
+      dialog: _NewSprintDialog(
+        nameController: nameCtrl,
+        goalController: goalCtrl,
+      ),
     );
 
     if (!mounted) return;
@@ -1022,10 +987,9 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
       await _createRealTask(preselect);
       return;
     }
-    final result = await showDialog<_TaskDraft>(
+    final result = await showNeobrutalistDialog<_TaskDraft>(
       context: context,
-      barrierColor: AppColors.scrim,
-      builder: (_) => _NewTaskDialog(members: _members, initialMember: member),
+      dialog: _NewTaskDialog(members: _members, initialMember: member),
     );
     if (result == null || !mounted) return;
 
@@ -1050,10 +1014,9 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
       return;
     }
     final current = task.days[day] ?? 0.0;
-    final value = await showDialog<double>(
+    final value = await showNeobrutalistDialog<double>(
       context: context,
-      barrierColor: AppColors.scrim,
-      builder: (_) => _ImputeHoursDialog(
+      dialog: _ImputeHoursDialog(
         taskTitle: task.task,
         day: day,
         initial: current,
@@ -1083,10 +1046,9 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
       return;
     }
     final current = task.days[day] ?? 0.0;
-    final value = await showDialog<double>(
+    final value = await showNeobrutalistDialog<double>(
       context: context,
-      barrierColor: AppColors.scrim,
-      builder: (_) => _ImputeHoursDialog(
+      dialog: _ImputeHoursDialog(
         taskTitle: task.task,
         day: day,
         initial: current,
@@ -1947,129 +1909,80 @@ class _NewTaskDialogState extends State<_NewTaskDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.zero,
-        side: BorderSide(
-          color: AppColors.border,
-          width: AppDimens.borderWidthThick,
-        ),
-      ),
-      title: const Text(
-        'NUEVA TAREA',
-        style: TextStyle(
-          fontWeight: FontWeight.w900,
-          fontSize: 13,
-          color: AppColors.text,
-        ),
-      ),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _FieldLabel('INTEGRANTE'),
-            const SizedBox(height: 4),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-              decoration: BoxDecoration(
-                color: AppColors.bg,
-                border: Border.all(color: AppColors.border, width: 2),
-                borderRadius: BorderRadius.circular(AppDimens.radius),
-              ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  value: _selectedMember,
-                  isExpanded: true,
-                  isDense: true,
-                  icon: const Icon(Icons.expand_more_rounded),
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 12,
-                    color: AppColors.text,
-                  ),
-                  items: widget.members
-                      .map(
-                        (member) => DropdownMenuItem<String>(
-                          value: member,
-                          child: Text(member, overflow: TextOverflow.ellipsis),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (value) {
-                    if (value != null) {
-                      setState(() => _selectedMember = value);
-                    }
-                  },
+    return NeobrutalistDialog(
+      title: 'Nueva tarea',
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const AppFieldLabel('INTEGRANTE'),
+          const SizedBox(height: AppDimens.spaceSm),
+          _DialogDropdown<String>(
+            value: _selectedMember,
+            items: [
+              for (final member in widget.members)
+                DropdownMenuItem<String>(
+                  value: member,
+                  child: Text(member, overflow: TextOverflow.ellipsis),
                 ),
-              ),
+            ],
+            onChanged: (value) {
+              if (value != null) {
+                setState(() => _selectedMember = value);
+              }
+            },
+          ),
+          const SizedBox(height: AppDimens.spaceMd),
+          const AppFieldLabel('TÍTULO'),
+          const SizedBox(height: AppDimens.spaceSm),
+          TextField(
+            controller: _titleController,
+            autofocus: true,
+            style: const TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 13,
+              color: AppColors.text,
             ),
-            const SizedBox(height: 12),
-            _FieldLabel('TÍTULO'),
-            const SizedBox(height: 4),
-            TextField(
-              controller: _titleController,
-              autofocus: true,
-              style: const TextStyle(
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
-                color: AppColors.text,
-              ),
-              decoration: appInputDecoration('Ej: Endpoint POST /notes'),
+            decoration: appInputDecoration('Ej: Endpoint POST /notes'),
+          ),
+          const SizedBox(height: AppDimens.spaceMd),
+          const AppFieldLabel('PRIORIDAD'),
+          const SizedBox(height: AppDimens.spaceSm),
+          _SegmentedPicker(
+            options: const ['alta', 'media', 'baja'],
+            value: _priority,
+            onChanged: (v) => setState(() => _priority = v),
+          ),
+          const SizedBox(height: AppDimens.spaceMd),
+          const AppFieldLabel('HORAS ESTIMADAS'),
+          const SizedBox(height: AppDimens.spaceSm),
+          TextField(
+            controller: _hoursController,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            inputFormatters: [FilteringTextInputFormatter.allow(_hoursRegex)],
+            style: const TextStyle(
+              fontWeight: FontWeight.w800,
+              fontSize: 13,
+              color: AppColors.text,
             ),
-            const SizedBox(height: 12),
-            _FieldLabel('PRIORIDAD'),
-            const SizedBox(height: 4),
-            _SegmentedPicker(
-              options: const ['alta', 'media', 'baja'],
-              value: _priority,
-              onChanged: (v) => setState(() => _priority = v),
-            ),
-            const SizedBox(height: 12),
-            _FieldLabel('HORAS ESTIMADAS'),
-            const SizedBox(height: 4),
-            TextField(
-              controller: _hoursController,
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-              inputFormatters: [FilteringTextInputFormatter.allow(_hoursRegex)],
-              style: const TextStyle(
-                fontWeight: FontWeight.w800,
-                fontSize: 13,
-                color: AppColors.text,
-              ),
-              decoration: appInputDecoration(
-                'Ej: 4.0',
-              ).copyWith(errorText: _hourError),
-            ),
-            const SizedBox(height: 12),
-            _FieldLabel('ESTADO'),
-            const SizedBox(height: 4),
-            _SegmentedPicker(
-              options: const ['Sin empezar', 'En proceso', 'Listo'],
-              value: _status,
-              onChanged: (v) => setState(() => _status = v),
-            ),
-          ],
-        ),
+            decoration: appInputDecoration(
+              'Ej: 4.0',
+            ).copyWith(errorText: _hourError),
+          ),
+          const SizedBox(height: AppDimens.spaceMd),
+          const AppFieldLabel('ESTADO'),
+          const SizedBox(height: AppDimens.spaceSm),
+          _SegmentedPicker(
+            options: const ['Sin empezar', 'En proceso', 'Listo'],
+            value: _status,
+            onChanged: (v) => setState(() => _status = v),
+          ),
+        ],
       ),
-      actionsPadding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
-      actions: [
-        NeobrutalistButton(
-          label: 'Cancelar',
-          variant: NeobrutalistButtonVariant.secondary,
-          onPressed: () => Navigator.pop(context),
-        ),
-        NeobrutalistButton(
-          label: 'Agregar',
-          icon: Icons.add_rounded,
-          variant: NeobrutalistButtonVariant.accent,
-          onPressed: _submit,
-        ),
-      ],
+      cancelLabel: 'Cancelar',
+      confirmLabel: 'Agregar',
+      closeOnConfirm: false,
+      onConfirm: _submit,
     );
   }
 }
@@ -2100,71 +2013,44 @@ class _NewSprintDialogState extends State<_NewSprintDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.zero,
-        side: BorderSide(
-          color: AppColors.border,
-          width: AppDimens.borderWidthThick,
-        ),
-      ),
-      title: const Text(
-        'NUEVO SPRINT',
-        style: TextStyle(
-          fontWeight: FontWeight.w900,
-          fontSize: 13,
-          color: AppColors.text,
-        ),
-      ),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _FieldLabel('NOMBRE'),
-            const SizedBox(height: 4),
-            TextField(
-              controller: widget.nameController,
-              autofocus: true,
-              style: const TextStyle(
-                fontWeight: FontWeight.w800,
-                fontSize: 13,
-                color: AppColors.text,
-              ),
-              decoration: appInputDecoration(
-                'Ej: Sprint 4',
-              ).copyWith(errorText: _nameError),
+    return NeobrutalistDialog(
+      title: 'Nuevo sprint',
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const AppFieldLabel('NOMBRE'),
+          const SizedBox(height: AppDimens.spaceSm),
+          TextField(
+            controller: widget.nameController,
+            autofocus: true,
+            style: const TextStyle(
+              fontWeight: FontWeight.w800,
+              fontSize: 13,
+              color: AppColors.text,
             ),
-            const SizedBox(height: 12),
-            _FieldLabel('OBJETIVO (OPCIONAL)'),
-            const SizedBox(height: 4),
-            TextField(
-              controller: widget.goalController,
-              style: const TextStyle(
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
-                color: AppColors.text,
-              ),
-              decoration: appInputDecoration('Ej: Terminar módulo de notas'),
+            decoration: appInputDecoration(
+              'Ej: Sprint 4',
+            ).copyWith(errorText: _nameError),
+          ),
+          const SizedBox(height: AppDimens.spaceMd),
+          const AppFieldLabel('OBJETIVO (OPCIONAL)'),
+          const SizedBox(height: AppDimens.spaceSm),
+          TextField(
+            controller: widget.goalController,
+            style: const TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 13,
+              color: AppColors.text,
             ),
-          ],
-        ),
+            decoration: appInputDecoration('Ej: Terminar módulo de notas'),
+          ),
+        ],
       ),
-      actionsPadding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
-      actions: [
-        NeobrutalistButton(
-          label: 'Cancelar',
-          variant: NeobrutalistButtonVariant.secondary,
-          onPressed: () => Navigator.pop(context),
-        ),
-        NeobrutalistButton(
-          label: 'Crear',
-          icon: Icons.check_rounded,
-          variant: NeobrutalistButtonVariant.accent,
-          onPressed: _submit,
-        ),
-      ],
+      cancelLabel: 'Cancelar',
+      confirmLabel: 'Crear',
+      closeOnConfirm: false,
+      onConfirm: _submit,
     );
   }
 }
@@ -2209,26 +2095,11 @@ class _ImputeHoursDialogState extends State<_ImputeHoursDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.zero,
-        side: BorderSide(
-          color: AppColors.border,
-          width: AppDimens.borderWidthThick,
-        ),
-      ),
-      title: const Text(
-        'IMPUTAR HORAS REALES',
-        style: TextStyle(
-          fontWeight: FontWeight.w900,
-          fontSize: 13,
-          color: AppColors.text,
-        ),
-      ),
+    return NeobrutalistDialog(
+      title: 'Imputar horas reales',
       content: Column(
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
             '${widget.taskTitle.toUpperCase()} • ${widget.day.toUpperCase()}',
@@ -2238,7 +2109,9 @@ class _ImputeHoursDialogState extends State<_ImputeHoursDialog> {
               color: AppColors.muted,
             ),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: AppDimens.spaceMd),
+          const AppFieldLabel('HORAS'),
+          const SizedBox(height: AppDimens.spaceSm),
           TextField(
             controller: _controller,
             autofocus: true,
@@ -2251,7 +2124,7 @@ class _ImputeHoursDialogState extends State<_ImputeHoursDialog> {
             ),
             decoration: appInputDecoration('Horas'),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: AppDimens.spaceMd),
           Wrap(
             spacing: 6,
             runSpacing: 6,
@@ -2265,20 +2138,10 @@ class _ImputeHoursDialogState extends State<_ImputeHoursDialog> {
           ),
         ],
       ),
-      actionsPadding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
-      actions: [
-        NeobrutalistButton(
-          label: 'Cancelar',
-          variant: NeobrutalistButtonVariant.secondary,
-          onPressed: () => Navigator.pop(context),
-        ),
-        NeobrutalistButton(
-          label: 'Guardar',
-          icon: Icons.check_rounded,
-          variant: NeobrutalistButtonVariant.accent,
-          onPressed: _submit,
-        ),
-      ],
+      cancelLabel: 'Cancelar',
+      confirmLabel: 'Guardar',
+      closeOnConfirm: false,
+      onConfirm: _submit,
     );
   }
 }
@@ -2557,20 +2420,61 @@ class _StatusChip extends StatelessWidget {
   }
 }
 
-class _FieldLabel extends StatelessWidget {
-  const _FieldLabel(this.text);
+/// Dropdown de diálogo con borde perimetral negro completo (2 px, radio 0):
+/// oculta el subrayado Material y rellena con el pergamino de `AppColors.bg`.
+class _DialogDropdown<T> extends StatelessWidget {
+  const _DialogDropdown({
+    required this.value,
+    required this.items,
+    required this.onChanged,
+    this.hint,
+  });
 
-  final String text;
+  final T? value;
+  final List<DropdownMenuItem<T>> items;
+  final ValueChanged<T?> onChanged;
+  final String? hint;
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: const TextStyle(
-        fontSize: 10,
-        fontWeight: FontWeight.w900,
-        color: AppColors.muted,
-        letterSpacing: 0.5,
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppDimens.spaceMd,
+        vertical: 2,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.bg,
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<T>(
+          value: value,
+          hint: hint == null
+              ? null
+              : Text(
+                  hint!,
+                  style: const TextStyle(
+                    color: AppColors.muted,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+          isExpanded: true,
+          isDense: true,
+          icon: const Icon(Icons.expand_more_rounded, color: AppColors.text),
+          dropdownColor: AppColors.surface,
+          style: const TextStyle(
+            fontWeight: FontWeight.w800,
+            fontSize: 13,
+            color: AppColors.text,
+          ),
+          items: items,
+          onChanged: onChanged,
+        ),
       ),
     );
   }

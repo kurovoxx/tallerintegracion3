@@ -540,3 +540,139 @@ class NeobrutalistBadge extends StatelessWidget {
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+// Diálogos
+// ---------------------------------------------------------------------------
+
+/// Diálogo neobrutalista de silueta rectangular dura: borde de tinta de 3 px,
+/// radio 0, sombra rígida `(6,6)`, header con separador y acciones definidas.
+/// Ver .skills/flutter_neobrutalism_ui.md, sección 4.5.
+class NeobrutalistDialog extends StatelessWidget {
+  const NeobrutalistDialog({
+    super.key,
+    required this.title,
+    required this.content,
+    this.confirmLabel,
+    this.cancelLabel,
+    this.onConfirm,
+    this.confirmVariant = NeobrutalistButtonVariant.accent,
+    this.closeOnConfirm = true,
+  });
+
+  final String title;
+  final Widget content;
+  final String? confirmLabel;
+  final String? cancelLabel;
+  final VoidCallback? onConfirm;
+  final NeobrutalistButtonVariant confirmVariant;
+
+  /// Cuando es false, la confirmación no cierra la ruta: [onConfirm] decide
+  /// cuándo cerrar (validación en línea, guardado asíncrono o devolver un
+  /// resultado por `Navigator.pop`). Por defecto replica la skill: cierra.
+  final bool closeOnConfirm;
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 480),
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          border: Border.all(
+            color: AppColors.border,
+            width: AppDimens.borderWidthThick,
+          ),
+          borderRadius: BorderRadius.circular(AppDimens.radius),
+          boxShadow: AppShadows.dialog,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
+              child: Text(
+                title.toUpperCase(),
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.6,
+                  color: AppColors.text,
+                ),
+              ),
+            ),
+            const Divider(
+              color: AppColors.border,
+              thickness: AppDimens.borderWidth,
+              height: 1,
+            ),
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: content,
+              ),
+            ),
+            if (confirmLabel != null || cancelLabel != null) ...<Widget>[
+              const Divider(
+                color: AppColors.border,
+                thickness: AppDimens.borderWidth,
+                height: 1,
+              ),
+              Padding(
+                padding: const EdgeInsets.all(AppDimens.spaceLg),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: <Widget>[
+                    if (cancelLabel != null) ...<Widget>[
+                      NeobrutalistButton(
+                        label: cancelLabel!,
+                        variant: NeobrutalistButtonVariant.secondary,
+                        onPressed: () => Navigator.of(context).pop(),
+                      ),
+                      const SizedBox(width: AppDimens.spaceMd),
+                    ],
+                    if (confirmLabel != null)
+                      NeobrutalistButton(
+                        label: confirmLabel!,
+                        variant: confirmVariant,
+                        onPressed: onConfirm == null
+                            ? null
+                            : () {
+                                onConfirm!.call();
+                                if (closeOnConfirm) {
+                                  Navigator.of(context).pop();
+                                }
+                              },
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Muestra un [NeobrutalistDialog] (o un wrapper que lo construya, p. ej.
+/// `StatefulBuilder`) con `barrierColor: AppColors.scrim`.
+Future<T?> showNeobrutalistDialog<T>({
+  required BuildContext context,
+  required Widget dialog,
+  bool barrierDismissible = true,
+}) {
+  return showDialog<T>(
+    context: context,
+    barrierDismissible: barrierDismissible,
+    barrierColor: AppColors.scrim,
+    builder: (_) => Dialog(
+      // Transparente: el marco visible lo aporta NeobrutalistDialog.
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      insetPadding: const EdgeInsets.all(AppDimens.spaceXl),
+      child: dialog,
+    ),
+  );
+}

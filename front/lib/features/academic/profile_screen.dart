@@ -347,42 +347,41 @@ class _ProfileScreenState extends State<ProfileScreen> {
       // Si ni siquiera abre el navegador, igual se ofrece el pegado manual.
     }
     if (!mounted) return null;
-    final pasted = await showDialog<String>(
+    final pasted = await showNeobrutalistDialog<String>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        title: const Text('PEGA EL CÓDIGO DE GOOGLE'),
+      dialog: NeobrutalistDialog(
+        title: 'Pega el código de Google',
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text(
               'Autoriza en la pestaña de Google y copia el parámetro code= de la dirección a la que te redirige.',
-              style: TextStyle(fontSize: 13),
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppColors.mutedStrong,
+                height: 1.4,
+              ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: AppDimens.spaceMd),
+            const AppFieldLabel('CÓDIGO (CODE=...)'),
+            const SizedBox(height: AppDimens.spaceSm),
             TextField(
               controller: codeController,
-              decoration: const InputDecoration(
-                labelText: 'CÓDIGO (code=...)',
-                hintText: '4/0A...',
-              ),
+              decoration: appInputDecoration('4/0A...'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('CANCELAR'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(codeController.text.trim()),
-            child: const Text('CONECTAR'),
-          ),
-        ],
+        cancelLabel: 'Cancelar',
+        confirmLabel: 'Conectar',
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop(codeController.text.trim()),
       ),
     );
     final code = (pasted ?? '').trim();
+    codeController.dispose();
     return code.isEmpty ? null : code;
   }
 
@@ -784,16 +783,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
           const SizedBox(height: AppDimens.spaceLg),
           if (!connected) ...[
+            const AppFieldLabel('TU CORREO DE GOOGLE'),
+            const SizedBox(height: AppDimens.spaceSm),
             TextField(
               controller: _googleEmailController,
               keyboardType: TextInputType.emailAddress,
               enabled: !busy,
-              decoration: const InputDecoration(
-                labelText: 'TU CORREO DE GOOGLE',
-                hintText: 'tucorreo@gmail.com',
+              decoration: appInputDecoration('tucorreo@gmail.com').copyWith(
+                disabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(AppDimens.radius),
+                  borderSide: const BorderSide(
+                    color: AppColors.muted,
+                    width: AppDimens.borderWidth,
+                  ),
+                ),
                 helperText:
                     'Se usa para abrir tu cuenta y verificar la conexión. Nunca se comparte.',
                 helperMaxLines: 2,
+                helperStyle: const TextStyle(
+                  color: AppColors.muted,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 11,
+                ),
               ),
             ),
             const SizedBox(height: AppDimens.spaceMd),
@@ -879,8 +890,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               textInputAction: TextInputAction.next,
               maxLength: 200,
               validator: (value) {
-                if ((value?.trim().length ?? 0) > 200)
+                if ((value?.trim().length ?? 0) > 200) {
                   return 'Máximo 200 caracteres';
+                }
                 return null;
               },
             ),
@@ -894,8 +906,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               textInputAction: TextInputAction.next,
               maxLength: 30,
               validator: (value) {
-                if ((value?.trim().length ?? 0) > 30)
+                if ((value?.trim().length ?? 0) > 30) {
                   return 'Máximo 30 caracteres';
+                }
                 return null;
               },
             ),
@@ -1170,35 +1183,41 @@ class _ProfileTextField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Borde perimetral limpio de 2 px (3 px al enfocar, según la skill 2.5)
+    // sin sombra individual: la elevación vive en la tarjeta, no en cada campo.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         AppFieldLabel(label),
         const SizedBox(height: AppDimens.spaceSm),
-        Container(
-          decoration: const BoxDecoration(boxShadow: AppShadows.badge),
-          child: TextFormField(
-            controller: controller,
-            keyboardType: keyboardType,
-            textInputAction: textInputAction,
-            maxLines: maxLines,
-            maxLength: maxLength,
-            validator: validator,
-            cursorColor: AppColors.text,
-            style: const TextStyle(
-              color: AppColors.text,
-              fontWeight: FontWeight.w700,
-              fontSize: 14,
-            ),
-            decoration: appInputDecoration(hint ?? '').copyWith(
-              prefixIcon: prefixIcon == null
-                  ? null
-                  : Icon(prefixIcon, size: 18, color: AppColors.text),
-              counterStyle: const TextStyle(
-                color: AppColors.muted,
-                fontWeight: FontWeight.w700,
-                fontSize: 11,
+        TextFormField(
+          controller: controller,
+          keyboardType: keyboardType,
+          textInputAction: textInputAction,
+          maxLines: maxLines,
+          maxLength: maxLength,
+          validator: validator,
+          cursorColor: AppColors.text,
+          style: const TextStyle(
+            color: AppColors.text,
+            fontWeight: FontWeight.w700,
+            fontSize: 14,
+          ),
+          decoration: appInputDecoration(hint ?? '').copyWith(
+            prefixIcon: prefixIcon == null
+                ? null
+                : Icon(prefixIcon, size: 18, color: AppColors.text),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(AppDimens.radius),
+              borderSide: const BorderSide(
+                color: AppColors.border,
+                width: AppDimens.borderWidthThick,
               ),
+            ),
+            counterStyle: const TextStyle(
+              color: AppColors.muted,
+              fontWeight: FontWeight.w700,
+              fontSize: 11,
             ),
           ),
         ),
@@ -1318,7 +1337,9 @@ class _VisibilityOption extends StatelessWidget {
           child: AnimatedContainer(
             duration: AppMotion.fast,
             curve: AppMotion.standard,
-            padding: const EdgeInsets.symmetric(vertical: AppDimens.spaceMd),
+            // Altura alineada con los inputs del formulario y borde
+            // perimetral completo; el amarillo resaltador marca la selección.
+            padding: const EdgeInsets.symmetric(vertical: 14),
             decoration: BoxDecoration(
               color: active ? AppColors.accentYellow : AppColors.bg,
               border: Border.all(

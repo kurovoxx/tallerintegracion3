@@ -197,35 +197,27 @@ class _KanbanScreenState extends State<KanbanScreen> {
     if (members == null) return;
     final ctrl = TextEditingController();
     GroupMember? selected;
-    final ok = await showDialog<bool>(
+    final ok = await showNeobrutalistDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text(
-          'NUEVA TAREA',
-          style: TextStyle(fontWeight: FontWeight.w900),
-        ),
-        content: StatefulBuilder(
-          builder: (context, setDialogState) => Column(
+      dialog: StatefulBuilder(
+        builder: (dialogContext, setDialogState) => NeobrutalistDialog(
+          title: 'Nueva tarea',
+          content: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              const AppFieldLabel('TÍTULO (REQUERIDO)'),
+              const SizedBox(height: AppDimens.spaceSm),
               TextField(
                 controller: ctrl,
-                decoration: const InputDecoration(
-                  labelText: 'Título (requerido)',
-                ),
+                decoration: appInputDecoration('Ej. Resolver guía de límites'),
               ),
-              const SizedBox(height: 8),
-              const Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Responsable (opcional)',
-                  style: TextStyle(fontSize: 12),
-                ),
-              ),
-              DropdownButton<GroupMember?>(
+              const SizedBox(height: AppDimens.spaceMd),
+              const AppFieldLabel('RESPONSABLE (OPCIONAL)'),
+              const SizedBox(height: AppDimens.spaceSm),
+              _DialogDropdown<GroupMember?>(
                 value: selected,
-                hint: const Text('Sin asignar'),
-                isExpanded: true,
+                hint: 'Sin asignar',
                 items: [
                   const DropdownMenuItem<GroupMember?>(
                     value: null,
@@ -241,17 +233,11 @@ class _KanbanScreenState extends State<KanbanScreen> {
               ),
             ],
           ),
+          cancelLabel: 'Cancelar',
+          confirmLabel: 'Crear',
+          closeOnConfirm: false,
+          onConfirm: () => Navigator.of(context).pop(true),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Crear'),
-          ),
-        ],
       ),
     );
     final title = ctrl.text.trim();
@@ -295,33 +281,28 @@ class _KanbanScreenState extends State<KanbanScreen> {
     if (!_isRealGroup) return;
     final ctrl = TextEditingController(text: title);
     String next = status;
-    final ok = await showDialog<bool>(
+    final ok = await showNeobrutalistDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text(
-          'EDITAR TAREA',
-          style: TextStyle(fontWeight: FontWeight.w900),
-        ),
-        content: StatefulBuilder(
-          builder: (context, setDialogState) => Column(
+      dialog: StatefulBuilder(
+        builder: (dialogContext, setDialogState) => NeobrutalistDialog(
+          title: 'Editar tarea',
+          content: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              const AppFieldLabel('TÍTULO (REQUERIDO)'),
+              const SizedBox(height: AppDimens.spaceSm),
               TextField(
                 controller: ctrl,
-                decoration: const InputDecoration(
-                  labelText: 'Título (requerido)',
-                ),
+                decoration: appInputDecoration('Título de la tarea'),
               ),
-              const SizedBox(height: 8),
-              const Align(
-                alignment: Alignment.centerLeft,
-                child: Text('Estado', style: TextStyle(fontSize: 12)),
-              ),
-              DropdownButton<String>(
+              const SizedBox(height: AppDimens.spaceMd),
+              const AppFieldLabel('ESTADO'),
+              const SizedBox(height: AppDimens.spaceSm),
+              _DialogDropdown<String>(
                 value: const ['todo', 'in_progress', 'done'].contains(next)
                     ? next
                     : 'todo',
-                isExpanded: true,
                 items: const [
                   DropdownMenuItem(value: 'todo', child: Text('Por hacer')),
                   DropdownMenuItem(
@@ -336,17 +317,11 @@ class _KanbanScreenState extends State<KanbanScreen> {
               ),
             ],
           ),
+          cancelLabel: 'Cancelar',
+          confirmLabel: 'Guardar',
+          closeOnConfirm: false,
+          onConfirm: () => Navigator.of(context).pop(true),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Guardar'),
-          ),
-        ],
       ),
     );
     final newTitle = ctrl.text.trim();
@@ -384,24 +359,24 @@ class _KanbanScreenState extends State<KanbanScreen> {
     required String title,
   }) async {
     if (!_isRealGroup) return;
-    final ok = await showDialog<bool>(
+    final ok = await showNeobrutalistDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text(
-          'ELIMINAR TAREA',
-          style: TextStyle(fontWeight: FontWeight.w900),
+      dialog: NeobrutalistDialog(
+        title: 'Eliminar tarea',
+        content: Text(
+          '¿Eliminar "$title"?',
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: AppColors.text,
+            height: 1.4,
+          ),
         ),
-        content: Text('¿Eliminar "$title"?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Eliminar'),
-          ),
-        ],
+        cancelLabel: 'Cancelar',
+        confirmLabel: 'Eliminar',
+        confirmVariant: NeobrutalistButtonVariant.danger,
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop(true),
       ),
     );
     if (ok != true || !mounted) return;
@@ -1933,6 +1908,66 @@ class _NewTaskSheetState extends State<_NewTaskSheet> {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Dropdown de diálogo con borde perimetral negro completo (2 px, radio 0):
+/// oculta el subrayado Material y rellena con el pergamino de `AppColors.bg`.
+class _DialogDropdown<T> extends StatelessWidget {
+  const _DialogDropdown({
+    required this.value,
+    required this.items,
+    required this.onChanged,
+    this.hint,
+  });
+
+  final T? value;
+  final List<DropdownMenuItem<T>> items;
+  final ValueChanged<T?> onChanged;
+  final String? hint;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppDimens.spaceMd,
+        vertical: 2,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.bg,
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<T>(
+          value: value,
+          hint: hint == null
+              ? null
+              : Text(
+                  hint!,
+                  style: const TextStyle(
+                    color: AppColors.muted,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+          isExpanded: true,
+          isDense: true,
+          icon: const Icon(Icons.expand_more_rounded, color: AppColors.text),
+          dropdownColor: AppColors.surface,
+          style: const TextStyle(
+            fontWeight: FontWeight.w800,
+            fontSize: 13,
+            color: AppColors.text,
+          ),
+          items: items,
+          onChanged: onChanged,
         ),
       ),
     );

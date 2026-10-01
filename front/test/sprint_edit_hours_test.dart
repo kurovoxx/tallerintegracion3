@@ -40,7 +40,7 @@ Future<void> _openEditDialog(WidgetTester tester) async {
 Future<void> _tapGuardar(WidgetTester tester) async {
   FocusManager.instance.primaryFocus?.unfocus();
   await tester.pumpAndSettle();
-  await tester.tap(find.text('Guardar'));
+  await tester.tap(find.text('GUARDAR'));
   await tester.pumpAndSettle();
 }
 
@@ -134,10 +134,12 @@ void main() {
     await _openEditDialog(tester);
 
     expect(find.text('EDITAR TAREA'), findsOneWidget);
-    expect(find.text('Horas asignadas'), findsOneWidget);
+    // El label del campo convive con la métrica "HORAS ASIGNADAS" del fondo.
+    expect(find.text('HORAS ASIGNADAS'), findsWidgets);
     // Precargado con las horas actuales (estimated_hours real).
     expect(find.text('2.0'), findsOneWidget);
 
+    // TextField 0 = título, TextField 1 = horas asignadas.
     await tester.enterText(find.byType(TextField).at(1), '5.5');
     await _tapGuardar(tester);
 
