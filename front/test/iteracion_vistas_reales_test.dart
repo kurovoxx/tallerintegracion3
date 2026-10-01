@@ -583,7 +583,8 @@ void main() {
       expect(find.text('Reunión Real'), findsOneWidget);
       // Secciones completas; Calendar no simula una conexión.
       expect(find.text('VINCULAR CON GOOGLE CALENDAR'), findsOneWidget);
-      expect(find.text('MIEMBROS INVITADOS'), findsOneWidget);
+      expect(find.textContaining('INVITAR MIEMBROS'), findsOneWidget);
+      expect(find.textContaining('INVITAR POR CORREO'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   });
@@ -638,7 +639,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Abandonar grupo'), findsOneWidget);
       expect(find.text('Código de invitación'), findsNothing);
-      await tester.tap(find.text('Cerrar'));
+      await tester.tap(find.text('CERRAR'));
       await tester.pumpAndSettle();
       // INVITAR muestra identificador + código, ambos copiables.
       await tester.tap(find.text('INVITAR'));
@@ -741,7 +742,7 @@ void main() {
       expect(find.text('UNIRSE A GRUPO'), findsWidgets);
       await tester.enterText(find.byType(TextField).at(0), _gid);
       await tester.enterText(find.byType(TextField).at(1), 'codigo-1');
-      await tester.tap(find.text('Unirse').last);
+      await tester.tap(find.text('UNIRSE').last);
       await tester.pumpAndSettle();
 
       expect(joined, isTrue);
@@ -767,7 +768,7 @@ void main() {
 
       await tester.tap(find.text('UNIRSE A GRUPO').first);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Unirse').last);
+      await tester.tap(find.text('UNIRSE').last);
       await tester.pumpAndSettle();
       expect(
         find.text('Completa el identificador y el código.'),

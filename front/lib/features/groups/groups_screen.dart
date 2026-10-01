@@ -157,17 +157,17 @@ class _GroupsScreenState extends State<GroupsScreen> {
   }
 
   Future<void> _showGroupInfo(GroupCard group) async {
-    final left = await showDialog<bool>(
+    final left = await showNeobrutalistDialog<bool>(
       context: context,
-      builder: (_) => _GroupInfoDialog(group: group, service: _service),
+      dialog: _GroupInfoDialog(group: group, service: _service),
     );
     if (left == true && mounted) await _load();
   }
 
   Future<void> _showInvite(GroupCard group) async {
-    await showDialog<void>(
+    await showNeobrutalistDialog<void>(
       context: context,
-      builder: (_) => _InviteDialog(group: group, service: _service),
+      dialog: _InviteDialog(group: group, service: _service),
     );
     if (mounted) await _load();
   }
@@ -177,44 +177,38 @@ class _GroupsScreenState extends State<GroupsScreen> {
   Future<void> _openJoinDialog() async {
     final idCtrl = TextEditingController();
     final codeCtrl = TextEditingController();
-    final ok = await showDialog<bool>(
+    final ok = await showNeobrutalistDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text(
-          'UNIRSE A GRUPO',
-          style: TextStyle(fontWeight: FontWeight.w900),
+      dialog: NeobrutalistDialog(
+        title: 'UNIRSE A GRUPO',
+        cancelLabel: 'Cancelar',
+        confirmLabel: 'Unirse',
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop(true),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Pide al administrador el identificador del grupo y el código de invitación.',
+              style: TextStyle(fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            const AppFieldLabel('IDENTIFICADOR DEL GRUPO'),
+            const SizedBox(height: 4),
+            TextField(
+              controller: idCtrl,
+              decoration: appInputDecoration('Identificador del grupo'),
+            ),
+            const SizedBox(height: 8),
+            const AppFieldLabel('CÓDIGO DE INVITACIÓN'),
+            const SizedBox(height: 4),
+            TextField(
+              controller: codeCtrl,
+              decoration: appInputDecoration('Código de invitación'),
+            ),
+          ],
         ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'Pide al administrador el identificador del grupo y el código de invitación.',
-                style: TextStyle(fontSize: 12),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: idCtrl,
-                decoration: appInputDecoration('Identificador del grupo'),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: codeCtrl,
-                decoration: appInputDecoration('Código de invitación'),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Unirse'),
-          ),
-        ],
       ),
     );
     final groupId = idCtrl.text.trim();
@@ -563,27 +557,19 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
 
   Future<void> _leave() async {
     if (_leaving) return;
-    final ok = await showDialog<bool>(
+    final ok = await showNeobrutalistDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text(
-          'ABANDONAR GRUPO',
-          style: TextStyle(fontWeight: FontWeight.w900),
-        ),
+      dialog: NeobrutalistDialog(
+        title: 'ABANDONAR GRUPO',
+        cancelLabel: 'Cancelar',
+        confirmLabel: 'Abandonar',
+        confirmVariant: NeobrutalistButtonVariant.danger,
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop(true),
         content: Text(
           '¿Abandonar "${widget.group.name}"? Si eres el único admin con más '
           'miembros, la administración pasará automáticamente al integrante más antiguo.',
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Abandonar'),
-          ),
-        ],
       ),
     );
     if (ok != true || !mounted) return;
@@ -614,49 +600,39 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
   Widget build(BuildContext context) {
     final group = widget.group;
     final members = group.memberCount;
-    return AlertDialog(
-      title: Text(
-        group.name,
-        style: const TextStyle(fontWeight: FontWeight.w900),
-      ),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (group.description != null &&
-                group.description!.trim().isNotEmpty)
-              Text(group.description!.trim()),
-            const SizedBox(height: 8),
-            Text('Tu rol: ${group.role}'),
-            Text('$members ${members == 1 ? 'integrante' : 'integrantes'}'),
-            const SizedBox(height: 12),
-            if (_loading)
-              const Center(child: CircularProgressIndicator(strokeWidth: 2))
-            else if (_error != null)
-              Text(_error!)
-            else if (_detail?.role == 'admin') ...[
-              const Text(
-                'Gestiona el código de invitación desde el botón Invitar.',
-                style: TextStyle(fontSize: 12),
-              ),
-            ],
-            const SizedBox(height: 12),
-            const Divider(),
-            TextButton.icon(
-              onPressed: _leaving ? null : _leave,
-              icon: const Icon(Icons.exit_to_app_rounded, size: 16),
-              label: Text(_leaving ? 'Abandonando...' : 'Abandonar grupo'),
+    return NeobrutalistDialog(
+      title: group.name,
+      cancelLabel: 'Cerrar',
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (group.description != null &&
+              group.description!.trim().isNotEmpty)
+            Text(group.description!.trim()),
+          const SizedBox(height: 8),
+          Text('Tu rol: ${group.role}'),
+          Text('$members ${members == 1 ? 'integrante' : 'integrantes'}'),
+          const SizedBox(height: 12),
+          if (_loading)
+            const Center(child: CircularProgressIndicator(strokeWidth: 2))
+          else if (_error != null)
+            Text(_error!)
+          else if (_detail?.role == 'admin') ...[
+            const Text(
+              'Gestiona el código de invitación desde el botón Invitar.',
+              style: TextStyle(fontSize: 12),
             ),
           ],
-        ),
+          const SizedBox(height: 12),
+          const Divider(),
+          TextButton.icon(
+            onPressed: _leaving ? null : _leave,
+            icon: const Icon(Icons.exit_to_app_rounded, size: 16),
+            label: Text(_leaving ? 'Abandonando...' : 'Abandonar grupo'),
+          ),
+        ],
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cerrar'),
-        ),
-      ],
     );
   }
 }
@@ -780,66 +756,56 @@ class _InviteDialogState extends State<_InviteDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(
-        'Invitar a ${widget.group.name}',
-        style: const TextStyle(fontWeight: FontWeight.w900),
-      ),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text(
-              'Comparte estos datos con la persona que quieras invitar.',
-              style: TextStyle(fontSize: 12),
-            ),
-            const SizedBox(height: 12),
-            _copyableField(
-              label: 'Identificador del grupo',
-              value: widget.group.groupId,
-            ),
+    return NeobrutalistDialog(
+      title: 'Invitar a ${widget.group.name}',
+      cancelLabel: 'Cerrar',
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Comparte estos datos con la persona que quieras invitar.',
+            style: TextStyle(fontSize: 12),
+          ),
+          const SizedBox(height: 12),
+          _copyableField(
+            label: 'Identificador del grupo',
+            value: widget.group.groupId,
+          ),
+          const SizedBox(height: 8),
+          if (_loading)
+            const Center(child: CircularProgressIndicator(strokeWidth: 2))
+          else if (_error != null)
+            Text(_error!)
+          else ...[
+            if (_inviteToken != null && _inviteToken!.isNotEmpty)
+              _copyableField(
+                label: 'Código de invitación',
+                value: _inviteToken!,
+              ),
             const SizedBox(height: 8),
-            if (_loading)
-              const Center(child: CircularProgressIndicator(strokeWidth: 2))
-            else if (_error != null)
-              Text(_error!)
-            else ...[
-              if (_inviteToken != null && _inviteToken!.isNotEmpty)
-                _copyableField(
-                  label: 'Código de invitación',
-                  value: _inviteToken!,
-                ),
-              const SizedBox(height: 8),
-              TextButton(
-                onPressed: _regenerating ? null : _regenerate,
-                child: Text(
-                  _regenerating ? 'Actualizando...' : 'Generar nuevo código',
-                ),
+            TextButton(
+              onPressed: _regenerating ? null : _regenerate,
+              child: Text(
+                _regenerating ? 'Actualizando...' : 'Generar nuevo código',
               ),
-              const Text(
-                'El código anterior dejará de funcionar.',
-                style: TextStyle(fontSize: 11),
-              ),
-              const SizedBox(height: 4),
-              OutlinedButton.icon(
-                onPressed:
-                    (_inviteToken == null || _inviteToken!.trim().isEmpty)
-                    ? null
-                    : _copyAll,
-                icon: const Icon(Icons.copy_all_rounded, size: 16),
-                label: const Text('Copiar datos de invitación'),
-              ),
-            ],
+            ),
+            const Text(
+              'El código anterior dejará de funcionar.',
+              style: TextStyle(fontSize: 11),
+            ),
+            const SizedBox(height: 4),
+            OutlinedButton.icon(
+              onPressed:
+                  (_inviteToken == null || _inviteToken!.trim().isEmpty)
+                  ? null
+                  : _copyAll,
+              icon: const Icon(Icons.copy_all_rounded, size: 16),
+              label: const Text('Copiar datos de invitación'),
+            ),
           ],
-        ),
+        ],
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cerrar'),
-        ),
-      ],
     );
   }
 }

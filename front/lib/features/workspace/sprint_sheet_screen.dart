@@ -230,9 +230,9 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
   Future<void> _manageSprint({bool edit = false}) async {
     final groupId = widget.groupId!.trim();
     final sheet = edit ? _activeSheet : null;
-    final result = await showDialog<SprintDraft>(
+    final result = await showNeobrutalistDialog<SprintDraft>(
       context: context,
-      builder: (_) => SprintEditorDialog(
+      dialog: SprintEditorDialog(
         sheet: sheet,
         suggestedName: 'Sprint ${_realSheets.length + 1}',
       ),
@@ -449,22 +449,24 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
         : null;
     String priority = 'media';
     String status = 'sin_empezar';
-    final ok = await showDialog<bool>(
+    final ok = await showNeobrutalistDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text(
-          'NUEVA TAREA',
-          style: TextStyle(fontWeight: FontWeight.w900),
-        ),
+      dialog: NeobrutalistDialog(
+        title: 'NUEVA TAREA',
+        confirmLabel: 'Crear',
+        cancelLabel: 'Cancelar',
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop(true),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              const AppFieldLabel('Título (requerido)'),
+              const SizedBox(height: 4),
               TextField(
                 controller: titleCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Título (requerido)',
-                ),
+                decoration: appInputDecoration('Título (requerido)'),
               ),
               const SizedBox(height: 8),
               StatefulBuilder(
@@ -472,10 +474,8 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Text(
-                      'Responsable (requerido)',
-                      style: TextStyle(fontSize: 12),
-                    ),
+                    const AppFieldLabel('Responsable (requerido)'),
+                    const SizedBox(height: 4),
                     DropdownButton<String>(
                       value: selectedUserId,
                       hint: const Text('Elige un miembro'),
@@ -491,14 +491,14 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                           setDialogState(() => selectedUserId = v),
                     ),
                     const SizedBox(height: 8),
+                    const AppFieldLabel('Horas estimadas'),
+                    const SizedBox(height: 4),
                     TextField(
                       controller: estimateCtrl,
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
-                      decoration: const InputDecoration(
-                        labelText: 'Horas estimadas',
-                      ),
+                      decoration: appInputDecoration('Horas estimadas'),
                     ),
                   ],
                 ),
@@ -511,16 +511,6 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
             ],
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Crear'),
-          ),
-        ],
       ),
     );
     final title = titleCtrl.text.trim();
@@ -603,22 +593,24 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     }
     String priority = row.priority;
     String status = row.status;
-    final ok = await showDialog<bool>(
+    final ok = await showNeobrutalistDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text(
-          'EDITAR TAREA',
-          style: TextStyle(fontWeight: FontWeight.w900),
-        ),
+      dialog: NeobrutalistDialog(
+        title: 'EDITAR TAREA',
+        confirmLabel: 'Guardar',
+        cancelLabel: 'Cancelar',
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop(true),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              const AppFieldLabel('Título (requerido)'),
+              const SizedBox(height: 4),
               TextField(
                 controller: titleCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Título (requerido)',
-                ),
+                decoration: appInputDecoration('Título (requerido)'),
               ),
               const SizedBox(height: 8),
               StatefulBuilder(
@@ -626,10 +618,8 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Text(
-                      'Responsable (requerido)',
-                      style: TextStyle(fontSize: 12),
-                    ),
+                    const AppFieldLabel('Responsable (requerido)'),
+                    const SizedBox(height: 4),
                     DropdownButton<String>(
                       value: selectedUserId,
                       hint: const Text('Elige un miembro'),
@@ -645,14 +635,14 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                           setDialogState(() => selectedUserId = v),
                     ),
                     const SizedBox(height: 8),
+                    const AppFieldLabel('Horas asignadas'),
+                    const SizedBox(height: 4),
                     TextField(
                       controller: estimateCtrl,
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
-                      decoration: const InputDecoration(
-                        labelText: 'Horas asignadas',
-                      ),
+                      decoration: appInputDecoration('Ej: 2.0'),
                     ),
                   ],
                 ),
@@ -660,16 +650,6 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
             ],
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Guardar'),
-          ),
-        ],
       ),
     );
     final title = titleCtrl.text.trim();
@@ -729,24 +709,16 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
 
   Future<void> _deleteTableRow(_SprintTask row) async {
     if (!_isRealGroup || !row.isReal) return;
-    final ok = await showDialog<bool>(
+    final ok = await showNeobrutalistDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text(
-          'ELIMINAR TAREA',
-          style: TextStyle(fontWeight: FontWeight.w900),
-        ),
+      dialog: NeobrutalistDialog(
+        title: 'ELIMINAR TAREA',
+        confirmLabel: 'Eliminar',
+        cancelLabel: 'Cancelar',
+        confirmVariant: NeobrutalistButtonVariant.danger,
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop(true),
         content: Text('¿Eliminar "${row.task}"?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Eliminar'),
-          ),
-        ],
       ),
     );
     if (ok != true || !mounted) return;
@@ -1017,11 +989,9 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     );
     final goalCtrl = TextEditingController();
 
-    await showDialog<void>(
+    await showNeobrutalistDialog<void>(
       context: context,
-      barrierColor: AppColors.scrim,
-      builder: (dialogContext) =>
-          _NewSprintDialog(nameController: nameCtrl, goalController: goalCtrl),
+      dialog: _NewSprintDialog(nameController: nameCtrl, goalController: goalCtrl),
     );
 
     if (!mounted) return;
@@ -1060,10 +1030,9 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
       await _createRealTask(preselect);
       return;
     }
-    final result = await showDialog<_TaskDraft>(
+    final result = await showNeobrutalistDialog<_TaskDraft>(
       context: context,
-      barrierColor: AppColors.scrim,
-      builder: (_) => _NewTaskDialog(members: _members, initialMember: member),
+      dialog: _NewTaskDialog(members: _members, initialMember: member),
     );
     if (result == null || !mounted) return;
 
@@ -1088,10 +1057,9 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
       return;
     }
     final current = task.days[day] ?? 0.0;
-    final value = await showDialog<double>(
+    final value = await showNeobrutalistDialog<double>(
       context: context,
-      barrierColor: AppColors.scrim,
-      builder: (_) => _ImputeHoursDialog(
+      dialog: _ImputeHoursDialog(
         taskTitle: task.task,
         day: day,
         initial: current,
@@ -1118,10 +1086,9 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
       return;
     }
     final current = task.days[day] ?? 0.0;
-    final value = await showDialog<double>(
+    final value = await showNeobrutalistDialog<double>(
       context: context,
-      barrierColor: AppColors.scrim,
-      builder: (_) => _ImputeHoursDialog(
+      dialog: _ImputeHoursDialog(
         taskTitle: task.task,
         day: day,
         initial: current,
@@ -2009,29 +1976,18 @@ class _NewTaskDialogState extends State<_NewTaskDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.zero,
-        side: BorderSide(
-          color: AppColors.border,
-          width: AppDimens.borderWidthThick,
-        ),
-      ),
-      title: const Text(
-        'NUEVA TAREA',
-        style: TextStyle(
-          fontWeight: FontWeight.w900,
-          fontSize: 13,
-          color: AppColors.text,
-        ),
-      ),
+    return NeobrutalistDialog(
+      title: 'NUEVA TAREA',
+      confirmLabel: 'Agregar',
+      cancelLabel: 'Cancelar',
+      closeOnConfirm: false,
+      onConfirm: _submit,
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _FieldLabel('INTEGRANTE'),
+            const AppFieldLabel('INTEGRANTE'),
             const SizedBox(height: 4),
             Container(
               width: double.infinity,
@@ -2069,7 +2025,7 @@ class _NewTaskDialogState extends State<_NewTaskDialog> {
               ),
             ),
             const SizedBox(height: 12),
-            _FieldLabel('TÍTULO'),
+            const AppFieldLabel('TÍTULO'),
             const SizedBox(height: 4),
             TextField(
               controller: _titleController,
@@ -2082,7 +2038,7 @@ class _NewTaskDialogState extends State<_NewTaskDialog> {
               decoration: appInputDecoration('Ej: Endpoint POST /notes'),
             ),
             const SizedBox(height: 12),
-            _FieldLabel('PRIORIDAD'),
+            const AppFieldLabel('PRIORIDAD'),
             const SizedBox(height: 4),
             _SegmentedPicker(
               options: const ['alta', 'media', 'baja'],
@@ -2090,7 +2046,7 @@ class _NewTaskDialogState extends State<_NewTaskDialog> {
               onChanged: (v) => setState(() => _priority = v),
             ),
             const SizedBox(height: 12),
-            _FieldLabel('HORAS ESTIMADAS'),
+            const AppFieldLabel('HORAS ESTIMADAS'),
             const SizedBox(height: 4),
             TextField(
               controller: _hoursController,
@@ -2108,7 +2064,7 @@ class _NewTaskDialogState extends State<_NewTaskDialog> {
               ).copyWith(errorText: _hourError),
             ),
             const SizedBox(height: 12),
-            _FieldLabel('ESTADO'),
+            const AppFieldLabel('ESTADO'),
             const SizedBox(height: 4),
             _SegmentedPicker(
               options: const ['Sin empezar', 'En proceso', 'Listo'],
@@ -2118,20 +2074,6 @@ class _NewTaskDialogState extends State<_NewTaskDialog> {
           ],
         ),
       ),
-      actionsPadding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
-      actions: [
-        NeobrutalistButton(
-          label: 'Cancelar',
-          variant: NeobrutalistButtonVariant.secondary,
-          onPressed: () => Navigator.pop(context),
-        ),
-        NeobrutalistButton(
-          label: 'Agregar',
-          icon: Icons.add_rounded,
-          variant: NeobrutalistButtonVariant.accent,
-          onPressed: _submit,
-        ),
-      ],
     );
   }
 }
@@ -2162,29 +2104,18 @@ class _NewSprintDialogState extends State<_NewSprintDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.zero,
-        side: BorderSide(
-          color: AppColors.border,
-          width: AppDimens.borderWidthThick,
-        ),
-      ),
-      title: const Text(
-        'NUEVO SPRINT',
-        style: TextStyle(
-          fontWeight: FontWeight.w900,
-          fontSize: 13,
-          color: AppColors.text,
-        ),
-      ),
+    return NeobrutalistDialog(
+      title: 'NUEVO SPRINT',
+      confirmLabel: 'Crear',
+      cancelLabel: 'Cancelar',
+      closeOnConfirm: false,
+      onConfirm: _submit,
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _FieldLabel('NOMBRE'),
+            const AppFieldLabel('NOMBRE'),
             const SizedBox(height: 4),
             TextField(
               controller: widget.nameController,
@@ -2199,7 +2130,7 @@ class _NewSprintDialogState extends State<_NewSprintDialog> {
               ).copyWith(errorText: _nameError),
             ),
             const SizedBox(height: 12),
-            _FieldLabel('OBJETIVO (OPCIONAL)'),
+            const AppFieldLabel('OBJETIVO (OPCIONAL)'),
             const SizedBox(height: 4),
             TextField(
               controller: widget.goalController,
@@ -2213,20 +2144,6 @@ class _NewSprintDialogState extends State<_NewSprintDialog> {
           ],
         ),
       ),
-      actionsPadding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
-      actions: [
-        NeobrutalistButton(
-          label: 'Cancelar',
-          variant: NeobrutalistButtonVariant.secondary,
-          onPressed: () => Navigator.pop(context),
-        ),
-        NeobrutalistButton(
-          label: 'Crear',
-          icon: Icons.check_rounded,
-          variant: NeobrutalistButtonVariant.accent,
-          onPressed: _submit,
-        ),
-      ],
     );
   }
 }
@@ -2271,23 +2188,12 @@ class _ImputeHoursDialogState extends State<_ImputeHoursDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.zero,
-        side: BorderSide(
-          color: AppColors.border,
-          width: AppDimens.borderWidthThick,
-        ),
-      ),
-      title: const Text(
-        'IMPUTAR HORAS REALES',
-        style: TextStyle(
-          fontWeight: FontWeight.w900,
-          fontSize: 13,
-          color: AppColors.text,
-        ),
-      ),
+    return NeobrutalistDialog(
+      title: 'IMPUTAR HORAS REALES',
+      confirmLabel: 'Guardar',
+      cancelLabel: 'Cancelar',
+      closeOnConfirm: false,
+      onConfirm: _submit,
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2327,20 +2233,6 @@ class _ImputeHoursDialogState extends State<_ImputeHoursDialog> {
           ),
         ],
       ),
-      actionsPadding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
-      actions: [
-        NeobrutalistButton(
-          label: 'Cancelar',
-          variant: NeobrutalistButtonVariant.secondary,
-          onPressed: () => Navigator.pop(context),
-        ),
-        NeobrutalistButton(
-          label: 'Guardar',
-          icon: Icons.check_rounded,
-          variant: NeobrutalistButtonVariant.accent,
-          onPressed: _submit,
-        ),
-      ],
     );
   }
 }
@@ -2615,25 +2507,6 @@ class _StatusChip extends StatelessWidget {
           ),
       ],
       child: chip,
-    );
-  }
-}
-
-class _FieldLabel extends StatelessWidget {
-  const _FieldLabel(this.text);
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: const TextStyle(
-        fontSize: 10,
-        fontWeight: FontWeight.w900,
-        color: AppColors.muted,
-        letterSpacing: 0.5,
-      ),
     );
   }
 }

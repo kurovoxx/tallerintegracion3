@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import '../../core/common_widgets.dart';
+import '../../core/theme/app_theme.dart';
+import '../../core/widgets/neobrutalism.dart';
 import '../../core/models/social_models.dart';
 
 class SprintDraft {
@@ -60,17 +63,40 @@ class _SprintEditorDialogState extends State<SprintEditorDialog> {
     });
   }
 
+  void _submit() {
+    if (_name.text.trim().isEmpty ||
+        iso(_end).compareTo(iso(_start)) < 0) {
+      setState(
+        () => _error =
+            'Escribe un nombre y una fecha fin igual o posterior al inicio.',
+      );
+      return;
+    }
+    Navigator.pop(
+      context,
+      SprintDraft(_name.text.trim(), iso(_start), iso(_end)),
+    );
+  }
+
   @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: Text(widget.sheet == null ? 'NUEVO SPRINT' : 'EDITAR SPRINT'),
+  Widget build(BuildContext context) => NeobrutalistDialog(
+    title: widget.sheet == null ? 'NUEVO SPRINT' : 'EDITAR SPRINT',
+    confirmLabel: widget.sheet == null ? 'CREAR SPRINT' : 'GUARDAR CAMBIOS',
+    cancelLabel: 'CANCELAR',
+    closeOnConfirm: false,
+    onConfirm: _submit,
     content: SingleChildScrollView(
       child: Column(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          const AppFieldLabel('Nombre del Sprint'),
+          const SizedBox(height: 4),
           TextField(
             controller: _name,
-            decoration: const InputDecoration(labelText: 'Nombre del Sprint'),
+            decoration: appInputDecoration('Nombre del Sprint'),
           ),
+          const SizedBox(height: 8),
           TextButton(
             onPressed: () => _pick(true),
             child: Text('Fecha inicio: ${iso(_start)}'),
@@ -82,32 +108,9 @@ class _SprintEditorDialogState extends State<SprintEditorDialog> {
           if (widget.sheet != null)
             const Text('Cambiar el rango no elimina las horas registradas.'),
           if (_error != null)
-            Text(_error!, style: const TextStyle(color: Colors.red)),
+            Text(_error!, style: const TextStyle(color: AppColors.error)),
         ],
       ),
     ),
-    actions: [
-      TextButton(
-        onPressed: () => Navigator.pop(context),
-        child: const Text('CANCELAR'),
-      ),
-      FilledButton(
-        onPressed: () {
-          if (_name.text.trim().isEmpty ||
-              iso(_end).compareTo(iso(_start)) < 0) {
-            setState(
-              () => _error =
-                  'Escribe un nombre y una fecha fin igual o posterior al inicio.',
-            );
-            return;
-          }
-          Navigator.pop(
-            context,
-            SprintDraft(_name.text.trim(), iso(_start), iso(_end)),
-          );
-        },
-        child: Text(widget.sheet == null ? 'CREAR SPRINT' : 'GUARDAR CAMBIOS'),
-      ),
-    ],
   );
 }
