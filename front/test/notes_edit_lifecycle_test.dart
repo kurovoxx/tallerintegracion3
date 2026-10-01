@@ -192,16 +192,51 @@ void main() {
       expect(stored.single.version, local ? isNull : 6);
       if (!local) {
         expect(sent, [4, 5]);
-        for (final att in [image, pdf]) {
-          final button = find.byKey(ValueKey('remove-$att'));
-          await t.ensureVisible(button);
-          await t.tap(button);
+        // 1. Lectura NO muestra botón quitar.
+        expect(find.byKey(ValueKey('remove-$image')), findsNothing);
+        expect(find.byKey(ValueKey('remove-$pdf')), findsNothing);
+        // 2. Editar SÍ muestra quitar.
+        Future<void> openEdit() async {
+          await t.scrollUntilVisible(
+            find.text('Editar'),
+            250,
+            scrollable: find.byType(Scrollable).last,
+          );
+          await t.tap(find.text('Editar'));
           await settle(t);
-          expect(find.byKey(ValueKey('remove-$att')), findsNothing);
-          expect(content, isNot(contains('attachment:$att')));
         }
+        await openEdit();
+        expect(find.text('ADJUNTOS VINCULADOS (2)'), findsOneWidget);
+        expect(find.byKey(ValueKey('remove-$image')), findsOneWidget);
+        expect(find.byKey(ValueKey('remove-$pdf')), findsOneWidget);
+        // 3-4. Quitar en editar solo marca pending; CANCELAR conserva.
+        await t.tap(find.byKey(ValueKey('remove-$image')));
+        await settle(t);
+        expect(find.textContaining('SE QUITARÁ'), findsOneWidget);
+        expect(deleted, isEmpty);
+        expect(content, contains('attachment:$image'));
+        await t.tap(find.text('CANCELAR'));
+        await settle(t);
+        expect(find.text('Editar'), findsOneWidget);
+        expect(find.byKey(ValueKey('remove-$image')), findsNothing);
+        // 5-6-8. Guardar elimina attachment + referencia inline; el otro intacto.
+        await openEdit();
+        await t.tap(find.byKey(ValueKey('remove-$image')));
+        await settle(t);
+        await t.tap(find.byKey(ValueKey('remove-$pdf')));
+        await settle(t);
+        await t.ensureVisible(find.text('GUARDAR'));
+        await t.tap(find.text('GUARDAR'));
+        await settle(t);
+        expect(find.text('Editar'), findsOneWidget);
+        expect(sent, [4, 5, 6]);
+        expect(content, isNot(contains('attachment:$image')));
+        expect(content, isNot(contains('attachment:$pdf')));
         expect(deleted, [image, pdf]);
+        // 9-11. Recarga confirma eliminación; inline ya no existe.
         expect(find.byType(AuthenticatedAttachmentImage), findsNothing);
+        expect(find.byKey(ValueKey('remove-$image')), findsNothing);
+        expect(find.byKey(ValueKey('remove-$pdf')), findsNothing);
       } else {
         expect(attempts, 0);
       }
@@ -209,4 +244,131 @@ void main() {
       await settle(t);
     });
   }
+
+  testWidgets('borrar solo Markdown NO elimina attachment', (t) async {
+    SharedPreferences.setMockInitialValues({});
+    await SessionManager.saveSession(jwt('first'), {
+      'id': 'owner',
+    }, refreshToken: 'test-refresh');
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    final repo = LocalNotesRepository(db);
+    const singleImage = 'abcdefab-1234-4234-8234-123456789abc';
+    var version = 4;
+    var content =
+        'texto antes\n\n![foto](attachment:$singleImage)\n\ntexto después';
+    final attachments = <Map<String, dynamic>>[
+      {
+        'id': singleImage,
+        'note_id': id,
+        'file_type': 'image/png',
+        'file_name': 'foto.png',
+        'external_file_id': 'img-drive',
+      },
+    ];
+    http.Response json(Object data, [int code = 200]) => http.Response(
+      jsonEncode(data),
+      code,
+      headers: {'content-type': 'application/json; charset=utf-8'},
+    );
+    notesHttpClientOverride = MockClient((r) async {
+      if (r.method == 'PATCH') {
+        final data = jsonDecode(r.body) as Map<String, dynamic>;
+        version++;
+        content = data['content'];
+        return json({'id': id, 'title': data['title'], 'version': version});
+      }
+      if (r.method == 'DELETE') {
+        attachments.removeWhere((a) => a['id'] == r.url.pathSegments.last);
+        return http.Response('', 204);
+      }
+      if (r.url.path == '/notes/me') {
+        return json({
+          'notes': [
+            {'id': id, 'title': 'Nota de prueba', 'version': version},
+          ],
+        });
+      }
+      if (r.url.path == '/notes/$id') {
+        return json({
+          'id': id,
+          'user_id': 'owner',
+          'title': 'Nota de prueba',
+          'content': content,
+          'version': version,
+          'attachments': attachments,
+        });
+      }
+      if (r.url.path.endsWith('/content')) {
+        return http.Response.bytes(
+          base64Decode(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+          ),
+          200,
+          headers: {'content-type': 'image/png'},
+        );
+      }
+      return json({}, 404);
+    });
+    AuthedHttp.refreshOverride = (_) async =>
+        RefreshResult.success(accessToken: jwt('renewed'));
+    addTearDown(() async {
+      notesHttpClientOverride = null;
+      AuthedHttp.refreshOverride = null;
+      await SessionManager.clear();
+    });
+    await t.runAsync(
+      () => repo.upsertNote(
+        LocalNote(
+          id: id,
+          title: 'Nota de prueba',
+          content: content,
+          visibility: 'private',
+          updatedAt: DateTime.now(),
+          ownerUserId: 'owner',
+          version: version,
+        ),
+      ),
+    );
+    Future<void> settle2(WidgetTester t) async {
+      await t.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 80)),
+      );
+      for (var i = 0; i < 5; i++) {
+        await t.pump(const Duration(milliseconds: 100));
+      }
+    }
+
+    t.view.physicalSize = const Size(1400, 1600);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.resetPhysicalSize);
+    addTearDown(t.view.resetDevicePixelRatio);
+    await t.pumpWidget(MaterialApp(home: AllNotesScreen(database: db)));
+    await settle2(t);
+    await t.tap(find.text('Nota de prueba'));
+    await settle2(t);
+    // Inline en el cuerpo + miniatura en Recursos Adjuntos.
+    expect(find.byType(AuthenticatedAttachmentImage), findsNWidgets(2));
+    // Editar: borrar el texto Markdown pero NO pulsar X del adjunto.
+    await t.scrollUntilVisible(
+      find.text('Editar'),
+      250,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await t.tap(find.text('Editar'));
+    await settle2(t);
+    final fields = find.byType(TextField);
+    await t.enterText(fields.last, 'solo texto sin imagen');
+    await t.ensureVisible(find.text('GUARDAR'));
+    await t.tap(find.text('GUARDAR'));
+    await settle2(t);
+    // Attachment preservado en servidor aunque el inline desapareció:
+    // queda solo la miniatura de Recursos Adjuntos (1 widget).
+    expect(attachments.length, 1);
+    expect(content, isNot(contains('attachment:$singleImage')));
+    expect(find.byType(AuthenticatedAttachmentImage), findsOneWidget);
+    // Y en lectura no hay ningún botón quitar.
+    expect(find.byKey(ValueKey('remove-$singleImage')), findsNothing);
+    await t.pumpWidget(const SizedBox());
+    await settle2(t);
+  });
 }
