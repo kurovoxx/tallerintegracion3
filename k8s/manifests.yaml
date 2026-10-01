@@ -103,8 +103,6 @@ spec:
             - {name: SOCIAL_PORT, value: "8083"}
             - {name: AUTH_BASE_URL, value: "http://auth:8080"}
             - {name: CALENDAR_MODE, value: mock}
-            # Stream Chat real: STREAM_API_KEY/STREAM_API_SECRET vienen de ti3-secrets.
-            - {name: STREAM_MODE, value: real}
 ---
 apiVersion: v1
 kind: Service

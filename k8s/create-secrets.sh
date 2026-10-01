@@ -14,8 +14,6 @@ kubectl create secret generic ti3-secrets -n student-brojas \
   --from-literal=GOOGLE_CLIENT_ID="<pendiente>" \
   --from-literal=GOOGLE_CLIENT_SECRET="<pendiente>" \
   --from-literal=GOOGLE_REDIRECT_URI="https://ti3-brojas.dev.censei.cl/auth/google/callback" \
-  --from-literal=STREAM_API_KEY="<pegar de .env>" \
-  --from-literal=STREAM_API_SECRET="<pegar de .env>" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 # Con tu propio PAT GitHub (scope read:packages), para que el cluster baje las imágenes privadas:

@@ -542,12 +542,11 @@ class NeobrutalistBadge extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Diálogos
+// Diálogos (portado de d0ef02c de Héctor sobre tokens actuales)
 // ---------------------------------------------------------------------------
 
 /// Diálogo neobrutalista de silueta rectangular dura: borde de tinta de 3 px,
-/// radio 0, sombra rígida `(6,6)`, header con separador y acciones definidas.
-/// Ver .skills/flutter_neobrutalism_ui.md, sección 4.5.
+/// radio según token, sombra rígida sin blur, header con separador y acciones.
 class NeobrutalistDialog extends StatelessWidget {
   const NeobrutalistDialog({
     super.key,
@@ -558,6 +557,7 @@ class NeobrutalistDialog extends StatelessWidget {
     this.onConfirm,
     this.confirmVariant = NeobrutalistButtonVariant.accent,
     this.closeOnConfirm = true,
+    this.maxWidth = 480,
   });
 
   final String title;
@@ -567,15 +567,16 @@ class NeobrutalistDialog extends StatelessWidget {
   final VoidCallback? onConfirm;
   final NeobrutalistButtonVariant confirmVariant;
 
-  /// Cuando es false, la confirmación no cierra la ruta: [onConfirm] decide
-  /// cuándo cerrar (validación en línea, guardado asíncrono o devolver un
-  /// resultado por `Navigator.pop`). Por defecto replica la skill: cierra.
+  /// false = onConfirm decide cuándo cerrar (validación, async o pop con dato).
   final bool closeOnConfirm;
+
+  /// Ancho máximo del marco (480 formularios; visor de imagen usa ~960).
+  final double maxWidth;
 
   @override
   Widget build(BuildContext context) {
     return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 480),
+      constraints: BoxConstraints(maxWidth: maxWidth),
       child: Container(
         decoration: BoxDecoration(
           color: AppColors.surface,
@@ -656,8 +657,7 @@ class NeobrutalistDialog extends StatelessWidget {
   }
 }
 
-/// Muestra un [NeobrutalistDialog] (o un wrapper que lo construya, p. ej.
-/// `StatefulBuilder`) con `barrierColor: AppColors.scrim`.
+/// Muestra un [NeobrutalistDialog] con `barrierColor: AppColors.scrim`.
 Future<T?> showNeobrutalistDialog<T>({
   required BuildContext context,
   required Widget dialog,
@@ -668,7 +668,6 @@ Future<T?> showNeobrutalistDialog<T>({
     barrierDismissible: barrierDismissible,
     barrierColor: AppColors.scrim,
     builder: (_) => Dialog(
-      // Transparente: el marco visible lo aporta NeobrutalistDialog.
       backgroundColor: Colors.transparent,
       elevation: 0,
       insetPadding: const EdgeInsets.all(AppDimens.spaceXl),

@@ -199,25 +199,30 @@ class _KanbanScreenState extends State<KanbanScreen> {
     GroupMember? selected;
     final ok = await showNeobrutalistDialog<bool>(
       context: context,
-      dialog: StatefulBuilder(
-        builder: (dialogContext, setDialogState) => NeobrutalistDialog(
-          title: 'Nueva tarea',
-          content: Column(
+      dialog: NeobrutalistDialog(
+        title: 'NUEVA TAREA',
+        confirmLabel: 'Crear',
+        cancelLabel: 'Cancelar',
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop(true),
+        content: StatefulBuilder(
+          builder: (context, setDialogState) => Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const AppFieldLabel('TÍTULO (REQUERIDO)'),
-              const SizedBox(height: AppDimens.spaceSm),
+              const AppFieldLabel('Título (requerido)'),
+              const SizedBox(height: 4),
               TextField(
                 controller: ctrl,
-                decoration: appInputDecoration('Ej. Resolver guía de límites'),
+                decoration: appInputDecoration('Título (requerido)'),
               ),
-              const SizedBox(height: AppDimens.spaceMd),
-              const AppFieldLabel('RESPONSABLE (OPCIONAL)'),
-              const SizedBox(height: AppDimens.spaceSm),
-              _DialogDropdown<GroupMember?>(
+              const SizedBox(height: 8),
+              const AppFieldLabel('Responsable (opcional)'),
+              const SizedBox(height: 4),
+              DropdownButton<GroupMember?>(
                 value: selected,
-                hint: 'Sin asignar',
+                hint: const Text('Sin asignar'),
+                isExpanded: true,
                 items: [
                   const DropdownMenuItem<GroupMember?>(
                     value: null,
@@ -233,10 +238,6 @@ class _KanbanScreenState extends State<KanbanScreen> {
               ),
             ],
           ),
-          cancelLabel: 'Cancelar',
-          confirmLabel: 'Crear',
-          closeOnConfirm: false,
-          onConfirm: () => Navigator.of(context).pop(true),
         ),
       ),
     );
@@ -283,26 +284,31 @@ class _KanbanScreenState extends State<KanbanScreen> {
     String next = status;
     final ok = await showNeobrutalistDialog<bool>(
       context: context,
-      dialog: StatefulBuilder(
-        builder: (dialogContext, setDialogState) => NeobrutalistDialog(
-          title: 'Editar tarea',
-          content: Column(
+      dialog: NeobrutalistDialog(
+        title: 'EDITAR TAREA',
+        confirmLabel: 'Guardar',
+        cancelLabel: 'Cancelar',
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop(true),
+        content: StatefulBuilder(
+          builder: (context, setDialogState) => Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const AppFieldLabel('TÍTULO (REQUERIDO)'),
-              const SizedBox(height: AppDimens.spaceSm),
+              const AppFieldLabel('Título (requerido)'),
+              const SizedBox(height: 4),
               TextField(
                 controller: ctrl,
-                decoration: appInputDecoration('Título de la tarea'),
+                decoration: appInputDecoration('Título (requerido)'),
               ),
-              const SizedBox(height: AppDimens.spaceMd),
-              const AppFieldLabel('ESTADO'),
-              const SizedBox(height: AppDimens.spaceSm),
-              _DialogDropdown<String>(
+              const SizedBox(height: 8),
+              const AppFieldLabel('Estado'),
+              const SizedBox(height: 4),
+              DropdownButton<String>(
                 value: const ['todo', 'in_progress', 'done'].contains(next)
                     ? next
                     : 'todo',
+                isExpanded: true,
                 items: const [
                   DropdownMenuItem(value: 'todo', child: Text('Por hacer')),
                   DropdownMenuItem(
@@ -317,10 +323,6 @@ class _KanbanScreenState extends State<KanbanScreen> {
               ),
             ],
           ),
-          cancelLabel: 'Cancelar',
-          confirmLabel: 'Guardar',
-          closeOnConfirm: false,
-          onConfirm: () => Navigator.of(context).pop(true),
         ),
       ),
     );
@@ -362,21 +364,13 @@ class _KanbanScreenState extends State<KanbanScreen> {
     final ok = await showNeobrutalistDialog<bool>(
       context: context,
       dialog: NeobrutalistDialog(
-        title: 'Eliminar tarea',
-        content: Text(
-          '¿Eliminar "$title"?',
-          style: const TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            color: AppColors.text,
-            height: 1.4,
-          ),
-        ),
-        cancelLabel: 'Cancelar',
+        title: 'ELIMINAR TAREA',
         confirmLabel: 'Eliminar',
+        cancelLabel: 'Cancelar',
         confirmVariant: NeobrutalistButtonVariant.danger,
         closeOnConfirm: false,
         onConfirm: () => Navigator.of(context).pop(true),
+        content: Text('¿Eliminar "$title"?'),
       ),
     );
     if (ok != true || !mounted) return;
@@ -1908,66 +1902,6 @@ class _NewTaskSheetState extends State<_NewTaskSheet> {
               ],
             ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Dropdown de diálogo con borde perimetral negro completo (2 px, radio 0):
-/// oculta el subrayado Material y rellena con el pergamino de `AppColors.bg`.
-class _DialogDropdown<T> extends StatelessWidget {
-  const _DialogDropdown({
-    required this.value,
-    required this.items,
-    required this.onChanged,
-    this.hint,
-  });
-
-  final T? value;
-  final List<DropdownMenuItem<T>> items;
-  final ValueChanged<T?> onChanged;
-  final String? hint;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppDimens.spaceMd,
-        vertical: 2,
-      ),
-      decoration: BoxDecoration(
-        color: AppColors.bg,
-        border: Border.all(
-          color: AppColors.border,
-          width: AppDimens.borderWidth,
-        ),
-        borderRadius: BorderRadius.circular(AppDimens.radius),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<T>(
-          value: value,
-          hint: hint == null
-              ? null
-              : Text(
-                  hint!,
-                  style: const TextStyle(
-                    color: AppColors.muted,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 13,
-                  ),
-                ),
-          isExpanded: true,
-          isDense: true,
-          icon: const Icon(Icons.expand_more_rounded, color: AppColors.text),
-          dropdownColor: AppColors.surface,
-          style: const TextStyle(
-            fontWeight: FontWeight.w800,
-            fontSize: 13,
-            color: AppColors.text,
-          ),
-          items: items,
-          onChanged: onChanged,
         ),
       ),
     );

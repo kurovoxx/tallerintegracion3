@@ -16,6 +16,7 @@ class LocalNotesRepository {
         .insertOnConflictUpdate(
           LocalNotesCompanion(
             id: Value(note.id),
+            version: Value(note.version),
             title: Value(note.title),
             content: Value(note.content),
             visibility: Value(note.visibility),
@@ -79,7 +80,7 @@ class LocalNotesRepository {
       final rows = await db
           .customSelect(
             '''
-        SELECT n.id, n.title, n.content, n.visibility, n.updated_at, n.owner_user_id,
+        SELECT n.id, n.title, n.content, n.visibility, n.updated_at, n.owner_user_id, n.version,
                bm25(local_notes_fts, 2.0, 1.0) AS score
         FROM local_notes n
         JOIN local_notes_fts fts ON n.rowid = fts.rowid
@@ -94,6 +95,7 @@ class LocalNotesRepository {
       return rows.map((row) {
         return LocalNote(
           id: row.read<String>('id'),
+          version: row.readNullable<int>('version'),
           title: row.read<String>('title'),
           content: row.read<String>('content'),
           visibility: row.read<String>('visibility'),

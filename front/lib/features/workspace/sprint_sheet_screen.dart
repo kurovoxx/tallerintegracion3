@@ -8,6 +8,7 @@ import '../../core/models/social_models.dart';
 import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import 'sprint_editor_dialog.dart';
 
 // ---------------------------------------------------------------------------
 // Modelo de datos (tipeado + store estático en memoria para aguantar el hot
@@ -119,6 +120,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
 
   @override
   void dispose() {
+    _tableScroll.dispose();
     if (widget._serviceOverride == null) _social.dispose();
     super.dispose();
   }
@@ -152,43 +154,40 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
 
   // Lectura: GET /groups/:id/workspace (sprint_sheet) con fallback a
   // GET /groups/:id/sprint-sheet. Luego miembros (nombres) y horas por tarea.
-  Future<void> _loadReal() async {
-    if (!_isRealGroup) return;
-    if (!mounted) return;
+  SprintSheetInfo? get _activeSheet => _realSheets.isEmpty
+      ? null
+      : _realSheets[_realSheetIndex.clamp(0, _realSheets.length - 1)];
+
+  Future<void> _loadReal({String? selectId}) async {
+    if (!_isRealGroup || !mounted) return;
+    final groupId = widget.groupId!.trim();
+    final selected = selectId ?? _activeSheet?.id;
     setState(() {
       _loadingReal = true;
       _realError = null;
     });
     try {
-      final ws = await _social.getWorkspace(widget.groupId!.trim());
-      if (!mounted) return;
+      List<SprintSheetInfo> sheets;
+      List<SprintTask> tasks;
+      try {
+        final ws = await _social.getWorkspace(groupId);
+        sheets = ws.sheets;
+        tasks = ws.sprintTasks;
+      } on SocialApiException {
+        sheets = await _social.listSprintSheets(groupId);
+        tasks = await _social.listSprintTasks(groupId);
+      }
+      if (!mounted || groupId != widget.groupId?.trim()) return;
       setState(() {
-        _realSheets = ws.sheets;
-        _realTasks = ws.sprintTasks;
-        _realSheetIndex = 0;
+        _realSheets = sheets;
+        _realTasks = tasks;
+        final index = sheets.indexWhere((s) => s.id == selected);
+        _realSheetIndex = index < 0 ? 0 : index;
         _loadingReal = false;
       });
       await _loadRealSupport();
-    } on SocialApiException catch (_) {
-      // Fallback a endpoint directo.
-      try {
-        final tasks = await _social.listSprintTasks(widget.groupId!.trim());
-        if (!mounted) return;
-        setState(() {
-          _realTasks = tasks;
-          _realSheetIndex = 0;
-          _loadingReal = false;
-        });
-        await _loadRealSupport();
-      } catch (_) {
-        if (!mounted) return;
-        setState(() {
-          _realError = 'No se pudo cargar la hoja de sprint.';
-          _loadingReal = false;
-        });
-      }
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || groupId != widget.groupId?.trim()) return;
       setState(() {
         _realError = 'No se pudo cargar la hoja de sprint.';
         _loadingReal = false;
@@ -196,40 +195,69 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     }
   }
 
-  /// Miembros y horas que acompañan la vista real (best-effort: si fallan,
-  /// la tabla igual se muestra con ids cortos y horas en cero).
   Future<void> _loadRealSupport() async {
+    final groupId = widget.groupId?.trim();
     if (!_isRealGroup || !mounted) return;
     try {
-      final members = await _social.listMembers(widget.groupId!.trim());
-      if (!mounted) return;
-      setState(() {
-        _memberById = {for (final m in members) m.userId: m};
-      });
+      final members = await _social.listMembers(groupId!);
+      if (!mounted || groupId != widget.groupId?.trim()) return;
+      setState(() => _memberById = {for (final m in members) m.userId: m});
     } catch (_) {}
+    final results = await Future.wait(
+      _realTasks.map((t) async {
+        try {
+          return MapEntry(t.id, await _social.listHours(t.id));
+        } catch (_) {
+          return MapEntry<String, SprintHoursList?>(t.id, null);
+        }
+      }),
+    );
+    if (!mounted || groupId != widget.groupId?.trim()) return;
+    setState(
+      () => _hoursByTask = {
+        for (final e in results)
+          if (e.value != null)
+            e.key: {
+              for (final h in e.value!.entries)
+                if ((h.logDate ?? '').isNotEmpty) h.logDate!: h.hours,
+            },
+      },
+    );
+  }
+
+  final _tableScroll = ScrollController();
+
+  Future<void> _manageSprint({bool edit = false}) async {
+    final groupId = widget.groupId!.trim();
+    final sheet = edit ? _activeSheet : null;
+    final result = await showNeobrutalistDialog<SprintDraft>(
+      context: context,
+      dialog: SprintEditorDialog(
+        sheet: sheet,
+        suggestedName: 'Sprint ${_realSheets.length + 1}',
+      ),
+    );
+    if (result == null || !mounted || groupId != widget.groupId?.trim()) return;
     try {
-      final results = await Future.wait(
-        _realTasks.map((t) async {
-          try {
-            final h = await _social.listHours(t.id);
-            return MapEntry(t.id, h);
-          } catch (_) {
-            return MapEntry(t.id, null);
-          }
-        }),
+      final saved = await _social.saveSprintSheet(
+        groupId: groupId,
+        sheetId: sheet?.id,
+        name: result.name,
+        start: result.start,
+        end: result.end,
       );
-      if (!mounted) return;
-      setState(() {
-        _hoursByTask = {
-          for (final e in results)
-            if (e.value != null)
-              e.key: {
-                for (final h in e.value!.entries)
-                  if ((h.logDate ?? '').isNotEmpty) h.logDate!: h.hours,
-              },
-        };
-      });
-    } catch (_) {}
+      if (!mounted || groupId != widget.groupId?.trim()) return;
+      await _loadReal(selectId: saved.id);
+    } catch (_) {
+      if (!mounted || groupId != widget.groupId?.trim()) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No se pudo guardar el sprint. Revisa las fechas e inténtalo de nuevo.',
+          ),
+        ),
+      );
+    }
   }
 
   /// Vista rica construida con datos reales (hojas, tareas, horas, nombres).
@@ -244,9 +272,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
         ? sheets[_realSheetIndex.clamp(0, sheets.length - 1)]
         : null;
     final sheetId = sheet?.id ?? '';
-    final tasks = _realTasks
-        .where((t) => sheetId.isEmpty || t.sheetId == sheetId)
-        .toList();
+    final tasks = _realTasks.where((t) => t.sheetId == sheetId).toList();
     if (tasks.isEmpty && sheets.isNotEmpty) {
       // La hoja elegida no tiene tareas: igual se muestra su cabecera.
     }
@@ -276,10 +302,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
             priority: _capitalized(t.priority),
             status: _sprintStatusLabel(t.status),
             estimate: t.estimatedHours,
-            days: {
-              for (var i = 0; i < days.length; i++)
-                days[i]: (_hoursByTask[t.id]?[isoByDay[i]] ?? 0.0),
-            },
+            days: Map<String, double>.from(_hoursByTask[t.id] ?? const {}),
             backendId: t.id,
           ),
       ],
@@ -296,7 +319,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     DateTime.sunday: 'Domingo',
   };
 
-  /// Columnas de días: período real de la hoja (máx. 5) o semana actual.
+  /// Columnas de días corridos del período completo, o semana actual para hojas históricas.
   List<String> _realDayNames(SprintSheetInfo? sheet) =>
       _realDayPairs(sheet).map((p) => p.$1).toList();
 
@@ -310,9 +333,9 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     if (start != null && end != null && !end.isBefore(start)) {
       var d = DateTime(start.year, start.month, start.day);
       final last = DateTime(end.year, end.month, end.day);
-      while (!d.isAfter(last) && out.length < 5) {
+      while (!d.isAfter(last)) {
         out.add((_weekdayNames[d.weekday] ?? '', _iso(d)));
-        d = d.add(const Duration(days: 1));
+        d = DateTime(d.year, d.month, d.day + 1);
       }
     }
     if (out.isEmpty) {
@@ -428,59 +451,65 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     String status = 'sin_empezar';
     final ok = await showNeobrutalistDialog<bool>(
       context: context,
-      dialog: StatefulBuilder(
-        builder: (dialogContext, setDialogState) => NeobrutalistDialog(
-          title: 'Nueva tarea',
-          content: Column(
+      dialog: NeobrutalistDialog(
+        title: 'NUEVA TAREA',
+        confirmLabel: 'Crear',
+        cancelLabel: 'Cancelar',
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop(true),
+        content: SingleChildScrollView(
+          child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const AppFieldLabel('TÍTULO (REQUERIDO)'),
-              const SizedBox(height: AppDimens.spaceSm),
+              const AppFieldLabel('Título (requerido)'),
+              const SizedBox(height: 4),
               TextField(
                 controller: titleCtrl,
-                decoration: appInputDecoration('Ej. Endpoint POST /notes'),
+                decoration: appInputDecoration('Título (requerido)'),
               ),
-              const SizedBox(height: AppDimens.spaceMd),
-              const AppFieldLabel('RESPONSABLE (REQUERIDO)'),
-              const SizedBox(height: AppDimens.spaceSm),
-              _DialogDropdown<String>(
-                value: selectedUserId,
-                hint: 'Elige un miembro',
-                items: [
-                  for (final m in members)
-                    DropdownMenuItem<String>(
-                      value: m.userId,
-                      child: Text(m.displayLabel),
+              const SizedBox(height: 8),
+              StatefulBuilder(
+                builder: (context, setDialogState) => Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const AppFieldLabel('Responsable (requerido)'),
+                    const SizedBox(height: 4),
+                    DropdownButton<String>(
+                      value: selectedUserId,
+                      hint: const Text('Elige un miembro'),
+                      isExpanded: true,
+                      items: [
+                        for (final m in members)
+                          DropdownMenuItem<String>(
+                            value: m.userId,
+                            child: Text(m.displayLabel),
+                          ),
+                      ],
+                      onChanged: (v) =>
+                          setDialogState(() => selectedUserId = v),
                     ),
-                ],
-                onChanged: (v) => setDialogState(() => selectedUserId = v),
-              ),
-              const SizedBox(height: AppDimens.spaceMd),
-              const AppFieldLabel('HORAS ESTIMADAS'),
-              const SizedBox(height: AppDimens.spaceSm),
-              TextField(
-                controller: estimateCtrl,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
+                    const SizedBox(height: 8),
+                    const AppFieldLabel('Horas estimadas'),
+                    const SizedBox(height: 4),
+                    TextField(
+                      controller: estimateCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: appInputDecoration('Horas estimadas'),
+                    ),
+                  ],
                 ),
-                decoration: appInputDecoration('Ej. 2.0'),
               ),
-              const SizedBox(height: AppDimens.spaceMd),
+              const SizedBox(height: 8),
               const Text(
                 'Prioridad: alta, media o baja. Estado inicial: sin empezar.',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.mutedStrong,
-                ),
+                style: TextStyle(fontSize: 11),
               ),
             ],
           ),
-          cancelLabel: 'Cancelar',
-          confirmLabel: 'Crear',
-          closeOnConfirm: false,
-          onConfirm: () => Navigator.of(context).pop(true),
         ),
       ),
     );
@@ -501,8 +530,22 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     }
     setState(() => _creatingReal = true);
     try {
+      var sheet = _activeSheet;
+      if (sheet == null) {
+        // La primera tarea conserva la compatibilidad con grupos sin hoja.
+        final now = DateTime.now();
+        sheet = await _social.saveSprintSheet(
+          groupId: widget.groupId!.trim(),
+          name: 'Sprint 1',
+          start: _iso(now),
+          end: _iso(now.add(const Duration(days: 4))),
+        );
+        _realSheets = [sheet];
+        _realSheetIndex = 0;
+      }
       await _social.createSprintTask(
         groupId: widget.groupId!.trim(),
+        sheetId: sheet.id,
         title: title,
         assignedTo: selectedUserId!,
         priority: priority,
@@ -552,50 +595,60 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     String status = row.status;
     final ok = await showNeobrutalistDialog<bool>(
       context: context,
-      dialog: StatefulBuilder(
-        builder: (dialogContext, setDialogState) => NeobrutalistDialog(
-          title: 'Editar tarea',
-          content: Column(
+      dialog: NeobrutalistDialog(
+        title: 'EDITAR TAREA',
+        confirmLabel: 'Guardar',
+        cancelLabel: 'Cancelar',
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop(true),
+        content: SingleChildScrollView(
+          child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const AppFieldLabel('TÍTULO (REQUERIDO)'),
-              const SizedBox(height: AppDimens.spaceSm),
+              const AppFieldLabel('Título (requerido)'),
+              const SizedBox(height: 4),
               TextField(
                 controller: titleCtrl,
-                decoration: appInputDecoration('Título de la tarea'),
+                decoration: appInputDecoration('Título (requerido)'),
               ),
-              const SizedBox(height: AppDimens.spaceMd),
-              const AppFieldLabel('RESPONSABLE (REQUERIDO)'),
-              const SizedBox(height: AppDimens.spaceSm),
-              _DialogDropdown<String>(
-                value: selectedUserId,
-                hint: 'Elige un miembro',
-                items: [
-                  for (final m in members)
-                    DropdownMenuItem<String>(
-                      value: m.userId,
-                      child: Text(m.displayLabel),
+              const SizedBox(height: 8),
+              StatefulBuilder(
+                builder: (context, setDialogState) => Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const AppFieldLabel('Responsable (requerido)'),
+                    const SizedBox(height: 4),
+                    DropdownButton<String>(
+                      value: selectedUserId,
+                      hint: const Text('Elige un miembro'),
+                      isExpanded: true,
+                      items: [
+                        for (final m in members)
+                          DropdownMenuItem<String>(
+                            value: m.userId,
+                            child: Text(m.displayLabel),
+                          ),
+                      ],
+                      onChanged: (v) =>
+                          setDialogState(() => selectedUserId = v),
                     ),
-                ],
-                onChanged: (v) => setDialogState(() => selectedUserId = v),
-              ),
-              const SizedBox(height: AppDimens.spaceMd),
-              const AppFieldLabel('HORAS ASIGNADAS'),
-              const SizedBox(height: AppDimens.spaceSm),
-              TextField(
-                controller: estimateCtrl,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
+                    const SizedBox(height: 8),
+                    const AppFieldLabel('Horas asignadas'),
+                    const SizedBox(height: 4),
+                    TextField(
+                      controller: estimateCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: appInputDecoration('Ej: 2.0'),
+                    ),
+                  ],
                 ),
-                decoration: appInputDecoration('Ej. 2.0'),
               ),
             ],
           ),
-          cancelLabel: 'Cancelar',
-          confirmLabel: 'Guardar',
-          closeOnConfirm: false,
-          onConfirm: () => Navigator.of(context).pop(true),
         ),
       ),
     );
@@ -659,21 +712,13 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     final ok = await showNeobrutalistDialog<bool>(
       context: context,
       dialog: NeobrutalistDialog(
-        title: 'Eliminar tarea',
-        content: Text(
-          '¿Eliminar "${row.task}"?',
-          style: const TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            color: AppColors.text,
-            height: 1.4,
-          ),
-        ),
-        cancelLabel: 'Cancelar',
+        title: 'ELIMINAR TAREA',
         confirmLabel: 'Eliminar',
+        cancelLabel: 'Cancelar',
         confirmVariant: NeobrutalistButtonVariant.danger,
         closeOnConfirm: false,
         onConfirm: () => Navigator.of(context).pop(true),
+        content: Text('¿Eliminar "${row.task}"?'),
       ),
     );
     if (ok != true || !mounted) return;
@@ -717,7 +762,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
   static DateTime _nextTuesday(DateTime now) {
     var d = DateTime(now.year, now.month, now.day);
     while (d.weekday != DateTime.tuesday) {
-      d = d.add(const Duration(days: 1));
+      d = DateTime(d.year, d.month, d.day + 1);
     }
     return d;
   }
@@ -914,6 +959,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
   }
 
   List<String> get _days => _sprint.days;
+  List<String> get _dayKeys => _usingRealTable ? _sprint.dayIsoDates : _days;
   List<String> get _dayDates => _sprint.dayDates;
   List<_SprintTask> get _tasks => _sprint.tasks;
 
@@ -945,10 +991,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
 
     await showNeobrutalistDialog<void>(
       context: context,
-      dialog: _NewSprintDialog(
-        nameController: nameCtrl,
-        goalController: goalCtrl,
-      ),
+      dialog: _NewSprintDialog(nameController: nameCtrl, goalController: goalCtrl),
     );
 
     if (!mounted) return;
@@ -1032,10 +1075,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
 
   /// Imputa horas reales en la fecha ISO de la columna.
   Future<void> _imputeRealHours(_SprintTask task, String day) async {
-    final isoDates = _sprint.dayIsoDates;
-    final days = _sprint.days;
-    final idx = days.indexOf(day);
-    final iso = (idx >= 0 && idx < isoDates.length) ? isoDates[idx] : '';
+    final iso = day;
     if (iso.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -1177,10 +1217,25 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                 ),
               ],
               const SizedBox(height: 8),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: SizedBox(width: 1200, child: _buildSprintTable()),
-              ),
+              if (_isRealGroup && _tasks.isEmpty)
+                _buildSprintTable()
+              else
+                Scrollbar(
+                  key: const ValueKey('sprint-date-scrollbar'),
+                  controller: _tableScroll,
+                  thumbVisibility: true,
+                  trackVisibility: true,
+                  scrollbarOrientation: ScrollbarOrientation.bottom,
+                  child: SingleChildScrollView(
+                    controller: _tableScroll,
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.only(bottom: 18),
+                    child: SizedBox(
+                      width: math.max(1200, 740 + 90.0 * _days.length),
+                      child: _buildSprintTable(),
+                    ),
+                  ),
+                ),
             ],
           ],
         ),
@@ -1322,37 +1377,109 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     );
   }
 
-  /// Selector de hojas reales del grupo (sin alta: el backend no expone
-  /// crear hoja; las tareas crean la hoja por defecto).
+  /// Elimina la hoja con confirmación neobrutalista y reselección vecina:
+  /// siguiente si existe, si no anterior, nunca sin selección. La X solo se
+  /// muestra con 2+ sprints; el backend también protege el último.
+  Future<void> _confirmDeleteSheet(SprintSheetInfo sheet) async {
+    final groupId = widget.groupId!.trim();
+    final sheets = _realSheets;
+    if (sheets.length <= 1) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No puedes eliminar el único sprint del grupo.'),
+        ),
+      );
+      return;
+    }
+    final sure = await showNeobrutalistDialog<bool>(
+      context: context,
+      dialog: NeobrutalistDialog(
+        title: 'ELIMINAR SPRINT',
+        cancelLabel: 'CANCELAR',
+        confirmLabel: 'ELIMINAR',
+        confirmVariant: NeobrutalistButtonVariant.danger,
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop(true),
+        content: Text(
+          '¿Eliminar ${sheet.name}? También se eliminarán sus tareas y horas registradas.',
+          style: const TextStyle(
+            fontWeight: FontWeight.w600,
+            color: AppColors.text,
+          ),
+        ),
+      ),
+    );
+    // 12. Cancelar no elimina nada.
+    if (sure != true || !mounted || groupId != widget.groupId?.trim()) return;
+    final idx = sheets.indexWhere((s) => s.id == sheet.id);
+    final neighborId = idx >= 0 && idx < sheets.length - 1
+        ? sheets[idx + 1].id
+        : sheets[idx > 0 ? idx - 1 : 0].id;
+    try {
+      await _social.deleteSprintSheet(groupId: groupId, sheetId: sheet.id);
+      if (!mounted || groupId != widget.groupId?.trim()) return;
+      await _loadReal(selectId: neighborId);
+    } on SocialApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo eliminar el sprint.')),
+      );
+    }
+  }
+
+  /// Acciones visibles para todas las hojas, incluida la primera sin fechas.
   Widget _buildRealSheetSelector() {
     final sheets = _realSheets;
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      physics: const BouncingScrollPhysics(),
-      child: Row(
-        children: [
-          for (var i = 0; i < sheets.length; i++) ...[
-            if (i != 0) const SizedBox(width: 8),
-            _SprintChip(
-              label: sheets[i].name,
-              dates:
-                  '${_fmtDateLabel(sheets[i].periodStart)} → ${_fmtDateLabel(sheets[i].periodEnd)}',
-              selected: i == _realSheetIndex,
-              taskCount: _realTasks
-                  .where((t) => t.sheetId == sheets[i].id)
-                  .length,
-              onTap: () => setState(() => _realSheetIndex = i),
-            ),
-          ],
-          const SizedBox(width: 8),
-          NeobrutalistButton(
-            label: 'VER GRÁFICO BURNDOWN',
-            icon: Icons.show_chart_rounded,
-            variant: NeobrutalistButtonVariant.accent,
-            onPressed: _showBurndownDialog,
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (var i = 0; i < sheets.length; i++) ...[
+          if (i != 0) const SizedBox(width: 8),
+          _SprintChip(
+            label: sheets[i].name,
+            dates:
+                '${_fmtDateLabel(sheets[i].periodStart)} → ${_fmtDateLabel(sheets[i].periodEnd)}',
+            selected: i == _realSheetIndex,
+            taskCount: _realTasks
+                .where((t) => t.sheetId == sheets[i].id)
+                .length,
+            onTap: () => setState(() => _realSheetIndex = i),
+            // Sin trato especial para Sprint 1; con un solo sprint no hay X.
+            onDelete: sheets.length <= 1
+                ? null
+                : () => _confirmDeleteSheet(sheets[i]),
+            sheetId: sheets[i].id,
           ),
         ],
-      ),
+        const SizedBox(width: 8),
+        NeobrutalistButton(
+          label: '+ NUEVO SPRINT',
+          icon: Icons.add_circle_outline_rounded,
+          onPressed: _loadingReal ? null : () => _manageSprint(),
+        ),
+        if (_activeSheet != null) ...[
+          const SizedBox(width: 8),
+          NeobrutalistButton(
+            label: 'EDITAR SPRINT',
+            icon: Icons.edit_outlined,
+            onPressed: _loadingReal ? null : () => _manageSprint(edit: true),
+          ),
+        ],
+        const SizedBox(width: 8),
+        NeobrutalistButton(
+          label: 'VER GRÁFICO BURNDOWN',
+          icon: Icons.show_chart_rounded,
+          variant: NeobrutalistButtonVariant.accent,
+          onPressed: _showBurndownDialog,
+        ),
+      ],
     );
   }
 
@@ -1488,7 +1615,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
   List<double> _cumulativeUsedByDay() {
     final result = <double>[];
     var acc = 0.0;
-    for (final day in _days) {
+    for (final day in _dayKeys) {
       acc += _tasks.fold(0.0, (sum, t) => sum + (t.days[day] ?? 0.0));
       result.add(acc);
     }
@@ -1565,6 +1692,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
       ),
       child: Table(
         border: TableBorder.all(color: AppColors.border, width: 2),
+        defaultColumnWidth: const FixedColumnWidth(90),
         columnWidths: const {
           0: FixedColumnWidth(220),
           1: FixedColumnWidth(90),
@@ -1762,7 +1890,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                       ),
                     ),
                   ),
-                  for (final day in _days)
+                  for (final day in _dayKeys)
                     _DayCell(
                       value: t.days[day] ?? 0.0,
                       onTap: () => _showImputeHours(t, day),
@@ -1787,6 +1915,8 @@ class _SprintChip extends StatelessWidget {
     required this.selected,
     required this.taskCount,
     required this.onTap,
+    this.onDelete,
+    this.sheetId,
   });
 
   final String label;
@@ -1794,6 +1924,12 @@ class _SprintChip extends StatelessWidget {
   final bool selected;
   final int taskCount;
   final VoidCallback onTap;
+
+  /// X pequeña integrada para eliminar. Null = sin X (último sprint).
+  final VoidCallback? onDelete;
+
+  /// Id para la key `delete-sheet-<id>` usada en tests.
+  final String? sheetId;
 
   @override
   Widget build(BuildContext context) {
@@ -1830,6 +1966,36 @@ class _SprintChip extends StatelessWidget {
                     : NeobrutalistTone.accent,
                 compact: true,
               ),
+              if (onDelete != null) ...[
+                const SizedBox(width: 6),
+                MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: GestureDetector(
+                    key: sheetId == null
+                        ? null
+                        : ValueKey('delete-sheet-$sheetId'),
+                    onTap: onDelete,
+                    child: Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: BoxDecoration(
+                        color: AppColors.surface,
+                        border: Border.all(
+                          color: AppColors.border,
+                          width: 1.5,
+                        ),
+                        borderRadius: BorderRadius.circular(
+                          AppDimens.radiusChip,
+                        ),
+                      ),
+                      child: const Icon(
+                        Icons.close_rounded,
+                        size: 12,
+                        color: AppColors.text,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -1910,79 +2076,103 @@ class _NewTaskDialogState extends State<_NewTaskDialog> {
   @override
   Widget build(BuildContext context) {
     return NeobrutalistDialog(
-      title: 'Nueva tarea',
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const AppFieldLabel('INTEGRANTE'),
-          const SizedBox(height: AppDimens.spaceSm),
-          _DialogDropdown<String>(
-            value: _selectedMember,
-            items: [
-              for (final member in widget.members)
-                DropdownMenuItem<String>(
-                  value: member,
-                  child: Text(member, overflow: TextOverflow.ellipsis),
-                ),
-            ],
-            onChanged: (value) {
-              if (value != null) {
-                setState(() => _selectedMember = value);
-              }
-            },
-          ),
-          const SizedBox(height: AppDimens.spaceMd),
-          const AppFieldLabel('TÍTULO'),
-          const SizedBox(height: AppDimens.spaceSm),
-          TextField(
-            controller: _titleController,
-            autofocus: true,
-            style: const TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 13,
-              color: AppColors.text,
-            ),
-            decoration: appInputDecoration('Ej: Endpoint POST /notes'),
-          ),
-          const SizedBox(height: AppDimens.spaceMd),
-          const AppFieldLabel('PRIORIDAD'),
-          const SizedBox(height: AppDimens.spaceSm),
-          _SegmentedPicker(
-            options: const ['alta', 'media', 'baja'],
-            value: _priority,
-            onChanged: (v) => setState(() => _priority = v),
-          ),
-          const SizedBox(height: AppDimens.spaceMd),
-          const AppFieldLabel('HORAS ESTIMADAS'),
-          const SizedBox(height: AppDimens.spaceSm),
-          TextField(
-            controller: _hoursController,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            inputFormatters: [FilteringTextInputFormatter.allow(_hoursRegex)],
-            style: const TextStyle(
-              fontWeight: FontWeight.w800,
-              fontSize: 13,
-              color: AppColors.text,
-            ),
-            decoration: appInputDecoration(
-              'Ej: 4.0',
-            ).copyWith(errorText: _hourError),
-          ),
-          const SizedBox(height: AppDimens.spaceMd),
-          const AppFieldLabel('ESTADO'),
-          const SizedBox(height: AppDimens.spaceSm),
-          _SegmentedPicker(
-            options: const ['Sin empezar', 'En proceso', 'Listo'],
-            value: _status,
-            onChanged: (v) => setState(() => _status = v),
-          ),
-        ],
-      ),
-      cancelLabel: 'Cancelar',
+      title: 'NUEVA TAREA',
       confirmLabel: 'Agregar',
+      cancelLabel: 'Cancelar',
       closeOnConfirm: false,
       onConfirm: _submit,
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const AppFieldLabel('INTEGRANTE'),
+            const SizedBox(height: 4),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+              decoration: BoxDecoration(
+                color: AppColors.bg,
+                border: Border.all(color: AppColors.border, width: 2),
+                borderRadius: BorderRadius.circular(AppDimens.radius),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: _selectedMember,
+                  isExpanded: true,
+                  isDense: true,
+                  icon: const Icon(Icons.expand_more_rounded),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 12,
+                    color: AppColors.text,
+                  ),
+                  items: widget.members
+                      .map(
+                        (member) => DropdownMenuItem<String>(
+                          value: member,
+                          child: Text(member, overflow: TextOverflow.ellipsis),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() => _selectedMember = value);
+                    }
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            const AppFieldLabel('TÍTULO'),
+            const SizedBox(height: 4),
+            TextField(
+              controller: _titleController,
+              autofocus: true,
+              style: const TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+                color: AppColors.text,
+              ),
+              decoration: appInputDecoration('Ej: Endpoint POST /notes'),
+            ),
+            const SizedBox(height: 12),
+            const AppFieldLabel('PRIORIDAD'),
+            const SizedBox(height: 4),
+            _SegmentedPicker(
+              options: const ['alta', 'media', 'baja'],
+              value: _priority,
+              onChanged: (v) => setState(() => _priority = v),
+            ),
+            const SizedBox(height: 12),
+            const AppFieldLabel('HORAS ESTIMADAS'),
+            const SizedBox(height: 4),
+            TextField(
+              controller: _hoursController,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              inputFormatters: [FilteringTextInputFormatter.allow(_hoursRegex)],
+              style: const TextStyle(
+                fontWeight: FontWeight.w800,
+                fontSize: 13,
+                color: AppColors.text,
+              ),
+              decoration: appInputDecoration(
+                'Ej: 4.0',
+              ).copyWith(errorText: _hourError),
+            ),
+            const SizedBox(height: 12),
+            const AppFieldLabel('ESTADO'),
+            const SizedBox(height: 4),
+            _SegmentedPicker(
+              options: const ['Sin empezar', 'En proceso', 'Listo'],
+              value: _status,
+              onChanged: (v) => setState(() => _status = v),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -2014,43 +2204,45 @@ class _NewSprintDialogState extends State<_NewSprintDialog> {
   @override
   Widget build(BuildContext context) {
     return NeobrutalistDialog(
-      title: 'Nuevo sprint',
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const AppFieldLabel('NOMBRE'),
-          const SizedBox(height: AppDimens.spaceSm),
-          TextField(
-            controller: widget.nameController,
-            autofocus: true,
-            style: const TextStyle(
-              fontWeight: FontWeight.w800,
-              fontSize: 13,
-              color: AppColors.text,
-            ),
-            decoration: appInputDecoration(
-              'Ej: Sprint 4',
-            ).copyWith(errorText: _nameError),
-          ),
-          const SizedBox(height: AppDimens.spaceMd),
-          const AppFieldLabel('OBJETIVO (OPCIONAL)'),
-          const SizedBox(height: AppDimens.spaceSm),
-          TextField(
-            controller: widget.goalController,
-            style: const TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 13,
-              color: AppColors.text,
-            ),
-            decoration: appInputDecoration('Ej: Terminar módulo de notas'),
-          ),
-        ],
-      ),
-      cancelLabel: 'Cancelar',
+      title: 'NUEVO SPRINT',
       confirmLabel: 'Crear',
+      cancelLabel: 'Cancelar',
       closeOnConfirm: false,
       onConfirm: _submit,
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const AppFieldLabel('NOMBRE'),
+            const SizedBox(height: 4),
+            TextField(
+              controller: widget.nameController,
+              autofocus: true,
+              style: const TextStyle(
+                fontWeight: FontWeight.w800,
+                fontSize: 13,
+                color: AppColors.text,
+              ),
+              decoration: appInputDecoration(
+                'Ej: Sprint 4',
+              ).copyWith(errorText: _nameError),
+            ),
+            const SizedBox(height: 12),
+            const AppFieldLabel('OBJETIVO (OPCIONAL)'),
+            const SizedBox(height: 4),
+            TextField(
+              controller: widget.goalController,
+              style: const TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+                color: AppColors.text,
+              ),
+              decoration: appInputDecoration('Ej: Terminar módulo de notas'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -2096,10 +2288,14 @@ class _ImputeHoursDialogState extends State<_ImputeHoursDialog> {
   @override
   Widget build(BuildContext context) {
     return NeobrutalistDialog(
-      title: 'Imputar horas reales',
+      title: 'IMPUTAR HORAS REALES',
+      confirmLabel: 'Guardar',
+      cancelLabel: 'Cancelar',
+      closeOnConfirm: false,
+      onConfirm: _submit,
       content: Column(
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             '${widget.taskTitle.toUpperCase()} • ${widget.day.toUpperCase()}',
@@ -2109,9 +2305,7 @@ class _ImputeHoursDialogState extends State<_ImputeHoursDialog> {
               color: AppColors.muted,
             ),
           ),
-          const SizedBox(height: AppDimens.spaceMd),
-          const AppFieldLabel('HORAS'),
-          const SizedBox(height: AppDimens.spaceSm),
+          const SizedBox(height: 10),
           TextField(
             controller: _controller,
             autofocus: true,
@@ -2124,7 +2318,7 @@ class _ImputeHoursDialogState extends State<_ImputeHoursDialog> {
             ),
             decoration: appInputDecoration('Horas'),
           ),
-          const SizedBox(height: AppDimens.spaceMd),
+          const SizedBox(height: 10),
           Wrap(
             spacing: 6,
             runSpacing: 6,
@@ -2138,10 +2332,6 @@ class _ImputeHoursDialogState extends State<_ImputeHoursDialog> {
           ),
         ],
       ),
-      cancelLabel: 'Cancelar',
-      confirmLabel: 'Guardar',
-      closeOnConfirm: false,
-      onConfirm: _submit,
     );
   }
 }
@@ -2416,66 +2606,6 @@ class _StatusChip extends StatelessWidget {
           ),
       ],
       child: chip,
-    );
-  }
-}
-
-/// Dropdown de diálogo con borde perimetral negro completo (2 px, radio 0):
-/// oculta el subrayado Material y rellena con el pergamino de `AppColors.bg`.
-class _DialogDropdown<T> extends StatelessWidget {
-  const _DialogDropdown({
-    required this.value,
-    required this.items,
-    required this.onChanged,
-    this.hint,
-  });
-
-  final T? value;
-  final List<DropdownMenuItem<T>> items;
-  final ValueChanged<T?> onChanged;
-  final String? hint;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppDimens.spaceMd,
-        vertical: 2,
-      ),
-      decoration: BoxDecoration(
-        color: AppColors.bg,
-        border: Border.all(
-          color: AppColors.border,
-          width: AppDimens.borderWidth,
-        ),
-        borderRadius: BorderRadius.circular(AppDimens.radius),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<T>(
-          value: value,
-          hint: hint == null
-              ? null
-              : Text(
-                  hint!,
-                  style: const TextStyle(
-                    color: AppColors.muted,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 13,
-                  ),
-                ),
-          isExpanded: true,
-          isDense: true,
-          icon: const Icon(Icons.expand_more_rounded, color: AppColors.text),
-          dropdownColor: AppColors.surface,
-          style: const TextStyle(
-            fontWeight: FontWeight.w800,
-            fontSize: 13,
-            color: AppColors.text,
-          ),
-          items: items,
-          onChanged: onChanged,
-        ),
-      ),
     );
   }
 }

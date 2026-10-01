@@ -1,6 +1,7 @@
 package http
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -65,6 +66,7 @@ type logoutRequest struct {
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req loginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Printf("auth login fail email=? code=bad_request ip=%s", c.ClientIP())
 		utils.RespondError(c, http.StatusBadRequest, "bad_request", "Request inválido")
 		return
 	}
@@ -72,12 +74,15 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	if err != nil {
 		if se, ok := err.(*service.ServiceError); ok {
 			status := utils.StatusForCode(se.Code)
+			log.Printf("auth login fail email=%s code=%s ip=%s", req.Email, se.Code, c.ClientIP())
 			utils.RespondError(c, status, se.Code, se.Message)
 			return
 		}
+		log.Printf("auth login fail email=%s code=internal_error ip=%s err=%v", req.Email, c.ClientIP(), err)
 		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
 		return
 	}
+	log.Printf("auth login ok email=%s ip=%s", req.Email, c.ClientIP())
 	c.JSON(http.StatusOK, loginResponse{
 		AccessToken:  res.AccessToken,
 		RefreshToken: res.RefreshToken,
@@ -91,6 +96,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 func (h *AuthHandler) Refresh(c *gin.Context) {
 	var req refreshRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Printf("auth refresh fail code=bad_request ip=%s", c.ClientIP())
 		utils.RespondError(c, http.StatusBadRequest, "bad_request", "Request inválido: refresh_token requerido")
 		return
 	}
@@ -102,12 +108,15 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 			if se.Code == utils.ErrInvalidToken || se.Code == utils.ErrTokenExpired || se.Code == utils.ErrUnauthorized {
 				status = http.StatusUnauthorized
 			}
+			log.Printf("auth refresh fail code=%s ip=%s", se.Code, c.ClientIP())
 			utils.RespondError(c, status, se.Code, se.Message)
 			return
 		}
+		log.Printf("auth refresh fail code=internal_error ip=%s err=%v", c.ClientIP(), err)
 		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
 		return
 	}
+	log.Printf("auth refresh ok ip=%s", c.ClientIP())
 	c.JSON(http.StatusOK, refreshResponse{
 		AccessToken:  res.AccessToken,
 		RefreshToken: res.RefreshToken,
@@ -121,19 +130,23 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 func (h *AuthHandler) Logout(c *gin.Context) {
 	var req logoutRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Printf("auth logout fail code=bad_request ip=%s", c.ClientIP())
 		utils.RespondError(c, http.StatusBadRequest, "bad_request", "Request inválido: refresh_token requerido")
 		return
 	}
 	if err := h.svc.Logout(c.Request.Context(), req.RefreshToken); err != nil {
 		if se, ok := err.(*service.ServiceError); ok {
 			if se.Code == "bad_request" {
+				log.Printf("auth logout fail code=bad_request ip=%s", c.ClientIP())
 				utils.RespondError(c, http.StatusBadRequest, se.Code, se.Message)
 				return
 			}
 		}
+		log.Printf("auth logout fail code=internal_error ip=%s err=%v", c.ClientIP(), err)
 		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
 		return
 	}
+	log.Printf("auth logout ok ip=%s", c.ClientIP())
 	c.AbortWithStatus(http.StatusNoContent)
 }
 
@@ -144,17 +157,21 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		msg := err.Error()
 		if contains(msg, "Email") && contains(msg, "required") {
+			log.Printf("auth register fail email=? code=%s ip=%s", utils.ErrInvalidEmail, c.ClientIP())
 			utils.RespondError(c, http.StatusBadRequest, utils.ErrInvalidEmail, utils.MessageForCode(utils.ErrInvalidEmail))
 			return
 		}
 		if contains(msg, "Password") {
+			log.Printf("auth register fail email=%s code=%s ip=%s", req.Email, utils.ErrWeakPassword, c.ClientIP())
 			utils.RespondError(c, http.StatusBadRequest, utils.ErrWeakPassword, utils.MessageForCode(utils.ErrWeakPassword))
 			return
 		}
 		if contains(msg, "Visibility") || contains(msg, "visibility") {
+			log.Printf("auth register fail email=%s code=%s ip=%s", req.Email, utils.ErrInvalidVisibility, c.ClientIP())
 			utils.RespondError(c, http.StatusBadRequest, utils.ErrInvalidVisibility, utils.MessageForCode(utils.ErrInvalidVisibility))
 			return
 		}
+		log.Printf("auth register fail email=%s code=bad_request ip=%s", req.Email, c.ClientIP())
 		utils.RespondError(c, http.StatusBadRequest, "bad_request", "Request inválido: "+msg)
 		return
 	}
@@ -163,13 +180,16 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	if err != nil {
 		if se, ok := err.(*service.ServiceError); ok {
 			status := utils.StatusForCode(se.Code)
+			log.Printf("auth register fail email=%s code=%s ip=%s", req.Email, se.Code, c.ClientIP())
 			utils.RespondError(c, status, se.Code, se.Message)
 			return
 		}
+		log.Printf("auth register fail email=%s code=internal_error ip=%s err=%v", req.Email, c.ClientIP(), err)
 		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
 		return
 	}
 
+	log.Printf("auth register ok id=%s email=%s ip=%s", user.ID, user.Email, c.ClientIP())
 	resp := registerResponse{
 		ID:        user.ID,
 		Email:     user.Email,

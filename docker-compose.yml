@@ -88,7 +88,7 @@ services:
       SOCIAL_PORT: 8083
       AUTH_BASE_URL: http://auth:8080
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
-      CALENDAR_MODE: mock
+      CALENDAR_MODE: ${CALENDAR_MODE:-mock}
       STREAM_API_KEY: ${STREAM_API_KEY}
       STREAM_API_SECRET: ${STREAM_API_SECRET:-dev-stream-secret-change-me}
       STREAM_MODE: ${STREAM_MODE:-mock}

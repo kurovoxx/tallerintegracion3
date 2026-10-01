@@ -18,6 +18,7 @@ var (
 	ErrInvalidSprintStatus   = errors.New("invalid status: must be sin_empezar, en_proceso or listo")
 	ErrSprintTaskNotFound    = errors.New("sprint task not found")
 	ErrSheetNotFound         = errors.New("sheet not found in group")
+	ErrLastSheet              = errors.New("no puedes eliminar el único sprint del grupo")
 	ErrInvalidSprintTaskID   = errors.New("invalid sprint task ID")
 	ErrInvalidSheetID        = errors.New("invalid sheet ID")
 	ErrAssigneeRequired      = errors.New("assigned_to is required")
@@ -46,6 +47,8 @@ type SprintService struct {
 // *repository.SprintRepository es la implementación real (Postgres);
 // MemoryTasksStore, la de tests.
 type SprintRepo interface {
+	DeleteSheet(ctx context.Context, arg sqlc.DeleteSheetParams) (sqlc.SocialSprintSheet, error)
+	UpdateSheet(ctx context.Context, arg sqlc.UpdateSheetParams) (sqlc.SocialSprintSheet, error)
 	GetGroupByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialGroup, error)
 	IsMember(ctx context.Context, groupID, userID pgtype.UUID) (bool, error)
 	GetSheetByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialSprintSheet, error)

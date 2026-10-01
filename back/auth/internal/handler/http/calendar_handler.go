@@ -20,6 +20,9 @@ func NewCalendarHandler(svc *service.CalendarOAuthService) *CalendarHandler {
 
 type calendarConnectRequest struct {
 	OAuthCode string `json:"oauth_code"`
+	// redirect_uri opcional: flujo desktop RFC 8252 con puerto efímero.
+	// Se valida con allowlist; vacío = redirect configurado del servidor.
+	RedirectURI *string `json:"redirect_uri"`
 }
 
 type calendarConnectResponse struct {
@@ -44,11 +47,15 @@ func (h *CalendarHandler) Connect(c *gin.Context) {
 		utils.RespondError(c, http.StatusBadRequest, "bad_request", "oauth_code requerido")
 		return
 	}
-	err := h.svc.Connect(c.Request.Context(), userID, req.OAuthCode)
+	var redirectURI string
+	if req.RedirectURI != nil {
+		redirectURI = *req.RedirectURI
+	}
+	err := h.svc.ConnectWithRedirect(c.Request.Context(), userID, req.OAuthCode, redirectURI)
 	if err != nil {
 		if se, ok := err.(*service.ServiceError); ok {
 			switch se.Code {
-			case "bad_request":
+			case "bad_request", "invalid_redirect_uri":
 				utils.RespondError(c, http.StatusBadRequest, se.Code, se.Message)
 				return
 			case "invalid_oauth_code":
@@ -69,4 +76,25 @@ func (h *CalendarHandler) Connect(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, calendarConnectResponse{Connected: true})
+}
+
+// Status responde GET /auth/google-calendar/status con {connected,
+// external_email?}. Nunca expone access/refresh tokens ni secretos.
+func (h *CalendarHandler) Status(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok || userID == "" {
+		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		return
+	}
+	status, err := h.svc.GetCalendarConnectionStatus(c.Request.Context(), userID)
+	if err != nil {
+		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "No se pudo consultar Calendar")
+		return
+	}
+	c.Header("Cache-Control", "private, no-store")
+	if status.ExternalEmail != nil && *status.ExternalEmail != "" {
+		c.JSON(http.StatusOK, gin.H{"connected": status.Connected, "external_email": *status.ExternalEmail})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"connected": status.Connected})
 }

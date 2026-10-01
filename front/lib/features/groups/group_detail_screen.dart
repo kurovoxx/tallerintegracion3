@@ -518,36 +518,8 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
     final saved = await showNeobrutalistDialog<bool>(
       context: context,
       dialog: StatefulBuilder(
-        builder: (dialogContext, setD) => NeobrutalistDialog(
-          title: 'Configurar Discord',
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const AppFieldLabel('NOMBRE DEL SERVIDOR'),
-              const SizedBox(height: AppDimens.spaceSm),
-              TextField(
-                controller: serverCtrl,
-                decoration: appInputDecoration('Ej. Sigma Academy'),
-              ),
-              const SizedBox(height: AppDimens.spaceMd),
-              const AppFieldLabel('ENLACE DE INVITACIÓN'),
-              const SizedBox(height: AppDimens.spaceSm),
-              TextField(
-                controller: inviteCtrl,
-                decoration: appInputDecoration('https://discord.gg/...'),
-              ),
-              const SizedBox(height: AppDimens.spaceMd),
-              const AppFieldLabel('WEBHOOK (OPCIONAL)'),
-              const SizedBox(height: AppDimens.spaceSm),
-              TextField(
-                controller: webhookCtrl,
-                decoration: appInputDecoration(
-                  'https://discord.com/api/webhooks/...',
-                ),
-              ),
-            ],
-          ),
+        builder: (ctx, setD) => NeobrutalistDialog(
+          title: 'CONFIGURAR DISCORD',
           cancelLabel: 'Cancelar',
           confirmLabel: saving ? 'Guardando...' : 'Guardar',
           closeOnConfirm: false,
@@ -585,9 +557,7 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
                         webhookUrl: webhook,
                       );
                     });
-                    if (dialogContext.mounted) {
-                      Navigator.of(dialogContext).pop(true);
-                    }
+                    if (ctx.mounted) Navigator.of(ctx).pop(true);
                   } on SocialApiException catch (_) {
                     if (!mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -596,11 +566,35 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
                         backgroundColor: AppColors.error,
                       ),
                     );
-                    if (dialogContext.mounted) {
-                      setD(() => saving = false);
-                    }
+                    setD(() => saving = false);
                   }
                 },
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const AppFieldLabel('NOMBRE DEL SERVIDOR'),
+              const SizedBox(height: 4),
+              TextField(
+                controller: serverCtrl,
+                decoration: appInputDecoration('Nombre del servidor'),
+              ),
+              const SizedBox(height: 8),
+              const AppFieldLabel('ENLACE DE INVITACIÓN'),
+              const SizedBox(height: 4),
+              TextField(
+                controller: inviteCtrl,
+                decoration: appInputDecoration('Enlace de invitación'),
+              ),
+              const SizedBox(height: 8),
+              const AppFieldLabel('WEBHOOK (OPCIONAL)'),
+              const SizedBox(height: 4),
+              TextField(
+                controller: webhookCtrl,
+                decoration: appInputDecoration('Webhook (opcional)'),
+              ),
+            ],
+          ),
         ),
       ),
     );

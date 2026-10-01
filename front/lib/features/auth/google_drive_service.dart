@@ -145,6 +145,7 @@ class GoogleDriveService {
   /// la URL trae el ?code= para copiar).
   /// Retorna código + redirect usada, para enviarla en connectDrive.
   /// null = usuario canceló en Google (?error=) o cerró el navegador.
+  /// Lanza LocalPortBusyException si no hay puerto libre.
   Future<DriveDesktopAuth?> getDesktopAuthCode({
     String? loginHint,
     String? scopes,
@@ -154,8 +155,9 @@ class GoogleDriveService {
         'GOOGLE_CLIENT_ID no configurado: rebuild con --dart-define=GOOGLE_CLIENT_ID=... (ver front/Dockerfile)',
       );
     }
-    final requested = (scopes ?? '').trim();
-    final scopeParam = requested.isEmpty ? _scopes : requested;
+    final scopeParam = (scopes ?? _scopes).trim().isEmpty
+        ? _scopes
+        : scopes!.trim();
     final hintParam = (loginHint != null && loginHint.trim().isNotEmpty)
         ? '&login_hint=${Uri.encodeComponent(loginHint.trim())}'
         : '';

@@ -34,9 +34,9 @@ Future<void> _openEditDialog(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
-/// Suelta el foco antes de pulsar Guardar: hacer pop del diálogo con un
-/// TextField enfocado dispara una aserción del framework solo bajo el
-/// test binding (en uso real el flujo ya está verificado manualmente).
+/// Suelta el foco antes de pulsar GUARDAR (marco canónico en mayúsculas):
+/// hacer pop del diálogo con un TextField enfocado dispara una aserción
+/// del framework solo bajo el test binding.
 Future<void> _tapGuardar(WidgetTester tester) async {
   FocusManager.instance.primaryFocus?.unfocus();
   await tester.pumpAndSettle();
@@ -134,12 +134,10 @@ void main() {
     await _openEditDialog(tester);
 
     expect(find.text('EDITAR TAREA'), findsOneWidget);
-    // El label del campo convive con la métrica "HORAS ASIGNADAS" del fondo.
-    expect(find.text('HORAS ASIGNADAS'), findsWidgets);
+    expect(find.text('Horas asignadas'), findsOneWidget);
     // Precargado con las horas actuales (estimated_hours real).
     expect(find.text('2.0'), findsOneWidget);
 
-    // TextField 0 = título, TextField 1 = horas asignadas.
     await tester.enterText(find.byType(TextField).at(1), '5.5');
     await _tapGuardar(tester);
 
