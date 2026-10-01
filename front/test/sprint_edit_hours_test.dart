@@ -34,13 +34,13 @@ Future<void> _openEditDialog(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
-/// Suelta el foco antes de pulsar Guardar: hacer pop del diálogo con un
-/// TextField enfocado dispara una aserción del framework solo bajo el
-/// test binding (en uso real el flujo ya está verificado manualmente).
+/// Suelta el foco antes de pulsar GUARDAR (marco canónico en mayúsculas):
+/// hacer pop del diálogo con un TextField enfocado dispara una aserción
+/// del framework solo bajo el test binding.
 Future<void> _tapGuardar(WidgetTester tester) async {
   FocusManager.instance.primaryFocus?.unfocus();
   await tester.pumpAndSettle();
-  await tester.tap(find.text('Guardar'));
+  await tester.tap(find.text('GUARDAR'));
   await tester.pumpAndSettle();
 }
 

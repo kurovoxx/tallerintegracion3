@@ -136,12 +136,18 @@ class GoogleDriveService {
   /// Retorna código + redirect real usado, para enviarlo en connectDrive.
   /// null = usuario canceló en Google (?error=) o cerró el navegador.
   /// Lanza LocalPortBusyException si no hay puerto libre.
-  Future<DriveDesktopAuth?> getDesktopAuthCode({String? loginHint}) async {
+  Future<DriveDesktopAuth?> getDesktopAuthCode({
+    String? loginHint,
+    String? scopes,
+  }) async {
     if (!isConfigured) {
       throw StateError(
         'GOOGLE_CLIENT_ID no configurado: rebuild con --dart-define=GOOGLE_CLIENT_ID=... (ver front/Dockerfile)',
       );
     }
+    final scopeParam = (scopes ?? _scopes).trim().isEmpty
+        ? _scopes
+        : scopes!.trim();
     final hintParam = (loginHint != null && loginHint.trim().isNotEmpty)
         ? '&login_hint=${Uri.encodeComponent(loginHint.trim())}'
         : '';
@@ -174,7 +180,7 @@ class GoogleDriveService {
     try {
       final redirectUri = 'http://127.0.0.1:$port/callback';
       final authUrl =
-          'https://accounts.google.com/o/oauth2/v2/auth?response_type=code&scope=$_scopes&access_type=offline&prompt=consent&client_id=$_clientId&redirect_uri=$redirectUri$hintParam';
+          'https://accounts.google.com/o/oauth2/v2/auth?response_type=code&scope=$scopeParam&access_type=offline&prompt=consent&client_id=$_clientId&redirect_uri=$redirectUri$hintParam';
       if (!await launchUrl(
         Uri.parse(authUrl),
         mode: LaunchMode.externalApplication,

@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/common_widgets.dart';
 import '../../core/models/social_models.dart';
 import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/neobrutalism.dart';
 import '../chat/group_chat_screen.dart';
 import '../workspace/kanban_screen.dart';
 import '../workspace/schedule_meeting_screen.dart';
@@ -513,96 +515,86 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
     final inviteCtrl = TextEditingController(text: _config?.inviteUrl ?? '');
     final webhookCtrl = TextEditingController(text: _config?.webhookUrl ?? '');
     var saving = false;
-    final saved = await showDialog<bool>(
+    final saved = await showNeobrutalistDialog<bool>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setD) => AlertDialog(
-          title: const Text(
-            'CONFIGURAR DISCORD',
-            style: TextStyle(fontWeight: FontWeight.w900),
+      dialog: StatefulBuilder(
+        builder: (ctx, setD) => NeobrutalistDialog(
+          title: 'CONFIGURAR DISCORD',
+          cancelLabel: 'Cancelar',
+          confirmLabel: saving ? 'Guardando...' : 'Guardar',
+          closeOnConfirm: false,
+          onConfirm: saving
+              ? null
+              : () async {
+                  final server = serverCtrl.text.trim();
+                  final invite = inviteCtrl.text.trim();
+                  if (server.isEmpty || invite.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Completa el nombre del servidor y la invitación.',
+                        ),
+                      ),
+                    );
+                    return;
+                  }
+                  setD(() => saving = true);
+                  try {
+                    final webhook = webhookCtrl.text.trim().isEmpty
+                        ? null
+                        : webhookCtrl.text.trim();
+                    await _social.updateDiscordConfig(
+                      groupId: widget.groupId!.trim(),
+                      serverName: server,
+                      inviteUrl: invite,
+                      webhookUrl: webhook,
+                    );
+                    if (!mounted) return;
+                    setState(() {
+                      _config = DiscordConfig(
+                        serverName: server,
+                        inviteUrl: invite,
+                        webhookUrl: webhook,
+                      );
+                    });
+                    if (ctx.mounted) Navigator.of(ctx).pop(true);
+                  } on SocialApiException catch (_) {
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('No se pudo guardar la integración.'),
+                        backgroundColor: AppColors.error,
+                      ),
+                    );
+                    setD(() => saving = false);
+                  }
+                },
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const AppFieldLabel('NOMBRE DEL SERVIDOR'),
+              const SizedBox(height: 4),
+              TextField(
+                controller: serverCtrl,
+                decoration: appInputDecoration('Nombre del servidor'),
+              ),
+              const SizedBox(height: 8),
+              const AppFieldLabel('ENLACE DE INVITACIÓN'),
+              const SizedBox(height: 4),
+              TextField(
+                controller: inviteCtrl,
+                decoration: appInputDecoration('Enlace de invitación'),
+              ),
+              const SizedBox(height: 8),
+              const AppFieldLabel('WEBHOOK (OPCIONAL)'),
+              const SizedBox(height: 4),
+              TextField(
+                controller: webhookCtrl,
+                decoration: appInputDecoration('Webhook (opcional)'),
+              ),
+            ],
           ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: serverCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Nombre del servidor',
-                  ),
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: inviteCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Enlace de invitación',
-                  ),
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: webhookCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Webhook (opcional)',
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Cancelar'),
-            ),
-            TextButton(
-              onPressed: saving
-                  ? null
-                  : () async {
-                      final server = serverCtrl.text.trim();
-                      final invite = inviteCtrl.text.trim();
-                      if (server.isEmpty || invite.isEmpty) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                              'Completa el nombre del servidor y la invitación.',
-                            ),
-                          ),
-                        );
-                        return;
-                      }
-                      setD(() => saving = true);
-                      try {
-                        final webhook = webhookCtrl.text.trim().isEmpty
-                            ? null
-                            : webhookCtrl.text.trim();
-                        await _social.updateDiscordConfig(
-                          groupId: widget.groupId!.trim(),
-                          serverName: server,
-                          inviteUrl: invite,
-                          webhookUrl: webhook,
-                        );
-                        if (!mounted) return;
-                        setState(() {
-                          _config = DiscordConfig(
-                            serverName: server,
-                            inviteUrl: invite,
-                            webhookUrl: webhook,
-                          );
-                        });
-                        if (ctx.mounted) Navigator.of(ctx).pop(true);
-                      } on SocialApiException catch (_) {
-                        if (!mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('No se pudo guardar la integración.'),
-                            backgroundColor: AppColors.error,
-                          ),
-                        );
-                        setD(() => saving = false);
-                      }
-                    },
-              child: Text(saving ? 'Guardando...' : 'Guardar'),
-            ),
-          ],
         ),
       ),
     );

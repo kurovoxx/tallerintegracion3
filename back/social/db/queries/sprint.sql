@@ -8,8 +8,8 @@ WHERE group_id = $1
 ORDER BY created_at ASC;
 
 -- name: CreateSheet :one
-INSERT INTO social.sprint_sheets (group_id, name)
-VALUES ($1, $2)
+INSERT INTO social.sprint_sheets (group_id, name, period_start, period_end)
+VALUES ($1, $2, $3, $4)
 RETURNING *;
 
 -- name: GetSprintSheetTaskByID :one
@@ -47,4 +47,14 @@ RETURNING *;
 -- name: DeleteSprintSheetTask :one
 DELETE FROM social.sprint_sheet_tasks
 WHERE id = $1
+RETURNING *;
+
+-- name: UpdateSheet :one
+UPDATE social.sprint_sheets SET name = $3, period_start = $4, period_end = $5
+WHERE id = $1 AND group_id = $2
+RETURNING *;
+
+-- name: DeleteSheet :one
+DELETE FROM social.sprint_sheets
+WHERE id = $1 AND group_id = $2
 RETURNING *;

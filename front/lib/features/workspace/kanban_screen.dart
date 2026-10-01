@@ -197,31 +197,28 @@ class _KanbanScreenState extends State<KanbanScreen> {
     if (members == null) return;
     final ctrl = TextEditingController();
     GroupMember? selected;
-    final ok = await showDialog<bool>(
+    final ok = await showNeobrutalistDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text(
-          'NUEVA TAREA',
-          style: TextStyle(fontWeight: FontWeight.w900),
-        ),
+      dialog: NeobrutalistDialog(
+        title: 'NUEVA TAREA',
+        confirmLabel: 'Crear',
+        cancelLabel: 'Cancelar',
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop(true),
         content: StatefulBuilder(
           builder: (context, setDialogState) => Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              const AppFieldLabel('Título (requerido)'),
+              const SizedBox(height: 4),
               TextField(
                 controller: ctrl,
-                decoration: const InputDecoration(
-                  labelText: 'Título (requerido)',
-                ),
+                decoration: appInputDecoration('Título (requerido)'),
               ),
               const SizedBox(height: 8),
-              const Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Responsable (opcional)',
-                  style: TextStyle(fontSize: 12),
-                ),
-              ),
+              const AppFieldLabel('Responsable (opcional)'),
+              const SizedBox(height: 4),
               DropdownButton<GroupMember?>(
                 value: selected,
                 hint: const Text('Sin asignar'),
@@ -242,16 +239,6 @@ class _KanbanScreenState extends State<KanbanScreen> {
             ],
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Crear'),
-          ),
-        ],
       ),
     );
     final title = ctrl.text.trim();
@@ -295,28 +282,28 @@ class _KanbanScreenState extends State<KanbanScreen> {
     if (!_isRealGroup) return;
     final ctrl = TextEditingController(text: title);
     String next = status;
-    final ok = await showDialog<bool>(
+    final ok = await showNeobrutalistDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text(
-          'EDITAR TAREA',
-          style: TextStyle(fontWeight: FontWeight.w900),
-        ),
+      dialog: NeobrutalistDialog(
+        title: 'EDITAR TAREA',
+        confirmLabel: 'Guardar',
+        cancelLabel: 'Cancelar',
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop(true),
         content: StatefulBuilder(
           builder: (context, setDialogState) => Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              const AppFieldLabel('Título (requerido)'),
+              const SizedBox(height: 4),
               TextField(
                 controller: ctrl,
-                decoration: const InputDecoration(
-                  labelText: 'Título (requerido)',
-                ),
+                decoration: appInputDecoration('Título (requerido)'),
               ),
               const SizedBox(height: 8),
-              const Align(
-                alignment: Alignment.centerLeft,
-                child: Text('Estado', style: TextStyle(fontSize: 12)),
-              ),
+              const AppFieldLabel('Estado'),
+              const SizedBox(height: 4),
               DropdownButton<String>(
                 value: const ['todo', 'in_progress', 'done'].contains(next)
                     ? next
@@ -337,16 +324,6 @@ class _KanbanScreenState extends State<KanbanScreen> {
             ],
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Guardar'),
-          ),
-        ],
       ),
     );
     final newTitle = ctrl.text.trim();
@@ -384,24 +361,16 @@ class _KanbanScreenState extends State<KanbanScreen> {
     required String title,
   }) async {
     if (!_isRealGroup) return;
-    final ok = await showDialog<bool>(
+    final ok = await showNeobrutalistDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text(
-          'ELIMINAR TAREA',
-          style: TextStyle(fontWeight: FontWeight.w900),
-        ),
+      dialog: NeobrutalistDialog(
+        title: 'ELIMINAR TAREA',
+        confirmLabel: 'Eliminar',
+        cancelLabel: 'Cancelar',
+        confirmVariant: NeobrutalistButtonVariant.danger,
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop(true),
         content: Text('¿Eliminar "$title"?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Eliminar'),
-          ),
-        ],
       ),
     );
     if (ok != true || !mounted) return;

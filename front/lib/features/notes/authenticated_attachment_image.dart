@@ -12,11 +12,13 @@ class AuthenticatedAttachmentImage extends StatefulWidget {
     required this.fit,
     required this.onOpenDrive,
     this.client,
+    this.debugLabel = 'ATTACHMENT',
   });
   final Uri contentUri;
   final BoxFit fit;
   final VoidCallback onOpenDrive;
   final http.Client? client;
+  final String debugLabel;
 
   @override
   State<AuthenticatedAttachmentImage> createState() =>
@@ -41,6 +43,13 @@ class _AuthenticatedAttachmentImageState
     }
   }
 
+  String get _attachmentId {
+    final segs = widget.contentUri.pathSegments;
+    final idx = segs.indexOf('attachments');
+    if (idx >= 0 && idx + 1 < segs.length) return segs[idx + 1];
+    return segs.isNotEmpty ? segs.last : '';
+  }
+
   Future<Uint8List> _load() async {
     final client = widget.client ?? http.Client();
     try {
@@ -51,8 +60,12 @@ class _AuthenticatedAttachmentImageState
             .get(widget.contentUri, headers: {'Authorization': 'Bearer $token'})
             .timeout(const Duration(seconds: 30));
       });
+      final mime = response.headers['content-type'] ?? '';
+      debugPrint(
+        '[Notes] ${widget.debugLabel} attachment=$_attachmentId status=${response.statusCode} mime=$mime',
+      );
       if (response.statusCode != 200 ||
-          !(response.headers['content-type'] ?? '').startsWith('image/') ||
+          !mime.startsWith('image/') ||
           response.bodyBytes.length > 10 * 1024 * 1024) {
         throw StateError('Imagen no disponible');
       }

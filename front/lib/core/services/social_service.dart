@@ -334,6 +334,74 @@ class SocialService {
     if (res.statusCode != 200) throw _toError(res);
   }
 
+  Future<List<SprintSheetInfo>> listSprintSheets(String groupId) async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .get(
+            Uri.parse('$baseUrl/groups/$groupId/sprint-sheets'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) throw _toError(res);
+    final data = (jsonDecode(res.body) as Map<String, dynamic>)['data'] as List;
+    return data
+        .map((e) => SprintSheetInfo.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<SprintSheetInfo> saveSprintSheet({
+    required String groupId,
+    String? sheetId,
+    required String name,
+    required String start,
+    required String end,
+  }) async {
+    final url = Uri.parse(
+      '$baseUrl/groups/$groupId/sprint-sheets${sheetId == null ? '' : '/$sheetId'}',
+    );
+    final body = jsonEncode({
+      'name': name.trim(),
+      'period_start': start,
+      'period_end': end,
+    });
+    final res = await AuthedHttp.run(
+      () =>
+          (sheetId == null
+                  ? _client.post(url, headers: _headers(json: true), body: body)
+                  : _client.patch(
+                      url,
+                      headers: _headers(json: true),
+                      body: body,
+                    ))
+              .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200 && res.statusCode != 201) throw _toError(res);
+    return SprintSheetInfo.fromJson(
+      (jsonDecode(res.body) as Map<String, dynamic>)['data']
+          as Map<String, dynamic>,
+    );
+  }
+
+  /// DELETE /groups/:id/sprint-sheets/:sheetId. El backend protege el
+  /// último sprint y valida grupo; el error humano llega vía _toError.
+  Future<void> deleteSprintSheet({
+    required String groupId,
+    required String sheetId,
+  }) async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .delete(
+            Uri.parse(
+              '$baseUrl/groups/${groupId.trim()}/sprint-sheets/${sheetId.trim()}',
+            ),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200 && res.statusCode != 204) throw _toError(res);
+  }
+
   // GET /groups/:id/sprint-sheet?status=&priority=&sheet_id=
   Future<List<SprintTask>> listSprintTasks(String groupId) async {
     final id = groupId.trim();
@@ -359,6 +427,7 @@ class SocialService {
   // OJO: assigned_to es requerido por el backend (sprint_handler.go:27).
   Future<SprintTask> createSprintTask({
     required String groupId,
+    String? sheetId,
     required String title,
     required String assignedTo,
     String? priority,
@@ -367,6 +436,7 @@ class SocialService {
   }) async {
     final payload = <String, dynamic>{
       'title': title.trim(),
+      'sheet_id': ?sheetId,
       'assigned_to': assignedTo.trim(),
       if (priority != null && priority.isNotEmpty) 'priority': priority,
       if (status != null && status.isNotEmpty) 'status': status,
@@ -549,11 +619,14 @@ class SocialService {
     required String title,
     String? description,
     required DateTime scheduledAtUtc,
+    List<String> attendees = const [],
   }) async {
     final payload = <String, dynamic>{
       'title': title.trim(),
       if (description != null && description.trim().isNotEmpty)
         'description': description.trim(),
+      if (attendees.isNotEmpty)
+        'attendees': normalizeMeetingAttendees(attendees),
       'scheduled_at': scheduledAtUtc.toUtc().toIso8601String(),
     };
     debugPrint('[Social] creando reunión en grupo $groupId');
@@ -632,4 +705,21 @@ class SocialService {
   void dispose() {
     _client.close();
   }
+}
+
+/// Mismo formato, normalización y máximo que parseAttendees del servicio Social.
+List<String> normalizeMeetingAttendees(Iterable<String> values) {
+  final emails = values
+      .map((e) => e.trim().toLowerCase())
+      .where((e) => e.isNotEmpty)
+      .toSet()
+      .toList();
+  final pattern = RegExp(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$');
+  if (emails.any((e) => e.length > 255 || !pattern.hasMatch(e))) {
+    throw const FormatException('Ingresa un correo válido.');
+  }
+  if (emails.length > 50) {
+    throw const FormatException('Puedes invitar hasta 50 personas.');
+  }
+  return emails;
 }
