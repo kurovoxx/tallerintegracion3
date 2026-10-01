@@ -201,6 +201,7 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 		protected.GET("/groups/:id/sprint-sheets", sprintH.ListSheets)
 		protected.POST("/groups/:id/sprint-sheets", sprintH.CreateSheet)
 		protected.PATCH("/groups/:id/sprint-sheets/:sheetId", sprintH.UpdateSheet)
+		protected.DELETE("/groups/:id/sprint-sheets/:sheetId", sprintH.DeleteSheet)
 		protected.POST("/groups/:id/sprint-sheet", sprintH.CreateSprintTask)
 		protected.GET("/groups/:id/sprint-sheet", sprintH.ListSprintTasks)
 		protected.PATCH("/groups/:id/sprint-sheet/:taskId", sprintH.UpdateSprintTask)

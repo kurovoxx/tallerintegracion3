@@ -89,6 +89,36 @@ func (s *SprintService) UpdateSprintSheet(ctx context.Context, groupID, userID, 
 	return value, err
 }
 
+// DeleteSprintSheet borra la hoja con la MISMA autorización que crear y
+// editar (solo membresía, vía sheetAccess). PostgreSQL resuelve la cascada
+// (tareas y daily hours) por ON DELETE CASCADE; no hay deletes manuales.
+// Nunca deja al grupo sin hojas: con una sola responde ErrLastSheet.
+func (s *SprintService) DeleteSprintSheet(ctx context.Context, groupID, userID, sheetID string) (sqlc.SocialSprintSheet, error) {
+	gid, err := s.sheetAccess(ctx, groupID, userID)
+	if err != nil {
+		return sqlc.SocialSprintSheet{}, err
+	}
+	if strings.TrimSpace(sheetID) == "" {
+		return sqlc.SocialSprintSheet{}, ErrInvalidSheetID
+	}
+	value, err := s.resolveSheet(ctx, gid, sheetID)
+	if err != nil {
+		return value, err
+	}
+	sheets, err := s.repo.ListSheetsByGroup(ctx, gid)
+	if err != nil {
+		return sqlc.SocialSprintSheet{}, err
+	}
+	if len(sheets) <= 1 {
+		return sqlc.SocialSprintSheet{}, ErrLastSheet
+	}
+	deleted, err := s.repo.DeleteSheet(ctx, sqlc.DeleteSheetParams{ID: value.ID, GroupID: gid})
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = ErrSheetNotFound
+	}
+	return deleted, err
+}
+
 func applySheetPatch(value *sqlc.SocialSprintSheet, patch SheetPatch) error {
 	if patch.Name != nil {
 		value.Name = strings.TrimSpace(*patch.Name)

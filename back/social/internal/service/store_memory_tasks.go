@@ -357,3 +357,28 @@ func (m *MemorySprintStore) UpdateSheet(_ context.Context, arg sqlc.UpdateSheetP
 	m.sheets[uuidStr(s.ID)] = s
 	return s, nil
 }
+
+func (m *MemorySprintStore) DeleteSheet(_ context.Context, arg sqlc.DeleteSheetParams) (sqlc.SocialSprintSheet, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sheets[uuidStr(arg.ID)]
+	if !ok || s.GroupID != arg.GroupID {
+		return sqlc.SocialSprintSheet{}, pgx.ErrNoRows
+	}
+	delete(m.sheets, uuidStr(arg.ID))
+	// Cascada en memoria (paridad con ON DELETE CASCADE de Postgres):
+	// tareas de la hoja y sus daily hours.
+	for tid, t := range m.tasks {
+		if uuidStr(t.SheetID) != uuidStr(arg.ID) {
+			continue
+		}
+		delete(m.tasks, tid)
+		for hid, h := range m.hours {
+			if uuidStr(h.TaskID) == tid {
+				delete(m.hourKey, uuidStr(h.TaskID)+"|"+logDateStr(h.LogDate))
+				delete(m.hours, hid)
+			}
+		}
+	}
+	return s, nil
+}

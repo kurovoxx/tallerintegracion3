@@ -383,6 +383,25 @@ class SocialService {
     );
   }
 
+  /// DELETE /groups/:id/sprint-sheets/:sheetId. El backend protege el
+  /// último sprint y valida grupo; el error humano llega vía _toError.
+  Future<void> deleteSprintSheet({
+    required String groupId,
+    required String sheetId,
+  }) async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .delete(
+            Uri.parse(
+              '$baseUrl/groups/${groupId.trim()}/sprint-sheets/${sheetId.trim()}',
+            ),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200 && res.statusCode != 204) throw _toError(res);
+  }
+
   // GET /groups/:id/sprint-sheet?status=&priority=&sheet_id=
   Future<List<SprintTask>> listSprintTasks(String groupId) async {
     final id = groupId.trim();

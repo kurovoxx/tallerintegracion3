@@ -298,3 +298,21 @@ func (q *Queries) UpdateSheet(ctx context.Context, arg UpdateSheetParams) (Socia
 	err := row.Scan(&s.ID, &s.GroupID, &s.Name, &s.PeriodStart, &s.PeriodEnd, &s.CreatedAt)
 	return s, err
 }
+
+const deleteSheet = `-- name: DeleteSheet :one
+DELETE FROM social.sprint_sheets
+WHERE id = $1 AND group_id = $2
+RETURNING id, group_id, name, period_start, period_end, created_at
+`
+
+type DeleteSheetParams struct {
+	ID      pgtype.UUID
+	GroupID pgtype.UUID
+}
+
+func (q *Queries) DeleteSheet(ctx context.Context, arg DeleteSheetParams) (SocialSprintSheet, error) {
+	row := q.db.QueryRow(ctx, deleteSheet, arg.ID, arg.GroupID)
+	var s SocialSprintSheet
+	err := row.Scan(&s.ID, &s.GroupID, &s.Name, &s.PeriodStart, &s.PeriodEnd, &s.CreatedAt)
+	return s, err
+}

@@ -24,6 +24,7 @@ func TestSprintSheetRoutes(t *testing.T) {
 	r.GET("/groups/:id/sprint-sheets", h.ListSheets)
 	r.POST("/groups/:id/sprint-sheets", h.CreateSheet)
 	r.PATCH("/groups/:id/sprint-sheets/:sheetId", h.UpdateSheet)
+	r.DELETE("/groups/:id/sprint-sheets/:sheetId", h.DeleteSheet)
 	call := func(method, path, uid, body string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(method, path, bytes.NewBufferString(body))
@@ -63,6 +64,33 @@ func TestSprintSheetRoutes(t *testing.T) {
 	}
 	if w := call("PATCH", path+"/"+body.Data.ID, user, `{"period_end":"2020-01-01"}`); w.Code != 400 {
 		t.Fatal(w.Code)
+	}
+	if w := call("GET", path, user, ""); w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	// DELETE: último sprint protegido con mensaje humano.
+	if w := call("DELETE", path+"/"+body.Data.ID, user, ""); w.Code != 400 {
+		t.Fatalf("último sprint: esperado 400, got %d %s", w.Code, w.Body.String())
+	} else if got := w.Body.String(); !bytes.Contains([]byte(got), []byte("único sprint")) {
+		t.Fatalf("mensaje humano esperado, got %s", got)
+	}
+	if w := call("DELETE", path+"/"+body.Data.ID, outsider, ""); w.Code != 403 {
+		t.Fatal(w.Code)
+	}
+	w2 := call("POST", path, user, `{"name":"Sprint 3","period_start":"2026-09-30","period_end":"2026-10-15"}`)
+	if w2.Code != 201 {
+		t.Fatal(w2.Code, w2.Body.String())
+	}
+	var second struct {
+		Data struct {
+			ID string `json:"id"`
+		}
+	}
+	if err := json.Unmarshal(w2.Body.Bytes(), &second); err != nil {
+		t.Fatal(err)
+	}
+	if w := call("DELETE", path+"/"+second.Data.ID, user, ""); w.Code != 200 {
+		t.Fatalf("borrar segundo: %d %s", w.Code, w.Body.String())
 	}
 	if w := call("GET", path, user, ""); w.Code != 200 {
 		t.Fatal(w.Code)

@@ -23,15 +23,19 @@ func sheetJSON(s sqlc.SocialSprintSheet) gin.H {
 }
 func sheetError(c *gin.Context, err error) {
 	code, status := "internal", http.StatusInternalServerError
+	message := "No se pudo completar la operación del sprint."
 	switch {
 	case errors.Is(err, service.ErrForbidden):
 		code, status = "forbidden", 403
 	case errors.Is(err, service.ErrSheetNotFound), errors.Is(err, service.ErrGroupNotFound):
 		code, status = "not_found", 404
+	case errors.Is(err, service.ErrLastSheet):
+		code, status = "invalid_body", 400
+		message = "No puedes eliminar el único sprint del grupo."
 	case errors.Is(err, service.ErrInvalidSheet), errors.Is(err, service.ErrInvalidSheetID), errors.Is(err, service.ErrInvalidGroupID), errors.Is(err, service.ErrInvalidUserID):
 		code, status = "invalid_body", 400
 	}
-	c.JSON(status, gin.H{"error": gin.H{"code": code, "message": "No se pudo completar la operación del sprint."}})
+	c.JSON(status, gin.H{"error": gin.H{"code": code, "message": message}})
 }
 func (h *SprintHandler) ListSheets(c *gin.Context) {
 	uid, ok := middleware.GetUserID(c)
@@ -52,6 +56,19 @@ func (h *SprintHandler) ListSheets(c *gin.Context) {
 }
 func (h *SprintHandler) CreateSheet(c *gin.Context) { h.writeSheet(c, false) }
 func (h *SprintHandler) UpdateSheet(c *gin.Context) { h.writeSheet(c, true) }
+func (h *SprintHandler) DeleteSheet(c *gin.Context) {
+	uid, ok := middleware.GetUserID(c)
+	if !ok {
+		c.Status(401)
+		return
+	}
+	sheet, err := h.svc.DeleteSprintSheet(c.Request.Context(), c.Param("id"), uid, c.Param("sheetId"))
+	if err != nil {
+		sheetError(c, err)
+		return
+	}
+	c.JSON(200, gin.H{"data": sheetJSON(sheet)})
+}
 func (h *SprintHandler) writeSheet(c *gin.Context, update bool) {
 	uid, ok := middleware.GetUserID(c)
 	if !ok {

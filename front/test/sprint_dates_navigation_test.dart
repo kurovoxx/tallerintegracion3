@@ -130,4 +130,182 @@ void main() {
       await t.pumpWidget(const SizedBox());
     });
   }
+
+  testWidgets('Eliminar sprint con confirmación y reselección vecina', (t) async {
+    SharedPreferences.setMockInitialValues({});
+    await SessionManager.saveSession('test', {'id': 'u'});
+    const group = '11111111-1111-1111-1111-111111111111';
+    var sheets = [
+      {
+        'id': 's1',
+        'name': 'Sprint 1',
+        'period_start': '2026-10-01',
+        'period_end': '2026-10-05',
+      },
+      {
+        'id': 's2',
+        'name': 'Sprint 2',
+        'period_start': '2026-10-06',
+        'period_end': '2026-10-10',
+      },
+      {
+        'id': 's3',
+        'name': 'Sprint 3',
+        'period_start': '2026-10-11',
+        'period_end': '2026-10-15',
+      },
+    ];
+    final deletedIds = <String>[];
+    final service = SocialService(
+      client: MockClient((r) async {
+        Object body = {};
+        if (r.method == 'DELETE') {
+          final id = r.url.pathSegments.last;
+          if (sheets.length <= 1) {
+            return http.Response(
+              jsonEncode({
+                'error': {
+                  'code': 'invalid_body',
+                  'message': 'No puedes eliminar el único sprint del grupo.',
+                },
+              }),
+              400,
+              headers: {'content-type': 'application/json'},
+            );
+          }
+          sheets.removeWhere((s) => s['id'] == id);
+          deletedIds.add(id);
+          body = {
+            'data': {'id': id, 'name': 'borrado'},
+          };
+        } else if (r.url.path.endsWith('/workspace')) {
+          body = {
+            'group': {'id': group},
+            'sprint_sheet': {'sheets': sheets, 'tasks': []},
+          };
+        } else if (r.url.path.endsWith('/members')) {
+          body = [
+            {'user_id': 'u', 'display_name': 'Persona'},
+          ];
+        } else if (r.url.path.endsWith('/hours')) {
+          body = {'data': []};
+        }
+        return http.Response(
+          jsonEncode(body),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }),
+    );
+    addTearDown(service.dispose);
+    addTearDown(SessionManager.clear);
+    t.view.physicalSize = const Size(1200, 1000);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.resetPhysicalSize);
+    addTearDown(t.view.resetDevicePixelRatio);
+    await t.pumpWidget(
+      MaterialApp(
+        home: SprintSheetScreen(groupId: group, service: service),
+      ),
+    );
+    await t.pumpAndSettle();
+    // X visible con 3 sprints.
+    expect(find.byKey(const ValueKey('delete-sheet-s1')), findsOneWidget);
+    expect(find.byKey(const ValueKey('delete-sheet-s2')), findsOneWidget);
+    expect(find.byKey(const ValueKey('delete-sheet-s3')), findsOneWidget);
+    // 12. Cancelar no elimina nada.
+    await t.tap(find.byKey(const ValueKey('delete-sheet-s3')));
+    await t.pumpAndSettle();
+    expect(find.text('ELIMINAR SPRINT'), findsOneWidget);
+    expect(
+      find.textContaining('También se eliminarán sus tareas'),
+      findsOneWidget,
+    );
+    await t.tap(find.text('CANCELAR'));
+    await t.pumpAndSettle();
+    expect(deletedIds, isEmpty);
+    expect(find.byKey(const ValueKey('delete-sheet-s3')), findsOneWidget);
+    // 10. Borrar el activo (Sprint 2) selecciona al siguiente (Sprint 3).
+    await t.tap(find.text('SPRINT 2'));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const ValueKey('delete-sheet-s2')));
+    await t.pumpAndSettle();
+    await t.tap(find.text('ELIMINAR'));
+    await t.pumpAndSettle();
+    expect(deletedIds, ['s2']);
+    expect(find.byKey(const ValueKey('delete-sheet-s2')), findsNothing);
+    // 11. Borrar Sprint 1 con otro existente funciona y no renombra.
+    await t.tap(find.byKey(const ValueKey('delete-sheet-s1')));
+    await t.pumpAndSettle();
+    await t.tap(find.text('ELIMINAR'));
+    await t.pumpAndSettle();
+    expect(deletedIds, ['s2', 's1']);
+    expect(find.text('SPRINT 3'), findsOneWidget);
+    expect(find.text('SPRINT 1'), findsNothing);
+    // 13. Recargar confirma la eliminación.
+    await t.pumpWidget(const SizedBox());
+    await t.pumpWidget(
+      MaterialApp(
+        home: SprintSheetScreen(groupId: group, service: service),
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(find.byKey(const ValueKey('delete-sheet-s2')), findsNothing);
+    expect(find.byKey(const ValueKey('delete-sheet-s1')), findsNothing);
+    expect(find.text('SPRINT 3'), findsOneWidget);
+    await t.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('Sprint único no ofrece eliminar', (t) async {
+    SharedPreferences.setMockInitialValues({});
+    await SessionManager.saveSession('test', {'id': 'u'});
+    const group = '11111111-1111-1111-1111-111111111111';
+    final service = SocialService(
+      client: MockClient((r) async {
+        Object body = {};
+        if (r.url.path.endsWith('/workspace')) {
+          body = {
+            'group': {'id': group},
+            'sprint_sheet': {
+              'sheets': [
+                {
+                  'id': 'solo',
+                  'name': 'Sprint 1',
+                  'period_start': '2026-10-01',
+                  'period_end': '2026-10-05',
+                },
+              ],
+              'tasks': [],
+            },
+          };
+        } else if (r.url.path.endsWith('/members')) {
+          body = [
+            {'user_id': 'u', 'display_name': 'Persona'},
+          ];
+        } else if (r.url.path.endsWith('/hours')) {
+          body = {'data': []};
+        }
+        return http.Response(
+          jsonEncode(body),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }),
+    );
+    addTearDown(service.dispose);
+    addTearDown(SessionManager.clear);
+    t.view.physicalSize = const Size(1200, 1000);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.resetPhysicalSize);
+    addTearDown(t.view.resetDevicePixelRatio);
+    await t.pumpWidget(
+      MaterialApp(
+        home: SprintSheetScreen(groupId: group, service: service),
+      ),
+    );
+    await t.pumpAndSettle();
+    expect(find.byKey(const ValueKey('delete-sheet-solo')), findsNothing);
+    expect(find.text('SPRINT 1'), findsOneWidget);
+    await t.pumpWidget(const SizedBox());
+  });
 }

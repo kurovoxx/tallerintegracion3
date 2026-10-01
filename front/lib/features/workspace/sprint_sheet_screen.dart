@@ -1377,6 +1377,62 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     );
   }
 
+  /// Elimina la hoja con confirmación neobrutalista y reselección vecina:
+  /// siguiente si existe, si no anterior, nunca sin selección. La X solo se
+  /// muestra con 2+ sprints; el backend también protege el último.
+  Future<void> _confirmDeleteSheet(SprintSheetInfo sheet) async {
+    final groupId = widget.groupId!.trim();
+    final sheets = _realSheets;
+    if (sheets.length <= 1) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No puedes eliminar el único sprint del grupo.'),
+        ),
+      );
+      return;
+    }
+    final sure = await showNeobrutalistDialog<bool>(
+      context: context,
+      dialog: NeobrutalistDialog(
+        title: 'ELIMINAR SPRINT',
+        cancelLabel: 'CANCELAR',
+        confirmLabel: 'ELIMINAR',
+        confirmVariant: NeobrutalistButtonVariant.danger,
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop(true),
+        content: Text(
+          '¿Eliminar ${sheet.name}? También se eliminarán sus tareas y horas registradas.',
+          style: const TextStyle(
+            fontWeight: FontWeight.w600,
+            color: AppColors.text,
+          ),
+        ),
+      ),
+    );
+    // 12. Cancelar no elimina nada.
+    if (sure != true || !mounted || groupId != widget.groupId?.trim()) return;
+    final idx = sheets.indexWhere((s) => s.id == sheet.id);
+    final neighborId = idx >= 0 && idx < sheets.length - 1
+        ? sheets[idx + 1].id
+        : sheets[idx > 0 ? idx - 1 : 0].id;
+    try {
+      await _social.deleteSprintSheet(groupId: groupId, sheetId: sheet.id);
+      if (!mounted || groupId != widget.groupId?.trim()) return;
+      await _loadReal(selectId: neighborId);
+    } on SocialApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo eliminar el sprint.')),
+      );
+    }
+  }
+
   /// Acciones visibles para todas las hojas, incluida la primera sin fechas.
   Widget _buildRealSheetSelector() {
     final sheets = _realSheets;
@@ -1395,6 +1451,11 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                 .where((t) => t.sheetId == sheets[i].id)
                 .length,
             onTap: () => setState(() => _realSheetIndex = i),
+            // Sin trato especial para Sprint 1; con un solo sprint no hay X.
+            onDelete: sheets.length <= 1
+                ? null
+                : () => _confirmDeleteSheet(sheets[i]),
+            sheetId: sheets[i].id,
           ),
         ],
         const SizedBox(width: 8),
@@ -1854,6 +1915,8 @@ class _SprintChip extends StatelessWidget {
     required this.selected,
     required this.taskCount,
     required this.onTap,
+    this.onDelete,
+    this.sheetId,
   });
 
   final String label;
@@ -1861,6 +1924,12 @@ class _SprintChip extends StatelessWidget {
   final bool selected;
   final int taskCount;
   final VoidCallback onTap;
+
+  /// X pequeña integrada para eliminar. Null = sin X (último sprint).
+  final VoidCallback? onDelete;
+
+  /// Id para la key `delete-sheet-<id>` usada en tests.
+  final String? sheetId;
 
   @override
   Widget build(BuildContext context) {
@@ -1897,6 +1966,36 @@ class _SprintChip extends StatelessWidget {
                     : NeobrutalistTone.accent,
                 compact: true,
               ),
+              if (onDelete != null) ...[
+                const SizedBox(width: 6),
+                MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: GestureDetector(
+                    key: sheetId == null
+                        ? null
+                        : ValueKey('delete-sheet-$sheetId'),
+                    onTap: onDelete,
+                    child: Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: BoxDecoration(
+                        color: AppColors.surface,
+                        border: Border.all(
+                          color: AppColors.border,
+                          width: 1.5,
+                        ),
+                        borderRadius: BorderRadius.circular(
+                          AppDimens.radiusChip,
+                        ),
+                      ),
+                      child: const Icon(
+                        Icons.close_rounded,
+                        size: 12,
+                        color: AppColors.text,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

@@ -53,3 +53,8 @@ RETURNING *;
 UPDATE social.sprint_sheets SET name = $3, period_start = $4, period_end = $5
 WHERE id = $1 AND group_id = $2
 RETURNING *;
+
+-- name: DeleteSheet :one
+DELETE FROM social.sprint_sheets
+WHERE id = $1 AND group_id = $2
+RETURNING *;

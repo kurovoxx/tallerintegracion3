@@ -66,3 +66,7 @@ func (r *SprintRepository) DeleteTask(ctx context.Context, id pgtype.UUID) (sqlc
 func (r *SprintRepository) UpdateSheet(ctx context.Context, arg sqlc.UpdateSheetParams) (sqlc.SocialSprintSheet, error) {
 	return r.queries.UpdateSheet(ctx, arg)
 }
+
+func (r *SprintRepository) DeleteSheet(ctx context.Context, arg sqlc.DeleteSheetParams) (sqlc.SocialSprintSheet, error) {
+	return r.queries.DeleteSheet(ctx, arg)
+}
