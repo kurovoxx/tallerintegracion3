@@ -342,7 +342,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
             : _DriveStatus.error,
       );
       messenger.showSnackBar(SnackBar(content: Text(result.message)));
-    } catch (_) {
+    } catch (e) {
+      // Traza para diagnóstico (visible en terminal de `flutter run`).
+      // ignore: avoid_print
+      print('[DRIVE] fallo conectar: $e');
       if (!mounted || !_sameSession(revision)) return;
       setState(() => _driveStatus = _DriveStatus.error);
       messenger.showSnackBar(
@@ -409,14 +412,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _handleDisconnectDrive() async {
-    // El cierre local de Google no revoca la conexión que conserva el servidor.
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'Para desconectar Drive, revoca el acceso desde tu cuenta de Google.',
-        ),
-      ),
-    );
+    if (_driveStatus == _DriveStatus.connecting ||
+        _driveStatus == _DriveStatus.disconnecting) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _driveStatus = _DriveStatus.disconnecting);
+    try {
+      final token = SessionManager.token;
+      String message = 'Drive desconectado.';
+      if (token != null) {
+        message = await GoogleDriveService().disconnectDrive(
+          backendBaseUrl: authApiBaseUrl,
+          appAccessToken: token,
+        );
+      }
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text(message)));
+    } catch (_) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Drive desconectado localmente.')),
+      );
+    }
+    // Relee el estado real desde el backend (ya no hay pref local).
     await _restoreDriveStatus();
   }
 
@@ -529,12 +548,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
       onPressed: _handleShare,
     );
 
+    // Salida rápida para tests: un tap, sin diálogos ni scroll.
+    final quickLogoutButton = NeobrutalistIconButton(
+      icon: Icons.logout_rounded,
+      tooltip: 'Cerrar sesión',
+      onPressed: _handleLogout,
+    );
+
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Expanded(child: titleBlock),
         const SizedBox(width: AppDimens.spaceSm),
         shareButton,
+        const SizedBox(width: AppDimens.spaceSm),
+        quickLogoutButton,
       ],
     );
   }
@@ -1092,6 +1120,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 variant: NeobrutalistButtonVariant.primary,
                 expand: true,
                 onPressed: _loadProfile,
+              ),
+            ),
+            const SizedBox(height: AppDimens.spaceSm),
+            SizedBox(
+              width: 220,
+              child: NeobrutalistButton(
+                label: 'CERRAR SESIÓN',
+                icon: Icons.logout_rounded,
+                variant: NeobrutalistButtonVariant.secondary,
+                expand: true,
+                onPressed: _handleLogout,
               ),
             ),
           ],

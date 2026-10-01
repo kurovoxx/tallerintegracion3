@@ -57,6 +57,27 @@ type driveConnectResponse struct {
 	Connected bool `json:"connected"`
 }
 
+// Disconnect maneja DELETE /auth/google-drive/connection
+// Desvincula por completo: revoca en Google (best-effort) y borra la fila.
+// Idempotente: sin conexión previa responde 204 igual.
+func (h *DriveHandler) Disconnect(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok || userID == "" {
+		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		return
+	}
+	if err := h.svc.Disconnect(c.Request.Context(), userID); err != nil {
+		if se, ok := err.(*service.ServiceError); ok && se.Code == utils.ErrUnauthorized {
+			utils.RespondError(c, http.StatusUnauthorized, se.Code, se.Message)
+			return
+		}
+		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
+		return
+	}
+	// AbortWithStatus (igual que logout): vuelca el 204 también sin engine en tests.
+	c.AbortWithStatus(http.StatusNoContent)
+}
+
 // Status consulta únicamente la conexión del usuario autenticado; nunca expone tokens.
 func (h *DriveHandler) Status(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)

@@ -50,6 +50,11 @@ class GoogleDriveService {
     defaultValue: 'http://localhost:8081/auth/google/callback',
   );
 
+  /// Redirect fija legacy = la registrada en Cloud Console para cliente Web.
+  /// Debe coincidir carácter por carácter o Google responde mismatch.
+  static const legacyDesktopRedirect =
+      'http://localhost:8081/auth/google/callback';
+
   // Config remota (cacheada) servida por el backend: GET {auth}/auth/google-config.
   // Prioridad: remoto > --dart-define > default. Así el .env raíz es la única fuente.
   static String? _remoteClientId;
@@ -131,9 +136,14 @@ class GoogleDriveService {
     return account.serverAuthCode;
   }
 
-  /// Flujo desktop RFC 8252: puerto efímero en 127.0.0.1 (válido sin
-  /// pre-registro para clientes Desktop), fallback a rango 8081-8090.
-  /// Retorna código + redirect real usado, para enviarlo en connectDrive.
+  /// Flujo desktop con cliente OAuth tipo Web: Google exige redirect_uri
+  /// EXACTA a la registrada. Se usa la fija legacy
+  /// http://localhost:8081/auth/google/callback (NO puerto efímero: con
+  /// cliente Web daría redirect_uri_mismatch garantizado).
+  /// Si el puerto está ocupado -> LocalPortBusyException (cae al pegar-código
+  /// con la misma redirect fija: el navegador muestra error de conexión pero
+  /// la URL trae el ?code= para copiar).
+  /// Retorna código + redirect usada, para enviarla en connectDrive.
   /// null = usuario canceló en Google (?error=) o cerró el navegador.
   /// Lanza LocalPortBusyException si no hay puerto libre.
   Future<DriveDesktopAuth?> getDesktopAuthCode({
@@ -153,32 +163,17 @@ class GoogleDriveService {
         : '';
 
     HttpServer? server;
-    int? port;
-    // 1) Efímero: el SO elige puerto libre en loopback.
     try {
-      server = await HttpServer.bind('127.0.0.1', 0);
-      port = server.port;
+      server = await HttpServer.bind('localhost', 8081);
     } catch (_) {
       server = null;
     }
-    // 2) Fallback: rango fijo por si el efímero falla (sandbox raras).
     if (server == null) {
-      for (var p = 8081; p <= 8090; p++) {
-        try {
-          server = await HttpServer.bind('127.0.0.1', p);
-          port = p;
-          break;
-        } catch (_) {
-          // Puerto ocupado: sigue al siguiente.
-        }
-      }
-    }
-    if (server == null || port == null) {
       throw const LocalPortBusyException();
     }
+    const redirectUri = legacyDesktopRedirect;
     final bound = server;
     try {
-      final redirectUri = 'http://127.0.0.1:$port/callback';
       final authUrl =
           'https://accounts.google.com/o/oauth2/v2/auth?response_type=code&scope=$scopeParam&access_type=offline&prompt=consent&client_id=$_clientId&redirect_uri=$redirectUri$hintParam';
       if (!await launchUrl(
@@ -315,4 +310,30 @@ class GoogleDriveService {
   }
 
   Future<void> signOut() => _googleSignIn.signOut();
+
+  /// Desconecta por completo: cierra sesión local de Google y pide al backend
+  /// que revoque en Google y borre la fila (DELETE /auth/google-drive/connection).
+  /// Ya no hay que revocar a mano desde la cuenta. Retorna mensaje para mostrar.
+  Future<String> disconnectDrive({
+    required String backendBaseUrl,
+    required String appAccessToken,
+  }) async {
+    try {
+      await signOut();
+    } catch (_) {}
+    try {
+      final resp = await http
+          .delete(
+            Uri.parse('$backendBaseUrl/auth/google-drive/connection'),
+            headers: {
+              'Authorization': 'Bearer $appAccessToken',
+            },
+          )
+          .timeout(const Duration(seconds: 10));
+      if (resp.statusCode == 204) return 'Drive desconectado.';
+      return 'Drive desconectado localmente.';
+    } catch (_) {
+      return 'Drive desconectado localmente.';
+    }
+  }
 }

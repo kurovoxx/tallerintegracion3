@@ -15,14 +15,16 @@ import (
 // Mocks
 
 type mockOAuthRepo struct {
-	upsertCalled bool
-	lastUserID   string
-	lastProvider string
-	lastAccess   string
-	lastRefresh  *string
-	lastExpires  *time.Time
-	lastEmail    *string
-	upsertErr    error
+	deletedCalled bool
+	deleteErr     error
+	upsertCalled  bool
+	lastUserID    string
+	lastProvider  string
+	lastAccess    string
+	lastRefresh   *string
+	lastExpires   *time.Time
+	lastEmail     *string
+	upsertErr     error
 }
 
 func (m *mockOAuthRepo) UpsertGoogleDriveConnection(ctx context.Context, userID, accessToken string, refreshToken *string, expiresAt *time.Time, externalEmail *string) error {
@@ -42,6 +44,11 @@ func (m *mockOAuthRepo) GetByUserIDAndProvider(ctx context.Context, userID, prov
 
 func (m *mockOAuthRepo) UpdateGoogleDriveAccessToken(ctx context.Context, userID, accessToken string, refreshToken *string, expiresAt time.Time) error {
 	return nil
+}
+
+func (m *mockOAuthRepo) DeleteGoogleDriveConnection(ctx context.Context, userID string) error {
+	m.deletedCalled = true
+	return m.deleteErr
 }
 
 func (m *mockOAuthRepo) MarkGoogleDriveConnectionRevoked(ctx context.Context, userID string) error {
@@ -733,6 +740,10 @@ func (m *mockOAuthRepoWithGet) UpdateGoogleDriveAccessToken(ctx context.Context,
 	m.lastExpires = expiresAt
 	return m.updateErr
 }
+func (m *mockOAuthRepoWithGet) DeleteGoogleDriveConnection(ctx context.Context, userID string) error {
+	return nil
+}
+
 func (m *mockOAuthRepoWithGet) MarkGoogleDriveConnectionRevoked(ctx context.Context, userID string) error {
 	m.markCalled = true
 	return m.markErr
