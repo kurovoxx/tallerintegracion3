@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -318,6 +320,7 @@ type OAuthRepository interface {
 	GetByUserIDAndProvider(ctx context.Context, userID, provider string) (*model.OAuthConnection, error)
 	UpdateGoogleDriveAccessToken(ctx context.Context, userID, accessToken string, refreshToken *string, expiresAt time.Time) error
 	MarkGoogleDriveConnectionRevoked(ctx context.Context, userID string) error
+	DeleteGoogleDriveConnection(ctx context.Context, userID string) error
 }
 
 func NewDriveOAuthService(repo OAuthRepository, provider DriveOAuthProvider) *DriveOAuthService {
@@ -483,4 +486,55 @@ func (s *DriveOAuthService) ReportGoogleDrivePermissionDenied(ctx context.Contex
 		return NewServiceError("internal_error")
 	}
 	return nil
+}
+
+// revokeURL de Google: revocar cualquier token del par invalida todo el grant.
+const googleRevokeURL = "https://oauth2.googleapis.com/revoke"
+
+// Disconnect desvincula Drive por petición explícita del usuario:
+// revoca el grant en Google (best-effort, con timeout) y borra la fila local.
+// Sin fila previa es éxito silencioso (idempotente). Nunca expone tokens.
+func (s *DriveOAuthService) Disconnect(ctx context.Context, userID string) error {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return NewServiceError(utils.ErrUnauthorized)
+	}
+	conn, err := s.oauthRepo.GetByUserIDAndProvider(ctx, userID, model.ProviderGoogleDrive)
+	if err != nil {
+		return NewServiceError("internal_error")
+	}
+	if conn != nil {
+		revokeGoogleGrant(ctx, conn.AccessToken, conn.RefreshToken)
+	}
+	if err := s.oauthRepo.DeleteGoogleDriveConnection(ctx, userID); err != nil {
+		return NewServiceError("internal_error")
+	}
+	return nil
+}
+
+// revokeGoogleGrant intenta invalidar el grant en Google. Best-effort puro:
+// cualquier fallo se loguea y se ignora (la fila local se borra igual,
+// y el token huérfano expira solo).
+func revokeGoogleGrant(ctx context.Context, accessToken string, refreshToken *string) {
+	token := strings.TrimSpace(accessToken)
+	if token == "" && refreshToken != nil {
+		token = strings.TrimSpace(*refreshToken)
+	}
+	if token == "" {
+		return
+	}
+	client := &http.Client{Timeout: 8 * time.Second}
+	form := url.Values{"token": {token}}.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, googleRevokeURL, strings.NewReader(form))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("drive: revoke en Google falló (best-effort): %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
 }

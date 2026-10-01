@@ -19,9 +19,11 @@ import (
 func init() { gin.SetMode(gin.TestMode) }
 
 type mockDriveRepo struct {
-	upsertCalled bool
-	upsertErr    error
-	connections  map[string]*model.OAuthConnection
+	deletedCalled bool
+	deleteErr     error
+	upsertCalled  bool
+	upsertErr     error
+	connections   map[string]*model.OAuthConnection
 }
 
 func (m *mockDriveRepo) UpsertGoogleDriveConnection(ctx context.Context, userID, accessToken string, refreshToken *string, expiresAt *time.Time, externalEmail *string) error {
@@ -34,6 +36,12 @@ func (m *mockDriveRepo) GetByUserIDAndProvider(ctx context.Context, userID, prov
 func (m *mockDriveRepo) UpdateGoogleDriveAccessToken(ctx context.Context, userID, accessToken string, refreshToken *string, expiresAt time.Time) error {
 	return nil
 }
+
+func (m *mockDriveRepo) DeleteGoogleDriveConnection(ctx context.Context, userID string) error {
+	m.deletedCalled = true
+	return m.deleteErr
+}
+
 func (m *mockDriveRepo) MarkGoogleDriveConnectionRevoked(ctx context.Context, userID string) error {
 	return nil
 }
