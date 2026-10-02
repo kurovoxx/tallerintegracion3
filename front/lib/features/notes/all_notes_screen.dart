@@ -1018,7 +1018,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   }
 
   void _shareNote(LocalNote note) {
-    final link = 'https://sigmastudy.app/notes/${note.id}';
+    // ponytail: la app aún no tiene ruta /notes/:id; el link abre el inicio, no la nota.
+    final link = '${Uri.parse(authApiBaseUrl).origin}/notes/${note.id}';
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
