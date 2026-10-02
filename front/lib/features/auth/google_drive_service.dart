@@ -155,9 +155,8 @@ class GoogleDriveService {
         'GOOGLE_CLIENT_ID no configurado: rebuild con --dart-define=GOOGLE_CLIENT_ID=... (ver front/Dockerfile)',
       );
     }
-    final scopeParam = (scopes ?? _scopes).trim().isEmpty
-        ? _scopes
-        : scopes!.trim();
+    final customScopes = scopes?.trim() ?? '';
+    final scopeParam = customScopes.isEmpty ? _scopes : customScopes;
     final hintParam = (loginHint != null && loginHint.trim().isNotEmpty)
         ? '&login_hint=${Uri.encodeComponent(loginHint.trim())}'
         : '';
