@@ -51,7 +51,12 @@ Future<T> _withNotesClient<T>(
 }
 
 class AllNotesScreen extends StatefulWidget {
-  const AllNotesScreen({super.key, this.database});
+  const AllNotesScreen({
+    super.key,
+    this.database,
+    this.enableAttachmentRemoval = kEnableAttachmentRemoval,
+  });
+  final bool enableAttachmentRemoval;
   final AppDatabase? database;
 
   @override
@@ -717,9 +722,14 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     final url = '$notesBaseUrl/notes/${note.id}';
     try {
       final res = await AuthedHttp.run(
-        () => http
-            .delete(Uri.parse(url), headers: _authHeaders())
-            .timeout(const Duration(seconds: 8)),
+        () => _withNotesClient(
+          (client) => client
+              .delete(Uri.parse(url), headers: _authHeaders())
+              .timeout(const Duration(seconds: 30)),
+        ),
+      );
+      debugPrint(
+        '[Notes] DELETE NOTE note=${note.id} status=${res.statusCode}',
       );
       if (res.statusCode == 200 || res.statusCode == 204) {
         return _RemoteResult(ok: true, status: res.statusCode);
@@ -774,6 +784,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   Future<void> _applyLocalDelete(LocalNote note) async {
     if (!mounted) return;
     setState(() {
+      _latestNotes.remove(note.id);
+      _versions.remove(note.id);
+      _ownedNoteIds.remove(note.id);
+      _remoteIds.removeWhere(
+        (key, value) => key == note.id || value == note.id,
+      );
       _likesCount.remove(note.id);
       _isLiked.remove(note.id);
       _isSaved.remove(note.id);
@@ -876,6 +892,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   /// Borra en backend y, con 200/204, elimina local. Con 404 (el recurso ya no
   /// existe en el backend) también limpia local para no dejar la referencia bloqueada.
   Future<_RemoteResult> _deleteFlow(LocalNote note) async {
+    final realId = _remoteIds[note.id];
+    if (realId != null) note = note.copyWith(id: realId);
+    if (!_isRemoteNote(note.id)) {
+      await _applyLocalDelete(note);
+      return const _RemoteResult(ok: true, status: 204);
+    }
     final remote = await _deleteNoteRemote(note);
     if (!mounted) return remote;
     if (remote.ok) {
@@ -1168,6 +1190,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         builder: (context, scroll) => _NoteDetailSheet(
           scrollController: scroll,
           note: note,
+          enableAttachmentRemoval: widget.enableAttachmentRemoval,
           isMine: _isMine(note),
           tag: _noteTags[note.id] ?? 'General',
           likesCount: _likesCount[note.id] ?? 0,
@@ -2325,6 +2348,7 @@ enum _EditSaveOutcome {
 /// Modal de detalle con lectura híbrida (GET /notes/:id), edición (PATCH) y
 /// borrado (DELETE). El contenido local se muestra de inmediato como fallback.
 class _NoteDetailSheet extends StatefulWidget {
+  final bool enableAttachmentRemoval;
   final ScrollController scrollController;
   final LocalNote note;
   final bool isMine;
@@ -2343,6 +2367,7 @@ class _NoteDetailSheet extends StatefulWidget {
   final Future<_RemoteResult> Function() onClone;
 
   const _NoteDetailSheet({
+    required this.enableAttachmentRemoval,
     required this.scrollController,
     required this.note,
     required this.isMine,
@@ -2519,7 +2544,11 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     // 1. Eliminar del contenido las refs inline de los marcados.
     // Borrar solo Markdown NO borra el attachment; QUITAR sí (paso 3).
     for (final id in _pendingRemovedIds) {
-      c = removeAttachmentReferences(c, {'attachment_id': id, 'url': ''});
+      final resource = _attachments.firstWhere(
+        (a) => a['attachment_id'] == id,
+        orElse: () => {'attachment_id': id, 'url': ''},
+      );
+      c = removeAttachmentReferences(c, resource);
     }
     setState(() {
       _saving = true;
@@ -2572,11 +2601,12 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
       _saving = false;
       _pendingRemovedIds.clear();
       _title = t;
-      _content = _contentCtrl?.text ?? c;
+      _content = c;
       if (_contentCtrl != null) _contentCtrl!.text = _content;
       _editing = false;
       _releaseEditControllersAfterFrame();
     });
+    if (toDelete.isNotEmpty) await _loadRemote();
     return;
   }
 
@@ -2591,7 +2621,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
         closeOnConfirm: false,
         onConfirm: () => Navigator.of(context).pop(true),
         content: const Text(
-          '¿Eliminar esta nota? También se borrará de Google Drive.',
+          '¿Eliminar esta nota? También se eliminarán sus archivos adjuntos.',
           style: TextStyle(fontWeight: FontWeight.w600, color: Colors.black),
         ),
       ),
@@ -2778,9 +2808,10 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     // 1 attachment ID = 1 tarjeta. Las referencias inline `attachment:<uuid>`
     // que resuelven al adjunto real no generan tarjeta extra; las stale se
     // excluyen para no mostrar una tarjeta genérica duplicada.
+    final markdown = _resourcesFromMarkdown(_content);
     final merged = mergeAttachmentResources(_attachments, [
       ...widget.resources,
-      ..._resourcesFromMarkdown(_content),
+      ...markdown,
     ]);
     return merged.where((r) {
       final id = r['attachment_id'] as String?;
@@ -2795,7 +2826,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
   /// Marca/desmarca un adjunto para borrar al GUARDAR. No toca el servidor.
   /// CANCELAR limpia [_pendingRemovedIds] y restaura todo.
   void _togglePendingRemove(Map<String, dynamic> resource) {
-    if (!widget.isMine) return;
+    if (!widget.isMine || _saving || _removingAttachment) return;
     final id = resource['attachment_id'] as String?;
     if (id == null || id.isEmpty) return;
     setState(() {
@@ -2823,12 +2854,22 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
               .timeout(const Duration(seconds: 30)),
         ),
       );
+      debugPrint(
+        '[Notes] DELETE ATTACHMENT note=${widget.note.id} attachment=$id status=${response.statusCode}',
+      );
       if (response.statusCode != 200 && response.statusCode != 204) {
         throw const FormatException('delete failed');
       }
-      debugPrint('[Notes] ATTACHMENT attachment=$id status=${response.statusCode} mime=-');
       if (!mounted) return false;
       setState(() {
+        for (final resource in _attachments.where(
+          (resource) => resource['attachment_id'] == id,
+        )) {
+          final url = resource['url'] as String?;
+          if (url != null && url.isNotEmpty) {
+            _removedResources.add(resourceIdentity(url));
+          }
+        }
         _removedResources.add('attachment:$id');
         _pendingRemovedIds.remove(id);
         _attachments.removeWhere((a) => a['attachment_id'] == id);
@@ -2843,7 +2884,6 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
             ),
           ),
         );
-        await _loadRemote();
       }
       return false;
     }
@@ -2922,12 +2962,10 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
             runSpacing: 6,
             children: [
               for (final att in _attachments)
-                if (kEnableAttachmentRemoval)
+                if (widget.enableAttachmentRemoval)
                   _EditAttachmentChip(
                     resource: att,
-                    pending: _pendingRemovedIds.contains(
-                      att['attachment_id'],
-                    ),
+                    pending: _pendingRemovedIds.contains(att['attachment_id']),
                     onToggle: () => _togglePendingRemove(att),
                   )
                 else
@@ -3223,8 +3261,17 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                     _DetectedAttachmentsPreview(
                       content: _contentCtrl!.text,
                       onRemoveSnippet: (url) {
-                        _removeAttachmentUrl(_contentCtrl!, url);
-                        setState(() {});
+                        final matches = _attachments.where(
+                          (a) => urlMatchesAttachment(a, url),
+                        );
+                        if (matches.isNotEmpty) {
+                          if (widget.enableAttachmentRemoval) {
+                            _togglePendingRemove(matches.first);
+                          }
+                        } else {
+                          _removeAttachmentUrl(_contentCtrl!, url);
+                          setState(() {});
+                        }
                       },
                       onPreviewResource: _showResourceDialog,
                     ),
@@ -4420,7 +4467,10 @@ class _DetectedAttachmentChip extends StatelessWidget {
 /// TODO: reactivar eliminación de adjuntos tras validar DELETE E2E.
 /// Bandera temporal: la acción QUITAR falla en manual, así que no se expone
 /// en la UI hasta completar la validación. El backend DELETE se conserva.
-const bool kEnableAttachmentRemoval = false;
+const bool kEnableAttachmentRemoval = bool.fromEnvironment(
+  'ENABLE_ATTACHMENT_REMOVAL',
+  defaultValue: false,
+);
 
 /// Chip de ADJUNTOS VINCULADOS en modo Editar: X marca pending (no borra).
 /// Key `remove-<attachment_id>` preservada para tests y accesibilidad.
@@ -4506,9 +4556,7 @@ class _EditAttachmentChip extends StatelessWidget {
                     vertical: 4,
                   ),
                   child: Icon(
-                    pending
-                        ? Icons.undo_rounded
-                        : Icons.close_rounded,
+                    pending ? Icons.undo_rounded : Icons.close_rounded,
                     size: 13,
                     color: AppColors.text,
                   ),
@@ -4720,7 +4768,9 @@ Widget _buildResourceImage({
   // no intentar Drive ni red, mostrar fallback compacto directamente.
   // Esto evita pedir un UUID stale y permite diagnosticar el mismatch.
   if (url.trim().startsWith('attachment:')) {
-    debugPrint('[Notes] $debugLabel attachment=${url.trim()} status=unresolved mime=-');
+    debugPrint(
+      '[Notes] $debugLabel attachment=${url.trim()} status=unresolved mime=-',
+    );
     return fallback();
   }
   if (isDriveViewerUrl(url)) {
@@ -5085,10 +5135,10 @@ class _ResourceViewerDialog extends StatelessWidget {
     return info.isRemote
         ? (isDriveViewerUrl(_url) ? 'ABRIR EN DRIVE' : 'ABRIR')
         : ((resource['type'] == 'image')
-            ? 'DESCARGAR'
-            : (_isWindows
-                  ? 'ABRIR EN VISOR DE WINDOWS'
-                  : 'ABRIR EN VISOR DEL SISTEMA'));
+              ? 'DESCARGAR'
+              : (_isWindows
+                    ? 'ABRIR EN VISOR DE WINDOWS'
+                    : 'ABRIR EN VISOR DEL SISTEMA'));
   }
 
   void _onPrimary(BuildContext context) {
