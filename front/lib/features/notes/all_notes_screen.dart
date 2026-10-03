@@ -4,7 +4,7 @@ import 'dart:io' show File, Platform, Process;
 
 import 'package:drift/drift.dart' show Value;
 import 'package:flutter/foundation.dart'
-    show defaultTargetPlatform, kIsWeb, visibleForTesting;
+    show defaultTargetPlatform, kDebugMode, kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -2422,6 +2422,14 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     _likes = widget.likesCount;
     _liked = widget.isLiked;
     _saved = widget.isSaved;
+    // Diagnóstico del flag efectivo (solo debug): bool.fromEnvironment es
+    // compile-time; si el binario se compiló sin el define, la X no aparece
+    // aunque se pase la bandera al arrancar en caliente. Ver consola.
+    if (kDebugMode) {
+      debugPrint(
+        '[Notes] attachmentRemoval enabled=${widget.enableAttachmentRemoval}',
+      );
+    }
     _loadRemote();
   }
 
@@ -2929,7 +2937,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     );
   }
 
-  /// Sección exclusiva de Editar: ADJUNTOS VINCULADOS con X/QUITAR por
+  /// Sección exclusiva de Editar: ADJUNTOS DE LA NOTA con X/QUITAR por
   /// attachment. Marca pending, no borra hasta GUARDAR.
   Widget _buildEditAttachments() {
     if (!widget.isMine || _attachments.isEmpty) {
@@ -2948,7 +2956,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'ADJUNTOS VINCULADOS (${_attachments.length})',
+            'ADJUNTOS DE LA NOTA (${_attachments.length})',
             style: const TextStyle(
               fontSize: 10,
               fontWeight: FontWeight.w900,
@@ -4472,7 +4480,7 @@ const bool kEnableAttachmentRemoval = bool.fromEnvironment(
   defaultValue: false,
 );
 
-/// Chip de ADJUNTOS VINCULADOS en modo Editar: X marca pending (no borra).
+/// Chip de ADJUNTOS DE LA NOTA en modo Editar: X marca pending (no borra).
 /// Key `remove-<attachment_id>` preservada para tests y accesibilidad.
 class _EditAttachmentChip extends StatelessWidget {
   final Map<String, dynamic> resource;

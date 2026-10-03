@@ -203,7 +203,7 @@ void main() {
         );
         await t.tap(find.text('Editar'));
         await settle(t);
-        expect(find.text('ADJUNTOS VINCULADOS (2)'), findsOneWidget);
+        expect(find.text('ADJUNTOS DE LA NOTA (2)'), findsOneWidget);
         expect(find.byKey(ValueKey('remove-$image')), findsNothing);
         expect(find.byKey(ValueKey('remove-$pdf')), findsNothing);
         expect(find.textContaining('SE QUITARÁ'), findsNothing);
