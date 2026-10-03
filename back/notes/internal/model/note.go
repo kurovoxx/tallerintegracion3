@@ -128,3 +128,14 @@ const (
 	// la misma clave debe retomarla, nunca duplicarla.
 	IdempotencyStatusRecoverable = "recoverable"
 )
+
+// NoteDriveCleanup is captured before metadata cascades, in the delete transaction.
+// It is also returned for immediate best-effort cleanup; the outbox remains durable.
+type NoteDriveCleanup struct {
+	FileID      string
+	Attachments []AttachmentDriveCleanup
+}
+type AttachmentDriveCleanup struct {
+	ID             string
+	ExternalFileID string
+}

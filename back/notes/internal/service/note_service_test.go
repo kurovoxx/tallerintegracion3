@@ -127,8 +127,8 @@ func (f *failingNoteStore) UpdateSyncStatus(ctx context.Context, noteID, syncSta
 	return nil
 }
 
-func (f *failingNoteStore) DeleteWithDriveCleanup(ctx context.Context, noteID, requesterID string) (string, error) {
-	return "", f.err
+func (f *failingNoteStore) DeleteWithDriveCleanup(ctx context.Context, noteID, requesterID string) (model.NoteDriveCleanup, error) {
+	return model.NoteDriveCleanup{}, f.err
 }
 func (f *failingNoteStore) EnqueueDriveOperation(ctx context.Context, op, noteID, attID, fileID, ownerUserID string, payload map[string]any) error {
 	return f.err

@@ -197,7 +197,7 @@ func (p *PGNoteStore) FailDriveOperation(ctx context.Context, id, errStr string,
 	return p.repo.FailDriveOperation(ctx, id, errStr, nextAttempt)
 }
 
-func (p *PGNoteStore) DeleteWithDriveCleanup(ctx context.Context, noteID, requesterID string) (string, error) {
+func (p *PGNoteStore) DeleteWithDriveCleanup(ctx context.Context, noteID, requesterID string) (model.NoteDriveCleanup, error) {
 	return p.repo.DeleteWithDriveCleanup(ctx, noteID, requesterID)
 }
 

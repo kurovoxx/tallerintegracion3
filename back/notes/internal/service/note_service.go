@@ -401,7 +401,7 @@ type NoteStore interface {
 	IncrementLikes(ctx context.Context, noteID string, delta int) error
 	UpdateExternalFileID(ctx context.Context, noteID, fileID string) error
 	UpdateSyncStatus(ctx context.Context, noteID, syncStatus string) error
-	DeleteWithDriveCleanup(ctx context.Context, noteID, requesterID string) (string, error)
+	DeleteWithDriveCleanup(ctx context.Context, noteID, requesterID string) (model.NoteDriveCleanup, error)
 	EnqueueDriveOperation(ctx context.Context, op, noteID, attID, fileID, ownerUserID string, payload map[string]any) error
 	ClaimDriveOperations(ctx context.Context, limit int, lockDuration time.Duration) ([]*model.DriveOperation, error)
 	CompleteDriveOperation(ctx context.Context, id string) error
@@ -1305,7 +1305,7 @@ func (s *NoteService) Delete(ctx context.Context, userID string, noteID string) 
 	// 1. Borrar metadata en PG (fuente de verdad). Si falla, Drive intacto.
 	// La clasificación del error del store es tipada (revalidación con el
 	// propio store), sin inspeccionar strings ni filtrar trazas SQL.
-	fileID, err := s.notes.DeleteWithDriveCleanup(ctx, noteID, userID)
+	cleanup, err := s.notes.DeleteWithDriveCleanup(ctx, noteID, userID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) || errors.Is(err, repository.ErrForbidden) {
 			return newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
@@ -1322,20 +1322,24 @@ func (s *NoteService) Delete(ctx context.Context, userID string, noteID string) 
 	if cleanupErr := s.shared.DeleteManagedPermissionsByNote(ctx, noteID); cleanupErr != nil {
 		log.Printf("notes: delete nota %s: no se pudieron limpiar permisos administrados: %v", noteID, cleanupErr)
 	}
-	if fileID != "" {
+	// Every file was captured and queued atomically before CASCADE.
+	files := []model.DriveOperation{}
+	if cleanup.FileID != "" {
+		files = append(files, model.DriveOperation{Operation: "delete_file", ExternalFileID: &cleanup.FileID, OwnerUserID: userID})
+	}
+	for _, att := range cleanup.Attachments {
+		if att.ExternalFileID == "" {
+			continue
+		}
+		fileID := att.ExternalFileID
+		files = append(files, model.DriveOperation{Operation: "delete_attachment", ExternalFileID: &fileID, OwnerUserID: userID})
+	}
+	for _, op := range files {
 		driveCtx, cancelDrive := withDriveTimeout(ctx)
-		delErr := retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
-			return s.drive.DeleteFile(driveCtx, userID, fileID)
-		})
+		delErr := retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error { return s.executeDriveOperation(driveCtx, &op) })
 		cancelDrive()
 		if delErr != nil {
-			if drive.IsNotFound(delErr) {
-				return nil // idempotente: ya borrado en Drive
-			}
-			// OAuth revocado/ausente o 500 tras PG OK: no fallar la operación,
-			// solo loguear (evita fila huérfana visible por token inválido).
-			// La transacción ya dejó la limpieza durable en la outbox.
-			log.Printf("[CRITICAL_UNRECONCILED] notes: delete nota %s: PG OK, Drive best-effort falló (file %s): %v", noteID, fileID, delErr)
+			log.Printf("[Notes] DELETE NOTE note=%s cleanup=%s pending=true", noteID, op.Operation)
 		}
 	}
 	return nil

@@ -101,8 +101,8 @@ func TestDriveCleanupTransactions(t *testing.T) {
 		t.Fatal("unauthorized deletion mutated data")
 	}
 	file, err := notes.DeleteWithDriveCleanup(ctx, id, owner)
-	if err != nil || file != "drive-note" {
-		t.Fatalf("delete: %q %v", file, err)
+	if err != nil || file.FileID != "drive-note" {
+		t.Fatalf("delete: %+v %v", file, err)
 	}
 	if count("notes") != 0 || count("drive_reconciliation_queue") != 1 {
 		t.Fatal("delete/outbox not committed together")
@@ -142,9 +142,9 @@ func TestDriveCleanupTransactions(t *testing.T) {
 	if _, err := attachments.DeleteAttachmentWithDriveCleanup(ctx, insert(nil), attID, owner); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-note attachment: %v", err)
 	}
-	file, err = attachments.DeleteAttachmentWithDriveCleanup(ctx, id, attID, owner)
-	if err != nil || file != "drive-attachment" {
-		t.Fatalf("attachment delete: %q %v", file, err)
+	attachmentFile, err := attachments.DeleteAttachmentWithDriveCleanup(ctx, id, attID, owner)
+	if err != nil || attachmentFile != "drive-attachment" {
+		t.Fatalf("attachment delete: %q %v", attachmentFile, err)
 	}
 	if count("note_attachments") != 0 || count("drive_reconciliation_queue") != 2 {
 		t.Fatal("attachment cleanup not committed")
@@ -239,5 +239,74 @@ func TestDriveQueueConcurrentClaimsAndRetry(t *testing.T) {
 	}
 	if err := repo.FailDriveOperation(ctx, id, "late failure", time.Now()); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("completed job regressed: %v", err)
+	}
+}
+
+func TestDeleteNoteQueuesAllAttachmentsBeforeCascade(t *testing.T) {
+	pool := outboxTestPool(t)
+	ctx := context.Background()
+	repo := NewNoteRepository(pool)
+	owner, note, other := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	if _, err := pool.Exec(ctx, `INSERT INTO notes.notes VALUES ($1,$3,'note.md'),($2,$3,'other.md');`, note, other, owner); err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{uuid.NewString(), uuid.NewString(), uuid.NewString()}
+	for i, id := range ids {
+		if _, err := pool.Exec(ctx, `INSERT INTO notes.note_attachments VALUES ($1,$2,$3)`, id, note, []string{"image1.png", "image2.jpg", "guide.pdf"}[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `CREATE TABLE notes.shared_notes (note_id uuid REFERENCES notes.notes(id) ON DELETE CASCADE); INSERT INTO notes.shared_notes VALUES ('`+note+`');`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO notes.note_attachments VALUES ($1,$2,'keep.png')`, uuid.NewString(), other); err != nil {
+		t.Fatal(err)
+	}
+	// A downstream constraint failure must roll back ALL jobs and metadata.
+	if _, err := pool.Exec(ctx, `CREATE TABLE notes.block_delete (note_id uuid REFERENCES notes.notes(id)); INSERT INTO notes.block_delete VALUES ('`+note+`');`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.DeleteWithDriveCleanup(ctx, note, owner); err == nil {
+		t.Fatal("expected rollback")
+	}
+	var n int
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM notes.drive_reconciliation_queue`).Scan(&n)
+	if n != 0 {
+		t.Fatal("partial outbox commit")
+	}
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM notes.note_attachments WHERE note_id=$1`, note).Scan(&n)
+	if n != 3 {
+		t.Fatal("rollback lost attachments")
+	}
+	if _, err := pool.Exec(ctx, `DROP TABLE notes.block_delete`); err != nil {
+		t.Fatal(err)
+	}
+	result, err := repo.DeleteWithDriveCleanup(ctx, note, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FileID != "note.md" || len(result.Attachments) != 3 {
+		t.Fatal("incomplete snapshot")
+	}
+	jobs, err := repo.ClaimDriveOperations(ctx, 10, time.Minute)
+	if err != nil || len(jobs) != 4 {
+		t.Fatalf("queue=%d err=%v", len(jobs), err)
+	}
+	for _, job := range jobs {
+		if job.OwnerUserID != owner || job.ExternalFileID == nil {
+			t.Fatal("lost cleanup identity")
+		}
+	}
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM notes.note_attachments WHERE note_id=$1`, note).Scan(&n)
+	if n != 0 {
+		t.Fatal("cascade missing")
+	}
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM notes.shared_notes`).Scan(&n)
+	if n != 0 {
+		t.Fatal("shares remain")
+	}
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM notes.note_attachments WHERE note_id=$1`, other).Scan(&n)
+	if n != 1 {
+		t.Fatal("other attachment affected")
 	}
 }

@@ -1093,3 +1093,56 @@ func TestHandlerShareRestrictedGrantsDrive(t *testing.T) {
 		}
 	}
 }
+
+func TestHandlerDeleteNoteAndAllFiles(t *testing.T) {
+	r, svc, files, _ := setupRouter()
+	ctx := context.Background()
+	owner := uuid.NewString()
+	note, err := svc.Create(ctx, owner, "Delete test", nil, "private", stringPtrForDelete("body"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	att, err := svc.AddAttachment(ctx, owner, note.ID, "image.png", "image/png", testPNGBytes, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := svc.AddAttachment(ctx, owner, note.ID, "guide.pdf", "application/pdf", []byte("%PDF-1.4"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(method, path, user string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Authorization", "Bearer "+genToken(user, "student"))
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+	if w := call("DELETE", "/notes/"+note.ID, uuid.NewString()); w.Code != 404 {
+		t.Fatal(w.Code)
+	}
+	if w := call("DELETE", "/notes/"+note.ID+"/attachments/"+att.ID, uuid.NewString()); w.Code != 403 {
+		t.Fatal(w.Code)
+	}
+	if w := call("DELETE", "/notes/"+note.ID+"/attachments/"+att.ID, owner); w.Code != 204 {
+		t.Fatal(w.Code)
+	}
+	if files.HasFile(att.ExternalFileID) || !files.HasFile(doc.ExternalFileID) {
+		t.Fatal("individual cleanup failed")
+	}
+	if w := call("GET", "/notes/"+note.ID, owner); w.Code != 200 || strings.Contains(w.Body.String(), att.ID) || !strings.Contains(w.Body.String(), doc.ID) {
+		t.Fatal("reload attachments failed")
+	}
+	if w := call("DELETE", "/notes/"+note.ID, owner); w.Code != 204 {
+		t.Fatal(w.Code)
+	}
+	if files.HasFile(*note.ExternalFileID) || files.HasFile(doc.ExternalFileID) {
+		t.Fatal("note left remote files")
+	}
+	if w := call("GET", "/notes/"+note.ID, owner); w.Code != 404 {
+		t.Fatal(w.Code)
+	}
+	if w := call("DELETE", "/notes/"+note.ID, owner); w.Code != 404 {
+		t.Fatal(w.Code)
+	}
+}
+func stringPtrForDelete(value string) *string { return &value }

@@ -17,6 +17,7 @@ import (
 // In-memory stores para tests unitarios sin DB.
 
 type MemoryNoteStore struct {
+	attachments     *MemoryAttachmentStore
 	mu              sync.RWMutex
 	notes           map[string]*model.Note
 	driveOperations map[string]*model.DriveOperation
@@ -316,6 +317,9 @@ func NewMemoryAttachmentStore() *MemoryAttachmentStore {
 }
 
 func (m *MemoryAttachmentStore) SetNoteStore(notes *MemoryNoteStore) {
+	notes.mu.Lock()
+	defer notes.mu.Unlock()
+	notes.attachments = m
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.notes = notes
@@ -1059,18 +1063,18 @@ func (m *MemoryNoteStore) FailDriveOperation(ctx context.Context, id, errStr str
 	return nil
 }
 
-func (m *MemoryNoteStore) DeleteWithDriveCleanup(ctx context.Context, noteID, requesterID string) (string, error) {
+func (m *MemoryNoteStore) DeleteWithDriveCleanup(ctx context.Context, noteID, requesterID string) (model.NoteDriveCleanup, error) {
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return model.NoteDriveCleanup{}, err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	note := m.notes[noteID]
 	if note == nil {
-		return "", repository.ErrNotFound
+		return model.NoteDriveCleanup{}, repository.ErrNotFound
 	}
 	if note.UserID != requesterID {
-		return "", repository.ErrForbidden
+		return model.NoteDriveCleanup{}, repository.ErrForbidden
 	}
 	fileID := ""
 	if note.ExternalFileID != nil {
@@ -1078,11 +1082,30 @@ func (m *MemoryNoteStore) DeleteWithDriveCleanup(ctx context.Context, noteID, re
 	}
 	if fileID != "" {
 		if err := m.enqueueDriveOperation(ctx, "delete_file", noteID, "", fileID, note.UserID, nil); err != nil {
-			return "", err
+			return model.NoteDriveCleanup{}, err
+		}
+	}
+	result := model.NoteDriveCleanup{FileID: fileID}
+	if m.attachments != nil {
+		m.attachments.mu.Lock()
+		defer m.attachments.mu.Unlock()
+		for _, att := range m.attachments.atts {
+			if att.NoteID != noteID {
+				continue
+			}
+			result.Attachments = append(result.Attachments, model.AttachmentDriveCleanup{ID: att.ID, ExternalFileID: att.ExternalFileID})
+			if att.ExternalFileID != "" {
+				if err := m.enqueueDriveOperation(ctx, "delete_attachment", noteID, att.ID, att.ExternalFileID, note.UserID, nil); err != nil {
+					return model.NoteDriveCleanup{}, err
+				}
+			}
+		}
+		for _, att := range result.Attachments {
+			delete(m.attachments.atts, att.ID)
 		}
 	}
 	delete(m.notes, noteID)
-	return fileID, nil
+	return result, nil
 }
 
 func (m *MemoryAttachmentStore) DeleteAttachmentWithDriveCleanup(ctx context.Context, noteID, attachmentID, requesterID string) (string, error) {
