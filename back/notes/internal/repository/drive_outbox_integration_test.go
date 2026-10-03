@@ -49,7 +49,10 @@ func outboxTestPool(t *testing.T) *pgxpool.Pool {
 	t.Cleanup(pool.Close)
 	_, err = pool.Exec(ctx, `CREATE SCHEMA notes;
 		CREATE TABLE notes.notes (id uuid PRIMARY KEY, user_id uuid NOT NULL, external_file_id text);
-		CREATE TABLE notes.note_attachments (id uuid PRIMARY KEY, note_id uuid REFERENCES notes.notes(id) ON DELETE CASCADE, external_file_id text NOT NULL);`)
+		CREATE TABLE notes.note_attachments (id uuid PRIMARY KEY, note_id uuid REFERENCES notes.notes(id), external_file_id text NOT NULL);
+		CREATE TABLE notes.saved_notes (note_id uuid REFERENCES notes.notes(id));
+		CREATE TABLE notes.note_likes (note_id uuid REFERENCES notes.notes(id));
+		CREATE TABLE notes.shared_notes (note_id uuid REFERENCES notes.notes(id));`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,6 +159,65 @@ func TestDriveCleanupTransactions(t *testing.T) {
 	for _, job := range jobs {
 		if job.OwnerUserID != owner || job.NoteID == nil || job.ExternalFileID == nil {
 			t.Fatalf("missing durable cleanup context: %+v", job)
+		}
+	}
+}
+
+func TestDeleteNoteCleansRestrictiveForeignKeysAtomically(t *testing.T) {
+	pool := outboxTestPool(t)
+	ctx := context.Background()
+	repo := NewNoteRepository(pool)
+	owner, noteID, attachmentID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	if _, err := pool.Exec(ctx, `INSERT INTO notes.notes VALUES ($1, $2, 'drive-note')`, noteID, owner); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO notes.note_attachments VALUES ($1, $2, 'drive-attachment')`, attachmentID, noteID); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"saved_notes", "note_likes", "shared_notes", "drive_managed_permissions"} {
+		query := "INSERT INTO notes." + table + " (note_id) VALUES ($1)"
+		if table == "drive_managed_permissions" {
+			query = `INSERT INTO notes.drive_managed_permissions
+				(note_id, external_file_id, principal_type, principal_key, role, sync_status)
+				VALUES ($1, 'drive-note', 'user', 'reader@example.com', 'reader', 'in_sync')`
+		}
+		if _, err := pool.Exec(ctx, query, noteID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An unrelated restrictive FK forces rollback after dependent cleanup.
+	if _, err := pool.Exec(ctx, `CREATE TABLE notes.block_delete (note_id uuid REFERENCES notes.notes(id))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO notes.block_delete VALUES ($1)`, noteID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.DeleteWithDriveCleanup(ctx, noteID, owner); err == nil {
+		t.Fatal("expected foreign key failure")
+	}
+	for _, table := range []string{"notes", "note_attachments", "saved_notes", "note_likes", "shared_notes", "drive_managed_permissions", "drive_reconciliation_queue"} {
+		var count int
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM notes."+table).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		want := 1
+		if table == "drive_reconciliation_queue" {
+			want = 0
+		}
+		if count != want {
+			t.Fatalf("rollback %s: got %d, want %d", table, count, want)
+		}
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM notes.block_delete WHERE note_id = $1`, noteID); err != nil {
+		t.Fatal(err)
+	}
+	if file, err := repo.DeleteWithDriveCleanup(ctx, noteID, owner); err != nil || file != "drive-note" {
+		t.Fatalf("delete: %q %v", file, err)
+	}
+	for _, table := range []string{"notes", "note_attachments", "saved_notes", "note_likes", "shared_notes", "drive_managed_permissions"} {
+		var count int
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM notes."+table).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("cleanup %s: %d %v", table, count, err)
 		}
 	}
 }

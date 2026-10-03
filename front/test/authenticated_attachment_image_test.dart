@@ -59,6 +59,32 @@ void main() {
       expect(opened,isTrue);
     });
   }
+  testWidgets('nota local sin external_file_id sirve bytes locales sin red', (tester) async {
+    var requests = 0;
+    final client = MockClient((_) async { requests++; return http.Response('{}',404); });
+    addTearDown(client.close);
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: AuthenticatedAttachmentImage(
+      contentUri: Uri.parse('https://sigma.test/notes/n/attachments/a/content'),
+      fit: BoxFit.contain, onOpenDrive: () {}, client:client,
+      externalFileId:'', localBytes:png,
+    ))));
+    await tester.pumpAndSettle();
+    expect(requests,0);
+    expect(find.byWidgetPredicate((w) => w is Image && w.image is MemoryImage),findsOneWidget);
+    expect(find.text('Imagen no disponible'),findsNothing);
+  });
+  testWidgets('endpoint caido con copia local cae a memoria sin error', (tester) async {
+    final client = MockClient((_) async => http.Response('private error',404));
+    addTearDown(client.close);
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: AuthenticatedAttachmentImage(
+      contentUri: Uri.parse('https://sigma.test/notes/n/attachments/a/content'),
+      fit: BoxFit.contain, onOpenDrive: () {}, client:client,
+      externalFileId:'drive-file', localBytes:png,
+    ))));
+    await tester.pumpAndSettle();
+    expect(find.byWidgetPredicate((w) => w is Image && w.image is MemoryImage),findsOneWidget);
+    expect(find.text('Imagen no disponible'),findsNothing);
+  });
   test('metadata prevalece sobre is_inline y distingue PDF de imagen', () {
     final resources = attachmentResources('note', [
       {'id':'image','note_id':'note','file_type':'image/jpeg','is_inline':false,'file_name':'foto.jpg'},

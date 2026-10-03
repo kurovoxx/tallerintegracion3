@@ -37,6 +37,14 @@ String get notesBaseUrl {
 @visibleForTesting
 http.Client? notesHttpClientOverride;
 
+/// Bytes de adjuntos seleccionados que aún no se han subido al backend,
+/// indexados por su URL temporal `attachment-pending://...`. Permiten
+/// previsualizar el archivo local (memoria) mientras la nota es local y
+/// reintentar la subida desde REFRESCAR / SINCRONIZAR DRIVE sin volver a
+/// pedírselo al usuario.
+final Map<String, PickedNoteFile> _pendingAttachmentFiles =
+    <String, PickedNoteFile>{};
+
 /// Ejecuta [run] con el cliente inyectado o con uno nuevo que se cierra al
 /// terminar, para no filtrar conexiones en la subida de adjuntos.
 Future<T> _withNotesClient<T>(
@@ -49,6 +57,11 @@ Future<T> _withNotesClient<T>(
     if (notesHttpClientOverride == null) client.close();
   }
 }
+
+/// Ancho máximo del modal de detalle/edición de nota. Evita que en monitores
+/// ultra-wide los campos de Título/Markdown y los botones se estiren al 100 %
+/// de forma desproporcionada (skill 3.3, contenedor máximo de contenido).
+const double _noteEditorMaxWidth = 920;
 
 class AllNotesScreen extends StatefulWidget {
   const AllNotesScreen({super.key, this.database});
@@ -68,12 +81,15 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   late Future<List<LocalNote>> _notesFuture;
   List<LocalNote> _filtered = [];
   List<LocalNote> _memoryFallback = [];
+  final Set<String> _deletedNoteIds = {};
   bool _isLoading = true;
   bool _isGridView = false;
   String _selectedFilter = 'all';
   String? _error;
   bool _useMemoryFallback = false;
   bool _isSyncingBackend = false;
+  // Reconciliación manual Drive (botón REFRESCAR / SINCRONIZAR DRIVE).
+  bool _isReconciling = false;
   String? _backendError;
   bool _showingLocalExample = false;
   int _hiddenDemoCount = 0;
@@ -409,6 +425,207 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     }
   }
 
+  /// SnackBar neobrutalista reutilizable: borde negro, esquinas rectas y texto
+  /// de alto contraste. Se usa para el resultado de la sincronización.
+  void _notifySnack(String message, {bool ok = true}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: ok ? AppColors.surface : AppColors.accentYellow,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 3),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppDimens.radius),
+          side: const BorderSide(
+            color: AppColors.border,
+            width: AppDimens.borderWidth,
+          ),
+        ),
+        content: Row(
+          children: [
+            Icon(
+              ok ? Icons.cloud_done_rounded : Icons.warning_amber_rounded,
+              size: 18,
+              color: AppColors.text,
+            ),
+            const SizedBox(width: AppDimens.spaceSm),
+            Expanded(
+              child: Text(
+                message,
+                style: const TextStyle(
+                  color: AppColors.text,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 12.5,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// REFRESCAR / SINCRONIZAR DRIVE: empuja hacia el backend existente las notas
+  /// que aún no tienen respaldo remoto (`drive_file_id` inexistente => id local
+  /// sin UUID) y re-guarda (PATCH) las que ya viven en Drive para forzar su
+  /// reconciliación. Muestra indicador de carga y notifica con SnackBar.
+  Future<void> _syncWithDrive() async {
+    if (_isReconciling) return;
+    final token = SessionManager.token;
+    if (token == null || token.isEmpty) {
+      _notifySnack(
+        'Inicia sesión para sincronizar tus notas con Google Drive.',
+        ok: false,
+      );
+      return;
+    }
+    setState(() => _isReconciling = true);
+    var pushed = 0;
+    var refreshed = 0;
+    var failed = 0;
+    var linkedAttachments = 0;
+    try {
+      final notes = _useMemoryFallback
+          ? List<LocalNote>.from(_memoryFallback)
+          : await _repo!.getAllNotes(ownerId: _ownerId());
+      // 1. Sin respaldo remoto: id local (timestamp) => crear en backend y
+      //    asociar los adjuntos pendientes que sigan en memoria.
+      for (final note in notes.where(
+        (n) => !_isRemoteNote(n.id) && !_isKnownDemo(n),
+      )) {
+        final realId = await _createNoteOnBackend(
+          title: note.title,
+          content: _withoutPendingAttachments(note.content),
+          visibility: note.visibility,
+        );
+        if (realId == null || realId.isEmpty) {
+          failed++;
+          continue;
+        }
+        await _replaceLocalId(note.id, realId);
+        final remoteNote = _latestNotes[realId] ?? note.copyWith(id: realId);
+        final uploadedIds = <String>[];
+        final failedNames = <String>[];
+        final newContent = await _uploadPendingAttachmentsToNote(
+          remoteNote,
+          realId,
+          uploadedIds,
+          failedNames,
+        );
+        linkedAttachments += uploadedIds.length;
+        failed += failedNames.length;
+        if (newContent != _withoutPendingAttachments(remoteNote.content)) {
+          final saved = await _patchNoteRemote(
+            remoteNote,
+            remoteNote.title,
+            newContent,
+          );
+          if (saved.ok) {
+            await _applyLocalUpsert(
+              remoteNote.copyWith(
+                content: newContent,
+                version: Value(_versions[realId]),
+              ),
+            );
+          }
+        }
+        pushed++;
+      }
+      // 2. Ya remotas propias: reenviar adjuntos pendientes y re-guardar.
+      for (final note in notes.where(
+        (n) => _isRemoteNote(n.id) && _isMine(n),
+      )) {
+        final uploadedIds = <String>[];
+        final failedNames = <String>[];
+        final newContent = await _uploadPendingAttachmentsToNote(
+          note,
+          note.id,
+          uploadedIds,
+          failedNames,
+        );
+        linkedAttachments += uploadedIds.length;
+        failed += failedNames.length;
+        final res = await _patchNoteRemote(note, note.title, newContent);
+        if (res.ok) {
+          if (newContent != note.content) {
+            await _applyLocalUpsert(
+              note.copyWith(
+                content: newContent,
+                version: Value(_versions[note.id]),
+              ),
+            );
+          }
+          refreshed++;
+        } else {
+          failed++;
+        }
+      }
+      await _syncFromBackend();
+      await _applySearch(_currentQuery);
+    } catch (e) {
+      failed++;
+      debugPrint('[Notes] Reconciliación Drive falló: $e');
+    } finally {
+      if (mounted) setState(() => _isReconciling = false);
+    }
+    if (!mounted) return;
+    final linked = linkedAttachments > 0
+        ? ', $linkedAttachments adjunto(s) vinculado(s)'
+        : '';
+    if (failed == 0) {
+      _notifySnack(
+        'Sincronización completa: $pushed respaldada(s) en Drive, '
+        '$refreshed actualizada(s)$linked.',
+      );
+    } else {
+      _notifySnack(
+        'Sincronización parcial: $pushed respaldada(s), $refreshed '
+        'actualizada(s)$linked, $failed con error. Revisa tu conexión.',
+        ok: false,
+      );
+    }
+  }
+
+  /// Verifica los adjuntos pendientes (`attachment-pending://...`) referenciados
+  /// por [note] y gatilla su subida real contra `POST /notes/{id}/attachments`.
+  /// Los bytes que siguen en memoria (sesión) se envían como multipart y la
+  /// referencia se reescribe con el UUID devuelto (`attachment:<id>`). Devuelve
+  /// el contenido listo para PATCH: sin placeholders irresolubles.
+  Future<String> _uploadPendingAttachmentsToNote(
+    LocalNote note,
+    String noteId,
+    List<String> uploadedIds,
+    List<String> failedNames,
+  ) async {
+    var content = note.content;
+    final matches = RegExp(
+      r'\((attachment-pending://[^)]+)\)',
+    ).allMatches(content).toList();
+    for (final match in matches) {
+      final url = match.group(1);
+      if (url == null) continue;
+      final file = _pendingAttachmentFiles[url];
+      if (file == null) continue;
+      final result = await _uploadAttachmentBinary(
+        noteId: noteId,
+        bytes: file.bytes,
+        fileName: file.name,
+        isInline: file.isImage,
+      );
+      if (result.ok && result.attachmentId != null) {
+        content = content.replaceAll(
+          '($url)',
+          '(attachment:${result.attachmentId})',
+        );
+        uploadedIds.add(result.attachmentId!);
+        _pendingAttachmentFiles.remove(url);
+      } else {
+        failedNames.add(file.name);
+      }
+    }
+    return _withoutPendingAttachments(content);
+  }
+
   /// Intento de creación remota. Devuelve el UUID real del backend (201) o null.
   /// No bloquea el guardado local: si el backend falla, solo se imprime el error (offline-first).
   Future<String?> _createNoteOnBackend({
@@ -717,9 +934,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     final url = '$notesBaseUrl/notes/${note.id}';
     try {
       final res = await AuthedHttp.run(
-        () => http
-            .delete(Uri.parse(url), headers: _authHeaders())
-            .timeout(const Duration(seconds: 8)),
+        () => _withNotesClient(
+          (client) => client
+              .delete(Uri.parse(url), headers: _authHeaders())
+              .timeout(const Duration(seconds: 8)),
+        ),
       );
       if (res.statusCode == 200 || res.statusCode == 204) {
         return _RemoteResult(ok: true, status: res.statusCode);
@@ -774,6 +993,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   Future<void> _applyLocalDelete(LocalNote note) async {
     if (!mounted) return;
     setState(() {
+      _deletedNoteIds.add(note.id);
+      _filtered.removeWhere((n) => n.id == note.id);
+      _latestNotes.remove(note.id);
+      _ownedNoteIds.remove(note.id);
+      _noteTags.remove(note.id);
       _likesCount.remove(note.id);
       _isLiked.remove(note.id);
       _isSaved.remove(note.id);
@@ -782,7 +1006,10 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     if (!_useMemoryFallback && _repo != null) {
       try {
         await _repo!.deleteNote(note.id);
-      } catch (_) {}
+      } catch (_) {
+        // Keep the successful server deletion reflected in the current list.
+        return;
+      }
     }
     await _applySearch(_currentQuery);
   }
@@ -935,7 +1162,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     String query,
     String filter,
   ) {
-    var res = notes;
+    var res = notes.where((n) => !_deletedNoteIds.contains(n.id)).toList();
     // Con sesión y fallo de backend, se ocultan (sin borrar) solo los
     // ejemplos verificables id+título. Nunca se presentan como reales.
     final token = SessionManager.token;
@@ -1157,9 +1384,10 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
-      // En desktop/web el modal por defecto se limita a 640px; sin tope la
-      // hoja de detalle ocupa todo el ancho disponible junto al sidebar.
-      constraints: const BoxConstraints(maxWidth: double.infinity),
+      // En desktop/web el modal por defecto se limita a 640px; lo acotamos a
+      // `_noteEditorMaxWidth` y Flutter lo centra horizontalmente para no
+      // estirar el editor al 100 % del ancho junto al sidebar.
+      constraints: const BoxConstraints(maxWidth: _noteEditorMaxWidth),
       builder: (_) => DraggableScrollableSheet(
         initialChildSize: 0.95,
         minChildSize: 0.5,
@@ -1223,11 +1451,22 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                   _buildHeader(isDesktop),
                   const SizedBox(height: 16),
                   _buildSearchBar(),
-                  if (_isSyncingBackend) ...<Widget>[
+                  if (_isSyncingBackend || _isReconciling) ...<Widget>[
                     const SizedBox(height: 8),
                     const LinearProgressIndicator(
                       color: AppColors.border,
                       backgroundColor: AppColors.bg,
+                    ),
+                  ],
+                  if (_isReconciling) ...<Widget>[
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Reconciliando notas con Google Drive…',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.muted,
+                      ),
                     ),
                   ],
                   if (_backendError != null) ...<Widget>[
@@ -1341,23 +1580,31 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                 final uploaded = <_DriveUploadResult>[];
                 for (final pending in attachments) {
                   if (revision != SessionManager.revision.value) return;
-                  if (pending.selectedFile == null) {
+                  final file = pending.selectedFile;
+                  if (file == null) {
+                    // Ya subida a Drive antes de crear la nota: se vincula por
+                    // external_file_id (JSON) más abajo.
                     uploaded.add(pending);
                     continue;
                   }
-                  final file = pending.selectedFile!;
-                  final result = await _uploadAttachmentToDrive(
-                    selectedBytes: file.bytes,
+                  // Flujo canónico: el binario real se envía a
+                  // POST /notes/{note_id}/attachments (multipart) para que el
+                  // backend cree la fila en notes.note_attachments con este
+                  // note_id y, con Drive conectado, rellene external_file_id y
+                  // file_url. Se reescribe la referencia con el UUID devuelto.
+                  final result = await _uploadAttachmentBinary(
+                    noteId: realId,
+                    bytes: file.bytes,
                     fileName: file.name,
                     isInline: file.isImage,
                   );
                   if (revision != SessionManager.revision.value) return;
-                  if (result.ok && result.fileUrl != null) {
-                    uploaded.add(result);
+                  if (result.ok && result.attachmentId != null) {
                     finalContent = finalContent.replaceAll(
-                      pending.fileUrl!,
-                      result.fileUrl!,
+                      '(${pending.fileUrl})',
+                      '(attachment:${result.attachmentId})',
                     );
+                    _pendingAttachmentFiles.remove(pending.fileUrl);
                   } else if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
@@ -1489,6 +1736,28 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             ],
           ),
         ),
+        // Reconciliación manual con Drive: botón completo en desktop/tablet y
+        // botón de ícono en compact para no desbordar la barra superior.
+        if (MediaQuery.sizeOf(context).width < AppDimens.breakpointCompact)
+          NeobrutalistIconButton(
+            icon: Icons.cloud_sync_rounded,
+            tooltip: _isReconciling
+                ? 'Sincronizando…'
+                : 'Refrescar / sincronizar Drive',
+            variant: NeobrutalistButtonVariant.info,
+            onPressed: _isReconciling ? null : _syncWithDrive,
+          )
+        else
+          NeobrutalistButton(
+            label: _isReconciling
+                ? 'SINCRONIZANDO…'
+                : 'REFRESCAR / SINCRONIZAR DRIVE',
+            icon: Icons.cloud_sync_rounded,
+            variant: NeobrutalistButtonVariant.info,
+            borderWidth: AppDimens.borderWidthAction,
+            onPressed: _isReconciling ? null : _syncWithDrive,
+          ),
+        const SizedBox(width: AppDimens.spaceMd),
         // Creación contextual en desktop: botón con atajo visible junto a los
         // controles de vista. En mobile lo aporta el FAB del shell (solo en
         // la pestaña de Notas).
@@ -2372,6 +2641,9 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
   // IDs marcados para borrar al GUARDAR (Fase 5): X en Editar solo marca,
   // CANCELAR los restaura, GUARDAR hace PATCH y luego DELETE reales.
   final Set<String> _pendingRemovedIds = {};
+  // Respaldo para que CANCELAR restaure los adjuntos quitados durante Editar.
+  List<Map<String, dynamic>> _attachmentsBackup = [];
+  Set<String> _removedResourcesBackup = {};
   late String _title;
   late String _content;
   late int _likes;
@@ -2478,6 +2750,9 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
       _editing = true;
       _editError = null;
       _pendingRemovedIds.clear();
+      // Snapshot para que CANCELAR restaure el estado previo.
+      _attachmentsBackup = List<Map<String, dynamic>>.from(_attachments);
+      _removedResourcesBackup = Set<String>.from(_removedResources);
     });
   }
 
@@ -2489,8 +2764,12 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     setState(() {
       _editing = false;
       _editError = null;
-      // Cancelar no borra nada: se restauran los marcados.
+      // Cancelar no borra nada: se restauran los marcados y los adjuntos.
       _pendingRemovedIds.clear();
+      _attachments = List<Map<String, dynamic>>.from(_attachmentsBackup);
+      _removedResources
+        ..clear()
+        ..addAll(_removedResourcesBackup);
     });
     _releaseEditControllersAfterFrame();
   }
@@ -2792,17 +3071,48 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     }).toList();
   }
 
-  /// Marca/desmarca un adjunto para borrar al GUARDAR. No toca el servidor.
-  /// CANCELAR limpia [_pendingRemovedIds] y restaura todo.
-  void _togglePendingRemove(Map<String, dynamic> resource) {
+  /// Quita un adjunto de la lista en memoria, lo marca para DELETE al GUARDAR
+  /// y limpia automáticamente su referencia Markdown en el editor.
+  void _removeAttachmentResource(Map<String, dynamic> resource) {
     if (!widget.isMine) return;
     final id = resource['attachment_id'] as String?;
-    if (id == null || id.isEmpty) return;
+    final url = (resource['url'] ?? '') as String;
     setState(() {
-      if (_pendingRemovedIds.contains(id)) {
-        _pendingRemovedIds.remove(id);
-      } else {
+      if (id != null && id.isNotEmpty) {
         _pendingRemovedIds.add(id);
+        _removedResources.add('attachment:$id');
+        _attachments.removeWhere((a) => a['attachment_id'] == id);
+      } else {
+        _removedResources.add(resourceIdentity(url));
+        _attachments.removeWhere((a) => urlMatchesAttachment(a, url));
+      }
+    });
+    final ctrl = _contentCtrl;
+    if (ctrl != null) {
+      final cleaned = removeAttachmentReferences(ctrl.text, resource);
+      if (cleaned != ctrl.text) {
+        ctrl.value = TextEditingValue(
+          text: cleaned,
+          selection: TextSelection.collapsed(offset: cleaned.length),
+        );
+      }
+    }
+  }
+
+  /// X de las referencias detectadas en el texto: limpia el Markdown y quita de
+  /// la lista en memoria el adjunto resuelto por UUID o por identidad de URL.
+  void _removeResourceByUrl(String url) {
+    final ctrl = _contentCtrl;
+    if (ctrl != null) _removeAttachmentUrl(ctrl, url);
+    final inlineId = attachmentIdFromUrl(url);
+    setState(() {
+      if (inlineId.isNotEmpty) {
+        _pendingRemovedIds.add(inlineId);
+        _removedResources.add('attachment:$inlineId');
+        _attachments.removeWhere((a) => a['attachment_id'] == inlineId);
+      } else {
+        _removedResources.add(resourceIdentity(url));
+        _attachments.removeWhere((a) => urlMatchesAttachment(a, url));
       }
     });
   }
@@ -2826,7 +3136,9 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
       if (response.statusCode != 200 && response.statusCode != 204) {
         throw const FormatException('delete failed');
       }
-      debugPrint('[Notes] ATTACHMENT attachment=$id status=${response.statusCode} mime=-');
+      debugPrint(
+        '[Notes] ATTACHMENT attachment=$id status=${response.statusCode} mime=-',
+      );
       if (!mounted) return false;
       setState(() {
         _removedResources.add('attachment:$id');
@@ -2856,8 +3168,13 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     return Container(
       width: 160,
       decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: Colors.black, width: 2),
+        // Fondo neutro del canvas en lugar de blanco puro: cualquier hueco
+        // sobrante de la miniatura se funde con la paleta neobrutalista.
+        color: AppColors.bg,
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
         boxShadow: AppShadows.badge,
       ),
@@ -2869,8 +3186,10 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
           child,
           Container(
             decoration: const BoxDecoration(
-              border: Border(top: BorderSide(color: Colors.black, width: 2)),
-              color: Color(0xFFF5F0E8),
+              border: Border(
+                top: BorderSide(color: AppColors.border, width: 2),
+              ),
+              color: AppColors.bg,
             ),
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
             child: Text(
@@ -2880,7 +3199,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
               style: const TextStyle(
                 fontSize: 10,
                 fontWeight: FontWeight.w800,
-                color: Colors.black,
+                color: AppColors.text,
               ),
             ),
           ),
@@ -2925,10 +3244,8 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                 if (kEnableAttachmentRemoval)
                   _EditAttachmentChip(
                     resource: att,
-                    pending: _pendingRemovedIds.contains(
-                      att['attachment_id'],
-                    ),
-                    onToggle: () => _togglePendingRemove(att),
+                    pending: _pendingRemovedIds.contains(att['attachment_id']),
+                    onToggle: () => _removeAttachmentResource(att),
                   )
                 else
                   _AttachedFileChip(resource: att),
@@ -2955,6 +3272,9 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     final resources = _mergedResources;
     final images = resources.where((r) => r['type'] == 'image').toList();
     final docs = resources.where((r) => r['type'] != 'image').toList();
+    // La X solo aparece para el dueño durante la edición (marca pending y
+    // limpia el Markdown); en lectura pura las tarjetas son informativas.
+    final canRemove = widget.isMine && _editing;
     return <Widget>[
       if (images.isNotEmpty) ...[
         if (docs.isNotEmpty) ...[
@@ -2979,6 +3299,9 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                 _ResourceImageThumb(
                   resource: img,
                   onTap: () => _showResourceDialog(img),
+                  onRemove: canRemove
+                      ? () => _removeAttachmentResource(img)
+                      : null,
                 ),
               ),
           ],
@@ -3003,6 +3326,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
               resource: doc,
               onView: () => _showResourceDialog(doc),
               onDownload: _downloadResource,
+              onRemove: canRemove ? () => _removeAttachmentResource(doc) : null,
             ),
           ),
           const SizedBox(height: 8),
@@ -3222,10 +3546,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                     ],
                     _DetectedAttachmentsPreview(
                       content: _contentCtrl!.text,
-                      onRemoveSnippet: (url) {
-                        _removeAttachmentUrl(_contentCtrl!, url);
-                        setState(() {});
-                      },
+                      onRemoveSnippet: _removeResourceByUrl,
                       onPreviewResource: _showResourceDialog,
                     ),
                     _buildEditAttachments(),
@@ -3488,101 +3809,99 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
       closeOnConfirm: false,
       onConfirm: _submitting ? null : _submit,
       content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const AppFieldLabel('TÍTULO'),
-              const SizedBox(height: 4),
-              TextField(
-                controller: _titleCtrl,
-                decoration: appInputDecoration('Título'),
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const AppFieldLabel('TÍTULO'),
+          const SizedBox(height: 4),
+          TextField(
+            controller: _titleCtrl,
+            decoration: appInputDecoration('Título'),
+          ),
+          const SizedBox(height: 12),
+          const AppFieldLabel('CONTENIDO MARKDOWN'),
+          const SizedBox(height: 4),
+          TextField(
+            controller: _contentCtrl,
+            maxLines: 4,
+            decoration: appInputDecoration('Contenido Markdown'),
+          ),
+          const SizedBox(height: 8),
+          _AttachmentToolbar(
+            queueUntilCreated: true,
+            controller: _contentCtrl,
+            onChanged: () => setState(() {}),
+            onUploaded: _onAttachmentUploaded,
+            onWarning: _onAttachmentWarning,
+          ),
+          if (_attachNotice != null) ...[
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              decoration: BoxDecoration(
+                color: _attachNoticeOk
+                    ? AppColors.subjectMint
+                    : AppColors.accentYellow,
+                border: Border.all(color: AppColors.border, width: 1.5),
+                borderRadius: BorderRadius.circular(AppDimens.radiusChip),
               ),
-              const SizedBox(height: 12),
-              const AppFieldLabel('CONTENIDO MARKDOWN'),
-              const SizedBox(height: 4),
-              TextField(
-                controller: _contentCtrl,
-                maxLines: 4,
-                decoration: appInputDecoration('Contenido Markdown'),
-              ),
-              const SizedBox(height: 8),
-              _AttachmentToolbar(
-                queueUntilCreated: true,
-                controller: _contentCtrl,
-                onChanged: () => setState(() {}),
-                onUploaded: _onAttachmentUploaded,
-                onWarning: _onAttachmentWarning,
-              ),
-              if (_attachNotice != null) ...[
-                const SizedBox(height: 6),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 6,
+              child: Row(
+                children: [
+                  Icon(
+                    _attachNoticeOk
+                        ? Icons.cloud_done_rounded
+                        : Icons.info_outline_rounded,
+                    size: 14,
+                    color: AppColors.text,
                   ),
-                  decoration: BoxDecoration(
-                    color: _attachNoticeOk
-                        ? AppColors.subjectMint
-                        : AppColors.accentYellow,
-                    border: Border.all(color: AppColors.border, width: 1.5),
-                    borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        _attachNoticeOk
-                            ? Icons.cloud_done_rounded
-                            : Icons.info_outline_rounded,
-                        size: 14,
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      _attachNotice!,
+                      style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
                         color: AppColors.text,
                       ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          _attachNotice!,
-                          style: const TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w800,
-                            color: AppColors.text,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-              _DetectedAttachmentsPreview(
-                content: _contentCtrl.text,
-                onRemoveSnippet: (url) {
-                  _removeAttachmentUrl(_contentCtrl, url);
-                  _pendingAttachments.removeWhere((a) => a.fileUrl == url);
-                  setState(() {});
-                },
-                onPreviewResource: _showResource,
-              ),
-              const SizedBox(height: 12),
-              const AppFieldLabel('VISIBILIDAD'),
-              const SizedBox(height: 4),
-              Row(
-                children: [
-                  Expanded(
-                    child: _VisibilityOption(
-                      label: 'PÚBLICO',
-                      active: _visibility == 'public',
-                      onTap: () => setState(() => _visibility = 'public'),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _VisibilityOption(
-                      label: 'PRIVADO',
-                      active: _visibility == 'private',
-                      onTap: () => setState(() => _visibility = 'private'),
                     ),
                   ),
                 ],
               ),
+            ),
+          ],
+          _DetectedAttachmentsPreview(
+            content: _contentCtrl.text,
+            onRemoveSnippet: (url) {
+              _removeAttachmentUrl(_contentCtrl, url);
+              _pendingAttachments.removeWhere((a) => a.fileUrl == url);
+              _pendingAttachmentFiles.remove(url);
+              setState(() {});
+            },
+            onPreviewResource: _showResource,
+          ),
+          const SizedBox(height: 12),
+          const AppFieldLabel('VISIBILIDAD'),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Expanded(
+                child: _VisibilityOption(
+                  label: 'PÚBLICO',
+                  active: _visibility == 'public',
+                  onTap: () => setState(() => _visibility = 'public'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _VisibilityOption(
+                  label: 'PRIVADO',
+                  active: _visibility == 'private',
+                  onTap: () => setState(() => _visibility = 'private'),
+                ),
+              ),
             ],
+          ),
+        ],
       ),
     );
   }
@@ -3841,6 +4160,120 @@ Future<_DriveUploadResult> _uploadAttachmentToDrive({
   }
 }
 
+/// Resultado de asociar un binario a una nota con
+/// `POST /notes/{note_id}/attachments` (multipart/form-data). El backend crea
+/// la fila en `notes.note_attachments` y, con Drive conectado, sube el binario
+/// rellenando `external_file_id` y `file_url`.
+class _BinaryAttachmentResult {
+  final bool ok;
+  final String? attachmentId;
+  final String? fileUrl;
+  final String? externalFileId;
+  final String? message;
+
+  const _BinaryAttachmentResult({
+    required this.ok,
+    this.attachmentId,
+    this.fileUrl,
+    this.externalFileId,
+    this.message,
+  });
+}
+
+/// Asocia los bytes reales de un adjunto a [noteId] vía
+/// `POST /notes/{noteId}/attachments` en multipart/form-data (campo binario
+/// `file` + `is_inline`). Nunca lanza: ante fallo devuelve ok=false con un
+/// mensaje amigable para que el llamador conserve el respaldo local.
+Future<_BinaryAttachmentResult> _uploadAttachmentBinary({
+  required String noteId,
+  required List<int> bytes,
+  required String fileName,
+  required bool isInline,
+}) async {
+  final sessionToken = SessionManager.token;
+  if (sessionToken == null || sessionToken.isEmpty) {
+    return const _BinaryAttachmentResult(
+      ok: false,
+      message: 'Sin sesión activa: el adjunto quedó como referencia local.',
+    );
+  }
+  if (!_isRemoteNote(noteId)) {
+    return const _BinaryAttachmentResult(
+      ok: false,
+      message: 'La nota aún no tiene identificador del servidor.',
+    );
+  }
+  if (bytes.isEmpty) {
+    return const _BinaryAttachmentResult(
+      ok: false,
+      message: 'El archivo está vacío: no se puede adjuntar.',
+    );
+  }
+  if (bytes.length > 10 * 1024 * 1024) {
+    return const _BinaryAttachmentResult(
+      ok: false,
+      message: 'El archivo supera el límite de 10 MB.',
+    );
+  }
+  try {
+    final res = await AuthedHttp.run(
+      () => _withNotesClient((client) async {
+        final request = http.MultipartRequest(
+          'POST',
+          Uri.parse('$notesBaseUrl/notes/$noteId/attachments'),
+        );
+        request.headers['Authorization'] = 'Bearer ${SessionManager.token}';
+        request.fields['is_inline'] = isInline ? 'true' : 'false';
+        request.files.add(
+          http.MultipartFile.fromBytes('file', bytes, filename: fileName),
+        );
+        final streamed = await client
+            .send(request)
+            .timeout(const Duration(seconds: 30));
+        return http.Response.fromStream(
+          streamed,
+        ).timeout(const Duration(seconds: 30));
+      }),
+    );
+    final rawBody = utf8.decode(res.bodyBytes);
+    if (res.statusCode == 201) {
+      final data = jsonDecode(rawBody) as Map<String, dynamic>;
+      final id = (data['attachment_id'] as String?)?.trim() ?? '';
+      if (id.isEmpty) {
+        return const _BinaryAttachmentResult(
+          ok: false,
+          message: 'El servidor no devolvió el identificador del adjunto.',
+        );
+      }
+      return _BinaryAttachmentResult(
+        ok: true,
+        attachmentId: id,
+        fileUrl: (data['file_url'] as String?)?.trim(),
+        externalFileId: (data['external_file_id'] as String?)?.trim(),
+      );
+    }
+    return _BinaryAttachmentResult(
+      ok: false,
+      message: _uploadFailureMessage(
+        res.statusCode,
+        _parseBackendError(rawBody),
+      ),
+    );
+  } on TimeoutException {
+    return const _BinaryAttachmentResult(
+      ok: false,
+      message:
+          'Sin conexión con el servidor: el adjunto quedó como referencia local.',
+    );
+  } catch (_) {
+    return const _BinaryAttachmentResult(
+      ok: false,
+      message:
+          'No se pudo adjuntar el archivo a la nota: quedó como referencia local.',
+    );
+  }
+}
+
 /// Barra de botones de acción rápida para adjuntar imágenes o documentos.
 class _AttachmentToolbar extends StatelessWidget {
   final bool queueUntilCreated;
@@ -3996,7 +4429,8 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
   late final TextEditingController _urlCtrl;
   bool _uploading = false;
   bool _manual = false;
-  PickedNoteFile? _selected;
+  // Selección múltiple acumulada: cada IMAGEN/PDF añade sin borrar los previos.
+  final List<PickedNoteFile> _selected = <PickedNoteFile>[];
   String? _error;
 
   @override
@@ -4089,8 +4523,14 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
       final selected = await NoteFilePicker.pick(image: widget.isImage);
       if (!mounted || selected == null) return;
       setState(() {
-        _selected = selected;
-        _nameCtrl.text = selected.alt;
+        // Acumulación: se agrega a la lista en memoria sin descartar previos.
+        final duplicate = _selected.any(
+          (f) =>
+              f.name == selected.name &&
+              f.bytes.length == selected.bytes.length,
+        );
+        if (!duplicate) _selected.add(selected);
+        if (_selected.length == 1) _nameCtrl.text = _selected.first.alt;
         _error = null;
       });
     } on FormatException catch (e) {
@@ -4105,47 +4545,72 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
   }
 
   Future<void> _submitSelected() async {
-    final selected = _selected;
-    if (selected == null) return;
-    final label = _nameCtrl.text.trim().isEmpty
-        ? selected.alt
-        : _nameCtrl.text.trim();
+    final selected = List<PickedNoteFile>.from(_selected);
+    if (selected.isEmpty) return;
+    final manualLabel = _nameCtrl.text.trim();
     if (widget.queueUntilCreated) {
-      final placeholder =
-          'attachment-pending://${DateTime.now().microsecondsSinceEpoch}';
-      widget.onInsert(
-        '${selected.isImage ? '!' : ''}[${selected.isImage ? label : selected.name}]($placeholder)',
-      );
-      widget.onUploaded?.call(
-        _DriveUploadResult(
-          ok: true,
-          selectedFile: selected,
-          fileUrl: placeholder,
-          fileName: selected.name,
-          fileType: selected.mime,
-          isInline: selected.isImage,
-          fileSizeBytes: selected.bytes.length,
-        ),
-      );
+      for (final file in selected) {
+        final label = (manualLabel.isEmpty || selected.length > 1)
+            ? file.alt
+            : manualLabel;
+        final placeholder =
+            'attachment-pending://${DateTime.now().microsecondsSinceEpoch}-${file.name}';
+        // Conserva los bytes para previsualizar en local y reintentar la
+        // subida desde REFRESCAR si el alta remota de la nota falla.
+        _pendingAttachmentFiles[placeholder] = file;
+        widget.onInsert(
+          '${file.isImage ? '!' : ''}[${file.isImage ? label : file.name}]($placeholder)',
+        );
+        widget.onUploaded?.call(
+          _DriveUploadResult(
+            ok: true,
+            selectedFile: file,
+            fileUrl: placeholder,
+            fileName: file.name,
+            fileType: file.mime,
+            isInline: file.isImage,
+            fileSizeBytes: file.bytes.length,
+          ),
+        );
+      }
       Navigator.pop(context);
       return;
     }
     setState(() => _uploading = true);
-    final result = await _uploadAttachmentToDrive(
-      selectedBytes: selected.bytes,
-      fileName: selected.name,
-      isInline: selected.isImage,
-    );
+    final failed = <PickedNoteFile>[];
+    for (final file in selected) {
+      final label = (manualLabel.isEmpty || selected.length > 1)
+          ? file.alt
+          : manualLabel;
+      final result = await _uploadAttachmentToDrive(
+        selectedBytes: file.bytes,
+        fileName: file.name,
+        isInline: file.isImage,
+      );
+      if (!mounted) return;
+      if (result.ok && result.fileUrl != null) {
+        widget.onInsert(
+          '${result.isInline ? '!' : ''}[$label](${result.fileUrl})',
+        );
+        widget.onUploaded?.call(result);
+      } else {
+        failed.add(file);
+      }
+    }
     if (!mounted) return;
-    if (!result.ok) {
+    if (failed.isNotEmpty) {
       setState(() {
         _uploading = false;
-        _error = result.message ?? 'No se pudo subir el archivo.';
+        _selected
+          ..clear()
+          ..addAll(failed);
+        _error = failed.length == selected.length
+            ? 'No se pudieron subir los archivos. Inténtalo nuevamente.'
+            : 'Algunos archivos no se pudieron subir: '
+                  '${failed.map((f) => f.name).join(', ')}.';
       });
       return;
     }
-    widget.onInsert('${result.isInline ? '!' : ''}[$label](${result.fileUrl})');
-    widget.onUploaded?.call(result);
     Navigator.pop(context);
   }
 
@@ -4191,24 +4656,61 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
         children: [
           if (!_manual) ...[
             NeobrutalistButton(
-              label: _selected == null
+              label: _selected.isEmpty
                   ? (isImage ? 'SELECCIONAR IMAGEN' : 'SELECCIONAR PDF')
-                  : 'CAMBIAR',
+                  : (isImage ? 'AGREGAR OTRA IMAGEN' : 'AGREGAR OTRO PDF'),
               icon: isImage
                   ? Icons.add_photo_alternate_rounded
                   : Icons.picture_as_pdf_rounded,
               onPressed: _uploading ? null : _pick,
             ),
-            if (_selected != null) ...[
+            if (_selected.isNotEmpty) ...[
               const SizedBox(height: 8),
-              Text(
-                '${_selected!.name} · ${_selected!.sizeLabel}',
-                style: const TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.text,
+              for (final file in _selected)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Row(
+                    children: [
+                      Icon(
+                        file.isImage
+                            ? Icons.image_rounded
+                            : Icons.picture_as_pdf_rounded,
+                        size: 14,
+                        color: AppColors.text,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          '${file.name} · ${file.sizeLabel}',
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.text,
+                          ),
+                        ),
+                      ),
+                      if (!_uploading)
+                        MouseRegion(
+                          cursor: SystemMouseCursors.click,
+                          child: GestureDetector(
+                            onTap: () => setState(() => _selected.remove(file)),
+                            child: const Padding(
+                              padding: EdgeInsets.symmetric(
+                                horizontal: 4,
+                                vertical: 2,
+                              ),
+                              child: Icon(
+                                Icons.close_rounded,
+                                size: 14,
+                                color: AppColors.text,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
-              ),
             ],
             const SizedBox(height: 8),
           ],
@@ -4417,13 +4919,13 @@ class _DetectedAttachmentChip extends StatelessWidget {
   }
 }
 
-/// TODO: reactivar eliminación de adjuntos tras validar DELETE E2E.
-/// Bandera temporal: la acción QUITAR falla en manual, así que no se expone
-/// en la UI hasta completar la validación. El backend DELETE se conserva.
-const bool kEnableAttachmentRemoval = false;
+/// Eliminación de adjuntos habilitada: la X quita el adjunto de la lista en
+/// memoria, limpia su referencia Markdown y lo marca para DELETE al GUARDAR.
+const bool kEnableAttachmentRemoval = true;
 
-/// Chip de ADJUNTOS VINCULADOS en modo Editar: X marca pending (no borra).
-/// Key `remove-<attachment_id>` preservada para tests y accesibilidad.
+/// Chip de ADJUNTOS VINCULADOS en modo Editar: X quita el adjunto y limpia el
+/// Markdown; el DELETE físico se ejecuta al GUARDAR. Key
+/// `remove-<attachment_id>` preservada para tests y accesibilidad.
 class _EditAttachmentChip extends StatelessWidget {
   final Map<String, dynamic> resource;
   final bool pending;
@@ -4506,9 +5008,7 @@ class _EditAttachmentChip extends StatelessWidget {
                     vertical: 4,
                   ),
                   child: Icon(
-                    pending
-                        ? Icons.undo_rounded
-                        : Icons.close_rounded,
+                    pending ? Icons.undo_rounded : Icons.close_rounded,
                     size: 13,
                     color: AppColors.text,
                   ),
@@ -4700,6 +5200,17 @@ Widget _buildResourceImage({
   Widget Function(BuildContext, Widget, ImageChunkEvent?)? loadingBuilder,
   String debugLabel = 'ATTACHMENT',
 }) {
+  // Adjunto en memoria de una nota local aún sin subir: se pinta el binario
+  // local (no se dispara el endpoint ni el error de "IMAGEN NO DISPONIBLE").
+  final pending = _pendingAttachmentFiles[url.trim()];
+  if (pending != null) {
+    return Image.memory(
+      pending.bytes,
+      fit: fit,
+      gaplessPlayback: true,
+      errorBuilder: (_, _, _) => fallback(),
+    );
+  }
   if (resource?['note_id'] is String && resource?['attachment_id'] is String) {
     final noteId = Uri.encodeComponent(resource!['note_id'] as String);
     final attachmentId = Uri.encodeComponent(
@@ -4713,6 +5224,7 @@ Widget _buildResourceImage({
       fit: fit,
       client: notesHttpClientOverride,
       debugLabel: debugLabel,
+      externalFileId: resource['external_file_id'] as String?,
       onOpenDrive: () => _openResourceExternally(url),
     );
   }
@@ -4720,7 +5232,9 @@ Widget _buildResourceImage({
   // no intentar Drive ni red, mostrar fallback compacto directamente.
   // Esto evita pedir un UUID stale y permite diagnosticar el mismatch.
   if (url.trim().startsWith('attachment:')) {
-    debugPrint('[Notes] $debugLabel attachment=${url.trim()} status=unresolved mime=-');
+    debugPrint(
+      '[Notes] $debugLabel attachment=${url.trim()} status=unresolved mime=-',
+    );
     return fallback();
   }
   if (isDriveViewerUrl(url)) {
@@ -4779,10 +5293,16 @@ Widget _buildResourceImage({
 
 /// Miniatura de recurso de imagen: borde de tinta de 2 px, sombra dura y
 /// errorBuilder neobrutalista si la red falla. Tap abre el visor en grande.
+/// Con [onRemove] muestra una X neobrutalista para quitar el adjunto.
 class _ResourceImageThumb extends StatelessWidget {
   final Map<String, dynamic> resource;
   final VoidCallback onTap;
-  const _ResourceImageThumb({required this.resource, required this.onTap});
+  final VoidCallback? onRemove;
+  const _ResourceImageThumb({
+    required this.resource,
+    required this.onTap,
+    this.onRemove,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -4814,11 +5334,10 @@ class _ResourceImageThumb extends StatelessWidget {
       child: GestureDetector(
         onTap: onTap,
         child: Container(
-          width: 104,
-          height: 78,
-          clipBehavior: Clip.hardEdge,
+          width: 120,
+          height: 120,
           decoration: BoxDecoration(
-            color: AppColors.surface,
+            color: AppColors.border,
             border: Border.all(
               color: AppColors.border,
               width: AppDimens.borderWidth,
@@ -4826,27 +5345,136 @@ class _ResourceImageThumb extends StatelessWidget {
             borderRadius: BorderRadius.circular(AppDimens.radius),
             boxShadow: AppShadows.badge,
           ),
-          child: _buildResourceImage(
-            url: (resource['url'] ?? '') as String,
-            resource: resource,
-            fit: BoxFit.cover,
-            debugLabel: 'ATTACHMENT',
-            fallback: fallback,
-            loadingBuilder: (context, child, progress) {
-              if (progress == null) return child;
-              return Container(
-                color: AppColors.bg,
-                alignment: Alignment.center,
-                child: const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2.5,
-                    color: AppColors.border,
+          child: ClipRect(
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                _buildResourceImage(
+                  url: (resource['url'] ?? '') as String,
+                  resource: resource,
+                  fit: BoxFit.cover,
+                  debugLabel: 'ATTACHMENT',
+                  fallback: fallback,
+                  loadingBuilder: (context, child, progress) {
+                    if (progress == null) return child;
+                    return const Center(
+                      child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: AppColors.surface,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                Positioned(
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  child: Container(
+                    padding: const EdgeInsets.all(AppDimens.spaceXs),
+                    decoration: const BoxDecoration(
+                      color: AppColors.surface,
+                      border: Border(
+                        top: BorderSide(
+                          color: AppColors.border,
+                          width: AppDimens.borderWidth,
+                        ),
+                      ),
+                    ),
+                    child: Text(
+                      (resource['name'] ?? 'IMAGEN') as String,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w900,
+                        color: AppColors.text,
+                      ),
+                    ),
                   ),
                 ),
-              );
+                if (onRemove != null)
+                  Positioned(
+                    top: AppDimens.spaceXs,
+                    right: AppDimens.spaceXs,
+                    child: _ResourceRemoveButton(onRemove: onRemove!),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Botón X neobrutalista reutilizable para quitar un recurso adjunto.
+class _ResourceRemoveButton extends StatefulWidget {
+  final VoidCallback onRemove;
+  const _ResourceRemoveButton({required this.onRemove});
+
+  @override
+  State<_ResourceRemoveButton> createState() => _ResourceRemoveButtonState();
+}
+
+class _ResourceRemoveButtonState extends State<_ResourceRemoveButton> {
+  bool _pressed = false;
+  bool _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    const size = 24.0;
+    return Semantics(
+      button: true,
+      label: 'Quitar adjunto',
+      child: Tooltip(
+        message: 'Quitar adjunto',
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: Focus(
+            onFocusChange: (focused) => setState(() => _focused = focused),
+            onKeyEvent: (_, event) {
+              if (event is KeyDownEvent &&
+                  (event.logicalKey == LogicalKeyboardKey.enter ||
+                      event.logicalKey == LogicalKeyboardKey.space)) {
+                widget.onRemove();
+                return KeyEventResult.handled;
+              }
+              return KeyEventResult.ignored;
             },
+            child: GestureDetector(
+              onTap: widget.onRemove,
+              onTapDown: (_) => setState(() => _pressed = true),
+              onTapUp: (_) => setState(() => _pressed = false),
+              onTapCancel: () => setState(() => _pressed = false),
+              child: AnimatedContainer(
+                duration: MediaQuery.disableAnimationsOf(context)
+                    ? Duration.zero
+                    : AppMotion.press,
+                width: size,
+                height: size,
+                alignment: Alignment.center,
+                transform: Matrix4.translationValues(
+                  _pressed ? AppShadows.offsetBadge.dx : 0,
+                  _pressed ? AppShadows.offsetBadge.dy : 0,
+                  0,
+                ),
+                decoration: BoxDecoration(
+                  color: _focused ? AppColors.surface : AppColors.errorDeep,
+                  border: Border.all(color: AppColors.border, width: 1.5),
+                  borderRadius: BorderRadius.circular(AppDimens.radius),
+                  boxShadow: _pressed ? const [] : AppShadows.badge,
+                ),
+                child: Icon(
+                  Icons.close_rounded,
+                  size: 16,
+                  color: _focused ? AppColors.errorDeep : AppColors.surface,
+                ),
+              ),
+            ),
           ),
         ),
       ),
@@ -4860,10 +5488,12 @@ class _ResourceDocTile extends StatelessWidget {
   final Map<String, dynamic> resource;
   final VoidCallback onView;
   final ValueChanged<Map<String, dynamic>> onDownload;
+  final VoidCallback? onRemove;
   const _ResourceDocTile({
     required this.resource,
     required this.onView,
     required this.onDownload,
+    this.onRemove,
   });
 
   @override
@@ -4939,6 +5569,15 @@ class _ResourceDocTile extends StatelessWidget {
             fill: AppColors.border,
             foreground: AppColors.surface,
           ),
+          if (onRemove != null) ...[
+            const SizedBox(width: 6),
+            _DocAction(
+              label: 'X',
+              onTap: onRemove!,
+              fill: AppColors.errorDeep,
+              foreground: AppColors.surface,
+            ),
+          ],
         ],
       ),
     );
@@ -5085,10 +5724,10 @@ class _ResourceViewerDialog extends StatelessWidget {
     return info.isRemote
         ? (isDriveViewerUrl(_url) ? 'ABRIR EN DRIVE' : 'ABRIR')
         : ((resource['type'] == 'image')
-            ? 'DESCARGAR'
-            : (_isWindows
-                  ? 'ABRIR EN VISOR DE WINDOWS'
-                  : 'ABRIR EN VISOR DEL SISTEMA'));
+              ? 'DESCARGAR'
+              : (_isWindows
+                    ? 'ABRIR EN VISOR DE WINDOWS'
+                    : 'ABRIR EN VISOR DEL SISTEMA'));
   }
 
   void _onPrimary(BuildContext context) {

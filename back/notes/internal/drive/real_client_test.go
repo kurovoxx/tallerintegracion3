@@ -483,6 +483,41 @@ func TestMockCreateFileIndexesAppPropertiesAndFindsByNoteID(t *testing.T) {
 	}
 }
 
+// UploadAttachment indexa el binario con la nota/dueño y una marca
+// notes_attachment, pero FindFileByNoteID nunca debe devolverlo en lugar del
+// .md (rompería la recuperación de huérfanos con bytes de imagen/PDF).
+func TestMockUploadAttachmentIndexedButNotAdoptedAsNoteFile(t *testing.T) {
+	ctx := context.Background()
+	m := NewMockClient()
+	owner := "owner-att"
+	noteID := "note-att"
+	attID, _, err := m.UploadAttachment(ctx, owner, noteID, "foto", "image/png", []byte("img"), false)
+	if err != nil {
+		t.Fatalf("upload attachment failed: %v", err)
+	}
+	props, ok := m.FileAppProperties(attID)
+	if !ok {
+		t.Fatal("el adjunto debe existir")
+	}
+	if props["notes_note_id"] != noteID || props["notes_owner_user_id"] != owner || props["notes_attachment"] != "1" {
+		t.Fatalf("appProperties del adjunto incorrectas: %v", props)
+	}
+	if mt, _ := m.FileMimeType(attID); mt != "image/png" {
+		t.Fatalf("mime del adjunto = %q, want image/png", mt)
+	}
+	mdID, err := m.CreateFile(ctx, owner, noteID, "nota.md", "contenido")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	found, err := m.FindFileByNoteID(ctx, owner, noteID)
+	if err != nil {
+		t.Fatalf("FindFileByNoteID: %v", err)
+	}
+	if found != mdID {
+		t.Fatalf("FindFileByNoteID = %q, want el .md %q (no el adjunto %q)", found, mdID, attID)
+	}
+}
+
 // CopyFile indexa el clon con el notes_note_id de la NUEVA nota y el dueño
 // destino, permitiendo recuperarlo tras un crash.
 func TestMockCopyFileIndexesNewNoteID(t *testing.T) {

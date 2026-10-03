@@ -160,7 +160,13 @@ func (r *RealDriveClient) FindFileByNoteID(ctx context.Context, ownerUserID stri
 	if err != nil {
 		return "", err
 	}
-	query := fmt.Sprintf("appProperties has { key='notes_note_id' and value='%s' } and trashed = false", escapeDriveQueryValue(noteID))
+	// Excluye adjuntos (notes_attachment=1): solo el .md se adopta como
+	// archivo de la nota. Un binario con la misma notes_note_id nunca debe
+	// devolverse aquí (rompería la recuperación de huérfanos con bytes).
+	query := fmt.Sprintf(
+		"appProperties has { key='notes_note_id' and value='%s' } and not appProperties has { key='notes_attachment' } and trashed = false",
+		escapeDriveQueryValue(noteID),
+	)
 	list, err := srv.Files.List().Q(query).Fields("files(id,appProperties)").PageSize(100).Context(ctx).Do()
 	if err != nil {
 		return "", mapGoogleError("FindFileByNoteID", err)
@@ -245,6 +251,9 @@ func (r *RealDriveClient) UploadAttachment(ctx context.Context, userID string, n
 	// último recurso, por sniffing del binario. Así Drive guarda
 	// image/jpeg, image/png, application/pdf o text/markdown correctos.
 	fileType = DetectMimeType(fileName, fileType, data)
+	// Garantiza nombre con extensión coherente (imagen.png, documento.pdf):
+	// sin ella Drive muestra el binario como octet-stream sin previsualización.
+	fileName = ensureAttachmentFileName(fileName, fileType)
 	srv, err := r.serviceFor(ctx, userID)
 	if err != nil {
 		return "", "", err
@@ -253,7 +262,19 @@ func (r *RealDriveClient) UploadAttachment(ctx context.Context, userID string, n
 	if err != nil {
 		return "", "", err
 	}
-	f, err := srv.Files.Create(&drive.File{Name: fileName, MimeType: fileType, Parents: []string{folderID}}).
+	// El binario se crea junto al .md en la carpeta de la app y se indexa con
+	// las mismas appProperties (dueño + nota) que el Markdown, de modo que
+	// ambos archivos quedan ligados a la misma nota en Google Drive. UploadToDrive
+	// lo invoca con noteID vacío (nota aún sin crear) y AddAttachment lo vincula
+	// después; cuando el noteID existe, el adjunto nace ya asociado.
+	props := attachmentFileProperties(userID, noteID)
+	_ = isInline // la clase inline/adjunto vive en Postgres, no en Drive.
+	f, err := srv.Files.Create(&drive.File{
+		Name:          fileName,
+		MimeType:      fileType,
+		Parents:       []string{folderID},
+		AppProperties: props,
+	}).
 		Media(bytes.NewReader(data)).
 		Fields("id, webViewLink").
 		Context(ctx).
@@ -265,8 +286,6 @@ func (r *RealDriveClient) UploadAttachment(ctx context.Context, userID string, n
 	if url == "" {
 		url = fmt.Sprintf("https://drive.google.com/file/d/%s/view", f.Id)
 	}
-	_ = noteID
-	_ = isInline
 	return f.Id, url, nil
 }
 

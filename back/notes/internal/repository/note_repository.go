@@ -415,7 +415,7 @@ func (r *NoteRepository) EnqueueDriveOperation(ctx context.Context, db DBTX, op,
 	_, err = db.Exec(ctx, `INSERT INTO notes.drive_reconciliation_queue
 		(operation, note_id, attachment_id, external_file_id, owner_user_id, payload)
 		VALUES ($1, NULLIF($2, '')::uuid, NULLIF($3, '')::uuid, NULLIF($4, ''), $5::uuid, $6::jsonb)`,
-		op, noteID, attID, fileID, ownerUserID, body)
+		op, noteID, attID, fileID, ownerUserID, string(body))
 	if err != nil {
 		return fmt.Errorf("enqueue drive operation: %w", err)
 	}
@@ -509,8 +509,24 @@ func (r *NoteRepository) DeleteWithDriveCleanup(ctx context.Context, noteID, req
 			return "", err
 		}
 	}
-	if err := r.Delete(ctx, tx, noteID); err != nil {
-		return "", err
+	// Older deployments may have restrictive foreign keys instead of CASCADE.
+	// Delete dependents explicitly while the parent lock protects ownership.
+	for _, query := range []string{
+		`DELETE FROM notes.note_attachments WHERE note_id = $1`,
+		`DELETE FROM notes.saved_notes WHERE note_id = $1`,
+		`DELETE FROM notes.note_likes WHERE note_id = $1`,
+		`DELETE FROM notes.shared_notes WHERE note_id = $1`,
+	} {
+		if _, err := tx.Exec(ctx, query, noteID); err != nil {
+			return "", fmt.Errorf("cleanup note dependents: %w", err)
+		}
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM notes.notes WHERE id = $1 AND user_id = $2`, noteID, requesterID)
+	if err != nil {
+		return "", fmt.Errorf("delete note: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return "", ErrNotFound
 	}
 	// La tabla de permisos administrados no tiene FK a notes.notes: el estado
 	// local del desired-state se limpia en la misma transacción para no dejar

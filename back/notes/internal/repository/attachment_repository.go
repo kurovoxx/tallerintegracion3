@@ -120,8 +120,12 @@ func (r *AttachmentRepository) DeleteAttachmentWithDriveCleanup(ctx context.Cont
 			return "", err
 		}
 	}
-	if err := r.Delete(ctx, tx, attachmentID); err != nil {
-		return "", err
+	tag, err := tx.Exec(ctx, `DELETE FROM notes.note_attachments WHERE id = $1 AND note_id = $2`, attachmentID, noteID)
+	if err != nil {
+		return "", fmt.Errorf("delete attachment: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return "", ErrNotFound
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return "", fmt.Errorf("commit delete attachment: %w", err)

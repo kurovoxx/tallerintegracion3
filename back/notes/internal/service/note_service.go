@@ -204,7 +204,7 @@ func (s *NoteService) beginIdempotentOperation(ctx context.Context, userID, oper
 			return rec, nil, false, newServiceError(utils.ErrConflict)
 		}
 		if rec.ResourceID != nil {
-			existing, getErr := s.notes.GetByID(ctx, *rec.ResourceID)
+			existing, getErr := s.observedNotesGetByID(ctx, *rec.ResourceID)
 			if getErr != nil {
 				return rec, nil, false, ErrInternalDatabase
 			}
@@ -370,7 +370,7 @@ func (s *NoteService) findOrphanDriveFile(ctx context.Context, ownerUserID, note
 	var fileID string
 	if err := retryDriveOperation(findCtx, driveRetryMaxAttempts, func() error {
 		var opErr error
-		fileID, opErr = s.drive.FindFileByNoteID(findCtx, ownerUserID, noteID)
+		fileID, opErr = s.observedDriveFindFileByNoteID(findCtx, ownerUserID, noteID)
 		return opErr
 	}); err != nil {
 		return "", err
@@ -745,13 +745,13 @@ func (s *NoteService) Create(ctx context.Context, userID string, title string, s
 	// El id preasignado se materializa en la fila; si el intento anterior murió
 	// después de insertarla, el retry reutiliza esa misma fila (sin duplicar).
 	if recoveredFromCrash {
-		note, err = s.notes.GetByID(ctx, noteID)
+		note, err = s.observedNotesGetByID(ctx, noteID)
 		if err != nil {
 			return nil, ErrInternalDatabase
 		}
 	}
 	if note == nil {
-		note, err = s.notes.Create(ctx, noteID, userID, subjectID, title, nil, visibility, nil, "pending_drive")
+		note, err = s.observedNotesCreate(ctx, noteID, userID, subjectID, title, nil, visibility, nil, "pending_drive")
 		if err != nil {
 			return nil, ErrInternalDatabase
 		}
@@ -778,7 +778,7 @@ func (s *NoteService) Create(ctx context.Context, userID string, title string, s
 	if driveFileID == "" && recoveredFromCrash {
 		found, findErr := s.findOrphanDriveFile(ctx, userID, note.ID)
 		if findErr != nil {
-			_ = s.notes.UpdateSyncStatus(ctx, note.ID, "failed_sync")
+			_ = s.observedNotesUpdateSyncStatus(ctx, note.ID, "failed_sync")
 			log.Printf("notes: create retry nota %s: no se pudo verificar el huérfano en Drive: %v", note.ID, findErr)
 			return nil, ErrDriveUnavailable
 		}
@@ -788,13 +788,13 @@ func (s *NoteService) Create(ctx context.Context, userID string, title string, s
 		driveCtx, cancelDrive := withDriveTimeout(ctx)
 		err = retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
 			var opErr error
-			driveFileID, opErr = s.drive.CreateFile(driveCtx, userID, note.ID, title+".md", mdContent)
+			driveFileID, opErr = s.observedDriveCreateFile(driveCtx, userID, note.ID, title+".md", mdContent)
 			return opErr
 		})
 		cancelDrive()
 		if err != nil {
 			// Drive falló: marcar nota como failed_sync para reconciliación
-			_ = s.notes.UpdateSyncStatus(ctx, note.ID, "failed_sync")
+			_ = s.observedNotesUpdateSyncStatus(ctx, note.ID, "failed_sync")
 			// OAuth ausente/revocado: 403 genérico sin filtrar texto interno.
 			if drive.IsOAuthError(err) {
 				return nil, newServiceErrorMsg(utils.ErrForbidden, "Conecte o renueve su Google Drive")
@@ -814,14 +814,14 @@ func (s *NoteService) Create(ctx context.Context, userID string, title string, s
 	// adoptado por recovery de crash no se toca para no duplicar permisos.
 	if visibility == "public" && createdDriveFile {
 		permissionCtx, cancelPermission := withDriveTimeout(ctx)
-		linkPermissionID, permissionErr := s.drive.GrantLinkPermission(permissionCtx, userID, driveFileID)
+		linkPermissionID, permissionErr := s.observedDriveGrantLinkPermission(permissionCtx, userID, driveFileID)
 		cancelPermission()
 		if permissionErr != nil {
 			cleanupCtx, cancelCleanup := withDriveTimeout(context.WithoutCancel(ctx))
 			defer cancelCleanup()
-			_ = s.notes.UpdateSyncStatus(cleanupCtx, note.ID, "failed_sync")
-			if cleanupErr := s.drive.DeleteFile(cleanupCtx, userID, driveFileID); cleanupErr != nil && !drive.IsNotFound(cleanupErr) {
-				_ = s.notes.EnqueueDriveOperation(cleanupCtx, "delete_file", note.ID, "", driveFileID, userID, map[string]any{"reason": "public_permission_failed"})
+			_ = s.observedNotesUpdateSyncStatus(cleanupCtx, note.ID, "failed_sync")
+			if cleanupErr := s.observedDriveDeleteFile(cleanupCtx, userID, driveFileID); cleanupErr != nil && !drive.IsNotFound(cleanupErr) {
+				_ = s.observedNotesEnqueueDriveOperation(cleanupCtx, "delete_file", note.ID, "", driveFileID, userID, map[string]any{"reason": "public_permission_failed"})
 			}
 			return nil, ErrDriveUnavailable
 		}
@@ -838,9 +838,9 @@ func (s *NoteService) Create(ctx context.Context, userID string, title string, s
 	}
 
 	// 3. Actualizar metadata en PG con external_file_id y sync_status='synced'
-	if err := s.notes.UpdateExternalFileID(ctx, note.ID, driveFileID); err != nil {
+	if err := s.observedNotesUpdateExternalFileID(ctx, note.ID, driveFileID); err != nil {
 		// Compensación: PG falló tras Drive OK -> borrar huérfano y marcar failed_sync.
-		_ = s.notes.UpdateSyncStatus(ctx, note.ID, "failed_sync")
+		_ = s.observedNotesUpdateSyncStatus(ctx, note.ID, "failed_sync")
 		_ = s.shared.DeleteManagedPermissionsByNote(ctx, note.ID)
 		if !createdDriveFile {
 			// El archivo adoptado pertenece a un intento previo que sí lo creó:
@@ -850,11 +850,11 @@ func (s *NoteService) Create(ctx context.Context, userID string, title string, s
 		}
 		compCtx, cancelComp := withDriveTimeout(ctx)
 		compErr := retryDriveOperation(compCtx, driveRetryMaxAttempts, func() error {
-			return s.drive.DeleteFile(compCtx, userID, driveFileID)
+			return s.observedDriveDeleteFile(compCtx, userID, driveFileID)
 		})
 		cancelComp()
 		if compErr != nil && !drive.IsNotFound(compErr) {
-			_ = s.notes.EnqueueDriveOperation(ctx, "delete_file", note.ID, "", driveFileID, userID, map[string]any{"reason": "create_orphan_failed"})
+			_ = s.observedNotesEnqueueDriveOperation(ctx, "delete_file", note.ID, "", driveFileID, userID, map[string]any{"reason": "create_orphan_failed"})
 			log.Printf("[CRITICAL_UNRECONCILED] notes: create compensación falló (file %s): %v - PG error: %v", driveFileID, compErr, err)
 		} else {
 			log.Printf("notes: create compensación OK (huérfano Drive %s eliminado tras fallo PG)", driveFileID)
@@ -863,7 +863,7 @@ func (s *NoteService) Create(ctx context.Context, userID string, title string, s
 	}
 
 	// Recuperar nota actualizada con external_file_id y sync_status
-	updated, err := s.notes.GetByID(ctx, note.ID)
+	updated, err := s.observedNotesGetByID(ctx, note.ID)
 	if err != nil {
 		return nil, ErrInternalDatabase
 	}
@@ -881,7 +881,7 @@ func (s *NoteService) Get(ctx context.Context, requesterID string, noteID string
 	if !utils.ValidateUUID(noteID) {
 		return nil, newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
 	}
-	note, err := s.notes.GetByID(ctx, noteID)
+	note, err := s.observedNotesGetByID(ctx, noteID)
 	if err != nil {
 		return nil, ErrInternalDatabase
 	}
@@ -907,7 +907,7 @@ func (s *NoteService) Get(ctx context.Context, requesterID string, noteID string
 	var content string
 	err = retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
 		var opErr error
-		content, opErr = s.drive.GetFileContent(driveCtx, note.UserID, *note.ExternalFileID)
+		content, opErr = s.observedDriveGetFileContent(driveCtx, note.UserID, *note.ExternalFileID)
 		return opErr
 	})
 	cancelDrive()
@@ -945,7 +945,7 @@ func (s *NoteService) ListMy(ctx context.Context, userID string, cursor string, 
 	if cursor != "" && !utils.ValidateUUID(cursor) {
 		return nil, "", newServiceErrorMsg(utils.ErrBadRequest, "cursor inválido")
 	}
-	notes, next, err := s.notes.ListByUser(ctx, userID, cursor, limit)
+	notes, next, err := s.observedNotesListByUser(ctx, userID, cursor, limit)
 	if err != nil {
 		return nil, "", ErrInternalDatabase
 	}
@@ -1028,7 +1028,7 @@ func (s *NoteService) updateInner(ctx context.Context, userID string, noteID str
 }
 
 func (s *NoteService) updateInnerLocked(ctx context.Context, userID string, noteID string, title *string, visibility *string, content *string, expectedVersion int64) (*model.Note, error) {
-	note, err := s.notes.GetByID(ctx, noteID)
+	note, err := s.observedNotesGetByID(ctx, noteID)
 	if err != nil {
 		return nil, ErrInternalDatabase
 	}
@@ -1085,7 +1085,7 @@ func (s *NoteService) updateInnerLocked(ctx context.Context, userID string, note
 		var prevContent string
 		readErr := retryDriveOperation(snapCtx, driveRetryMaxAttempts, func() error {
 			var opErr error
-			prevContent, opErr = s.drive.GetFileContent(snapCtx, userID, fileID)
+			prevContent, opErr = s.observedDriveGetFileContent(snapCtx, userID, fileID)
 			return opErr
 		})
 		cancelSnap()
@@ -1109,7 +1109,7 @@ func (s *NoteService) updateInnerLocked(ctx context.Context, userID string, note
 		}
 		updCtx, cancelUpd := withDriveTimeout(ctx)
 		updErr := retryDriveOperation(updCtx, driveRetryMaxAttempts, func() error {
-			return s.drive.UpdateFile(updCtx, userID, fileID, content, newTitle)
+			return s.observedDriveUpdateFile(updCtx, userID, fileID, content, newTitle)
 		})
 		cancelUpd()
 		if updErr != nil {
@@ -1131,7 +1131,7 @@ func (s *NoteService) updateInnerLocked(ctx context.Context, userID string, note
 		var newFileID string
 		err = retryDriveOperation(healCtx, driveRetryMaxAttempts, func() error {
 			var opErr error
-			newFileID, opErr = s.drive.CreateFile(healCtx, userID, noteID, titleForFile+".md", *content)
+			newFileID, opErr = s.observedDriveCreateFile(healCtx, userID, noteID, titleForFile+".md", *content)
 			return opErr
 		})
 		cancelHeal()
@@ -1145,17 +1145,17 @@ func (s *NoteService) updateInnerLocked(ctx context.Context, userID string, note
 			}
 			return nil, ErrDriveUnavailable
 		}
-		if err := s.notes.UpdateExternalFileID(ctx, noteID, newFileID); err != nil {
+		if err := s.observedNotesUpdateExternalFileID(ctx, noteID, newFileID); err != nil {
 			// Compensación: PG falló tras CreateFile OK -> marcar failed_sync
 			// y borrar huérfano.
-			_ = s.notes.UpdateSyncStatus(ctx, noteID, "failed_sync")
+			_ = s.observedNotesUpdateSyncStatus(ctx, noteID, "failed_sync")
 			compCtx, cancelComp := withDriveTimeout(ctx)
 			compErr := retryDriveOperation(compCtx, driveRetryMaxAttempts, func() error {
-				return s.drive.DeleteFile(compCtx, userID, newFileID)
+				return s.observedDriveDeleteFile(compCtx, userID, newFileID)
 			})
 			cancelComp()
 			if compErr != nil && !drive.IsNotFound(compErr) {
-				_ = s.notes.EnqueueDriveOperation(ctx, "delete_file", noteID, "", newFileID, userID, map[string]any{"reason": "update_orphan_failed"})
+				_ = s.observedNotesEnqueueDriveOperation(ctx, "delete_file", noteID, "", newFileID, userID, map[string]any{"reason": "update_orphan_failed"})
 				log.Printf("[CRITICAL_UNRECONCILED] notes: update self-healing compensación falló (file %s): %v - PG error: %v", newFileID, compErr, err)
 			}
 			return nil, ErrInternalDatabase
@@ -1170,7 +1170,7 @@ func (s *NoteService) updateInnerLocked(ctx context.Context, userID string, note
 		}
 		renameCtx, cancelRename := withDriveTimeout(ctx)
 		renameErr := retryDriveOperation(renameCtx, driveRetryMaxAttempts, func() error {
-			return s.drive.UpdateFile(renameCtx, userID, fileID, nil, newTitle)
+			return s.observedDriveUpdateFile(renameCtx, userID, fileID, nil, newTitle)
 		})
 		cancelRename()
 		if renameErr != nil {
@@ -1191,7 +1191,7 @@ func (s *NoteService) updateInnerLocked(ctx context.Context, userID string, note
 		shares, policyErr := s.shared.ListByNote(ctx, noteID)
 		if policyErr != nil {
 			if newDriveFile {
-				_ = s.notes.UpdateSyncStatus(ctx, noteID, "failed_sync")
+				_ = s.observedNotesUpdateSyncStatus(ctx, noteID, "failed_sync")
 			}
 			if revertDrive != nil {
 				revertDrive()
@@ -1205,7 +1205,7 @@ func (s *NoteService) updateInnerLocked(ctx context.Context, userID string, note
 		desiredPermissions, policyErr = s.ComputeDesiredDrivePermissions(ctx, desiredVisibility, shares)
 		if policyErr != nil {
 			if newDriveFile {
-				_ = s.notes.UpdateSyncStatus(ctx, noteID, "failed_sync")
+				_ = s.observedNotesUpdateSyncStatus(ctx, noteID, "failed_sync")
 			}
 			if revertDrive != nil {
 				revertDrive()
@@ -1223,7 +1223,7 @@ func (s *NoteService) updateInnerLocked(ctx context.Context, userID string, note
 			expected = 1
 		}
 	}
-	updated, err := s.notes.Update(ctx, noteID, newTitle, visibility, expected)
+	updated, err := s.observedNotesUpdate(ctx, noteID, newTitle, visibility, expected)
 	if err != nil {
 		if errors.Is(err, repository.ErrConflict) {
 			// Otro writer modificó la nota entre la lectura y la escritura:
@@ -1239,7 +1239,7 @@ func (s *NoteService) updateInnerLocked(ctx context.Context, userID string, note
 		// Si la compensación también falla, compensateDriveUpdate registra la
 		// entrada en la DLQ ([CRITICAL_UNRECONCILED]).
 		if driveMutated {
-			_ = s.notes.UpdateSyncStatus(ctx, noteID, "failed_sync")
+			_ = s.observedNotesUpdateSyncStatus(ctx, noteID, "failed_sync")
 		}
 		if revertDrive != nil {
 			revertDrive()
@@ -1271,9 +1271,9 @@ func (s *NoteService) compensateDriveUpdate(ctx context.Context, userID, fileID 
 	driveCtx, cancelDrive := withDriveTimeout(ctx)
 	defer cancelDrive()
 	if err := retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
-		return s.drive.UpdateFile(driveCtx, userID, fileID, content, title)
+		return s.observedDriveUpdateFile(driveCtx, userID, fileID, content, title)
 	}); err != nil {
-		_ = s.notes.EnqueueDriveOperation(ctx, "update_file", "", "", fileID, userID, map[string]any{"reason": reason, "content": content, "title": title})
+		_ = s.observedNotesEnqueueDriveOperation(ctx, "update_file", "", "", fileID, userID, map[string]any{"reason": reason, "content": content, "title": title})
 		log.Printf("[CRITICAL_UNRECONCILED] notes: compensación Update falló (file %s): %v", fileID, err)
 	}
 }
@@ -1292,7 +1292,7 @@ func (s *NoteService) Delete(ctx context.Context, userID string, noteID string) 
 	if !utils.ValidateUUID(noteID) {
 		return newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
 	}
-	note, err := s.notes.GetByID(ctx, noteID)
+	note, err := s.observedNotesGetByID(ctx, noteID)
 	if err != nil {
 		return ErrInternalDatabase
 	}
@@ -1305,12 +1305,12 @@ func (s *NoteService) Delete(ctx context.Context, userID string, noteID string) 
 	// 1. Borrar metadata en PG (fuente de verdad). Si falla, Drive intacto.
 	// La clasificación del error del store es tipada (revalidación con el
 	// propio store), sin inspeccionar strings ni filtrar trazas SQL.
-	fileID, err := s.notes.DeleteWithDriveCleanup(ctx, noteID, userID)
+	fileID, err := s.observedNotesDeleteWithDriveCleanup(ctx, noteID, userID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) || errors.Is(err, repository.ErrForbidden) {
 			return newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
 		}
-		if current, checkErr := s.notes.GetByID(ctx, noteID); checkErr == nil && current == nil {
+		if current, checkErr := s.observedNotesGetByID(ctx, noteID); checkErr == nil && current == nil {
 			// Borrado concurrente: el recurso ya no existe -> not_found.
 			return newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
 		}
@@ -1325,17 +1325,18 @@ func (s *NoteService) Delete(ctx context.Context, userID string, noteID string) 
 	if fileID != "" {
 		driveCtx, cancelDrive := withDriveTimeout(ctx)
 		delErr := retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
-			return s.drive.DeleteFile(driveCtx, userID, fileID)
+			return s.observedDriveDeleteFile(driveCtx, userID, fileID)
 		})
 		cancelDrive()
 		if delErr != nil {
 			if drive.IsNotFound(delErr) {
+				log.Printf("[WARN] notes: delete nota %s: archivo %s ya no existe en Drive: %v", noteID, fileID, delErr)
 				return nil // idempotente: ya borrado en Drive
 			}
 			// OAuth revocado/ausente o 500 tras PG OK: no fallar la operación,
 			// solo loguear (evita fila huérfana visible por token inválido).
 			// La transacción ya dejó la limpieza durable en la outbox.
-			log.Printf("[CRITICAL_UNRECONCILED] notes: delete nota %s: PG OK, Drive best-effort falló (file %s): %v", noteID, fileID, delErr)
+			log.Printf("[WARN] notes: delete nota %s: PG OK, limpieza Drive pendiente (file %s): %v", noteID, fileID, delErr)
 		}
 	}
 	return nil
@@ -1346,7 +1347,7 @@ func (s *NoteService) AddAttachment(ctx context.Context, userID string, noteID s
 	if !utils.ValidateUUID(noteID) {
 		return nil, newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
 	}
-	note, err := s.notes.GetByID(ctx, noteID)
+	note, err := s.observedNotesGetByID(ctx, noteID)
 	if err != nil {
 		return nil, ErrInternalDatabase
 	}
@@ -1373,7 +1374,7 @@ func (s *NoteService) AddAttachment(ctx context.Context, userID string, noteID s
 	var extID, url string
 	err = retryDriveOperation(uploadCtx, driveRetryMaxAttempts, func() error {
 		var opErr error
-		extID, url, opErr = s.drive.UploadAttachment(uploadCtx, userID, noteID, fileName, fileType, data, isInline)
+		extID, url, opErr = s.observedDriveUploadAttachment(uploadCtx, userID, noteID, fileName, fileType, data, isInline)
 		return opErr
 	})
 	cancelUpload()
@@ -1388,16 +1389,16 @@ func (s *NoteService) AddAttachment(ctx context.Context, userID string, noteID s
 		return nil, ErrDriveUnavailable
 	}
 	size := len(data)
-	att, err := s.attachments.Create(ctx, noteID, extID, url, fileType, &fileName, &size, isInline)
+	att, err := s.observedAttachmentsCreate(ctx, noteID, extID, url, fileType, &fileName, &size, isInline)
 	if err != nil {
 		// Compensación: PG falló tras UploadAttachment OK -> borrar huérfano.
 		compCtx, cancelComp := withDriveTimeout(ctx)
 		compErr := retryDriveOperation(compCtx, driveRetryMaxAttempts, func() error {
-			return s.drive.DeleteAttachment(compCtx, userID, extID)
+			return s.observedDriveDeleteAttachment(compCtx, userID, extID)
 		})
 		cancelComp()
 		if compErr != nil {
-			_ = s.notes.EnqueueDriveOperation(ctx, "delete_attachment", noteID, "", extID, userID, map[string]any{"reason": "add_attachment_orphan"})
+			_ = s.observedNotesEnqueueDriveOperation(ctx, "delete_attachment", noteID, "", extID, userID, map[string]any{"reason": "add_attachment_orphan"})
 			log.Printf("[CRITICAL_UNRECONCILED] notes: addAttachment compensación falló (file %s): %v - PG error: %v", extID, compErr, err)
 		}
 		return nil, ErrInternalDatabase
@@ -1409,7 +1410,7 @@ func (s *NoteService) RemoveAttachment(ctx context.Context, userID string, noteI
 	if !utils.ValidateUUID(noteID) || !utils.ValidateUUID(attachmentID) {
 		return newServiceErrorMsg(utils.ErrNotFound, "adjunto no encontrado")
 	}
-	note, err := s.notes.GetByID(ctx, noteID)
+	note, err := s.observedNotesGetByID(ctx, noteID)
 	if err != nil {
 		return ErrInternalDatabase
 	}
@@ -1419,7 +1420,7 @@ func (s *NoteService) RemoveAttachment(ctx context.Context, userID string, noteI
 	if note.UserID != userID {
 		return newServiceError(utils.ErrForbidden)
 	}
-	att, err := s.attachments.GetByID(ctx, attachmentID)
+	att, err := s.observedAttachmentsGetByID(ctx, attachmentID)
 	if err != nil {
 		return ErrInternalDatabase
 	}
@@ -1429,7 +1430,7 @@ func (s *NoteService) RemoveAttachment(ctx context.Context, userID string, noteI
 	// Orden canónico PG-primero (igual que Delete de notas): si PG falla, el
 	// binario en Drive queda intacto y la operación es reintentable; si PG OK
 	// pero Drive falla, se loguea y se retorna éxito (sin fila huérfana).
-	fileID, err := s.attachments.DeleteAttachmentWithDriveCleanup(ctx, noteID, attachmentID, userID)
+	fileID, err := s.observedAttachmentsDeleteAttachmentWithDriveCleanup(ctx, noteID, attachmentID, userID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return newServiceErrorMsg(utils.ErrNotFound, "adjunto no encontrado")
@@ -1444,17 +1445,17 @@ func (s *NoteService) RemoveAttachment(ctx context.Context, userID string, noteI
 	}
 	driveCtx, cancelDrive := withDriveTimeout(ctx)
 	delErr := retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
-		return s.drive.DeleteAttachment(driveCtx, userID, fileID)
+		return s.observedDriveDeleteAttachment(driveCtx, userID, fileID)
 	})
 	cancelDrive()
-	if delErr != nil && !drive.IsNotFound(delErr) {
-		log.Printf("[CRITICAL_UNRECONCILED] notes: removeAttachment nota %s adjunto %s: PG OK, Drive best-effort falló: %v", noteID, attachmentID, delErr)
+	if delErr != nil {
+		log.Printf("[WARN] notes: removeAttachment nota %s adjunto %s: PG OK, Drive best-effort falló: %v", noteID, attachmentID, delErr)
 	}
 	return nil
 }
 
 func (s *NoteService) ListAttachments(ctx context.Context, noteID string) ([]*model.Attachment, error) {
-	return s.attachments.ListByNote(ctx, noteID)
+	return s.observedAttachmentsListByNote(ctx, noteID)
 }
 
 // AddAttachmentExternal registra un adjunto ya subido directo a Drive desde el cliente (external_file_id provisto).
@@ -1465,7 +1466,7 @@ func (s *NoteService) AddAttachmentExternal(ctx context.Context, userID string, 
 	if strings.TrimSpace(externalFileID) == "" {
 		return nil, newServiceErrorMsg(utils.ErrBadRequest, "external_file_id requerido")
 	}
-	note, err := s.notes.GetByID(ctx, noteID)
+	note, err := s.observedNotesGetByID(ctx, noteID)
 	if err != nil {
 		return nil, ErrInternalDatabase
 	}
@@ -1479,7 +1480,7 @@ func (s *NoteService) AddAttachmentExternal(ctx context.Context, userID string, 
 	// Verificar que el archivo existe y es accesible en Drive (contexto acotado).
 	verifyCtx, cancelVerify := withDriveTimeout(ctx)
 	verifyErr := retryDriveOperation(verifyCtx, driveRetryMaxAttempts, func() error {
-		return s.drive.VerifyFileAccess(verifyCtx, userID, externalFileID)
+		return s.observedDriveVerifyFileAccess(verifyCtx, userID, externalFileID)
 	})
 	cancelVerify()
 	if verifyErr != nil {
@@ -1502,7 +1503,7 @@ func (s *NoteService) AddAttachmentExternal(ctx context.Context, userID string, 
 	if strings.TrimSpace(fileName) != "" {
 		fnPtr = &fileName
 	}
-	return s.attachments.Create(ctx, noteID, externalFileID, fileURL, fileType, fnPtr, fileSize, isInline)
+	return s.observedAttachmentsCreate(ctx, noteID, externalFileID, fileURL, fileType, fnPtr, fileSize, isInline)
 }
 
 // DriveUpload describe el resultado de subir un binario directo al Drive del
@@ -1534,7 +1535,7 @@ func (s *NoteService) UploadToDrive(ctx context.Context, userID string, fileName
 	var extID, url string
 	err := retryDriveOperation(uploadCtx, driveRetryMaxAttempts, func() error {
 		var opErr error
-		extID, url, opErr = s.drive.UploadAttachment(uploadCtx, userID, "", fileName, fileType, data, false)
+		extID, url, opErr = s.observedDriveUploadAttachment(uploadCtx, userID, "", fileName, fileType, data, false)
 		return opErr
 	})
 	cancelUpload()
@@ -1562,7 +1563,7 @@ func (s *NoteService) Save(ctx context.Context, userID string, noteID string) (*
 	if !utils.ValidateUUID(noteID) {
 		return nil, newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
 	}
-	note, err := s.notes.GetByID(ctx, noteID)
+	note, err := s.observedNotesGetByID(ctx, noteID)
 	if err != nil {
 		return nil, ErrInternalDatabase
 	}
@@ -1588,7 +1589,7 @@ func (s *NoteService) Save(ctx context.Context, userID string, noteID string) (*
 	if exists {
 		return nil, newServiceError(utils.ErrAlreadySaved)
 	}
-	saved, err := s.saved.Save(ctx, userID, noteID)
+	saved, err := s.observedSavedSave(ctx, userID, noteID)
 	if err != nil {
 		if ok, checkErr := s.saved.Exists(ctx, userID, noteID); checkErr == nil && ok {
 			return nil, newServiceError(utils.ErrAlreadySaved)
@@ -1618,7 +1619,7 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 	if !utils.ValidateUUID(noteID) {
 		return nil, notFoundNote()
 	}
-	orig, err := s.notes.GetByID(ctx, noteID)
+	orig, err := s.observedNotesGetByID(ctx, noteID)
 	if err != nil {
 		return nil, ErrInternalDatabase
 	}
@@ -1689,13 +1690,13 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 	}
 	var newNote *model.Note
 	if recoveredFromCrash {
-		newNote, err = s.notes.GetByID(ctx, newNoteID)
+		newNote, err = s.observedNotesGetByID(ctx, newNoteID)
 		if err != nil {
 			return nil, ErrInternalDatabase
 		}
 	}
 	if newNote == nil {
-		newNote, err = s.notes.Create(ctx, newNoteID, userID, nilSubject, orig.Title, nil, "private", &orig.ID, "pending_drive")
+		newNote, err = s.observedNotesCreate(ctx, newNoteID, userID, nilSubject, orig.Title, nil, "private", &orig.ID, "pending_drive")
 		if err != nil {
 			return nil, ErrInternalDatabase
 		}
@@ -1721,7 +1722,7 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 	if newFileID == "" && recoveredFromCrash {
 		found, findErr := s.findOrphanDriveFile(ctx, userID, newNote.ID)
 		if findErr != nil {
-			_ = s.notes.UpdateSyncStatus(ctx, newNote.ID, "failed_sync")
+			_ = s.observedNotesUpdateSyncStatus(ctx, newNote.ID, "failed_sync")
 			log.Printf("notes: copy retry clon %s: no se pudo verificar el huérfano en Drive: %v", newNote.ID, findErr)
 			return nil, ErrDriveUnavailable
 		}
@@ -1731,13 +1732,13 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 		copyCtx, cancelCopy := withDriveTimeout(ctx)
 		err = retryDriveOperation(copyCtx, driveRetryMaxAttempts, func() error {
 			var opErr error
-			newFileID, opErr = s.drive.CopyFile(copyCtx, orig.UserID, *orig.ExternalFileID, userID, newNote.ID, orig.Title)
+			newFileID, opErr = s.observedDriveCopyFile(copyCtx, orig.UserID, *orig.ExternalFileID, userID, newNote.ID, orig.Title)
 			return opErr
 		})
 		cancelCopy()
 		if err != nil {
 			// Drive falló: marcar nota como failed_sync para reconciliación
-			_ = s.notes.UpdateSyncStatus(ctx, newNote.ID, "failed_sync")
+			_ = s.observedNotesUpdateSyncStatus(ctx, newNote.ID, "failed_sync")
 			// (a) OAuth de la cuenta del clonador ausente/revocado: 403 genérico,
 			//     el problema está en su propio Drive, no en el origen.
 			if drive.IsOAuthError(err) {
@@ -1758,22 +1759,22 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 	}
 	// Defensa: el clon debe tener un fileID distinto al original.
 	if newFileID == *orig.ExternalFileID {
-		_ = s.notes.UpdateSyncStatus(ctx, newNote.ID, "failed_sync")
+		_ = s.observedNotesUpdateSyncStatus(ctx, newNote.ID, "failed_sync")
 		compCtx, cancelComp := withDriveTimeout(ctx)
 		compErr := retryDriveOperation(compCtx, driveRetryMaxAttempts, func() error {
-			return s.drive.DeleteFile(compCtx, userID, newFileID)
+			return s.observedDriveDeleteFile(compCtx, userID, newFileID)
 		})
 		cancelComp()
 		if compErr != nil && !drive.IsNotFound(compErr) {
-			_ = s.notes.EnqueueDriveOperation(ctx, "delete_file", newNote.ID, "", newFileID, userID, map[string]any{"reason": "copy_orphan_failed"})
+			_ = s.observedNotesEnqueueDriveOperation(ctx, "delete_file", newNote.ID, "", newFileID, userID, map[string]any{"reason": "copy_orphan_failed"})
 			log.Printf("[CRITICAL_UNRECONCILED] notes: copy fileID duplicado, compensación falló (file %s): %v", newFileID, compErr)
 		}
 		return nil, ErrDriveUnavailable
 	}
 
 	// 3. Actualizar metadata en PG con external_file_id y sync_status='synced'
-	if err := s.notes.UpdateExternalFileID(ctx, newNote.ID, newFileID); err != nil {
-		_ = s.notes.UpdateSyncStatus(ctx, newNote.ID, "failed_sync")
+	if err := s.observedNotesUpdateExternalFileID(ctx, newNote.ID, newFileID); err != nil {
+		_ = s.observedNotesUpdateSyncStatus(ctx, newNote.ID, "failed_sync")
 		if !createdDriveFile {
 			// El clon adoptado pertenece a un intento previo que sí lo creó: no
 			// se borra (evita pérdida de datos); queda reconciliable.
@@ -1782,11 +1783,11 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 		}
 		compCtx, cancelComp := withDriveTimeout(ctx)
 		compErr := retryDriveOperation(compCtx, driveRetryMaxAttempts, func() error {
-			return s.drive.DeleteFile(compCtx, userID, newFileID)
+			return s.observedDriveDeleteFile(compCtx, userID, newFileID)
 		})
 		cancelComp()
 		if compErr != nil && !drive.IsNotFound(compErr) {
-			_ = s.notes.EnqueueDriveOperation(ctx, "delete_file", newNote.ID, "", newFileID, userID, map[string]any{"reason": "copy_orphan_failed"})
+			_ = s.observedNotesEnqueueDriveOperation(ctx, "delete_file", newNote.ID, "", newFileID, userID, map[string]any{"reason": "copy_orphan_failed"})
 			log.Printf("[CRITICAL_UNRECONCILED] notes: copy compensación falló (file %s): %v - PG error: %v", newFileID, compErr, err)
 		} else {
 			log.Printf("notes: copy compensación OK (huérfano Drive %s eliminado tras fallo PG)", newFileID)
@@ -1795,7 +1796,7 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 	}
 
 	// Recuperar nota actualizada
-	updated, err := s.notes.GetByID(ctx, newNote.ID)
+	updated, err := s.observedNotesGetByID(ctx, newNote.ID)
 	if err != nil {
 		return nil, ErrInternalDatabase
 	}
@@ -1814,7 +1815,7 @@ func (s *NoteService) Like(ctx context.Context, userID string, noteID string) er
 	if !utils.ValidateUUID(noteID) {
 		return newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
 	}
-	note, err := s.notes.GetByID(ctx, noteID)
+	note, err := s.observedNotesGetByID(ctx, noteID)
 	if err != nil {
 		return ErrInternalDatabase
 	}
@@ -1836,7 +1837,7 @@ func (s *NoteService) Like(ctx context.Context, userID string, noteID string) er
 	if exists {
 		return newServiceError(utils.ErrAlreadyLiked)
 	}
-	if err := s.likes.LikeAtomic(ctx, noteID, userID); err != nil {
+	if err := s.observedLikesLikeAtomic(ctx, noteID, userID); err != nil {
 		// Carrera: si el like quedó registrado por otra request, el resultado
 		// canónico es already_liked; en otro caso, fallo interno.
 		if ok, checkErr := s.likes.Exists(ctx, noteID, userID); checkErr == nil && ok {
@@ -1852,7 +1853,7 @@ func (s *NoteService) Unlike(ctx context.Context, userID string, noteID string) 
 		return newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
 	}
 	// UnlikeAtomic decrements only when DELETE affects a row and clamps at zero.
-	if err := s.likes.UnlikeAtomic(ctx, noteID, userID); err != nil {
+	if err := s.observedLikesUnlikeAtomic(ctx, noteID, userID); err != nil {
 		return ErrInternalDatabase
 	}
 	return nil
@@ -1886,7 +1887,7 @@ func (s *NoteService) shareLocked(ctx context.Context, ownerID string, noteID st
 	if !utils.ValidateAccessMode(accessMode) {
 		return nil, newServiceError(utils.ErrInvalidAccessMode)
 	}
-	note, err := s.notes.GetByID(ctx, noteID)
+	note, err := s.observedNotesGetByID(ctx, noteID)
 	if err != nil {
 		return nil, ErrInternalDatabase
 	}
@@ -1923,7 +1924,7 @@ func (s *NoteService) shareLocked(ctx context.Context, ownerID string, noteID st
 	}
 
 	// 1) BD primero: intención durable del share ('pending') y de los permisos.
-	shared, err := s.shared.Create(ctx, noteID, groupID, isAdmin, accessMode, followers)
+	shared, err := s.observedSharedCreate(ctx, noteID, groupID, isAdmin, accessMode, followers)
 	if err != nil {
 		return nil, ErrInternalDatabase
 	}
@@ -1971,7 +1972,7 @@ func (s *NoteService) ComputeDesiredDrivePermissions(ctx context.Context, visibi
 // persistManagedPermission hace upsert del estado deseado/observado de un
 // permiso administrado en notes.drive_managed_permissions (BD primero).
 func (s *NoteService) persistManagedPermission(ctx context.Context, noteID, fileID, principalType, principalKey string, permissionID *string, status string) error {
-	_, err := s.shared.UpsertManagedPermission(ctx, &model.DriveManagedPermission{
+	_, err := s.observedSharedUpsertManagedPermission(ctx, &model.DriveManagedPermission{
 		NoteID:            noteID,
 		ExternalFileID:    fileID,
 		PrincipalType:     principalType,
@@ -2009,6 +2010,7 @@ func isPermissionAlreadyExists(err error) bool {
 // (shared.WithNoteLock), que serializa los cambios de ACL de una nota frente a
 // Share/Unshare/Update y al reconciliador incluso entre réplicas.
 func (s *NoteService) syncDrivePermissions(ctx context.Context, note *model.Note, desired DesiredDrivePermissions, legacyLinkExists bool) error {
+	ctx = utils.WithNotesLogger(ctx, utils.NotesLogger(ctx).With("note_id", note.ID))
 	if note == nil {
 		return nil
 	}
@@ -2016,7 +2018,7 @@ func (s *NoteService) syncDrivePermissions(ctx context.Context, note *model.Note
 		// Sin archivo remoto no hay ACL que converger: el estado de aplicación
 		// queda sincronizado y el alta del archivo (Create/self-healing) o el
 		// reconciliador aplicará los permisos cuando exista el archivo.
-		return s.shared.UpdateNotePermissionSyncStatus(ctx, note.ID, model.PermissionSyncInSync)
+		return s.observedSharedUpdateNotePermissionSyncStatus(ctx, note.ID, model.PermissionSyncInSync)
 	}
 	fileID, ownerID := *note.ExternalFileID, note.UserID
 	rows, err := s.shared.ListManagedPermissions(ctx, note.ID)
@@ -2130,12 +2132,12 @@ func (s *NoteService) syncDrivePermissions(ctx context.Context, note *model.Note
 		case model.PermissionPrincipalAnyone:
 			permissionID := derefOrEmpty(row.DrivePermissionID)
 			revErr = retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
-				return s.drive.RevokePermissionByID(driveCtx, ownerID, fileID, permissionID)
+				return s.observedDriveRevokePermissionByID(driveCtx, ownerID, fileID, permissionID)
 			})
 		case model.PermissionPrincipalEmail:
 			email := row.PrincipalKey
 			revErr = retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
-				return s.drive.RevokePermission(driveCtx, ownerID, fileID, email)
+				return s.observedDriveRevokePermission(driveCtx, ownerID, fileID, email)
 			})
 		}
 		cancel()
@@ -2155,7 +2157,7 @@ func (s *NoteService) syncDrivePermissions(ctx context.Context, note *model.Note
 	for _, email := range toGrant {
 		driveCtx, cancel := withDriveTimeout(ctx)
 		grantErr := retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
-			return s.drive.GrantPermission(driveCtx, ownerID, fileID, email, "reader")
+			return s.observedDriveGrantPermission(driveCtx, ownerID, fileID, email, "reader")
 		})
 		cancel()
 		if grantErr != nil && !isPermissionAlreadyExists(grantErr) {
@@ -2174,7 +2176,7 @@ func (s *NoteService) syncDrivePermissions(ctx context.Context, note *model.Note
 		var permissionID string
 		grantErr := retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
 			var opErr error
-			permissionID, opErr = s.drive.GrantLinkPermission(driveCtx, ownerID, fileID)
+			permissionID, opErr = s.observedDriveGrantLinkPermission(driveCtx, ownerID, fileID)
 			return opErr
 		})
 		cancel()
@@ -2198,7 +2200,7 @@ func (s *NoteService) syncDrivePermissions(ctx context.Context, note *model.Note
 	if firstErr != nil {
 		status = model.PermissionSyncFailed
 	}
-	if err := s.shared.UpdateNotePermissionSyncStatus(ctx, note.ID, status); err != nil {
+	if err := s.observedSharedUpdateNotePermissionSyncStatus(ctx, note.ID, status); err != nil {
 		noteErr(ErrInternalDatabase)
 	}
 	return firstErr
@@ -2218,7 +2220,7 @@ func (s *NoteService) reconcileManagedPermissions(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return errors.Join(result, err)
 		}
-		note, err := s.notes.GetByID(ctx, noteID)
+		note, err := s.observedNotesGetByID(ctx, noteID)
 		if err != nil {
 			result = errors.Join(result, ErrInternalDatabase)
 			continue
@@ -2239,7 +2241,7 @@ func (s *NoteService) reconcileManagedPermissions(ctx context.Context) error {
 			if err != nil {
 				// No se puede calcular el estado deseado (p. ej. Social caído):
 				// preservar failed para el siguiente tick sin perder la intención.
-				_ = s.shared.UpdateNotePermissionSyncStatus(lockCtx, noteID, model.PermissionSyncFailed)
+				_ = s.observedSharedUpdateNotePermissionSyncStatus(lockCtx, noteID, model.PermissionSyncFailed)
 				return nil
 			}
 			return s.syncDrivePermissions(lockCtx, note, desired, true)
@@ -2281,13 +2283,13 @@ func (s *NoteService) unshareLocked(ctx context.Context, userID string, sharedNo
 	if sh == nil {
 		return newServiceErrorMsg(utils.ErrNotFound, "compartición no encontrada")
 	}
-	note, err := s.notes.GetByID(ctx, sh.NoteID)
+	note, err := s.observedNotesGetByID(ctx, sh.NoteID)
 	if err != nil {
 		return ErrInternalDatabase
 	}
 	if note == nil {
 		// nota ya borrada, borrar share
-		_ = s.shared.Delete(ctx, sharedNoteID)
+		_ = s.observedSharedDelete(ctx, sharedNoteID)
 		_ = s.shared.DeleteManagedPermissionsByNote(ctx, sh.NoteID)
 		return nil
 	}
@@ -2303,24 +2305,24 @@ func (s *NoteService) unshareLocked(ctx context.Context, userID string, sharedNo
 		}
 	}
 	// 1) BD primero: el share deja de existir en la aplicación.
-	if err := s.shared.Delete(ctx, sharedNoteID); err != nil {
+	if err := s.observedSharedDelete(ctx, sharedNoteID); err != nil {
 		return ErrInternalDatabase
 	}
 	// 1b) Marcar los permisos administrados como pendientes: si la convergencia
 	// inmediata no puede completarse (Drive o Social caídos), el reconciliador
 	// tendrá el disparo durable para revocar lo que ya no es deseado.
-	if err := s.shared.MarkManagedPermissionsPending(ctx, note.ID); err != nil {
+	if err := s.observedSharedMarkManagedPermissionsPending(ctx, note.ID); err != nil {
 		log.Printf("notes: unshare nota %s: no se pudo marcar permisos pendientes: %v", note.ID, err)
 	}
 	// 2) Convergencia inmediata best-effort del estado deseado restante.
 	remaining, err := s.shared.ListByNote(ctx, note.ID)
 	if err != nil {
-		_ = s.shared.UpdateNotePermissionSyncStatus(ctx, note.ID, model.PermissionSyncFailed)
+		_ = s.observedSharedUpdateNotePermissionSyncStatus(ctx, note.ID, model.PermissionSyncFailed)
 		return nil
 	}
 	desired, err := s.ComputeDesiredDrivePermissions(ctx, note.Visibility, remaining)
 	if err != nil {
-		_ = s.shared.UpdateNotePermissionSyncStatus(ctx, note.ID, model.PermissionSyncFailed)
+		_ = s.observedSharedUpdateNotePermissionSyncStatus(ctx, note.ID, model.PermissionSyncFailed)
 		return nil
 	}
 	if syncErr := s.syncDrivePermissions(ctx, note, desired, true); syncErr != nil {
@@ -2337,7 +2339,7 @@ func (s *NoteService) UnshareAll(ctx context.Context, userID string, groupID str
 	// share must not invalidate the pagination cursor or skip another author.
 	cursor := ""
 	for {
-		notes, next, err := s.notes.ListByUser(ctx, userID, cursor, 100)
+		notes, next, err := s.observedNotesListByUser(ctx, userID, cursor, 100)
 		if err != nil {
 			return ErrInternalDatabase
 		}
@@ -2365,7 +2367,7 @@ func (s *NoteService) GetAccess(ctx context.Context, requesterID string, noteID 
 	if !utils.ValidateUUID(noteID) {
 		return nil, newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
 	}
-	note, err := s.notes.GetByID(ctx, noteID)
+	note, err := s.observedNotesGetByID(ctx, noteID)
 	if err != nil {
 		return nil, ErrInternalDatabase
 	}
@@ -2467,7 +2469,7 @@ func (s *NoteService) driveAccessFlags(ctx context.Context, requesterID, visibil
 		return false, false
 	}
 	verifyCtx, cancelVerify := withDriveTimeout(ctx)
-	err := s.drive.VerifyFileAccess(verifyCtx, requesterID, fileID)
+	err := s.observedDriveVerifyFileAccess(verifyCtx, requesterID, fileID)
 	cancelVerify()
 	if err == nil {
 		return true, false
@@ -2544,7 +2546,7 @@ func (s *NoteService) ListGroupNotes(ctx context.Context, requesterID string, gr
 	}
 	var pairs []pair
 	for _, sh := range sharedList {
-		n, _ := s.notes.GetByID(ctx, sh.NoteID)
+		n, _ := s.observedNotesGetByID(ctx, sh.NoteID)
 		if n != nil {
 			pairs = append(pairs, pair{note: n, shared: sh})
 		}
@@ -2639,12 +2641,12 @@ func (s *NoteService) ReconcilePendingNotes(ctx context.Context) error {
 			var orphanFileID string
 			findErr := retryDriveOperation(findCtx, driveRetryMaxAttempts, func() error {
 				var opErr error
-				orphanFileID, opErr = s.drive.FindFileByNoteID(findCtx, n.UserID, n.ID)
+				orphanFileID, opErr = s.observedDriveFindFileByNoteID(findCtx, n.UserID, n.ID)
 				return opErr
 			})
 			cancelFind()
 			if findErr == nil && strings.TrimSpace(orphanFileID) != "" {
-				if err := s.notes.UpdateExternalFileID(ctx, n.ID, orphanFileID); err != nil {
+				if err := s.observedNotesUpdateExternalFileID(ctx, n.ID, orphanFileID); err != nil {
 					if errors.Is(err, repository.ErrNotFound) {
 						continue // la fila desapareció: nada que recuperar
 					}
@@ -2656,7 +2658,7 @@ func (s *NoteService) ReconcilePendingNotes(ctx context.Context) error {
 				// No se puede probar la ausencia del archivo (OAuth, permiso o
 				// fallo transitorio): preservar la fila para el siguiente tick.
 				log.Printf("notes: reconcile note %s: no se pudo buscar huérfano por appProperties: %v", n.ID, findErr)
-				if err := s.notes.UpdateSyncStatus(ctx, n.ID, "failed_sync"); err != nil {
+				if err := s.observedNotesUpdateSyncStatus(ctx, n.ID, "failed_sync"); err != nil {
 					result = errors.Join(result, ErrInternalDatabase)
 				}
 				continue
@@ -2664,20 +2666,20 @@ func (s *NoteService) ReconcilePendingNotes(ctx context.Context) error {
 			if n.SyncStatus == "failed_sync" {
 				continue // No evidence that failed user data may safely be deleted.
 			}
-			if _, err := s.notes.DeleteWithDriveCleanup(ctx, n.ID, n.UserID); err != nil && !errors.Is(err, repository.ErrNotFound) {
+			if _, err := s.observedNotesDeleteWithDriveCleanup(ctx, n.ID, n.UserID); err != nil && !errors.Is(err, repository.ErrNotFound) {
 				result = errors.Join(result, ErrInternalDatabase)
 			}
 			continue
 		}
 		driveCtx, cancelDrive := withDriveTimeout(ctx)
 		statErr := retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
-			_, err := s.drive.GetFileContent(driveCtx, n.UserID, *n.ExternalFileID)
+			_, err := s.observedDriveGetFileContent(driveCtx, n.UserID, *n.ExternalFileID)
 			return err
 		})
 		cancelDrive()
 		if statErr == nil {
 			// Zero bytes is valid Markdown, including for recovered failed_sync notes.
-			if err := s.notes.UpdateSyncStatus(ctx, n.ID, "synced"); err != nil {
+			if err := s.observedNotesUpdateSyncStatus(ctx, n.ID, "synced"); err != nil {
 				result = errors.Join(result, ErrInternalDatabase)
 			}
 			continue
@@ -2688,7 +2690,7 @@ func (s *NoteService) ReconcilePendingNotes(ctx context.Context) error {
 		if !drive.IsNotFound(statErr) || n.SyncStatus == "failed_sync" {
 			// OAuth, permission and transient failures do not establish data loss.
 			log.Printf("notes: reconcile note %s: preserving failed_sync after Drive read error: %v", n.ID, statErr)
-			if err := s.notes.UpdateSyncStatus(ctx, n.ID, "failed_sync"); err != nil {
+			if err := s.observedNotesUpdateSyncStatus(ctx, n.ID, "failed_sync"); err != nil {
 				result = errors.Join(result, ErrInternalDatabase)
 			}
 			continue
@@ -2710,7 +2712,7 @@ func (s *NoteService) reconcileDriveOperations(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return errors.Join(result, err)
 		}
-		ops, err := s.notes.ClaimDriveOperations(ctx, 1, 2*reconcileTimeout)
+		ops, err := s.observedNotesClaimDriveOperations(ctx, 1, 2*reconcileTimeout)
 		if err != nil {
 			return errors.Join(result, ErrInternalDatabase)
 		}
@@ -2724,7 +2726,7 @@ func (s *NoteService) reconcileDriveOperations(ctx context.Context) error {
 		})
 		cancelDrive()
 		if opErr == nil {
-			if err := s.notes.CompleteDriveOperation(ctx, op.ID); err != nil {
+			if err := s.observedNotesCompleteDriveOperation(ctx, op.ID); err != nil {
 				result = errors.Join(result, ErrInternalDatabase)
 			}
 			continue
@@ -2737,7 +2739,7 @@ func (s *NoteService) reconcileDriveOperations(ctx context.Context) error {
 		if delay > time.Hour {
 			delay = time.Hour
 		}
-		if err := s.notes.FailDriveOperation(ctx, op.ID, opErr.Error(), time.Now().Add(delay)); err != nil {
+		if err := s.observedNotesFailDriveOperation(ctx, op.ID, opErr.Error(), time.Now().Add(delay)); err != nil {
 			result = errors.Join(result, ErrInternalDatabase)
 		}
 		log.Printf("notes: Drive operation %s (%s) scheduled for retry: %v", op.ID, op.Operation, opErr)
@@ -2745,16 +2747,23 @@ func (s *NoteService) reconcileDriveOperations(ctx context.Context) error {
 	return result
 }
 
-func (s *NoteService) executeDriveOperation(ctx context.Context, op *model.DriveOperation) error {
+func (s *NoteService) executeDriveOperation(ctx context.Context, op *model.DriveOperation) (err error) {
+	started := time.Now()
+	ctx = utils.WithNotesLogger(ctx, utils.NotesLogger(ctx).With(
+		"note_id", derefOrEmpty(op.NoteID), "attachment_id", derefOrEmpty(op.AttachmentID),
+		"outbox_id", op.ID, "operation", op.Operation, "drive_owner_user_id", op.OwnerUserID))
+	defer func() {
+		logNotesResult(ctx, started, "OUTBOX EXECUTE", derefOrEmpty(op.ExternalFileID), err,
+			"drive_file_id", derefOrEmpty(op.ExternalFileID))
+	}()
 	if op.ExternalFileID == nil || strings.TrimSpace(*op.ExternalFileID) == "" {
 		return &drive.DriveError{Code: 400, Message: "outbox operation requires external_file_id"}
 	}
-	var err error
 	switch op.Operation {
 	case "delete_file":
-		err = s.drive.DeleteFile(ctx, op.OwnerUserID, *op.ExternalFileID)
+		err = s.observedDriveDeleteFile(ctx, op.OwnerUserID, *op.ExternalFileID)
 	case "delete_attachment":
-		err = s.drive.DeleteAttachment(ctx, op.OwnerUserID, *op.ExternalFileID)
+		err = s.observedDriveDeleteAttachment(ctx, op.OwnerUserID, *op.ExternalFileID)
 	case "update_file":
 		var payload struct {
 			Content *string `json:"content"`
@@ -2766,7 +2775,7 @@ func (s *NoteService) executeDriveOperation(ctx context.Context, op *model.Drive
 		if payload.Content == nil && payload.Title == nil {
 			return &drive.DriveError{Code: 400, Message: "update_file payload requires content or title"}
 		}
-		return s.drive.UpdateFile(ctx, op.OwnerUserID, *op.ExternalFileID, payload.Content, payload.Title)
+		return s.observedDriveUpdateFile(ctx, op.OwnerUserID, *op.ExternalFileID, payload.Content, payload.Title)
 	default:
 		return &drive.DriveError{Code: 400, Message: "unsupported outbox operation"}
 	}

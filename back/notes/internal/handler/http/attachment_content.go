@@ -9,9 +9,10 @@ import (
 )
 
 func (h *NoteHandler) AttachmentContent(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/:id/attachments/:attachment_id/content")()
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
-		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
 		return
 	}
 	data, contentType, att, err := h.svc.GetAttachmentContent(c.Request.Context(), userID, c.Param("id"), c.Param("attachmentId"))

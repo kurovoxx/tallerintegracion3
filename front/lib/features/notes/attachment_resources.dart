@@ -41,6 +41,7 @@ List<Map<String, dynamic>> attachmentResources(
           'size': type == 'pdf' ? 'PDF' : 'Adjunto',
           'note_id': noteId,
           'attachment_id': a['id'],
+          'external_file_id': a['external_file_id'],
         };
       })
       .toList();
