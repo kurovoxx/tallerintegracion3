@@ -192,8 +192,8 @@ void main() {
       expect(stored.single.version, local ? isNull : 6);
       if (!local) {
         expect(sent, [4, 5]);
-        // Eliminación temporalmente oculta (kEnableAttachmentRemoval=false):
-        // ni lectura ni edición exponen QUITAR/X, y nada se borra.
+        // Lectura no expone X; Editar propio sí (sin flag): ARCHIVOS
+        // ADJUNTOS con X individual y nada marcado.
         expect(find.byKey(ValueKey('remove-$image')), findsNothing);
         expect(find.byKey(ValueKey('remove-$pdf')), findsNothing);
         await t.scrollUntilVisible(
@@ -203,9 +203,9 @@ void main() {
         );
         await t.tap(find.text('Editar'));
         await settle(t);
-        expect(find.text('ADJUNTOS DE LA NOTA (2)'), findsOneWidget);
-        expect(find.byKey(ValueKey('remove-$image')), findsNothing);
-        expect(find.byKey(ValueKey('remove-$pdf')), findsNothing);
+        expect(find.text('ARCHIVOS ADJUNTOS (2)'), findsOneWidget);
+        expect(find.byKey(ValueKey('remove-$image')), findsOneWidget);
+        expect(find.byKey(ValueKey('remove-$pdf')), findsOneWidget);
         expect(find.textContaining('SE QUITARÁ'), findsNothing);
         await t.tap(find.text('CANCELAR'));
         await settle(t);

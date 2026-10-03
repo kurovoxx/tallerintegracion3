@@ -4,7 +4,7 @@ import 'dart:io' show File, Platform, Process;
 
 import 'package:drift/drift.dart' show Value;
 import 'package:flutter/foundation.dart'
-    show defaultTargetPlatform, kDebugMode, kIsWeb, visibleForTesting;
+    show defaultTargetPlatform, kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -51,12 +51,7 @@ Future<T> _withNotesClient<T>(
 }
 
 class AllNotesScreen extends StatefulWidget {
-  const AllNotesScreen({
-    super.key,
-    this.database,
-    this.enableAttachmentRemoval = kEnableAttachmentRemoval,
-  });
-  final bool enableAttachmentRemoval;
+  const AllNotesScreen({super.key, this.database});
   final AppDatabase? database;
 
   @override
@@ -1190,7 +1185,6 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         builder: (context, scroll) => _NoteDetailSheet(
           scrollController: scroll,
           note: note,
-          enableAttachmentRemoval: widget.enableAttachmentRemoval,
           isMine: _isMine(note),
           tag: _noteTags[note.id] ?? 'General',
           likesCount: _likesCount[note.id] ?? 0,
@@ -2348,7 +2342,6 @@ enum _EditSaveOutcome {
 /// Modal de detalle con lectura híbrida (GET /notes/:id), edición (PATCH) y
 /// borrado (DELETE). El contenido local se muestra de inmediato como fallback.
 class _NoteDetailSheet extends StatefulWidget {
-  final bool enableAttachmentRemoval;
   final ScrollController scrollController;
   final LocalNote note;
   final bool isMine;
@@ -2367,7 +2360,6 @@ class _NoteDetailSheet extends StatefulWidget {
   final Future<_RemoteResult> Function() onClone;
 
   const _NoteDetailSheet({
-    required this.enableAttachmentRemoval,
     required this.scrollController,
     required this.note,
     required this.isMine,
@@ -2422,14 +2414,6 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     _likes = widget.likesCount;
     _liked = widget.isLiked;
     _saved = widget.isSaved;
-    // Diagnóstico del flag efectivo (solo debug): bool.fromEnvironment es
-    // compile-time; si el binario se compiló sin el define, la X no aparece
-    // aunque se pase la bandera al arrancar en caliente. Ver consola.
-    if (kDebugMode) {
-      debugPrint(
-        '[Notes] attachmentRemoval enabled=${widget.enableAttachmentRemoval}',
-      );
-    }
     _loadRemote();
   }
 
@@ -2937,8 +2921,8 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     );
   }
 
-  /// Sección exclusiva de Editar: ADJUNTOS DE LA NOTA con X/QUITAR por
-  /// attachment. Marca pending, no borra hasta GUARDAR.
+  /// Sección exclusiva de Editar: ARCHIVOS ADJUNTOS con X por attachment.
+  /// Marca pending (SE QUITARÁ, con DESHACER), no borra hasta GUARDAR.
   Widget _buildEditAttachments() {
     if (!widget.isMine || _attachments.isEmpty) {
       return const SizedBox.shrink();
@@ -2956,7 +2940,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'ADJUNTOS DE LA NOTA (${_attachments.length})',
+            'ARCHIVOS ADJUNTOS (${_attachments.length})',
             style: const TextStyle(
               fontSize: 10,
               fontWeight: FontWeight.w900,
@@ -2970,14 +2954,11 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
             runSpacing: 6,
             children: [
               for (final att in _attachments)
-                if (widget.enableAttachmentRemoval)
-                  _EditAttachmentChip(
-                    resource: att,
-                    pending: _pendingRemovedIds.contains(att['attachment_id']),
-                    onToggle: () => _togglePendingRemove(att),
-                  )
-                else
-                  _AttachedFileChip(resource: att),
+                _EditAttachmentChip(
+                  resource: att,
+                  pending: _pendingRemovedIds.contains(att['attachment_id']),
+                  onToggle: () => _togglePendingRemove(att),
+                ),
             ],
           ),
           if (_pendingRemovedIds.isNotEmpty)
@@ -3273,9 +3254,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                           (a) => urlMatchesAttachment(a, url),
                         );
                         if (matches.isNotEmpty) {
-                          if (widget.enableAttachmentRemoval) {
-                            _togglePendingRemove(matches.first);
-                          }
+                          _togglePendingRemove(matches.first);
                         } else {
                           _removeAttachmentUrl(_contentCtrl!, url);
                           setState(() {});
@@ -4472,15 +4451,7 @@ class _DetectedAttachmentChip extends StatelessWidget {
   }
 }
 
-/// TODO: reactivar eliminación de adjuntos tras validar DELETE E2E.
-/// Bandera temporal: la acción QUITAR falla en manual, así que no se expone
-/// en la UI hasta completar la validación. El backend DELETE se conserva.
-const bool kEnableAttachmentRemoval = bool.fromEnvironment(
-  'ENABLE_ATTACHMENT_REMOVAL',
-  defaultValue: false,
-);
-
-/// Chip de ADJUNTOS DE LA NOTA en modo Editar: X marca pending (no borra).
+/// Chip de ARCHIVOS ADJUNTOS en modo Editar: X marca pending (no borra).
 /// Key `remove-<attachment_id>` preservada para tests y accesibilidad.
 class _EditAttachmentChip extends StatelessWidget {
   final Map<String, dynamic> resource;
@@ -4573,56 +4544,6 @@ class _EditAttachmentChip extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-/// Chip informativo de archivo vinculado (sin acción de borrado).
-/// Se usa mientras la eliminación está deshabilitada (ver
-/// [kEnableAttachmentRemoval]).
-class _AttachedFileChip extends StatelessWidget {
-  final Map<String, dynamic> resource;
-
-  const _AttachedFileChip({required this.resource});
-
-  @override
-  Widget build(BuildContext context) {
-    final isImage = resource['type'] == 'image';
-    return Container(
-      decoration: BoxDecoration(
-        color: isImage ? AppColors.subjectMint : AppColors.accentYellow,
-        border: Border.all(color: AppColors.border, width: 1.5),
-        borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-        boxShadow: AppShadows.badge,
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            isImage
-                ? Icons.image_rounded
-                : resource['type'] == 'pdf'
-                ? Icons.picture_as_pdf_rounded
-                : Icons.description_rounded,
-            size: 13,
-            color: AppColors.text,
-          ),
-          const SizedBox(width: 4),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 140),
-            child: Text(
-              resource['name'] as String,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w900,
-                color: AppColors.text,
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }

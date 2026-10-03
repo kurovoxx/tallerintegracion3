@@ -126,7 +126,7 @@ void main() {
       addTearDown(t.view.resetDevicePixelRatio);
       await t.pumpWidget(
         MaterialApp(
-          home: AllNotesScreen(database: db, enableAttachmentRemoval: true),
+          home: AllNotesScreen(database: db),
         ),
       );
       await waitFor(t, () => find.text('Prueba borrado').evaluate().isNotEmpty);

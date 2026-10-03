@@ -6,8 +6,6 @@ ARG NOTES_BASE_URL=http://localhost:8082
 ARG SOCIAL_BASE_URL=http://localhost:8083
 ARG GOOGLE_CLIENT_ID=
 ARG GOOGLE_REDIRECT_URI=http://localhost:8081/auth/google/callback
-# Borrado individual de adjuntos (QUITAR en Editar). Default false hasta E2E.
-ARG ENABLE_ATTACHMENT_REMOVAL=false
 WORKDIR /app
 COPY pubspec.yaml pubspec.lock ./
 RUN flutter pub get
@@ -30,8 +28,7 @@ RUN flutter build web --release \
     --dart-define=NOTES_BASE_URL=$NOTES_BASE_URL \
     --dart-define=SOCIAL_BASE_URL=$SOCIAL_BASE_URL \
     --dart-define=GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID \
-    --dart-define=GOOGLE_REDIRECT_URI=$GOOGLE_REDIRECT_URI \
-    --dart-define=ENABLE_ATTACHMENT_REMOVAL=$ENABLE_ATTACHMENT_REMOVAL
+    --dart-define=GOOGLE_REDIRECT_URI=$GOOGLE_REDIRECT_URI
 
 # Etapa 2: nginx para servir
 FROM nginx:alpine

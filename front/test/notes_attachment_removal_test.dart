@@ -9,9 +9,9 @@ import 'package:taller_integracion_front/core/database/app_database.dart';
 import 'package:taller_integracion_front/core/services/session_manager.dart';
 import 'package:taller_integracion_front/features/notes/all_notes_screen.dart';
 
-// Matriz borrado individual de adjuntos (flag explícito; sin dart-define):
-// 1. flag true → X visible por attachment + cabecera ADJUNTOS DE LA NOTA.
-// 2. flag false (default) → X oculto.
+// Matriz borrado individual de adjuntos (siempre activo en Editar propio):
+// 1. X visible por attachment + cabecera ARCHIVOS ADJUNTOS.
+// 2. X también visible con el constructor por defecto (sin flag).
 // 3. marcar uno no marca el otro.
 // 5. deshacer restaura (toggle) y GUARDAR no llama DELETE.
 // 12. PDF funciona igual que imagen.
@@ -116,7 +116,7 @@ void main() {
     await t.pump();
   }
 
-  testWidgets('X individual, undo y paridad PDF con flag true', (t) async {
+  testWidgets('X individual, undo y paridad PDF en Editar', (t) async {
     SharedPreferences.setMockInitialValues({});
     final jwt =
         'e30.${base64Url.encode(utf8.encode(jsonEncode({'user_id': 'owner', 'exp': 9999999999}))).replaceAll('=', '')}.test';
@@ -160,14 +160,7 @@ void main() {
     addTearDown(t.view.resetDevicePixelRatio);
 
     Future<void> pumpHome(AppDatabase database) async {
-      await t.pumpWidget(
-        MaterialApp(
-          home: AllNotesScreen(
-            database: database,
-            enableAttachmentRemoval: true,
-          ),
-        ),
-      );
+      await t.pumpWidget(MaterialApp(home: AllNotesScreen(database: database)));
       await waitFor(t, () => find.text('Prueba borrado').evaluate().isNotEmpty);
     }
 
@@ -176,7 +169,7 @@ void main() {
     await enterEdit(t);
 
     // 1. Cabecera renombrada + X individual por attachment.
-    expect(find.text('ADJUNTOS DE LA NOTA (2)'), findsOneWidget);
+    expect(find.text('ARCHIVOS ADJUNTOS (2)'), findsOneWidget);
     expect(find.byKey(ValueKey('remove-$image')), findsOneWidget);
     expect(find.byKey(ValueKey('remove-$pdf')), findsOneWidget);
     // Lectura no expone X: las keys solo viven en Editar (ver test 2).
@@ -228,15 +221,13 @@ void main() {
     await openNote(t);
     expect(find.text('guia.pdf'), findsNothing);
     await enterEdit(t);
-    expect(find.text('ADJUNTOS DE LA NOTA (1)'), findsOneWidget);
+    expect(find.text('ARCHIVOS ADJUNTOS (1)'), findsOneWidget);
     expect(find.byKey(ValueKey('remove-$pdf')), findsNothing);
     expect(find.byKey(ValueKey('remove-$image')), findsOneWidget);
     await t.pumpWidget(const SizedBox());
   });
 
-  testWidgets('flag false por defecto oculta X pero muestra la sección', (
-    t,
-  ) async {
+  testWidgets('sin flag: X siempre visible en Editar propio', (t) async {
     SharedPreferences.setMockInitialValues({});
     final jwt =
         'e30.${base64Url.encode(utf8.encode(jsonEncode({'user_id': 'owner', 'exp': 9999999999}))).replaceAll('=', '')}.test';
@@ -271,14 +262,13 @@ void main() {
     addTearDown(t.view.resetPhysicalSize);
     addTearDown(t.view.resetDevicePixelRatio);
 
-    // Constructor por defecto: kEnableAttachmentRemoval == false en tests
-    // (sin --dart-define), igual que un build sin la bandera.
+    // Sin flag: la X está disponible normalmente en Editar propio.
     await t.pumpWidget(MaterialApp(home: AllNotesScreen(database: db)));
     await waitFor(t, () => find.text('Prueba borrado').evaluate().isNotEmpty);
     await openNote(t);
     await enterEdit(t);
-    expect(find.text('ADJUNTOS DE LA NOTA (1)'), findsOneWidget);
-    expect(find.byKey(ValueKey('remove-$image')), findsNothing);
+    expect(find.text('ARCHIVOS ADJUNTOS (1)'), findsOneWidget);
+    expect(find.byKey(ValueKey('remove-$image')), findsOneWidget);
     expect(find.textContaining('SE QUITARÁ'), findsNothing);
     await t.pumpWidget(const SizedBox());
   });
