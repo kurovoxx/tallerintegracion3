@@ -33,23 +33,23 @@ type CreateMeetingRequest struct {
 func (h *MeetingHandler) CreateMeeting(c *gin.Context) {
 	groupID := strings.TrimSpace(c.Param("id"))
 	if groupID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "group ID is required", "code": "invalid_group_id"})
+		fail(c, "CreateMeeting", http.StatusBadRequest, "invalid_group_id", "group ID is required")
 		return
 	}
 	if _, err := uuid.Parse(groupID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid group ID format", "code": "invalid_group_id"})
+		fail(c, "CreateMeeting", http.StatusBadRequest, "invalid_group_id", "invalid group ID format")
 		return
 	}
 
 	var req CreateMeetingRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_body"})
+		fail(c, "CreateMeeting", http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
 
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized", "code": "unauthorized"})
+		fail(c, "CreateMeeting", http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
@@ -66,28 +66,29 @@ func (h *MeetingHandler) CreateMeeting(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrGroupNotFound):
-			c.JSON(http.StatusNotFound, gin.H{"error": "group not found", "code": "group_not_found"})
+			fail(c, "CreateMeeting", http.StatusNotFound, "group_not_found", "group not found")
 		case errors.Is(err, service.ErrForbidden):
-			c.JSON(http.StatusForbidden, gin.H{"error": "you must be a member of the group", "code": "forbidden"})
+			fail(c, "CreateMeeting", http.StatusForbidden, "forbidden", "you must be a member of the group")
 		case errors.Is(err, service.ErrInvalidGroupID):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_group_id"})
+			fail(c, "CreateMeeting", http.StatusBadRequest, "invalid_group_id", err.Error())
 		case errors.Is(err, service.ErrInvalidUserID):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_user_id"})
+			fail(c, "CreateMeeting", http.StatusBadRequest, "invalid_user_id", err.Error())
 		case errors.Is(err, service.ErrInvalidTitle),
 			errors.Is(err, service.ErrTitleTooLong),
 			errors.Is(err, service.ErrScheduledAtRequired),
 			errors.Is(err, service.ErrInvalidScheduledAt),
 			errors.Is(err, service.ErrInvalidAttendeeEmail),
 			errors.Is(err, service.ErrTooManyAttendees):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_body"})
+			fail(c, "CreateMeeting", http.StatusBadRequest, "invalid_body", err.Error())
 		default:
 			log.Printf("CreateMeeting internal error: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not create meeting", "code": "internal"})
+			fail(c, "CreateMeeting", http.StatusInternalServerError, "internal", "could not create meeting")
 		}
 		return
 	}
 
 	// Contrato: 201 {meeting_id}
+	logOp(c, "CreateMeeting", http.StatusCreated, "meeting_id="+uuidToString(meeting.ID))
 	c.JSON(http.StatusCreated, gin.H{
 		"meeting_id": uuidToString(meeting.ID),
 	})

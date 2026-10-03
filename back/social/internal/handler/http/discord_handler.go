@@ -34,17 +34,17 @@ func (h *DiscordHandler) RegisterRoutes(r gin.IRoutes) {
 func (h *DiscordHandler) GetConfig(c *gin.Context) {
 	groupID := strings.TrimSpace(c.Param("id"))
 	if groupID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "group ID is required", "code": "invalid_group_id"})
+		fail(c, "GetConfig", http.StatusBadRequest, "invalid_group_id", "group ID is required")
 		return
 	}
 	if _, err := uuid.Parse(groupID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid group ID format", "code": "invalid_group_id"})
+		fail(c, "GetConfig", http.StatusBadRequest, "invalid_group_id", "invalid group ID format")
 		return
 	}
 
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized", "code": "unauthorized"})
+		fail(c, "GetConfig", http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
@@ -52,22 +52,23 @@ func (h *DiscordHandler) GetConfig(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrGroupNotFound):
-			c.JSON(http.StatusNotFound, gin.H{"error": "group not found", "code": "group_not_found"})
+			fail(c, "GetConfig", http.StatusNotFound, "group_not_found", "group not found")
 		case errors.Is(err, service.ErrForbidden):
-			c.JSON(http.StatusForbidden, gin.H{"error": "you must be a member of the group", "code": "forbidden"})
+			fail(c, "GetConfig", http.StatusForbidden, "forbidden", "you must be a member of the group")
 		case errors.Is(err, service.ErrDiscordNotConfigured):
-			c.JSON(http.StatusNotFound, gin.H{"error": "discord not configured for this group", "code": "discord_not_configured"})
+			fail(c, "GetConfig", http.StatusNotFound, "discord_not_configured", "discord not configured for this group")
 		case errors.Is(err, service.ErrInvalidGroupID):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_group_id"})
+			fail(c, "GetConfig", http.StatusBadRequest, "invalid_group_id", err.Error())
 		case errors.Is(err, service.ErrInvalidUserID):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_user_id"})
+			fail(c, "GetConfig", http.StatusBadRequest, "invalid_user_id", err.Error())
 		default:
 			log.Printf("GetDiscordConfig internal error: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not load discord config", "code": "internal"})
+			fail(c, "GetConfig", http.StatusInternalServerError, "internal", "could not load discord config")
 		}
 		return
 	}
 
+	logOp(c, "PutDiscordConfig", http.StatusOK, "group_id="+groupID)
 	c.JSON(http.StatusOK, gin.H{
 		"server_name": pgTextToString(cfg.ServerName),
 		"invite_url":  pgTextToString(cfg.InviteUrl),
@@ -86,23 +87,23 @@ type PutDiscordConfigRequest struct {
 func (h *DiscordHandler) PutConfig(c *gin.Context) {
 	groupID := strings.TrimSpace(c.Param("id"))
 	if groupID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "group ID is required", "code": "invalid_group_id"})
+		fail(c, "PutConfig", http.StatusBadRequest, "invalid_group_id", "group ID is required")
 		return
 	}
 	if _, err := uuid.Parse(groupID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid group ID format", "code": "invalid_group_id"})
+		fail(c, "PutConfig", http.StatusBadRequest, "invalid_group_id", "invalid group ID format")
 		return
 	}
 
 	var req PutDiscordConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_body"})
+		fail(c, "PutConfig", http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
 
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized", "code": "unauthorized"})
+		fail(c, "PutConfig", http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
@@ -117,24 +118,25 @@ func (h *DiscordHandler) PutConfig(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrGroupNotFound):
-			c.JSON(http.StatusNotFound, gin.H{"error": "group not found", "code": "group_not_found"})
+			fail(c, "PutConfig", http.StatusNotFound, "group_not_found", "group not found")
 		case errors.Is(err, service.ErrForbidden):
-			c.JSON(http.StatusForbidden, gin.H{"error": "only admins can configure discord", "code": "forbidden"})
+			fail(c, "PutConfig", http.StatusForbidden, "forbidden", "only admins can configure discord")
 		case errors.Is(err, service.ErrInvalidGroupID):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_group_id"})
+			fail(c, "PutConfig", http.StatusBadRequest, "invalid_group_id", err.Error())
 		case errors.Is(err, service.ErrInvalidUserID):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_user_id"})
+			fail(c, "PutConfig", http.StatusBadRequest, "invalid_user_id", err.Error())
 		case errors.Is(err, service.ErrServerNameEmpty),
 			errors.Is(err, service.ErrInviteURLEmpty),
 			errors.Is(err, service.ErrInvalidWebhookURL):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_body"})
+			fail(c, "PutConfig", http.StatusBadRequest, "invalid_body", err.Error())
 		default:
 			log.Printf("PutDiscordConfig internal error: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not save discord config", "code": "internal"})
+			fail(c, "PutConfig", http.StatusInternalServerError, "internal", "could not save discord config")
 		}
 		return
 	}
 
+	logOp(c, "GetDiscordConfig", http.StatusOK, "group_id="+groupID)
 	c.JSON(http.StatusOK, gin.H{
 		"message":     "discord config saved successfully",
 		"server_name": pgTextToString(cfg.ServerName),
