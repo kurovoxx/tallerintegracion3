@@ -412,10 +412,14 @@ func (r *NoteRepository) EnqueueDriveOperation(ctx context.Context, db DBTX, op,
 	if err != nil {
 		return fmt.Errorf("encode drive operation: %w", err)
 	}
+	// El pool de producción usa QueryExecModeSimpleProtocol: un []byte se
+	// interpolaría como literal bytea ('\x7b7d') y el cast a jsonb fallaría
+	// con 22P02. Como string viaja como literal de texto válido en ambos
+	// modos de protocolo (simple y extendido).
 	_, err = db.Exec(ctx, `INSERT INTO notes.drive_reconciliation_queue
 		(operation, note_id, attachment_id, external_file_id, owner_user_id, payload)
 		VALUES ($1, NULLIF($2, '')::uuid, NULLIF($3, '')::uuid, NULLIF($4, ''), $5::uuid, $6::jsonb)`,
-		op, noteID, attID, fileID, ownerUserID, body)
+		op, noteID, attID, fileID, ownerUserID, string(body))
 	if err != nil {
 		return fmt.Errorf("enqueue drive operation: %w", err)
 	}

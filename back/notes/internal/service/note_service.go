@@ -1314,6 +1314,9 @@ func (s *NoteService) Delete(ctx context.Context, userID string, noteID string) 
 			// Borrado concurrente: el recurso ya no existe -> not_found.
 			return newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
 		}
+		// Log servidor (sin secretos): la causa exacta del 500 quedaba
+		// oculta tras el mensaje genérico al cliente.
+		log.Printf("[Notes] DELETE NOTE note=%s step=delete_with_drive_cleanup status=error cause=%v", noteID, err)
 		return ErrInternalDatabase
 	}
 	// 2. Borrar archivo en Drive best-effort (nunca revierte el éxito de PG).
@@ -1441,6 +1444,7 @@ func (s *NoteService) RemoveAttachment(ctx context.Context, userID string, noteI
 		if errors.Is(err, repository.ErrForbidden) {
 			return newServiceError(utils.ErrForbidden)
 		}
+		log.Printf("[Notes] DELETE ATTACHMENT note=%s attachment=%s step=delete_with_drive_cleanup status=error cause=%v", noteID, attachmentID, err)
 		return ErrInternalDatabase
 	}
 	if fileID == "" {
