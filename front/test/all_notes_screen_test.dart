@@ -5,6 +5,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:taller_integracion_front/features/notes/note_file_picker.dart';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -125,8 +126,9 @@ void main() {
 
     final sheet = find.byType(DraggableScrollableSheet);
     expect(sheet, findsOneWidget);
-    // Sin el tope M3 de 640px, la hoja ocupa el ancho completo de la ventana.
-    expect(tester.getSize(sheet).width, 1440);
+    // El editor se acota a un ancho máximo legible en ultra-wide (920 dp) en
+    // lugar de estirarse al 100 % de la ventana junto al sidebar.
+    expect(tester.getSize(sheet).width, 920);
     expect(find.text('AMPLIAR'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -208,7 +210,7 @@ void main() {
       (w) =>
           w is Container &&
           w.constraints ==
-              const BoxConstraints.tightFor(width: 104, height: 78),
+              const BoxConstraints.tightFor(width: 120, height: 120),
     );
     expect(thumb, findsOneWidget);
     await tester.ensureVisible(thumb);
@@ -290,6 +292,13 @@ void main() {
   testWidgets('visor PDF resuelve el archivo real y ofrece apertura externa', (
     tester,
   ) async {
+    const launcher = MethodChannel('plugins.flutter.io/url_launcher');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(launcher, (_) async => true);
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(launcher, null);
+    });
     await pumpNotes(tester, const Size(1440, 900));
 
     await tester.tap(find.text('Cálculo - Límites y derivadas'));
@@ -516,12 +525,12 @@ void main() {
     final image = scenario.$3;
     final fileName = image ? 'foto.png' : 'guia.pdf';
     testWidgets(
-      'archivo nuevo espera UUID: fallo=$fail refresh=$refresh imagen=$image',
+      'adjunto nuevo se sube al note_id: fallo=$fail refresh=$refresh imagen=$image',
       (tester) async {
         await SessionManager.saveSession('jwt-new', {
           'id': 'u-new',
         }, refreshToken: 'refresh-test');
-        var uploads = 0;
+        var attachmentAttempts = 0;
         AuthedHttp.refreshOverride = (_) async =>
             RefreshResult.success(accessToken: 'jwt-renovado');
         const id = '12345678-1234-4234-8234-123456789abc';
@@ -533,34 +542,28 @@ void main() {
             created = true;
             return http.Response('{"note_id":"$id"}', 201);
           }
-          if (r.url.path == '/notes/upload') {
-            uploads++;
-            if (refresh && uploads == 1) {
+          if (r.url.path == '/notes/$id/attachments') {
+            expect(created, isTrue);
+            attachmentAttempts++;
+            if (refresh && attachmentAttempts == 1) {
               return http.Response('{"error":"unauthorized"}', 401);
             }
-            expect(created, isTrue);
-            // No acceder a r.body en multipart con binario PNG (falla UTF8).
-            // Se verifica el vínculo real vía POST attachments + PATCH.
             if (fail) {
               return http.Response(
                 '{"error":{"code":"drive_unavailable"}}',
                 500,
               );
             }
+            // El binario real llega en multipart; no se accede al body aquí
+            // (PNG binario rompe la decodificación UTF-8 del test).
             return http.Response(
               jsonEncode({
+                'attachment_id': 'attachment1',
                 'external_file_id': 'file1',
                 'file_url': 'https://drive.google.com/file/d/file1/view',
-                'file_name': fileName,
-                'file_type': image ? 'image/png' : 'application/pdf',
-                'file_size_bytes': 8,
               }),
               201,
             );
-          }
-          if (r.url.path == '/notes/$id/attachments') {
-            expect(created, isTrue);
-            return http.Response('{"attachment_id":"attachment1"}', 201);
           }
           if (r.method == 'PATCH') {
             final body = jsonDecode(r.body) as Map<String, dynamic>;
@@ -603,15 +606,15 @@ void main() {
         await tester.enterText(title, 'Nota con archivo');
         await tester.tap(find.text('GUARDAR'));
         await settleRealAsync(tester);
-        expect(uploads, refresh ? 2 : 1);
-        if (!fail) expect(paths, contains('POST /notes/$id/attachments'));
-        if (fail) {
+        expect(attachmentAttempts, refresh ? 2 : 1);
+        if (!fail) {
+          expect(paths, contains('POST /notes/$id/attachments'));
+          expect(paths, contains('PATCH /notes/$id'));
+        } else {
           expect(
             find.textContaining('no se pudo adjuntar guia.pdf'),
             findsOneWidget,
           );
-        } else {
-          expect(paths, contains('PATCH /notes/$id'));
         }
         expect(
           paths.where((p) => RegExp(r'/notes/\d{13}/attachments').hasMatch(p)),

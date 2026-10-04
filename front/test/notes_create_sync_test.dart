@@ -92,24 +92,17 @@ void main() {
         };
         return json({'note_id': realId, 'version': getVersion()}, 201);
       }
-      if (r.method == 'POST' && r.url.path == '/notes/upload') {
-        return json({
-          'file_url': 'https://drive.google.com/file/d/ext-foto/view',
-          'external_file_id': 'ext-foto',
-          'file_name': 'foto.png',
-          'file_type': 'image/png',
-          'file_size_bytes': pngBytes.length,
-        }, 201);
-      }
-      if (r.method == 'POST' && r.url.path.endsWith('/attachments')) {
-        final b = jsonDecode(r.body) as Map<String, dynamic>;
+      // Flujo canónico multipart (Development): el binario va directo a
+      // POST /notes/{uuid}/attachments. No se accede al body (binario
+      // multipart rompe la decodificación UTF-8 del test).
+      if (r.method == 'POST' && r.url.path == '/notes/$realId/attachments') {
         final note = remote[realId]!;
         (note['attachments'] as List).add({
           'id': attId,
           'note_id': realId,
-          'file_type': b['file_type'],
-          'file_name': b['file_name'],
-          'external_file_id': b['external_file_id'],
+          'file_type': 'image/png',
+          'file_name': 'foto.png',
+          'external_file_id': 'ext-foto',
         });
         return json({'attachment_id': attId}, 201);
       }
@@ -304,6 +297,12 @@ void main() {
           find.text('RECURSOS ADJUNTOS').evaluate().isNotEmpty,
     );
     await waitFrozen(t, () => find.text('foto.png').evaluate().isNotEmpty);
+    // Multipart canónico: un solo flujo (sin /notes/upload para crear).
+    expect(calls, contains('POST /notes/$realId/attachments'));
+    expect(
+      calls.where((c) => c == 'POST /notes/upload'),
+      isEmpty,
+    );
     // 12. Todo contra el UUID real; el tempId jamás toca la red.
     expect(
       calls.indexOf('POST /notes'),

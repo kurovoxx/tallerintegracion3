@@ -13,7 +13,7 @@ func (s *NoteService) GetAttachmentContent(ctx context.Context, requesterID, not
 	if !utils.ValidateUUID(noteID) || !utils.ValidateUUID(attachmentID) {
 		return nil, "", nil, notFoundNote()
 	}
-	note, err := s.notes.GetByID(ctx, noteID)
+	note, err := s.observedNotesGetByID(ctx, noteID)
 	if err != nil {
 		return nil, "", nil, ErrInternalDatabase
 	}
@@ -27,7 +27,7 @@ func (s *NoteService) GetAttachmentContent(ctx context.Context, requesterID, not
 	if !allowed {
 		return nil, "", nil, notFoundNote()
 	}
-	att, err := s.attachments.GetByID(ctx, attachmentID)
+	att, err := s.observedAttachmentsGetByID(ctx, attachmentID)
 	if err != nil {
 		return nil, "", nil, ErrInternalDatabase
 	}
@@ -40,7 +40,7 @@ func (s *NoteService) GetAttachmentContent(ctx context.Context, requesterID, not
 	var contentType string
 	err = retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
 		var downloadErr error
-		data, contentType, downloadErr = s.drive.DownloadAttachment(driveCtx, note.UserID, att.ExternalFileID)
+		data, contentType, downloadErr = s.observedDriveDownloadAttachment(driveCtx, note.UserID, att.ExternalFileID)
 		return downloadErr
 	})
 	if err != nil {

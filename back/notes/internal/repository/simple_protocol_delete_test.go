@@ -60,6 +60,9 @@ func simpleProtocolTestPool(t *testing.T) *pgxpool.Pool {
 	_, err = pool.Exec(ctx, `CREATE SCHEMA notes;
 		CREATE TABLE notes.notes (id uuid PRIMARY KEY, user_id uuid NOT NULL, external_file_id text);
 		CREATE TABLE notes.note_attachments (id uuid PRIMARY KEY, note_id uuid REFERENCES notes.notes(id) ON DELETE CASCADE, external_file_id text NOT NULL);
+		CREATE TABLE notes.saved_notes (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), note_id uuid REFERENCES notes.notes(id) ON DELETE CASCADE);
+		CREATE TABLE notes.note_likes (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), note_id uuid REFERENCES notes.notes(id) ON DELETE CASCADE);
+		CREATE TABLE notes.shared_notes (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), note_id uuid REFERENCES notes.notes(id) ON DELETE CASCADE);
 		CREATE TABLE notes.drive_reconciliation_queue (
 			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 			operation text NOT NULL,

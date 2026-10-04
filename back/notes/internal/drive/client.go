@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -146,6 +147,42 @@ func noteFileProperties(ownerUserID, noteID string) map[string]string {
 		props["notes_note_id"] = noteID
 	}
 	return props
+}
+
+// attachmentFileProperties indexa el binario adjunto con su dueño y, cuando se
+// conoce, con la nota destino (notes_note_id). Así el adjunto queda asociado a
+// la misma carpeta lógica de la app que el .md y puede auditarse/limpiarse por
+// nota sin depender solo de la fila de Postgres.
+func attachmentFileProperties(ownerUserID, noteID string) map[string]string {
+	props := noteFileProperties(ownerUserID, noteID)
+	props["notes_attachment"] = "1"
+	return props
+}
+
+// ensureAttachmentFileName garantiza una extensión coherente con el MIME
+// canónico (imagen.png, documento.pdf, apunte.md) para que Google Drive
+// previsualice e identifique el binario aunque el cliente no haya enviado
+// extensión en el nombre.
+func ensureAttachmentFileName(name, mimeType string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "adjunto"
+	}
+	if strings.Contains(filepath.Base(name), ".") {
+		return name
+	}
+	switch normalizeMimeType(mimeType) {
+	case MimePNG:
+		return name + ".png"
+	case MimeJPEG:
+		return name + ".jpg"
+	case MimePDF:
+		return name + ".pdf"
+	case MimeMarkdown:
+		return name + ".md"
+	default:
+		return name
+	}
 }
 
 func cloneProperties(props map[string]string) map[string]string {
@@ -304,11 +341,21 @@ func (m *MockClient) UploadAttachment(ctx context.Context, userID string, noteID
 		fileName = "attachment"
 	}
 	// Paridad con RealDriveClient: preserva el MIME declarado si es específico
-	// y lo resuelve por extensión/sniffing cuando viene vacío o genérico.
+	// y lo resuelve por extensión/sniffing cuando viene vacío o genérico, y
+	// garantiza una extensión coherente con el tipo para el nombre en Drive.
 	fileType = DetectMimeType(fileName, fileType, data)
+	fileName = ensureAttachmentFileName(fileName, fileType)
 	id := "att_" + uuid.NewString()
 	url := fmt.Sprintf("https://drive.google.com/file/d/%s/view", id)
-	m.files[id] = &mockFile{ID: id, OwnerID: userID, Title: fileName, Data: append([]byte(nil), data...), MimeType: fileType, Folder: noteID}
+	m.files[id] = &mockFile{
+		ID:            id,
+		OwnerID:       userID,
+		Title:         fileName,
+		Data:          append([]byte(nil), data...),
+		MimeType:      fileType,
+		Folder:        noteID,
+		AppProperties: attachmentFileProperties(userID, noteID),
+	}
 	return id, url, nil
 }
 
@@ -356,8 +403,9 @@ func (m *MockClient) CopyFile(ctx context.Context, srcUserID string, srcFileID s
 
 // FindFileByNoteID replica Files.List con query appProperties: devuelve el
 // archivo .md del dueño indexado con notes_note_id=noteID ("" si no existe).
-// Ante varios candidatos (p. ej. reintentos previos) elige el de ID menor para
-// ser determinista.
+// Excluye los adjuntos (notes_attachment=1) para no adoptar un binario como si
+// fuera el Markdown de la nota. Ante varios candidatos (p. ej. reintentos
+// previos) elige el de ID menor para ser determinista.
 func (m *MockClient) FindFileByNoteID(ctx context.Context, ownerUserID string, noteID string) (string, error) {
 	if err := m.checkOAuth(ownerUserID); err != nil {
 		return "", err
@@ -370,6 +418,9 @@ func (m *MockClient) FindFileByNoteID(ctx context.Context, ownerUserID string, n
 	found := ""
 	for id, f := range m.files {
 		if f.OwnerID != ownerUserID || f.AppProperties["notes_note_id"] != noteID {
+			continue
+		}
+		if f.AppProperties["notes_attachment"] == "1" {
 			continue
 		}
 		if found == "" || id < found {

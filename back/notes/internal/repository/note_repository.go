@@ -538,8 +538,27 @@ func (r *NoteRepository) DeleteWithDriveCleanup(ctx context.Context, noteID, req
 			return model.NoteDriveCleanup{}, err
 		}
 	}
-	if err := r.Delete(ctx, tx, noteID); err != nil {
-		return model.NoteDriveCleanup{}, err
+	// Hardening de Development para instalaciones con FK restrictivas en vez
+	// de CASCADE: borrar dependientes explícitamente (inocuo cuando CASCADE
+	// existe; la metadata ya fue capturada arriba para el cleanup de Drive).
+	for _, query := range []string{
+		`DELETE FROM notes.note_attachments WHERE note_id = $1`,
+		`DELETE FROM notes.saved_notes WHERE note_id = $1`,
+		`DELETE FROM notes.note_likes WHERE note_id = $1`,
+		`DELETE FROM notes.shared_notes WHERE note_id = $1`,
+	} {
+		if _, err := tx.Exec(ctx, query, noteID); err != nil {
+			return model.NoteDriveCleanup{}, fmt.Errorf("cleanup note dependents: %w", err)
+		}
+	}
+	// Scoping por owner como defensa en profundidad (la propiedad ya se
+	// verificó con el lock); 0 filas = borrado concurrente -> not_found.
+	tag, err := tx.Exec(ctx, `DELETE FROM notes.notes WHERE id = $1 AND user_id = $2`, noteID, requesterID)
+	if err != nil {
+		return model.NoteDriveCleanup{}, fmt.Errorf("delete note: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return model.NoteDriveCleanup{}, ErrNotFound
 	}
 	// La tabla de permisos administrados no tiene FK a notes.notes: el estado
 	// local del desired-state se limpia en la misma transacción para no dejar
