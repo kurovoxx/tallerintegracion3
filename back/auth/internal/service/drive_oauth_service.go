@@ -424,9 +424,11 @@ func (s *DriveOAuthService) GetValidAccessToken(ctx context.Context, userID stri
 				if markErr := s.oauthRepo.MarkGoogleDriveConnectionRevoked(ctx, userID); markErr != nil {
 					return "", NewServiceError("internal_error")
 				}
+				log.Printf("drive oauth refresh failed user_id=%s code=drive_connection_invalid", userID)
 				return "", NewServiceError("drive_connection_invalid")
 			}
 			if errors.Is(err, ErrGoogleUnavailable) {
+				log.Printf("drive oauth refresh failed user_id=%s code=google_unavailable", userID)
 				return "", NewServiceError("google_unavailable")
 			}
 			return "", NewServiceError("internal_error")
@@ -442,6 +444,7 @@ func (s *DriveOAuthService) GetValidAccessToken(ctx context.Context, userID stri
 		if err := s.oauthRepo.UpdateGoogleDriveAccessToken(ctx, userID, result.AccessToken, result.RefreshToken, expiresAt); err != nil {
 			return "", NewServiceError("internal_error")
 		}
+		log.Printf("drive oauth refresh ok user_id=%s", userID)
 		return result.AccessToken, nil
 	}
 	// Si el provider no implementa Refresh, intentar con Exchange no es correcto; retornar google_unavailable
