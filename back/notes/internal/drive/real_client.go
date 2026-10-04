@@ -360,6 +360,59 @@ func (r *RealDriveClient) VerifyFileAccess(ctx context.Context, userID string, d
 	return nil
 }
 
+// ListAppFileIDs lista en 1 llamada (paginada) los archivos activos de la app
+// del dueño para reconciliación eficiente. Solo indexados con
+// notes_owner_user_id; la papelera se excluye igual que en FindFileByNoteID.
+func (r *RealDriveClient) ListAppFileIDs(ctx context.Context, userID string) ([]string, error) {
+	srv, err := r.serviceFor(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	query := fmt.Sprintf(
+		"appProperties has { key='notes_owner_user_id' and value='%s' } and trashed = false",
+		escapeDriveQueryValue(userID),
+	)
+	var ids []string
+	pageToken := ""
+	for {
+		call := srv.Files.List().Q(query).Fields("files(id)", "nextPageToken").PageSize(1000).Context(ctx)
+		if pageToken != "" {
+			call = call.PageToken(pageToken)
+		}
+		list, err := call.Do()
+		if err != nil {
+			return nil, mapGoogleError("ListAppFileIDs", err)
+		}
+		for _, f := range list.Files {
+			ids = append(ids, f.Id)
+		}
+		if list.NextPageToken == "" {
+			break
+		}
+		pageToken = list.NextPageToken
+	}
+	return ids, nil
+}
+
+// FileGone confirma ausencia definitiva sin descargar contenido: 404 de la
+// API o papelera (trashed=true, que para la app cuenta como eliminado porque
+// el usuario lo borró en Drive). Cualquier otro error se propaga para no
+// borrar metadata ante fallos temporales.
+func (r *RealDriveClient) FileGone(ctx context.Context, userID string, driveFileID string) (bool, error) {
+	srv, err := r.serviceFor(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	f, err := srv.Files.Get(driveFileID).Fields("id,trashed").Context(ctx).Do()
+	if err != nil {
+		if IsNotFound(mapGoogleError("FileGone", err)) {
+			return true, nil
+		}
+		return false, mapGoogleError("FileGone", err)
+	}
+	return f.Trashed, nil
+}
+
 func (r *RealDriveClient) GrantPermission(ctx context.Context, ownerUserID string, fileID string, granteeEmail string, role string) error {
 	srv, err := r.serviceFor(ctx, ownerUserID)
 	if err != nil {

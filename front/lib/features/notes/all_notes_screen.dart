@@ -604,29 +604,87 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     } finally {
       if (mounted) setState(() => _isReconciling = false);
     }
+    // 3. Reconciliación Drive→App: eliminaciones hechas directamente en
+    // Google Drive (1 request; el backend confirma cada ausencia).
+    int removedNotes = 0;
+    int removedAttachments = 0;
+    final reconcile = await _reconcileDriveDeletions();
+    if (reconcile == null) {
+      failed++;
+    } else {
+      removedNotes = (reconcile['removed_notes'] as num?)?.toInt() ?? 0;
+      removedAttachments =
+          (reconcile['removed_attachments'] as num?)?.toInt() ?? 0;
+      failed += (reconcile['pending'] as num?)?.toInt() ?? 0;
+      final ids =
+          (reconcile['removed_note_ids'] as List?)
+              ?.whereType<String>()
+              .toList() ??
+          [];
+      for (final id in ids) {
+        final local = await _currentNoteById(id);
+        if (local != null) await _applyLocalDelete(local);
+      }
+    }
     if (!mounted) return;
     if (failed == 0 &&
         pushed == 0 &&
         refreshed == 0 &&
-        linkedAttachments == 0) {
+        linkedAttachments == 0 &&
+        removedNotes == 0 &&
+        removedAttachments == 0) {
       _notifySnack('Tus notas están sincronizadas.');
       return;
     }
-    final linked = linkedAttachments > 0
-        ? ', $linkedAttachments adjunto(s) vinculado(s)'
-        : '';
-    if (failed == 0) {
-      _notifySnack(
-        'Sincronización completa: $pushed respaldada(s) en Drive, '
-        '$refreshed actualizada(s)$linked.',
+    final parts = <String>[];
+    if (pushed > 0) parts.add('$pushed respaldada(s) en Drive');
+    if (refreshed > 0) parts.add('$refreshed actualizada(s)');
+    if (linkedAttachments > 0) {
+      parts.add('$linkedAttachments adjunto(s) vinculado(s)');
+    }
+    if (removedNotes > 0 || removedAttachments > 0) {
+      parts.add(
+        '$removedNotes nota(s) y $removedAttachments archivo(s) '
+        'eliminados en Drive fueron actualizados',
       );
+    }
+    final detail = parts.join(', ');
+    if (failed == 0) {
+      _notifySnack('Sincronización completa: $detail.');
     } else {
+      final partial = detail.isEmpty ? 'sin cambios aplicados' : detail;
       _notifySnack(
-        'Sincronización parcial: $pushed respaldada(s), $refreshed '
-        'actualizada(s)$linked, $failed con error. Revisa tu conexión.',
+        'Sincronización parcial: $partial, $failed con error. '
+        'Revisa tu conexión.',
         ok: false,
       );
     }
+  }
+
+  /// POST /notes/reconcile: eliminaciones hechas directamente en Drive.
+  /// Devuelve el resumen del backend o null si falló (el llamador lo cuenta
+  /// como error sin borrar nada local).
+  Future<Map<String, dynamic>?> _reconcileDriveDeletions() async {
+    try {
+      final res = await AuthedHttp.run(
+        () => _withNotesClient(
+          (client) => client
+              .post(
+                Uri.parse('$notesBaseUrl/notes/reconcile'),
+                headers: _authHeaders(),
+              )
+              .timeout(const Duration(seconds: 60)),
+        ),
+      );
+      debugPrint('[Notes] POST /notes/reconcile status=${res.statusCode}');
+      if (res.statusCode == 200) {
+        final data = jsonDecode(utf8.decode(res.bodyBytes));
+        if (data is Map<String, dynamic>) return data;
+      }
+    } catch (e) {
+      debugPrint('[Notes] reconcile Drive falló: $e');
+    }
+    return null;
   }
 
   /// Verifica los adjuntos pendientes (`attachment-pending://...`) referenciados

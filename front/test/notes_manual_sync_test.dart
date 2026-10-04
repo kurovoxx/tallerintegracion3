@@ -115,6 +115,14 @@ void main() {
     ]);
     notesHttpClientOverride = MockClient((r) async {
       calls.add('${r.method} ${r.url.path}');
+      if (r.method == 'POST' && r.url.path == '/notes/reconcile') {
+        return json({
+          'removed_notes': 0,
+          'removed_attachments': 0,
+          'pending': 0,
+          'removed_note_ids': [],
+        });
+      }
       if (r.url.path == '/notes/me') {
         return json({
           'notes': [
@@ -158,6 +166,14 @@ void main() {
           'version': 1,
           'content': 'contenido',
           'attachments': [],
+        });
+      }
+      if (r.method == 'POST' && r.url.path == '/notes/reconcile') {
+        return json({
+          'removed_notes': 0,
+          'removed_attachments': 0,
+          'pending': 0,
+          'removed_note_ids': [],
         });
       }
       if (r.url.path == '/notes/me') {
@@ -207,6 +223,14 @@ void main() {
       if (r.method == 'PATCH') {
         return json({'version': 3, 'title': 'Con pendiente'});
       }
+      if (r.method == 'POST' && r.url.path == '/notes/reconcile') {
+        return json({
+          'removed_notes': 0,
+          'removed_attachments': 0,
+          'pending': 0,
+          'removed_note_ids': [],
+        });
+      }
       if (r.url.path == '/notes/me') {
         return json({
           'notes': [
@@ -241,6 +265,14 @@ void main() {
       calls.add('${r.method} ${r.url.path}');
       if (r.method == 'POST' && r.url.path == '/notes') {
         return json({}, 500);
+      }
+      if (r.method == 'POST' && r.url.path == '/notes/reconcile') {
+        return json({
+          'removed_notes': 0,
+          'removed_attachments': 0,
+          'pending': 0,
+          'removed_note_ids': [],
+        });
       }
       if (r.url.path == '/notes/me') {
         return json({'notes': []});
@@ -277,6 +309,14 @@ void main() {
           'version': 1,
           'content': 'contenido',
           'attachments': [],
+        });
+      }
+      if (r.method == 'POST' && r.url.path == '/notes/reconcile') {
+        return json({
+          'removed_notes': 0,
+          'removed_attachments': 0,
+          'pending': 0,
+          'removed_note_ids': [],
         });
       }
       if (r.url.path == '/notes/me') {

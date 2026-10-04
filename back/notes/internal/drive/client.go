@@ -91,6 +91,16 @@ type Client interface {
 	RevokeAllPermissions(ctx context.Context, ownerUserID string, fileID string) error
 	// VerifyFileAccess comprueba que el usuario puede acceder al archivo.
 	VerifyFileAccess(ctx context.Context, userID string, driveFileID string) error
+	// ListAppFileIDs devuelve los IDs de archivos activos (no en papelera)
+	// de la app que pertenecen al dueño, para reconciliar eliminaciones
+	// externas con 1-2 llamadas en vez de una por archivo.
+	ListAppFileIDs(ctx context.Context, userID string) ([]string, error)
+	// FileGone confirma ausencia definitiva SIN descargar contenido:
+	// 404 de la API o papelera (trashed=true, documentado como eliminado
+	// para la app: el usuario lo borró en Drive) => (true, nil).
+	// Cualquier otro error (OAuth, red, 403, 429, 5xx, timeout) =>
+	// (false, err): NUNCA debe interpretarse como eliminación.
+	FileGone(ctx context.Context, userID string, driveFileID string) (bool, error)
 }
 
 // GrantCall registra un intento de GrantPermission (observable en tests).
@@ -125,6 +135,12 @@ type MockClient struct {
 	// CopyFile solo exige OAuth del destino (dst), replicando el Real desacoplado
 	// que no requiere token del autor original para clonar apuntes públicos.
 	NoOAuth map[string]bool
+	// trashed simula papelera de Drive (el archivo existe pero el usuario lo
+	// eliminó en la UI): FileGone lo reporta como ausente. ListAppFileIDs lo
+	// excluye, igual que Files.List por defecto en producción.
+	trashed map[string]bool
+	// ListErr inyecta un fallo del listado (p. ej. 5xx) para tests.
+	ListErr error
 }
 
 type mockFile struct {
@@ -602,6 +618,65 @@ func (m *MockClient) FileAppProperties(fileID string) (map[string]string, bool) 
 		return nil, false
 	}
 	return cloneProperties(f.AppProperties), true
+}
+
+// Trash simula mover un archivo a la papelera de Drive (solo tests).
+func (m *MockClient) Trash(fileID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.trashed == nil {
+		m.trashed = make(map[string]bool)
+	}
+	m.trashed[fileID] = true
+}
+
+// Restore saca un archivo de la papelera simulada (solo tests).
+func (m *MockClient) Restore(fileID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.trashed, fileID)
+}
+
+// ListAppFileIDs replica el listado por appProperties del dueño excluyendo
+// papelera, igual que el query con trashed = false en producción.
+func (m *MockClient) ListAppFileIDs(ctx context.Context, userID string) ([]string, error) {
+	if err := m.checkOAuth(userID); err != nil {
+		return nil, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.ListErr != nil {
+		return nil, m.ListErr
+	}
+	var ids []string
+	for id, f := range m.files {
+		if f.OwnerID != userID {
+			continue
+		}
+		if m.trashed[id] {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// FileGone confirma ausencia definitiva: archivo inexistente (404) o en
+// papelera. Los errores inyectados (GetErr) y OAuth se propagan para que el
+// llamador NUNCA los confunda con una eliminación del usuario.
+func (m *MockClient) FileGone(ctx context.Context, userID string, driveFileID string) (bool, error) {
+	if err := m.checkOAuth(userID); err != nil {
+		return false, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if err, ok := m.GetErr[driveFileID]; ok && err != nil {
+		return false, err
+	}
+	if _, ok := m.files[driveFileID]; !ok {
+		return true, nil
+	}
+	return m.trashed[driveFileID], nil
 }
 
 // Ensure interface compliance

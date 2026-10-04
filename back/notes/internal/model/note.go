@@ -139,3 +139,14 @@ type AttachmentDriveCleanup struct {
 	ID             string
 	ExternalFileID string
 }
+
+// ReconcileSummary es el resultado de ReconcileDriveDeletions: conteos de lo
+// eliminado tras confirmación inequívoca en Drive, IDs de notas removidas
+// (propias, no sensibles) para refresco local, y pendientes por errores
+// temporales (nada se borró por ellos).
+type ReconcileSummary struct {
+	RemovedNotes       int
+	RemovedAttachments int
+	Pending            int
+	RemovedNoteIDs     []string
+}
