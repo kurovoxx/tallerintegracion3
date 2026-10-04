@@ -45,6 +45,18 @@ http.Client? notesHttpClientOverride;
 final Map<String, PickedNoteFile> _pendingAttachmentFiles =
     <String, PickedNoteFile>{};
 
+/// Inyecta bytes pendientes para tests (REFRESCAR manual con adjunto).
+@visibleForTesting
+void debugInjectPendingAttachment(String placeholder, PickedNoteFile file) {
+  _pendingAttachmentFiles[placeholder] = file;
+}
+
+/// Limpia los pendientes inyectados (tests).
+@visibleForTesting
+void debugClearPendingAttachments() {
+  _pendingAttachmentFiles.clear();
+}
+
 /// Ejecuta [run] con el cliente inyectado o con uno nuevo que se cierra al
 /// terminar, para no filtrar conexiones en la subida de adjuntos.
 Future<T> _withNotesClient<T>(
@@ -471,10 +483,10 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     );
   }
 
-  /// REFRESCAR / SINCRONIZAR DRIVE: empuja hacia el backend existente las notas
-  /// que aún no tienen respaldo remoto (`drive_file_id` inexistente => id local
-  /// sin UUID) y re-guarda (PATCH) las que ya viven en Drive para forzar su
-  /// reconciliación. Muestra indicador de carga y notifica con SnackBar.
+  /// REFRESCAR / SINCRONIZAR DRIVE manual: procesa SOLO lo pendiente (notas
+  /// locales sin UUID, placeholders de adjuntos, notas en error). Una nota ya
+  /// sincronizada sin cambios NO recibe PATCH. Termina con GET /notes/me.
+  /// No duplica el pipeline de creación: si hay un Future en curso lo espera.
   Future<void> _syncWithDrive() async {
     if (_isReconciling) return;
     final token = SessionManager.token;
@@ -537,10 +549,27 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         }
         pushed++;
       }
-      // 2. Ya remotas propias: reenviar adjuntos pendientes y re-guardar.
+      // 2. Ya remotas propias: SOLO las que necesitan reconciliación
+      // (placeholders pendientes o error conocido). Sin pendientes no hay
+      // PATCH: pulsar el botón con todo sincronizado es solo un refresh.
       for (final note in notes.where(
         (n) => _isRemoteNote(n.id) && _isMine(n),
       )) {
+        // Pipeline de creación en curso: esperarlo en vez de duplicarlo.
+        final pending = _pendingSyncFor(note.id);
+        if (pending != null) {
+          try {
+            await pending.timeout(const Duration(seconds: 30));
+            refreshed++;
+          } catch (_) {
+            failed++;
+          }
+          continue;
+        }
+        final needsRetry = _noteSyncState[note.id] == _NoteSyncState.error;
+        final hasPendingAttachments =
+            note.content.contains('attachment-pending://');
+        if (!needsRetry && !hasPendingAttachments) continue;
         final uploadedIds = <String>[];
         final failedNames = <String>[];
         final newContent = await _uploadPendingAttachmentsToNote(
@@ -561,6 +590,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
               ),
             );
           }
+          _noteSyncState.remove(note.id);
           refreshed++;
         } else {
           failed++;
@@ -575,6 +605,13 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       if (mounted) setState(() => _isReconciling = false);
     }
     if (!mounted) return;
+    if (failed == 0 &&
+        pushed == 0 &&
+        refreshed == 0 &&
+        linkedAttachments == 0) {
+      _notifySnack('Tus notas están sincronizadas.');
+      return;
+    }
     final linked = linkedAttachments > 0
         ? ', $linkedAttachments adjunto(s) vinculado(s)'
         : '';
@@ -4027,6 +4064,8 @@ class _CreateNoteDialog extends StatefulWidget {
 class _CreateNoteDialogState extends State<_CreateNoteDialog> {
   late final TextEditingController _titleCtrl;
   late final TextEditingController _contentCtrl;
+  late final FocusNode _titleFocus;
+  String? _titleError;
   String _visibility = 'private';
   bool _submitting = false;
   // Adjuntos que ya viven en Drive: se registran contra la nota cuando el
@@ -4040,7 +4079,16 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
     super.initState();
     _titleCtrl = TextEditingController();
     _contentCtrl = TextEditingController();
+    _titleFocus = FocusNode();
+    _titleCtrl.addListener(_onTitleChanged);
     _contentCtrl.addListener(_onContentChanged);
+  }
+
+  void _onTitleChanged() {
+    // El error se limpia en cuanto el título deja de estar vacío.
+    if (_titleError != null && _titleCtrl.text.trim().isNotEmpty) {
+      if (mounted) setState(() => _titleError = null);
+    }
   }
 
   void _onContentChanged() {
@@ -4049,15 +4097,22 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
 
   @override
   void dispose() {
+    _titleCtrl.removeListener(_onTitleChanged);
     _contentCtrl.removeListener(_onContentChanged);
     _titleCtrl.dispose();
     _contentCtrl.dispose();
+    _titleFocus.dispose();
     super.dispose();
   }
 
   Future<void> _submit() async {
     if (_submitting) return;
-    if (_titleCtrl.text.trim().isEmpty) return;
+    if (_titleCtrl.text.trim().isEmpty) {
+      // Sin título no se crea: error inline junto al campo (sin cerrar).
+      setState(() => _titleError = 'El título es obligatorio.');
+      _titleFocus.requestFocus();
+      return;
+    }
     setState(() => _submitting = true);
     try {
       await widget.onCreate(
@@ -4113,7 +4168,15 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
           const SizedBox(height: 4),
           TextField(
             controller: _titleCtrl,
-            decoration: appInputDecoration('Título'),
+            focusNode: _titleFocus,
+            decoration: appInputDecoration('Título').copyWith(
+              errorText: _titleError,
+              errorStyle: const TextStyle(
+                color: AppColors.error,
+                fontWeight: FontWeight.w800,
+                fontSize: 12,
+              ),
+            ),
           ),
           const SizedBox(height: 12),
           const AppFieldLabel('CONTENIDO MARKDOWN'),
@@ -5612,33 +5675,8 @@ class _ResourceImageThumb extends StatelessWidget {
                     );
                   },
                 ),
-                Positioned(
-                  bottom: 0,
-                  left: 0,
-                  right: 0,
-                  child: Container(
-                    padding: const EdgeInsets.all(AppDimens.spaceXs),
-                    decoration: const BoxDecoration(
-                      color: AppColors.surface,
-                      border: Border(
-                        top: BorderSide(
-                          color: AppColors.border,
-                          width: AppDimens.borderWidth,
-                        ),
-                      ),
-                    ),
-                    child: Text(
-                      (resource['name'] ?? 'IMAGEN') as String,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w900,
-                        color: AppColors.text,
-                      ),
-                    ),
-                  ),
-                ),
+                // Sin franja de nombre sobre la imagen: el nombre humano se
+                // muestra UNA sola vez en el pie de _readOnlyResource.
                 if (onRemove != null)
                   Positioned(
                     top: AppDimens.spaceXs,
