@@ -2,6 +2,7 @@ package http
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/middleware"
@@ -61,57 +62,70 @@ type driveConnectResponse struct {
 // Desvincula por completo: revoca en Google (best-effort) y borra la fila.
 // Idempotente: sin conexión previa responde 204 igual.
 func (h *DriveHandler) Disconnect(c *gin.Context) {
+	started := time.Now()
 	userID, ok := middleware.GetUserID(c)
 	if !ok || userID == "" {
 		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		logAuthOp(c, "DriveDisconnect", http.StatusUnauthorized, "", started, "code="+utils.ErrUnauthorized)
 		return
 	}
 	if err := h.svc.Disconnect(c.Request.Context(), userID); err != nil {
 		if se, ok := err.(*service.ServiceError); ok && se.Code == utils.ErrUnauthorized {
 			utils.RespondError(c, http.StatusUnauthorized, se.Code, se.Message)
+			logAuthOp(c, "DriveDisconnect", http.StatusUnauthorized, userID, started, "code="+se.Code)
 			return
 		}
 		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
+		logAuthOp(c, "DriveDisconnect", http.StatusInternalServerError, userID, started, "code=internal_error")
 		return
 	}
 	// AbortWithStatus (igual que logout): vuelca el 204 también sin engine en tests.
 	c.AbortWithStatus(http.StatusNoContent)
+	logAuthOp(c, "DriveDisconnect", http.StatusNoContent, userID, started, "connected=false")
 }
 
 // Status consulta únicamente la conexión del usuario autenticado; nunca expone tokens.
 func (h *DriveHandler) Status(c *gin.Context) {
+	started := time.Now()
 	userID, ok := middleware.GetUserID(c)
 	if !ok || userID == "" {
 		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		logAuthOp(c, "DriveStatus", http.StatusUnauthorized, "", started, "code="+utils.ErrUnauthorized)
 		return
 	}
 	status, err := h.svc.GetGoogleDriveConnectionStatus(c.Request.Context(), userID)
 	if err != nil {
 		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "No se pudo consultar Drive")
+		logAuthOp(c, "DriveStatus", http.StatusInternalServerError, userID, started, "code=internal_error")
 		return
 	}
 	c.Header("Cache-Control", "private, no-store")
 	c.JSON(http.StatusOK, gin.H{"connected": status.Connected, "reconnect_required": status.ReconnectRequired})
+	logAuthOp(c, "DriveStatus", http.StatusOK, userID, started, boolDetail("connected", status.Connected)+" "+boolDetail("reconnect_required", status.ReconnectRequired))
 }
 
 // Connect maneja POST /auth/google-drive/connect
 // Requiere Authorization: Bearer <access_token> (via middleware)
-// Body {oauth_code}
+// Body {oauth_code}. Nunca se loguea el oauth_code ni tokens.
 func (h *DriveHandler) Connect(c *gin.Context) {
+	started := time.Now()
 	userID, ok := middleware.GetUserID(c)
 	if !ok || userID == "" {
 		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		logAuthOp(c, "DriveConnect", http.StatusUnauthorized, "", started, "code="+utils.ErrUnauthorized)
 		return
 	}
 	var req driveConnectRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		utils.RespondError(c, http.StatusBadRequest, "bad_request", "Request inválido")
+		logAuthOp(c, "DriveConnect", http.StatusBadRequest, userID, started, "code=bad_request")
 		return
 	}
 	// Trim y validar oauth_code
 	if req.OAuthCode == "" {
 		// ShouldBindJSON con binding no tiene required, validamos manual
 		utils.RespondError(c, http.StatusBadRequest, "bad_request", "oauth_code requerido")
+		logAuthOp(c, "DriveConnect", http.StatusBadRequest, userID, started, "code=bad_request")
 		return
 	}
 	// El Service hace TrimSpace y valida vacío
@@ -125,23 +139,30 @@ func (h *DriveHandler) Connect(c *gin.Context) {
 			switch se.Code {
 			case "bad_request", "email_mismatch", "invalid_redirect_uri":
 				utils.RespondError(c, http.StatusBadRequest, se.Code, se.Message)
+				logAuthOp(c, "DriveConnect", http.StatusBadRequest, userID, started, "code="+se.Code)
 				return
 			case "invalid_oauth_code":
 				utils.RespondError(c, http.StatusBadRequest, se.Code, se.Message)
+				logAuthOp(c, "DriveConnect", http.StatusBadRequest, userID, started, "code="+se.Code)
 				return
 			case "google_unavailable":
 				utils.RespondError(c, http.StatusBadGateway, se.Code, se.Message)
+				logAuthOp(c, "DriveConnect", http.StatusBadGateway, userID, started, "code="+se.Code)
 				return
 			case utils.ErrUnauthorized:
 				utils.RespondError(c, http.StatusUnauthorized, se.Code, se.Message)
+				logAuthOp(c, "DriveConnect", http.StatusUnauthorized, userID, started, "code="+se.Code)
 				return
 			default:
 				utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
+				logAuthOp(c, "DriveConnect", http.StatusInternalServerError, userID, started, "code=internal_error")
 				return
 			}
 		}
 		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
+		logAuthOp(c, "DriveConnect", http.StatusInternalServerError, userID, started, "code=internal_error")
 		return
 	}
 	c.JSON(http.StatusOK, driveConnectResponse{Connected: true})
+	logAuthOp(c, "DriveConnect", http.StatusOK, userID, started, "connected=true")
 }

@@ -2,6 +2,7 @@ package http
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/middleware"
@@ -45,11 +46,30 @@ type patchProfileRequest struct {
 	UserID *string `json:"user_id"`
 }
 
+// profileFieldsDetail resume presencia de campos (has_*) sin valores: seguro
+// para logs, nunca expone contenido del perfil.
+func profileFieldsDetail(req patchProfileRequest) string {
+	present := func(v *string) string {
+		if v != nil {
+			return "true"
+		}
+		return "false"
+	}
+	return "has_display_name=" + present(req.DisplayName) +
+		" has_photo_url=" + present(req.PhotoURL) +
+		" has_phone=" + present(req.Phone) +
+		" has_institution=" + present(req.Institution) +
+		" has_description=" + present(req.Description) +
+		" has_visibility=" + present(req.Visibility)
+}
+
 // GetProfile maneja GET /profile/me
 func (h *ProfileHandler) GetProfile(c *gin.Context) {
+	started := time.Now()
 	userID, ok := middleware.GetUserID(c)
 	if !ok || userID == "" {
 		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		logAuthOp(c, "GetProfile", http.StatusUnauthorized, "", started, "code="+utils.ErrUnauthorized)
 		return
 	}
 	profile, err := h.svc.GetProfile(c.Request.Context(), userID)
@@ -65,11 +85,14 @@ func (h *ProfileHandler) GetProfile(c *gin.Context) {
 				status = utils.StatusForCode(se.Code)
 			}
 			utils.RespondError(c, status, se.Code, se.Message)
+			logAuthOp(c, "GetProfile", status, userID, started, "code="+se.Code)
 			return
 		}
 		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
+		logAuthOp(c, "GetProfile", http.StatusInternalServerError, userID, started, "code=internal_error")
 		return
 	}
+	logAuthOp(c, "GetProfile", http.StatusOK, userID, started, "")
 	c.JSON(http.StatusOK, profileResponse{
 		DisplayName: profile.DisplayName,
 		PhotoURL:    profile.PhotoURL,
@@ -83,15 +106,18 @@ func (h *ProfileHandler) GetProfile(c *gin.Context) {
 
 // PatchProfile maneja PATCH /profile/me
 func (h *ProfileHandler) PatchProfile(c *gin.Context) {
+	started := time.Now()
 	userID, ok := middleware.GetUserID(c)
 	if !ok || userID == "" {
 		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		logAuthOp(c, "PatchProfile", http.StatusUnauthorized, "", started, "code="+utils.ErrUnauthorized)
 		return
 	}
 
 	var req patchProfileRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		utils.RespondError(c, http.StatusBadRequest, "bad_request", "Request inválido")
+		logAuthOp(c, "PatchProfile", http.StatusBadRequest, userID, started, "code=bad_request")
 		return
 	}
 
@@ -99,12 +125,14 @@ func (h *ProfileHandler) PatchProfile(c *gin.Context) {
 	// Si el cliente envía user_id, lo rechazamos explícitamente con 400 para evidenciar mal uso
 	if req.UserID != nil {
 		utils.RespondError(c, http.StatusBadRequest, "bad_request", "user_id no puede ser modificado")
+		logAuthOp(c, "PatchProfile", http.StatusBadRequest, userID, started, "code=bad_request")
 		return
 	}
 
 	// Detectar body vacío (todos nil) → 400
 	if req.DisplayName == nil && req.PhotoURL == nil && req.Phone == nil && req.Institution == nil && req.Description == nil && req.Visibility == nil {
 		utils.RespondError(c, http.StatusBadRequest, "bad_request", "No hay campos para actualizar")
+		logAuthOp(c, "PatchProfile", http.StatusBadRequest, userID, started, "code=bad_request")
 		return
 	}
 
@@ -118,6 +146,7 @@ func (h *ProfileHandler) PatchProfile(c *gin.Context) {
 	}
 
 	updated, err := h.svc.UpdateProfile(c.Request.Context(), userID, repoReq)
+	fields := profileFieldsDetail(req)
 	if err != nil {
 		if se, ok := err.(*service.ServiceError); ok {
 			status := utils.StatusForCode(se.Code)
@@ -135,11 +164,14 @@ func (h *ProfileHandler) PatchProfile(c *gin.Context) {
 				}
 			}
 			utils.RespondError(c, status, se.Code, se.Message)
+			logAuthOp(c, "PatchProfile", status, userID, started, "code="+se.Code+" "+fields)
 			return
 		}
 		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
+		logAuthOp(c, "PatchProfile", http.StatusInternalServerError, userID, started, "code=internal_error "+fields)
 		return
 	}
+	logAuthOp(c, "PatchProfile", http.StatusOK, userID, started, fields)
 
 	c.JSON(http.StatusOK, profileResponse{
 		DisplayName: updated.DisplayName,

@@ -372,6 +372,30 @@ func (h *NoteHandler) Delete(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// POST /notes/reconcile: reconciliación Drive→App de eliminaciones hechas
+// directamente en Google Drive. Solo el missing CONFIRMADO (404 o papelera)
+// elimina metadata (mismo flujo Delete); errores temporales abortan sin
+// borrar. Responde conteos + IDs propios para refresco local, sin secretos.
+func (h *NoteHandler) Reconcile(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/reconcile")()
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		return
+	}
+	summary, err := h.svc.ReconcileDriveDeletions(c.Request.Context(), userID)
+	if err != nil {
+		handleServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"removed_notes":       summary.RemovedNotes,
+		"removed_attachments": summary.RemovedAttachments,
+		"pending":             summary.Pending,
+		"removed_note_ids":    summary.RemovedNoteIDs,
+	})
+}
+
 // respondMimeValidationError traduce los errores tipados del sniffing estricto
 // de adjuntos a la respuesta HTTP canónica: 415 cuando el contenido real no
 // pertenece a la whitelist (image/jpeg, image/png, application/pdf) y 400

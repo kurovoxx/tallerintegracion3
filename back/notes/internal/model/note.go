@@ -128,3 +128,25 @@ const (
 	// la misma clave debe retomarla, nunca duplicarla.
 	IdempotencyStatusRecoverable = "recoverable"
 )
+
+// NoteDriveCleanup is captured before metadata cascades, in the delete transaction.
+// It is also returned for immediate best-effort cleanup; the outbox remains durable.
+type NoteDriveCleanup struct {
+	FileID      string
+	Attachments []AttachmentDriveCleanup
+}
+type AttachmentDriveCleanup struct {
+	ID             string
+	ExternalFileID string
+}
+
+// ReconcileSummary es el resultado de ReconcileDriveDeletions: conteos de lo
+// eliminado tras confirmación inequívoca en Drive, IDs de notas removidas
+// (propias, no sensibles) para refresco local, y pendientes por errores
+// temporales (nada se borró por ellos).
+type ReconcileSummary struct {
+	RemovedNotes       int
+	RemovedAttachments int
+	Pending            int
+	RemovedNoteIDs     []string
+}

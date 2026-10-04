@@ -45,6 +45,18 @@ http.Client? notesHttpClientOverride;
 final Map<String, PickedNoteFile> _pendingAttachmentFiles =
     <String, PickedNoteFile>{};
 
+/// Inyecta bytes pendientes para tests (REFRESCAR manual con adjunto).
+@visibleForTesting
+void debugInjectPendingAttachment(String placeholder, PickedNoteFile file) {
+  _pendingAttachmentFiles[placeholder] = file;
+}
+
+/// Limpia los pendientes inyectados (tests).
+@visibleForTesting
+void debugClearPendingAttachments() {
+  _pendingAttachmentFiles.clear();
+}
+
 /// Ejecuta [run] con el cliente inyectado o con uno nuevo que se cierra al
 /// terminar, para no filtrar conexiones en la subida de adjuntos.
 Future<T> _withNotesClient<T>(
@@ -124,6 +136,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   final Map<String, int> _versions = {};
   final Map<String, LocalNote> _latestNotes = {};
   final Map<String, String> _remoteIds = {};
+  // Pipeline de creación en curso por id vigente (tempId y, tras el POST,
+  // también el UUID real). Abrir una nota espera este Future en vez de
+  // mostrar contenido stale que obligaba a cerrar/reabrir.
+  final Map<String, Future<void>> _pendingNoteSyncs = {};
+  // Badge por nota recién creada: SINCRONIZANDO… / SOLO LOCAL.
+  final Map<String, _NoteSyncState> _noteSyncState = {};
 
   // Estado interactivo por nota
   final Map<String, int> _likesCount = {};
@@ -465,10 +483,10 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     );
   }
 
-  /// REFRESCAR / SINCRONIZAR DRIVE: empuja hacia el backend existente las notas
-  /// que aún no tienen respaldo remoto (`drive_file_id` inexistente => id local
-  /// sin UUID) y re-guarda (PATCH) las que ya viven en Drive para forzar su
-  /// reconciliación. Muestra indicador de carga y notifica con SnackBar.
+  /// REFRESCAR / SINCRONIZAR DRIVE manual: procesa SOLO lo pendiente (notas
+  /// locales sin UUID, placeholders de adjuntos, notas en error). Una nota ya
+  /// sincronizada sin cambios NO recibe PATCH. Termina con GET /notes/me.
+  /// No duplica el pipeline de creación: si hay un Future en curso lo espera.
   Future<void> _syncWithDrive() async {
     if (_isReconciling) return;
     final token = SessionManager.token;
@@ -531,10 +549,27 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         }
         pushed++;
       }
-      // 2. Ya remotas propias: reenviar adjuntos pendientes y re-guardar.
+      // 2. Ya remotas propias: SOLO las que necesitan reconciliación
+      // (placeholders pendientes o error conocido). Sin pendientes no hay
+      // PATCH: pulsar el botón con todo sincronizado es solo un refresh.
       for (final note in notes.where(
         (n) => _isRemoteNote(n.id) && _isMine(n),
       )) {
+        // Pipeline de creación en curso: esperarlo en vez de duplicarlo.
+        final pending = _pendingSyncFor(note.id);
+        if (pending != null) {
+          try {
+            await pending.timeout(const Duration(seconds: 30));
+            refreshed++;
+          } catch (_) {
+            failed++;
+          }
+          continue;
+        }
+        final needsRetry = _noteSyncState[note.id] == _NoteSyncState.error;
+        final hasPendingAttachments =
+            note.content.contains('attachment-pending://');
+        if (!needsRetry && !hasPendingAttachments) continue;
         final uploadedIds = <String>[];
         final failedNames = <String>[];
         final newContent = await _uploadPendingAttachmentsToNote(
@@ -555,6 +590,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
               ),
             );
           }
+          _noteSyncState.remove(note.id);
           refreshed++;
         } else {
           failed++;
@@ -568,22 +604,87 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     } finally {
       if (mounted) setState(() => _isReconciling = false);
     }
-    if (!mounted) return;
-    final linked = linkedAttachments > 0
-        ? ', $linkedAttachments adjunto(s) vinculado(s)'
-        : '';
-    if (failed == 0) {
-      _notifySnack(
-        'Sincronización completa: $pushed respaldada(s) en Drive, '
-        '$refreshed actualizada(s)$linked.',
-      );
+    // 3. Reconciliación Drive→App: eliminaciones hechas directamente en
+    // Google Drive (1 request; el backend confirma cada ausencia).
+    int removedNotes = 0;
+    int removedAttachments = 0;
+    final reconcile = await _reconcileDriveDeletions();
+    if (reconcile == null) {
+      failed++;
     } else {
+      removedNotes = (reconcile['removed_notes'] as num?)?.toInt() ?? 0;
+      removedAttachments =
+          (reconcile['removed_attachments'] as num?)?.toInt() ?? 0;
+      failed += (reconcile['pending'] as num?)?.toInt() ?? 0;
+      final ids =
+          (reconcile['removed_note_ids'] as List?)
+              ?.whereType<String>()
+              .toList() ??
+          [];
+      for (final id in ids) {
+        final local = await _currentNoteById(id);
+        if (local != null) await _applyLocalDelete(local);
+      }
+    }
+    if (!mounted) return;
+    if (failed == 0 &&
+        pushed == 0 &&
+        refreshed == 0 &&
+        linkedAttachments == 0 &&
+        removedNotes == 0 &&
+        removedAttachments == 0) {
+      _notifySnack('Tus notas están sincronizadas.');
+      return;
+    }
+    final parts = <String>[];
+    if (pushed > 0) parts.add('$pushed respaldada(s) en Drive');
+    if (refreshed > 0) parts.add('$refreshed actualizada(s)');
+    if (linkedAttachments > 0) {
+      parts.add('$linkedAttachments adjunto(s) vinculado(s)');
+    }
+    if (removedNotes > 0 || removedAttachments > 0) {
+      parts.add(
+        '$removedNotes nota(s) y $removedAttachments archivo(s) '
+        'eliminados en Drive fueron actualizados',
+      );
+    }
+    final detail = parts.join(', ');
+    if (failed == 0) {
+      _notifySnack('Sincronización completa: $detail.');
+    } else {
+      final partial = detail.isEmpty ? 'sin cambios aplicados' : detail;
       _notifySnack(
-        'Sincronización parcial: $pushed respaldada(s), $refreshed '
-        'actualizada(s)$linked, $failed con error. Revisa tu conexión.',
+        'Sincronización parcial: $partial, $failed con error. '
+        'Revisa tu conexión.',
         ok: false,
       );
     }
+  }
+
+  /// POST /notes/reconcile: eliminaciones hechas directamente en Drive.
+  /// Devuelve el resumen del backend o null si falló (el llamador lo cuenta
+  /// como error sin borrar nada local).
+  Future<Map<String, dynamic>?> _reconcileDriveDeletions() async {
+    try {
+      final res = await AuthedHttp.run(
+        () => _withNotesClient(
+          (client) => client
+              .post(
+                Uri.parse('$notesBaseUrl/notes/reconcile'),
+                headers: _authHeaders(),
+              )
+              .timeout(const Duration(seconds: 60)),
+        ),
+      );
+      debugPrint('[Notes] POST /notes/reconcile status=${res.statusCode}');
+      if (res.statusCode == 200) {
+        final data = jsonDecode(utf8.decode(res.bodyBytes));
+        if (data is Map<String, dynamic>) return data;
+      }
+    } catch (e) {
+      debugPrint('[Notes] reconcile Drive falló: $e');
+    }
+    return null;
   }
 
   /// Verifica los adjuntos pendientes (`attachment-pending://...`) referenciados
@@ -654,9 +755,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
               .timeout(const Duration(seconds: 8)),
         ),
       );
-      debugPrint(
-        '[FRONT DEBUG] Respuesta POST /notes: status=${res.statusCode}',
-      );
+      debugPrint('[Notes] POST /notes status=${res.statusCode}');
       if (res.statusCode == 201) {
         try {
           final data = jsonDecode(utf8.decode(res.bodyBytes));
@@ -667,13 +766,13 @@ class AllNotesScreenState extends State<AllNotesScreen> {
               ).hasMatch(newId)) {
             _ownedNoteIds.add(newId);
             _versions[newId] = (data['version'] as num?)?.toInt() ?? 1;
-            debugPrint('[FRONT DEBUG] UUID real del backend: $newId');
+            debugPrint('[Notes] POST /notes note_ready=$newId');
             return newId;
           }
         } catch (_) {}
       }
     } catch (e) {
-      debugPrint('[FRONT DEBUG] Error POST /notes a $url: $e');
+      debugPrint('[Notes] POST /notes status=error offline_or_failed');
     }
     return null;
   }
@@ -702,6 +801,14 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       if (current == null) return;
     }
     _remoteIds[tempId] = realId;
+    // El pipeline sigue en curso: el Future y el badge ahora responden por
+    // el UUID real (se conserva también la llave tempId hasta el cleanup).
+    if (_pendingNoteSyncs.containsKey(tempId)) {
+      _pendingNoteSyncs[realId] = _pendingNoteSyncs[tempId]!;
+    }
+    if (_noteSyncState.containsKey(tempId)) {
+      _noteSyncState[realId] = _noteSyncState[tempId]!;
+    }
     final renamed = LocalNote(
       id: realId,
       version: _versions[realId],
@@ -809,8 +916,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             );
           }
           debugPrint(
-            '[FRONT DEBUG] No se pudo vincular adjunto $externalId: '
-            'status=${res.statusCode}',
+            '[Notes] CREATE remote=$noteId link=failed status=${res.statusCode}',
           );
         }
       } catch (e) {
@@ -937,8 +1043,14 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         () => _withNotesClient(
           (client) => client
               .delete(Uri.parse(url), headers: _authHeaders())
-              .timeout(const Duration(seconds: 8)),
+              // 30s (no 8s): el backend borra PG + todos los Drive best-effort
+              // en el mismo request; con varios adjuntos supera 8s y un
+              // timeout corto fingiría error aunque el borrado prosiga.
+              .timeout(const Duration(seconds: 30)),
         ),
+      );
+      debugPrint(
+        '[Notes] DELETE NOTE note=${note.id} status=${res.statusCode}',
       );
       if (res.statusCode == 200 || res.statusCode == 204) {
         return _RemoteResult(ok: true, status: res.statusCode);
@@ -960,6 +1072,55 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   bool _isMine(LocalNote note) {
     if (_ownedNoteIds.contains(note.id)) return true;
     return !note.id.contains('-');
+  }
+
+  /// Future del pipeline de creación si sigue en curso para [id]
+  /// (tempId o UUID real). Null cuando ya terminó: quien abre no espera.
+  Future<void>? _pendingSyncFor(String id) {
+    if (_noteSyncState[id] != _NoteSyncState.syncing) return null;
+    final direct = _pendingNoteSyncs[id];
+    if (direct != null) return direct;
+    for (final entry in _remoteIds.entries) {
+      if (entry.value == id) {
+        final viaTemp = _pendingNoteSyncs[entry.key];
+        if (viaTemp != null &&
+            _noteSyncState[entry.key] == _NoteSyncState.syncing) {
+          return viaTemp;
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Etiqueta del badge de sincronización en la tarjeta, o null si no aplica.
+  String? _syncBadgeFor(String id) {
+    switch (_noteSyncState[id]) {
+      case _NoteSyncState.syncing:
+        return 'SINCRONIZANDO…';
+      case _NoteSyncState.error:
+        return 'SOLO LOCAL';
+      default:
+        return null;
+    }
+  }
+
+  /// Nota vigente por id (caché, memoria o Drift). Null si ya no existe.
+  Future<LocalNote?> _currentNoteById(String id) async {
+    final cached = _latestNotes[id];
+    if (cached != null) return cached;
+    if (_useMemoryFallback || _repo == null) {
+      for (final n in _memoryFallback) {
+        if (n.id == id) return n;
+      }
+      return null;
+    }
+    try {
+      final all = await _repo!.getAllNotes(ownerId: _ownerId());
+      for (final n in all) {
+        if (n.id == id) return n;
+      }
+    } catch (_) {}
+    return null;
   }
 
   /// true si el resultado indica nota no disponible en Drive (404/403 Drive,
@@ -993,10 +1154,15 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   Future<void> _applyLocalDelete(LocalNote note) async {
     if (!mounted) return;
     setState(() {
+      // Tombstone de Development: la nota borrada no reaparece por sync.
       _deletedNoteIds.add(note.id);
       _filtered.removeWhere((n) => n.id == note.id);
       _latestNotes.remove(note.id);
+      _versions.remove(note.id);
       _ownedNoteIds.remove(note.id);
+      _remoteIds.removeWhere(
+        (key, value) => key == note.id || value == note.id,
+      );
       _noteTags.remove(note.id);
       _likesCount.remove(note.id);
       _isLiked.remove(note.id);
@@ -1047,6 +1213,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           updatedAt: DateTime.now(),
         ),
       );
+      // La nota volvió a quedar sincronizada: se retira el badge de error.
+      _noteSyncState.remove(note.id);
       if (mounted) setState(() {});
       return _EditSaveOutcome.synced;
     }
@@ -1103,6 +1271,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   /// Borra en backend y, con 200/204, elimina local. Con 404 (el recurso ya no
   /// existe en el backend) también limpia local para no dejar la referencia bloqueada.
   Future<_RemoteResult> _deleteFlow(LocalNote note) async {
+    final realId = _remoteIds[note.id];
+    if (realId != null) note = note.copyWith(id: realId);
+    if (!_isRemoteNote(note.id)) {
+      await _applyLocalDelete(note);
+      return const _RemoteResult(ok: true, status: 204);
+    }
     final remote = await _deleteNoteRemote(note);
     if (!mounted) return remote;
     if (remote.ok) {
@@ -1378,7 +1552,81 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     return mocks[id] ?? const <Map<String, dynamic>>[];
   }
 
-  void _openNoteViewer(LocalNote note) {
+  /// Diálogo de espera mientras termina el pipeline de creación. El
+  /// llamador debe cerrarlo con pop en finally (ver [_openNoteViewer]).
+  void _showSyncWaitDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            border: Border.all(color: AppColors.border, width: 2),
+            borderRadius: BorderRadius.circular(AppDimens.radius),
+            boxShadow: AppShadows.dialog,
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 3),
+              ),
+              SizedBox(width: 12),
+              Text(
+                'Sincronizando nota…',
+                style: TextStyle(fontWeight: FontWeight.w900),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Abre el detalle esperando, si corresponde, el pipeline de creación en
+  /// curso: una sola apertura muestra el estado real (tempId → UUID real +
+  /// GET final). Con timeout o fallo se abre la copia local usable.
+  Future<void> _openNoteViewer(LocalNote note) async {
+    var target = note;
+    final pending = _pendingSyncFor(note.id);
+    if (pending != null) {
+      debugPrint('[Notes] OPEN id=${note.id} waitSync=true');
+      var waitShown = false;
+      try {
+        _showSyncWaitDialog();
+        waitShown = true;
+        await pending.timeout(const Duration(seconds: 30));
+      } catch (_) {
+        // Timeout o fallo: se abre igual con lo disponible (ver abajo).
+      } finally {
+        if (waitShown && mounted) {
+          Navigator.of(context, rootNavigator: true).pop();
+        }
+      }
+      if (!mounted) return;
+      final realId = _remoteIds[note.id] ?? note.id;
+      final fresh =
+          await _currentNoteById(realId) ?? await _currentNoteById(note.id);
+      if (fresh != null) {
+        target = fresh;
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'La nota aún se está sincronizando; se actualizará sola.',
+            ),
+          ),
+        );
+      }
+    } else {
+      debugPrint('[Notes] OPEN id=${note.id} waitSync=false');
+    }
+    if (!mounted) return;
+    final opened = target;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1395,20 +1643,27 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         expand: false,
         builder: (context, scroll) => _NoteDetailSheet(
           scrollController: scroll,
-          note: note,
-          isMine: _isMine(note),
-          tag: _noteTags[note.id] ?? 'General',
-          likesCount: _likesCount[note.id] ?? 0,
-          isLiked: _isLiked[note.id] ?? false,
-          isSaved: _isSaved[note.id] ?? false,
-          resources: _mockResourcesFor(note.id),
-          onToggleLike: () => _toggleLike(note),
-          onToggleSave: () => _toggleSave(note),
-          onShare: () => _shareNote(note),
-          onFetchRemote: () => _fetchHybridContent(note),
-          onSaveEdit: (title, content) => _saveEditFlow(note, title, content),
-          onDelete: () => _deleteFlow(note),
-          onClone: () => _cloneFlow(note),
+          note: opened,
+          isMine: _isMine(opened),
+          tag: _noteTags[opened.id] ?? 'General',
+          likesCount: _likesCount[opened.id] ?? 0,
+          isLiked: _isLiked[opened.id] ?? false,
+          isSaved: _isSaved[opened.id] ?? false,
+          resources: _mockResourcesFor(opened.id),
+          onToggleLike: () => _toggleLike(opened),
+          onToggleSave: () => _toggleSave(opened),
+          onShare: () => _shareNote(opened),
+          onFetchRemote: () => _fetchHybridContent(opened),
+          onSaveEdit: (title, content) =>
+              _saveEditFlow(opened, title, content),
+          onDelete: () => _deleteFlow(opened),
+          onClone: () => _cloneFlow(opened),
+          pendingSyncOf: _pendingSyncFor,
+          refreshNote: _currentNoteById,
+          onReopenWith: (fresh) {
+            Navigator.of(context).pop();
+            unawaited(_openNoteViewer(fresh));
+          },
         ),
       ),
     );
@@ -1565,114 +1820,171 @@ class AllNotesScreenState extends State<AllNotesScreen> {
               _applySearch(_currentQuery);
             }
           }
-          unawaited(
-            _createNoteOnBackend(
-              title: note.title,
-              content: _withoutPendingAttachments(note.content),
-              visibility: note.visibility,
-            ).then((realId) async {
-              if (realId != null &&
-                  realId.isNotEmpty &&
-                  revision == SessionManager.revision.value) {
-                await _replaceLocalId(tempId, realId);
-                var finalContent =
-                    _latestNotes[realId]?.content ?? note.content;
-                final uploaded = <_DriveUploadResult>[];
-                for (final pending in attachments) {
-                  if (revision != SessionManager.revision.value) return;
-                  final file = pending.selectedFile;
-                  if (file == null) {
-                    // Ya subida a Drive antes de crear la nota: se vincula por
-                    // external_file_id (JSON) más abajo.
-                    uploaded.add(pending);
-                    continue;
-                  }
-                  // Flujo canónico: el binario real se envía a
-                  // POST /notes/{note_id}/attachments (multipart) para que el
-                  // backend cree la fila en notes.note_attachments con este
-                  // note_id y, con Drive conectado, rellene external_file_id y
-                  // file_url. Se reescribe la referencia con el UUID devuelto.
-                  final result = await _uploadAttachmentBinary(
-                    noteId: realId,
-                    bytes: file.bytes,
-                    fileName: file.name,
-                    isInline: file.isImage,
-                  );
-                  if (revision != SessionManager.revision.value) return;
-                  if (result.ok && result.attachmentId != null) {
-                    finalContent = finalContent.replaceAll(
-                      '(${pending.fileUrl})',
-                      '(attachment:${result.attachmentId})',
-                    );
-                    _pendingAttachmentFiles.remove(pending.fileUrl);
-                  } else if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          'La nota se creó, pero no se pudo adjuntar ${file.name}. ${result.message ?? ''}',
-                        ),
-                      ),
-                    );
-                  }
-                }
-                final references = await _linkAttachmentsToNote(
-                  realId,
-                  uploaded,
-                );
-                for (final ref in references.entries) {
-                  finalContent = finalContent.replaceAll(
-                    '(${ref.key})',
-                    '(${ref.value})',
-                  );
-                }
-                finalContent = _withoutPendingAttachments(finalContent);
-                if (finalContent != _withoutPendingAttachments(note.content) ||
-                    (_latestNotes[realId]?.title ?? note.title) != note.title) {
-                  final remoteNote = LocalNote(
-                    id: realId,
-                    version: _versions[realId],
-                    title: _latestNotes[realId]?.title ?? note.title,
-                    content: finalContent,
-                    visibility: note.visibility,
-                    updatedAt: DateTime.now(),
-                    ownerUserId: note.ownerUserId,
-                  );
-                  final saved = await _patchNoteRemote(
-                    remoteNote,
-                    remoteNote.title,
-                    finalContent,
-                  );
-                  if (revision != SessionManager.revision.value) return;
-                  await _applyLocalUpsert(
-                    remoteNote.copyWith(version: Value(_versions[realId])),
-                  );
-                  if (!saved.ok && mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'La nota se creó, pero no se pudo actualizar el contenido de sus adjuntos.',
-                        ),
-                      ),
-                    );
-                  }
-                }
-                if (revision != SessionManager.revision.value) return;
-              } else if (mounted &&
-                  attachments.isNotEmpty &&
-                  revision == SessionManager.revision.value) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                      'La nota quedó guardada localmente. No se pudieron subir sus archivos; vuelve a seleccionarlos cuando se recupere la conexión.',
-                    ),
-                  ),
-                );
-              }
-            }),
+          // Pipeline completo registrado: abrir la nota espera este Future
+          // (badge SINCRONIZANDO…) en vez de mostrar estado stale.
+          // Se conserva el flujo validado E2E (upload + vínculo JSON +
+          // PATCH final); la variante multipart directa de Development queda
+          // disponible en el backend pero sin cablear en este flujo.
+          _noteSyncState[tempId] = _NoteSyncState.syncing;
+          debugPrint('[Notes] CREATE temp=$tempId state=syncing');
+          if (mounted) setState(() {});
+          final syncFuture = _completeRemoteCreation(
+            tempId: tempId,
+            note: note,
+            attachments: attachments,
+            revision: revision,
           );
+          _pendingNoteSyncs[tempId] = syncFuture;
+          unawaited(syncFuture);
         },
       ),
     );
+  }
+
+  /// Pipeline completo de creación: POST nota → UUID → subir adjuntos →
+  /// vincular → PATCH final → GET real. Solo al terminar (o fallar) se
+  /// actualiza [_noteSyncState] y se libera [_pendingNoteSyncs], de modo que
+  /// abrir la nota durante el proceso espera en vez de leer estado stale.
+  Future<void> _completeRemoteCreation({
+    required String tempId,
+    required LocalNote note,
+    required List<_DriveUploadResult> attachments,
+    required int revision,
+  }) async {
+    String? resolvedId;
+    try {
+      final realId = await _createNoteOnBackend(
+        title: note.title,
+        content: _withoutPendingAttachments(note.content),
+        visibility: note.visibility,
+      );
+      if (realId != null &&
+          realId.isNotEmpty &&
+          revision == SessionManager.revision.value) {
+        resolvedId = realId;
+        debugPrint('[Notes] CREATE remote=$realId state=note_ready');
+        await _replaceLocalId(tempId, realId);
+        var finalContent = _latestNotes[realId]?.content ?? note.content;
+        final uploaded = <_DriveUploadResult>[];
+        for (final pending in attachments) {
+          if (revision != SessionManager.revision.value) return;
+          if (pending.selectedFile == null) {
+            // Ya vive en Drive (subido antes de crear la nota): se vincula
+            // por external_file_id (JSON) más abajo. Compat, no flujo normal.
+            uploaded.add(pending);
+            continue;
+          }
+          final file = pending.selectedFile!;
+          // Flujo canónico multipart (Development): el binario va directo a
+          // POST /notes/{uuid}/attachments y la referencia se reescribe con
+          // el attachment_id devuelto. Sin paso por /notes/upload para crear.
+          final result = await _uploadAttachmentBinary(
+            noteId: realId,
+            bytes: file.bytes,
+            fileName: file.name,
+            isInline: file.isImage,
+          );
+          if (revision != SessionManager.revision.value) return;
+          if (result.ok && result.attachmentId != null) {
+            final placeholder = pending.fileUrl;
+            if (placeholder != null && placeholder.isNotEmpty) {
+              finalContent = finalContent.replaceAll(
+                '($placeholder)',
+                '(attachment:${result.attachmentId})',
+              );
+            }
+          } else if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'La nota se creó, pero no se pudo adjuntar ${file.name}. ${result.message ?? ''}',
+                ),
+              ),
+            );
+          }
+        }
+        final references = await _linkAttachmentsToNote(realId, uploaded);
+        for (final ref in references.entries) {
+          finalContent = finalContent.replaceAll(
+            '(${ref.key})',
+            '(${ref.value})',
+          );
+        }
+        finalContent = _withoutPendingAttachments(finalContent);
+        if (finalContent != _withoutPendingAttachments(note.content) ||
+            (_latestNotes[realId]?.title ?? note.title) != note.title) {
+          final remoteNote = LocalNote(
+            id: realId,
+            version: _versions[realId],
+            title: _latestNotes[realId]?.title ?? note.title,
+            content: finalContent,
+            visibility: note.visibility,
+            updatedAt: DateTime.now(),
+            ownerUserId: note.ownerUserId,
+          );
+          final saved = await _patchNoteRemote(
+            remoteNote,
+            remoteNote.title,
+            finalContent,
+          );
+          if (revision != SessionManager.revision.value) return;
+          await _applyLocalUpsert(
+            remoteNote.copyWith(version: Value(_versions[realId])),
+          );
+          if (!saved.ok && mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'La nota se creó, pero no se pudo actualizar el contenido de sus adjuntos.',
+                ),
+              ),
+            );
+          }
+        }
+        if (revision != SessionManager.revision.value) return;
+        // GET real final: la apertura posterior muestra el estado del
+        // servidor sin necesidad de cerrar/reabrir.
+        final current = _latestNotes[realId];
+        if (current != null) {
+          await _fetchHybridContent(current);
+          debugPrint('[Notes] CREATE remote=$realId state=attachments_ready');
+        }
+        _noteSyncState.remove(tempId);
+        _noteSyncState.remove(realId);
+        if (mounted) {
+          setState(() {});
+          await _applySearch(_currentQuery);
+        }
+        debugPrint('[Notes] CREATE remote=$realId state=synced');
+      } else if (mounted &&
+          attachments.isNotEmpty &&
+          revision == SessionManager.revision.value) {
+        _noteSyncState[tempId] = _NoteSyncState.error;
+        setState(() {});
+        debugPrint('[Notes] CREATE temp=$tempId state=error');
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'La nota quedó guardada localmente. No se pudieron subir sus archivos; vuelve a seleccionarlos cuando se recupere la conexión.',
+            ),
+          ),
+        );
+      } else if (revision == SessionManager.revision.value) {
+        // POST falló sin adjuntos pendientes: queda solo local.
+        _noteSyncState[tempId] = _NoteSyncState.error;
+        if (mounted) setState(() {});
+        debugPrint('[Notes] CREATE temp=$tempId state=error');
+      }
+    } finally {
+      _pendingNoteSyncs.remove(tempId);
+      if (resolvedId != null) _pendingNoteSyncs.remove(resolvedId);
+      if (revision != SessionManager.revision.value) {
+        // Sesión cambiada a mitad del pipeline: se descarta el estado
+        // transitorio sin tocar la copia local.
+        _noteSyncState.remove(tempId);
+        if (resolvedId != null) _noteSyncState.remove(resolvedId);
+      }
+    }
   }
 
   Widget _buildHeader(bool isDesktop) {
@@ -2108,6 +2420,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             isLiked: _isLiked[note.id] ?? false,
             isSaved: _isSaved[note.id] ?? false,
             tag: _noteTags[note.id] ?? 'General',
+            syncLabel: _syncBadgeFor(note.id),
             onTap: () => _openNoteViewer(note),
             onLike: () => _toggleLike(note),
             onSave: () => _toggleSave(note),
@@ -2135,6 +2448,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
               isLiked: _isLiked[note.id] ?? false,
               isSaved: _isSaved[note.id] ?? false,
               tag: _noteTags[note.id] ?? 'General',
+              syncLabel: _syncBadgeFor(note.id),
               onTap: () => _openNoteViewer(note),
               onLike: () => _toggleLike(note),
               onSave: () => _toggleSave(note),
@@ -2199,6 +2513,7 @@ class _NoteCard extends StatefulWidget {
     required this.isLiked,
     required this.isSaved,
     required this.tag,
+    this.syncLabel,
     required this.onTap,
     required this.onLike,
     required this.onSave,
@@ -2211,6 +2526,7 @@ class _NoteCard extends StatefulWidget {
   final bool isLiked;
   final bool isSaved;
   final String tag;
+  final String? syncLabel;
   final VoidCallback onTap;
   final VoidCallback onLike;
   final VoidCallback onSave;
@@ -2362,6 +2678,26 @@ class _NoteCardState extends State<_NoteCard> {
           ),
         ),
         const SizedBox(width: AppDimens.spaceXs),
+        if (widget.syncLabel != null) ...[
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+            decoration: BoxDecoration(
+              color: AppColors.accentYellow,
+              border: Border.all(color: AppColors.border, width: 1.5),
+              borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+              boxShadow: AppShadows.badge,
+            ),
+            child: Text(
+              widget.syncLabel!,
+              style: const TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.w900,
+                color: AppColors.text,
+              ),
+            ),
+          ),
+          const SizedBox(width: AppDimens.spaceXs),
+        ],
         Expanded(
           child: Text(
             _formatDate(widget.note.updatedAt),
@@ -2591,6 +2927,11 @@ enum _EditSaveOutcome {
   error,
 }
 
+/// Estado visible del pipeline de creación de una nota (POST + adjuntos +
+/// vínculo + PATCH final). Solo aplica a notas recién creadas; el resto no
+/// tiene entrada en [_noteSyncState] y se comporta como antes.
+enum _NoteSyncState { syncing, synced, error }
+
 /// Modal de detalle con lectura híbrida (GET /notes/:id), edición (PATCH) y
 /// borrado (DELETE). El contenido local se muestra de inmediato como fallback.
 class _NoteDetailSheet extends StatefulWidget {
@@ -2610,6 +2951,11 @@ class _NoteDetailSheet extends StatefulWidget {
   onSaveEdit;
   final Future<_RemoteResult> Function() onDelete;
   final Future<_RemoteResult> Function() onClone;
+  // Red de seguridad para aperturas que alcanzaron al sync en curso
+  // (p. ej. timeout de la espera al abrir): el detalle se refresca solo.
+  final Future<void>? Function(String noteId)? pendingSyncOf;
+  final Future<LocalNote?> Function(String noteId)? refreshNote;
+  final void Function(LocalNote fresh)? onReopenWith;
 
   const _NoteDetailSheet({
     required this.scrollController,
@@ -2627,6 +2973,9 @@ class _NoteDetailSheet extends StatefulWidget {
     required this.onSaveEdit,
     required this.onDelete,
     required this.onClone,
+    this.pendingSyncOf,
+    this.refreshNote,
+    this.onReopenWith,
   });
 
   @override
@@ -2670,6 +3019,48 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     _liked = widget.isLiked;
     _saved = widget.isSaved;
     _loadRemote();
+    // Si la apertura alcanzó al sync en curso, refrescar solo al
+    // finalizarlo (una vez, sin polling): el usuario no cierra/reabre.
+    unawaited(_settlePendingSync());
+  }
+
+  bool _settleDone = false;
+
+  Future<void> _settlePendingSync() async {
+    if (_settleDone) return;
+    final pendingOf = widget.pendingSyncOf;
+    if (pendingOf == null) return;
+    final pending = pendingOf(widget.note.id);
+    if (pending == null) return;
+    _settleDone = true;
+    try {
+      await pending.timeout(const Duration(seconds: 10));
+    } catch (_) {
+      // Timeout o fallo: igual se intenta un refresh best-effort abajo.
+    }
+    if (!mounted) return;
+    // Si el sync sigue en curso, reenganchar UNA sola vez a su
+    // finalización (sin polling ciego) y refrescar entonces.
+    final stillPending = pendingOf(widget.note.id);
+    if (stillPending != null) {
+      unawaited(
+        stillPending.then((_) => _refreshFromSync()).catchError((_) {}),
+      );
+    }
+    await _refreshFromSync();
+  }
+
+  /// Trae la nota vigente del padre y actualiza el detalle: si el id cambió
+  /// (tempId → UUID) se reabre con datos reales; si no, recarga remota.
+  Future<void> _refreshFromSync() async {
+    if (!mounted) return;
+    final fresh = await widget.refreshNote?.call(widget.note.id);
+    if (!mounted) return;
+    if (fresh != null && fresh.id != widget.note.id) {
+      widget.onReopenWith?.call(fresh);
+      return;
+    }
+    await _loadRemote();
   }
 
   @override
@@ -2798,7 +3189,11 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     // 1. Eliminar del contenido las refs inline de los marcados.
     // Borrar solo Markdown NO borra el attachment; QUITAR sí (paso 3).
     for (final id in _pendingRemovedIds) {
-      c = removeAttachmentReferences(c, {'attachment_id': id, 'url': ''});
+      final resource = _attachments.firstWhere(
+        (a) => a['attachment_id'] == id,
+        orElse: () => {'attachment_id': id, 'url': ''},
+      );
+      c = removeAttachmentReferences(c, resource);
     }
     setState(() {
       _saving = true;
@@ -2851,11 +3246,12 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
       _saving = false;
       _pendingRemovedIds.clear();
       _title = t;
-      _content = _contentCtrl?.text ?? c;
+      _content = c;
       if (_contentCtrl != null) _contentCtrl!.text = _content;
       _editing = false;
       _releaseEditControllersAfterFrame();
     });
+    if (toDelete.isNotEmpty) await _loadRemote();
     return;
   }
 
@@ -2870,7 +3266,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
         closeOnConfirm: false,
         onConfirm: () => Navigator.of(context).pop(true),
         content: const Text(
-          '¿Eliminar esta nota? También se borrará de Google Drive.',
+          '¿Eliminar esta nota? También se eliminarán sus archivos adjuntos.',
           style: TextStyle(fontWeight: FontWeight.w600, color: Colors.black),
         ),
       ),
@@ -3057,9 +3453,10 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     // 1 attachment ID = 1 tarjeta. Las referencias inline `attachment:<uuid>`
     // que resuelven al adjunto real no generan tarjeta extra; las stale se
     // excluyen para no mostrar una tarjeta genérica duplicada.
+    final markdown = _resourcesFromMarkdown(_content);
     final merged = mergeAttachmentResources(_attachments, [
       ...widget.resources,
-      ..._resourcesFromMarkdown(_content),
+      ...markdown,
     ]);
     return merged.where((r) {
       final id = r['attachment_id'] as String?;
@@ -3071,48 +3468,19 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     }).toList();
   }
 
-  /// Quita un adjunto de la lista en memoria, lo marca para DELETE al GUARDAR
-  /// y limpia automáticamente su referencia Markdown en el editor.
-  void _removeAttachmentResource(Map<String, dynamic> resource) {
-    if (!widget.isMine) return;
+  /// Marca/desmarca un adjunto para borrar al GUARDAR. No toca el servidor.
+  /// CANCELAR limpia [_pendingRemovedIds] y restaura todo. Es el ÚNICO
+  /// mecanismo de borrado (todas las X visuales lo llaman): la referencia
+  /// Markdown se limpia al GUARDAR y borrar solo Markdown NO elimina.
+  void _togglePendingRemove(Map<String, dynamic> resource) {
+    if (!widget.isMine || _saving || _removingAttachment) return;
     final id = resource['attachment_id'] as String?;
-    final url = (resource['url'] ?? '') as String;
+    if (id == null || id.isEmpty) return;
     setState(() {
-      if (id != null && id.isNotEmpty) {
+      if (_pendingRemovedIds.contains(id)) {
+        _pendingRemovedIds.remove(id);
+      } else {
         _pendingRemovedIds.add(id);
-        _removedResources.add('attachment:$id');
-        _attachments.removeWhere((a) => a['attachment_id'] == id);
-      } else {
-        _removedResources.add(resourceIdentity(url));
-        _attachments.removeWhere((a) => urlMatchesAttachment(a, url));
-      }
-    });
-    final ctrl = _contentCtrl;
-    if (ctrl != null) {
-      final cleaned = removeAttachmentReferences(ctrl.text, resource);
-      if (cleaned != ctrl.text) {
-        ctrl.value = TextEditingValue(
-          text: cleaned,
-          selection: TextSelection.collapsed(offset: cleaned.length),
-        );
-      }
-    }
-  }
-
-  /// X de las referencias detectadas en el texto: limpia el Markdown y quita de
-  /// la lista en memoria el adjunto resuelto por UUID o por identidad de URL.
-  void _removeResourceByUrl(String url) {
-    final ctrl = _contentCtrl;
-    if (ctrl != null) _removeAttachmentUrl(ctrl, url);
-    final inlineId = attachmentIdFromUrl(url);
-    setState(() {
-      if (inlineId.isNotEmpty) {
-        _pendingRemovedIds.add(inlineId);
-        _removedResources.add('attachment:$inlineId');
-        _attachments.removeWhere((a) => a['attachment_id'] == inlineId);
-      } else {
-        _removedResources.add(resourceIdentity(url));
-        _attachments.removeWhere((a) => urlMatchesAttachment(a, url));
       }
     });
   }
@@ -3133,14 +3501,25 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
               .timeout(const Duration(seconds: 30)),
         ),
       );
+      debugPrint(
+        '[Notes] DELETE ATTACHMENT note=${widget.note.id} attachment=$id status=${response.statusCode}',
+      );
       if (response.statusCode != 200 && response.statusCode != 204) {
         throw const FormatException('delete failed');
       }
       debugPrint(
-        '[Notes] ATTACHMENT attachment=$id status=${response.statusCode} mime=-',
+        '[Notes] ATTACHMENT attachment=$id status=${response.statusCode}',
       );
       if (!mounted) return false;
       setState(() {
+        for (final resource in _attachments.where(
+          (resource) => resource['attachment_id'] == id,
+        )) {
+          final url = resource['url'] as String?;
+          if (url != null && url.isNotEmpty) {
+            _removedResources.add(resourceIdentity(url));
+          }
+        }
         _removedResources.add('attachment:$id');
         _pendingRemovedIds.remove(id);
         _attachments.removeWhere((a) => a['attachment_id'] == id);
@@ -3155,7 +3534,6 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
             ),
           ),
         );
-        await _loadRemote();
       }
       return false;
     }
@@ -3208,8 +3586,8 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     );
   }
 
-  /// Sección exclusiva de Editar: ADJUNTOS VINCULADOS con X/QUITAR por
-  /// attachment. Marca pending, no borra hasta GUARDAR.
+  /// Sección exclusiva de Editar: ARCHIVOS ADJUNTOS con X por attachment.
+  /// Marca pending (SE QUITARÁ, con DESHACER), no borra hasta GUARDAR.
   Widget _buildEditAttachments() {
     if (!widget.isMine || _attachments.isEmpty) {
       return const SizedBox.shrink();
@@ -3227,7 +3605,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'ADJUNTOS VINCULADOS (${_attachments.length})',
+            'ARCHIVOS ADJUNTOS (${_attachments.length})',
             style: const TextStyle(
               fontSize: 10,
               fontWeight: FontWeight.w900,
@@ -3240,15 +3618,14 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
             spacing: 6,
             runSpacing: 6,
             children: [
+              // X siempre disponible al editar nota propia (sin feature
+              // flag): marca pending, con DESHACER y borrado real al GUARDAR.
               for (final att in _attachments)
-                if (kEnableAttachmentRemoval)
-                  _EditAttachmentChip(
-                    resource: att,
-                    pending: _pendingRemovedIds.contains(att['attachment_id']),
-                    onToggle: () => _removeAttachmentResource(att),
-                  )
-                else
-                  _AttachedFileChip(resource: att),
+                _EditAttachmentChip(
+                  resource: att,
+                  pending: _pendingRemovedIds.contains(att['attachment_id']),
+                  onToggle: () => _togglePendingRemove(att),
+                ),
             ],
           ),
           if (_pendingRemovedIds.isNotEmpty)
@@ -3299,8 +3676,9 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                 _ResourceImageThumb(
                   resource: img,
                   onTap: () => _showResourceDialog(img),
+                  // X de Development recableada al ÚNICO mecanismo pending.
                   onRemove: canRemove
-                      ? () => _removeAttachmentResource(img)
+                      ? () => _togglePendingRemove(img)
                       : null,
                 ),
               ),
@@ -3326,7 +3704,8 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
               resource: doc,
               onView: () => _showResourceDialog(doc),
               onDownload: _downloadResource,
-              onRemove: canRemove ? () => _removeAttachmentResource(doc) : null,
+              // X de Development recableada al ÚNICO mecanismo pending.
+              onRemove: canRemove ? () => _togglePendingRemove(doc) : null,
             ),
           ),
           const SizedBox(height: 8),
@@ -3546,7 +3925,20 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                     ],
                     _DetectedAttachmentsPreview(
                       content: _contentCtrl!.text,
-                      onRemoveSnippet: _removeResourceByUrl,
+                      // Borrar solo el snippet NO elimina el attachment (queda
+                      // en ARCHIVOS ADJUNTOS hasta pulsar su X): semántica
+                      // validada E2E, distinto del borrado con X.
+                      onRemoveSnippet: (url) {
+                        final matches = _attachments.where(
+                          (a) => urlMatchesAttachment(a, url),
+                        );
+                        if (matches.isNotEmpty) {
+                          _togglePendingRemove(matches.first);
+                        } else {
+                          _removeAttachmentUrl(_contentCtrl!, url);
+                          setState(() {});
+                        }
+                      },
                       onPreviewResource: _showResourceDialog,
                     ),
                     _buildEditAttachments(),
@@ -3730,6 +4122,8 @@ class _CreateNoteDialog extends StatefulWidget {
 class _CreateNoteDialogState extends State<_CreateNoteDialog> {
   late final TextEditingController _titleCtrl;
   late final TextEditingController _contentCtrl;
+  late final FocusNode _titleFocus;
+  String? _titleError;
   String _visibility = 'private';
   bool _submitting = false;
   // Adjuntos que ya viven en Drive: se registran contra la nota cuando el
@@ -3743,7 +4137,16 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
     super.initState();
     _titleCtrl = TextEditingController();
     _contentCtrl = TextEditingController();
+    _titleFocus = FocusNode();
+    _titleCtrl.addListener(_onTitleChanged);
     _contentCtrl.addListener(_onContentChanged);
+  }
+
+  void _onTitleChanged() {
+    // El error se limpia en cuanto el título deja de estar vacío.
+    if (_titleError != null && _titleCtrl.text.trim().isNotEmpty) {
+      if (mounted) setState(() => _titleError = null);
+    }
   }
 
   void _onContentChanged() {
@@ -3752,15 +4155,22 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
 
   @override
   void dispose() {
+    _titleCtrl.removeListener(_onTitleChanged);
     _contentCtrl.removeListener(_onContentChanged);
     _titleCtrl.dispose();
     _contentCtrl.dispose();
+    _titleFocus.dispose();
     super.dispose();
   }
 
   Future<void> _submit() async {
     if (_submitting) return;
-    if (_titleCtrl.text.trim().isEmpty) return;
+    if (_titleCtrl.text.trim().isEmpty) {
+      // Sin título no se crea: error inline junto al campo (sin cerrar).
+      setState(() => _titleError = 'El título es obligatorio.');
+      _titleFocus.requestFocus();
+      return;
+    }
     setState(() => _submitting = true);
     try {
       await widget.onCreate(
@@ -3816,7 +4226,15 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
           const SizedBox(height: 4),
           TextField(
             controller: _titleCtrl,
-            decoration: appInputDecoration('Título'),
+            focusNode: _titleFocus,
+            decoration: appInputDecoration('Título').copyWith(
+              errorText: _titleError,
+              errorStyle: const TextStyle(
+                color: AppColors.error,
+                fontWeight: FontWeight.w800,
+                fontSize: 12,
+              ),
+            ),
           ),
           const SizedBox(height: 12),
           const AppFieldLabel('CONTENIDO MARKDOWN'),
@@ -4919,13 +5337,9 @@ class _DetectedAttachmentChip extends StatelessWidget {
   }
 }
 
-/// Eliminación de adjuntos habilitada: la X quita el adjunto de la lista en
-/// memoria, limpia su referencia Markdown y lo marca para DELETE al GUARDAR.
-const bool kEnableAttachmentRemoval = true;
-
-/// Chip de ADJUNTOS VINCULADOS en modo Editar: X quita el adjunto y limpia el
-/// Markdown; el DELETE físico se ejecuta al GUARDAR. Key
-/// `remove-<attachment_id>` preservada para tests y accesibilidad.
+/// Chip de ARCHIVOS ADJUNTOS en modo Editar: X marca pending (no borra).
+/// Key `remove-<attachment_id>` preservada para tests y accesibilidad.
+/// Sin feature flag: es función normal al editar nota propia.
 class _EditAttachmentChip extends StatelessWidget {
   final Map<String, dynamic> resource;
   final bool pending;
@@ -5017,56 +5431,6 @@ class _EditAttachmentChip extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-/// Chip informativo de archivo vinculado (sin acción de borrado).
-/// Se usa mientras la eliminación está deshabilitada (ver
-/// [kEnableAttachmentRemoval]).
-class _AttachedFileChip extends StatelessWidget {
-  final Map<String, dynamic> resource;
-
-  const _AttachedFileChip({required this.resource});
-
-  @override
-  Widget build(BuildContext context) {
-    final isImage = resource['type'] == 'image';
-    return Container(
-      decoration: BoxDecoration(
-        color: isImage ? AppColors.subjectMint : AppColors.accentYellow,
-        border: Border.all(color: AppColors.border, width: 1.5),
-        borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-        boxShadow: AppShadows.badge,
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            isImage
-                ? Icons.image_rounded
-                : resource['type'] == 'pdf'
-                ? Icons.picture_as_pdf_rounded
-                : Icons.description_rounded,
-            size: 13,
-            color: AppColors.text,
-          ),
-          const SizedBox(width: 4),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 140),
-            child: Text(
-              resource['name'] as String,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w900,
-                color: AppColors.text,
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -5369,33 +5733,8 @@ class _ResourceImageThumb extends StatelessWidget {
                     );
                   },
                 ),
-                Positioned(
-                  bottom: 0,
-                  left: 0,
-                  right: 0,
-                  child: Container(
-                    padding: const EdgeInsets.all(AppDimens.spaceXs),
-                    decoration: const BoxDecoration(
-                      color: AppColors.surface,
-                      border: Border(
-                        top: BorderSide(
-                          color: AppColors.border,
-                          width: AppDimens.borderWidth,
-                        ),
-                      ),
-                    ),
-                    child: Text(
-                      (resource['name'] ?? 'IMAGEN') as String,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w900,
-                        color: AppColors.text,
-                      ),
-                    ),
-                  ),
-                ),
+                // Sin franja de nombre sobre la imagen: el nombre humano se
+                // muestra UNA sola vez en el pie de _readOnlyResource.
                 if (onRemove != null)
                   Positioned(
                     top: AppDimens.spaceXs,

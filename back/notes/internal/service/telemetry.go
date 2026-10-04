@@ -146,6 +146,20 @@ func (s *NoteService) observedDriveVerifyFileAccess(ctx context.Context, userID 
 	return err
 }
 
+func (s *NoteService) observedDriveListAppFileIDs(ctx context.Context, userID string) ([]string, error) {
+	started := time.Now()
+	result0, err := s.drive.ListAppFileIDs(ctx, userID)
+	logNotesResult(ctx, started, "DRIVE LIST", "", err, "drive_owner_user_id", userID, "files_count", len(result0))
+	return result0, err
+}
+
+func (s *NoteService) observedDriveFileGone(ctx context.Context, userID string, driveFileID string) (bool, error) {
+	started := time.Now()
+	result0, err := s.drive.FileGone(ctx, userID, driveFileID)
+	logNotesResult(ctx, started, "DRIVE EXISTENCE", driveFileID, err, "drive_owner_user_id", userID, "drive_file_id", driveFileID, "missing", result0)
+	return result0, err
+}
+
 func (s *NoteService) observedNotesCreate(ctx context.Context, noteID string, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string, syncStatus string) (*model.Note, error) {
 	started := time.Now()
 	result0, err := s.notes.Create(ctx, noteID, userID, subjectID, title, externalFileID, visibility, forkedFrom, syncStatus)
@@ -200,10 +214,10 @@ func (s *NoteService) observedNotesUpdateSyncStatus(ctx context.Context, noteID,
 	return err
 }
 
-func (s *NoteService) observedNotesDeleteWithDriveCleanup(ctx context.Context, noteID, requesterID string) (string, error) {
+func (s *NoteService) observedNotesDeleteWithDriveCleanup(ctx context.Context, noteID, requesterID string) (model.NoteDriveCleanup, error) {
 	started := time.Now()
 	result0, err := s.notes.DeleteWithDriveCleanup(ctx, noteID, requesterID)
-	logNotesResult(ctx, started, "DB notes.DeleteWithDriveCleanup", result0, err, "note_id", noteID, "user_id", requesterID, "drive_file_id", result0)
+	logNotesResult(ctx, started, "DB notes.DeleteWithDriveCleanup", result0.FileID, err, "note_id", noteID, "user_id", requesterID, "drive_file_id", result0.FileID, "attachments_count", len(result0.Attachments))
 	return result0, err
 }
 

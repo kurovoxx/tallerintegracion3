@@ -63,6 +63,7 @@ func setupRouter() (*gin.Engine, *service.NoteService, *drive.MockClient, *servi
 		prot.POST("/notes", h.Create)
 		prot.GET("/notes/me", h.ListMy)
 		prot.POST("/notes/unshare-all", h.UnshareAll)
+		prot.POST("/notes/reconcile", h.Reconcile)
 		prot.POST("/notes/upload", h.UploadFile)
 		prot.GET("/notes/:id/access", h.GetAccess)
 		prot.POST("/notes/:id/attachments", h.UploadAttachment)
@@ -1091,5 +1092,137 @@ func TestHandlerShareRestrictedGrantsDrive(t *testing.T) {
 		if gc.Role != "reader" {
 			t.Fatalf("role debe ser reader, got %q", gc.Role)
 		}
+	}
+}
+
+func TestHandlerDeleteNoteAndAllFiles(t *testing.T) {
+	r, svc, files, _ := setupRouter()
+	ctx := context.Background()
+	owner := uuid.NewString()
+	note, err := svc.Create(ctx, owner, "Delete test", nil, "private", stringPtrForDelete("body"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	att, err := svc.AddAttachment(ctx, owner, note.ID, "image.png", "image/png", testPNGBytes, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := svc.AddAttachment(ctx, owner, note.ID, "guide.pdf", "application/pdf", []byte("%PDF-1.4"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(method, path, user string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Authorization", "Bearer "+genToken(user, "student"))
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+	if w := call("DELETE", "/notes/"+note.ID, uuid.NewString()); w.Code != 404 {
+		t.Fatal(w.Code)
+	}
+	if w := call("DELETE", "/notes/"+note.ID+"/attachments/"+att.ID, uuid.NewString()); w.Code != 403 {
+		t.Fatal(w.Code)
+	}
+	if w := call("DELETE", "/notes/"+note.ID+"/attachments/"+att.ID, owner); w.Code != 204 {
+		t.Fatal(w.Code)
+	}
+	if files.HasFile(att.ExternalFileID) || !files.HasFile(doc.ExternalFileID) {
+		t.Fatal("individual cleanup failed")
+	}
+	if w := call("GET", "/notes/"+note.ID, owner); w.Code != 200 || strings.Contains(w.Body.String(), att.ID) || !strings.Contains(w.Body.String(), doc.ID) {
+		t.Fatal("reload attachments failed")
+	}
+	if w := call("DELETE", "/notes/"+note.ID, owner); w.Code != 204 {
+		t.Fatal(w.Code)
+	}
+	if files.HasFile(*note.ExternalFileID) || files.HasFile(doc.ExternalFileID) {
+		t.Fatal("note left remote files")
+	}
+	if w := call("GET", "/notes/"+note.ID, owner); w.Code != 404 {
+		t.Fatal(w.Code)
+	}
+	if w := call("DELETE", "/notes/"+note.ID, owner); w.Code != 404 {
+		t.Fatal(w.Code)
+	}
+}
+func stringPtrForDelete(value string) *string { return &value }
+
+func TestHandlerReconcileDriveDeletions(t *testing.T) {
+	r, svc, files, _ := setupRouter()
+	ctx := context.Background()
+	owner := uuid.NewString()
+	note, err := svc.Create(ctx, owner, "Reconcile test", nil, "private", stringPtrForDelete("body"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	att, err := svc.AddAttachment(ctx, owner, note.ID, "image.png", "image/png", testPNGBytes, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(user string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/notes/reconcile", nil)
+		if user != "" {
+			req.Header.Set("Authorization", "Bearer "+genToken(user, "student"))
+		}
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+	if w := call(""); w.Code != 401 {
+		t.Fatalf("sin token: %d", w.Code)
+	}
+	// Todo existe: resumen en ceros.
+	w := call(owner)
+	if w.Code != 200 {
+		t.Fatalf("reconcile: %d %s", w.Code, w.Body.String())
+	}
+	var zero struct {
+		RemovedNotes       int      `json:"removed_notes"`
+		RemovedAttachments int      `json:"removed_attachments"`
+		Pending            int      `json:"pending"`
+		RemovedNoteIDs     []string `json:"removed_note_ids"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &zero); err != nil {
+		t.Fatal(err)
+	}
+	if zero.RemovedNotes != 0 || zero.RemovedAttachments != 0 {
+		t.Fatalf("sin eliminaciones externas: %+v", zero)
+	}
+	// Borrado externo del adjunto: se reconcilia solo él.
+	if err := files.DeleteAttachment(ctx, owner, att.ExternalFileID); err != nil {
+		t.Fatal(err)
+	}
+	w = call(owner)
+	if w.Code != 200 {
+		t.Fatalf("reconcile attachment: %d", w.Code)
+	}
+	var one struct {
+		RemovedNotes       int `json:"removed_notes"`
+		RemovedAttachments int `json:"removed_attachments"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &one); err != nil {
+		t.Fatal(err)
+	}
+	if one.RemovedNotes != 0 || one.RemovedAttachments != 1 {
+		t.Fatalf("resumen attachment: %+v", one)
+	}
+	// Borrado externo del .md: se reconcilia la nota completa.
+	if err := files.DeleteFile(ctx, owner, *note.ExternalFileID); err != nil {
+		t.Fatal(err)
+	}
+	w = call(owner)
+	if w.Code != 200 {
+		t.Fatalf("reconcile nota: %d", w.Code)
+	}
+	var two struct {
+		RemovedNotes   int      `json:"removed_notes"`
+		RemovedNoteIDs []string `json:"removed_note_ids"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &two); err != nil {
+		t.Fatal(err)
+	}
+	if two.RemovedNotes != 1 || len(two.RemovedNoteIDs) != 1 || two.RemovedNoteIDs[0] != note.ID {
+		t.Fatalf("resumen nota: %+v", two)
 	}
 }

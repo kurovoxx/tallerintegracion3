@@ -412,6 +412,10 @@ func (r *NoteRepository) EnqueueDriveOperation(ctx context.Context, db DBTX, op,
 	if err != nil {
 		return fmt.Errorf("encode drive operation: %w", err)
 	}
+	// El pool de producción usa QueryExecModeSimpleProtocol: un []byte se
+	// interpolaría como literal bytea ('\x7b7d') y el cast a jsonb fallaría
+	// con 22P02. Como string viaja como literal de texto válido en ambos
+	// modos de protocolo (simple y extendido).
 	_, err = db.Exec(ctx, `INSERT INTO notes.drive_reconciliation_queue
 		(operation, note_id, attachment_id, external_file_id, owner_user_id, payload)
 		VALUES ($1, NULLIF($2, '')::uuid, NULLIF($3, '')::uuid, NULLIF($4, ''), $5::uuid, $6::jsonb)`,
@@ -482,35 +486,61 @@ func (r *NoteRepository) FailDriveOperation(ctx context.Context, id, errStr stri
 	return nil
 }
 
-func (r *NoteRepository) DeleteWithDriveCleanup(ctx context.Context, noteID, requesterID string) (string, error) {
+func (r *NoteRepository) DeleteWithDriveCleanup(ctx context.Context, noteID, requesterID string) (model.NoteDriveCleanup, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return "", fmt.Errorf("begin delete note: %w", err)
+		return model.NoteDriveCleanup{}, fmt.Errorf("begin delete note: %w", err)
 	}
 	defer tx.Rollback(context.Background())
 	var owner string
 	var fileID *string
 	err = tx.QueryRow(ctx, `SELECT user_id, external_file_id FROM notes.notes WHERE id = $1 FOR UPDATE`, noteID).Scan(&owner, &fileID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", ErrNotFound
+		return model.NoteDriveCleanup{}, ErrNotFound
 	}
 	if err != nil {
-		return "", fmt.Errorf("lock note: %w", err)
+		return model.NoteDriveCleanup{}, fmt.Errorf("lock note: %w", err)
 	}
 	if owner != requesterID {
-		return "", ErrForbidden
+		return model.NoteDriveCleanup{}, ErrForbidden
 	}
 	id := ""
 	if fileID != nil {
 		id = *fileID
 	}
-	if id != "" {
-		if err := r.EnqueueDriveOperation(ctx, tx, "delete_file", noteID, "", id, owner, nil); err != nil {
-			return "", err
+	result := model.NoteDriveCleanup{FileID: id}
+	rows, err := tx.Query(ctx, `SELECT id, external_file_id FROM notes.note_attachments WHERE note_id=$1 ORDER BY id FOR UPDATE`, noteID)
+	if err != nil {
+		return model.NoteDriveCleanup{}, fmt.Errorf("read cleanup attachments: %w", err)
+	}
+	for rows.Next() {
+		var attachment model.AttachmentDriveCleanup
+		if err := rows.Scan(&attachment.ID, &attachment.ExternalFileID); err != nil {
+			rows.Close()
+			return model.NoteDriveCleanup{}, err
+		}
+		result.Attachments = append(result.Attachments, attachment)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return model.NoteDriveCleanup{}, err
+	}
+	for _, attachment := range result.Attachments {
+		if attachment.ExternalFileID == "" {
+			continue
+		}
+		if err := r.EnqueueDriveOperation(ctx, tx, "delete_attachment", noteID, attachment.ID, attachment.ExternalFileID, owner, nil); err != nil {
+			return model.NoteDriveCleanup{}, err
 		}
 	}
-	// Older deployments may have restrictive foreign keys instead of CASCADE.
-	// Delete dependents explicitly while the parent lock protects ownership.
+	if id != "" {
+		if err := r.EnqueueDriveOperation(ctx, tx, "delete_file", noteID, "", id, owner, nil); err != nil {
+			return model.NoteDriveCleanup{}, err
+		}
+	}
+	// Hardening de Development para instalaciones con FK restrictivas en vez
+	// de CASCADE: borrar dependientes explícitamente (inocuo cuando CASCADE
+	// existe; la metadata ya fue capturada arriba para el cleanup de Drive).
 	for _, query := range []string{
 		`DELETE FROM notes.note_attachments WHERE note_id = $1`,
 		`DELETE FROM notes.saved_notes WHERE note_id = $1`,
@@ -518,24 +548,26 @@ func (r *NoteRepository) DeleteWithDriveCleanup(ctx context.Context, noteID, req
 		`DELETE FROM notes.shared_notes WHERE note_id = $1`,
 	} {
 		if _, err := tx.Exec(ctx, query, noteID); err != nil {
-			return "", fmt.Errorf("cleanup note dependents: %w", err)
+			return model.NoteDriveCleanup{}, fmt.Errorf("cleanup note dependents: %w", err)
 		}
 	}
+	// Scoping por owner como defensa en profundidad (la propiedad ya se
+	// verificó con el lock); 0 filas = borrado concurrente -> not_found.
 	tag, err := tx.Exec(ctx, `DELETE FROM notes.notes WHERE id = $1 AND user_id = $2`, noteID, requesterID)
 	if err != nil {
-		return "", fmt.Errorf("delete note: %w", err)
+		return model.NoteDriveCleanup{}, fmt.Errorf("delete note: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return "", ErrNotFound
+		return model.NoteDriveCleanup{}, ErrNotFound
 	}
 	// La tabla de permisos administrados no tiene FK a notes.notes: el estado
 	// local del desired-state se limpia en la misma transacción para no dejar
 	// filas huérfanas si el proceso muere tras el borrado.
 	if _, err := tx.Exec(ctx, `DELETE FROM notes.drive_managed_permissions WHERE note_id=$1`, noteID); err != nil {
-		return "", fmt.Errorf("cleanup managed permissions: %w", err)
+		return model.NoteDriveCleanup{}, fmt.Errorf("cleanup managed permissions: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return "", fmt.Errorf("commit delete note: %w", err)
+		return model.NoteDriveCleanup{}, fmt.Errorf("commit delete note: %w", err)
 	}
-	return id, nil
+	return result, nil
 }

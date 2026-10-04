@@ -56,6 +56,72 @@ void main() {
     const image = '![Foto](https://drive.google.com/file/d/image/view)';
     expect(resourcesFromMarkdown('$image\n$image'), hasLength(1));
   });
+  test('un attachment real + su ref inline => una sola tarjeta', () {
+    const id = 'abcdefab-1234-4234-8234-123456789abc';
+    final merged = mergeAttachmentResources(
+      [
+        {
+          'attachment_id': id,
+          'type': 'image',
+          'name': 'foto.png',
+          'url': 'https://drive.google.com/file/d/ext/view',
+        },
+      ],
+      [
+        {
+          'type': 'image',
+          'name': 'foto',
+          'url': 'attachment:$id',
+          'size': 'Adjunto',
+        },
+      ],
+    );
+    expect(merged, hasLength(1));
+    expect(merged.single['attachment_id'], id);
+  });
+  test('dos attachments distintos con mismo filename => dos tarjetas', () {
+    Map<String, dynamic> att(String id) => {
+      'attachment_id': id,
+      'type': 'image',
+      'name': 'foto.png',
+      'url': 'https://drive.google.com/file/d/$id/view',
+    };
+    final merged = mergeAttachmentResources(
+      [att('aaaaaaaa-1234-4234-8234-123456789abc')],
+      [],
+    );
+    final merged2 = mergeAttachmentResources(
+      [
+        att('aaaaaaaa-1234-4234-8234-123456789abc'),
+        att('bbbbbbbb-1234-4234-8234-123456789abc'),
+      ],
+      [],
+    );
+    expect(merged, hasLength(1));
+    // Nunca se colapsan dos IDs distintos aunque compartan filename.
+    expect(merged2.map((r) => r['attachment_id']).toSet(), hasLength(2));
+  });
+  test('mismo attachment_id duplicado en fuentes => una tarjeta', () {
+    const id = 'abcdefab-1234-4234-8234-123456789abc';
+    Map<String, dynamic> att() => {
+      'attachment_id': id,
+      'type': 'pdf',
+      'name': 'guia.pdf',
+      'url': 'https://drive.google.com/file/d/ext/view',
+    };
+    final merged = mergeAttachmentResources(
+      [att(), att()],
+      [
+        {
+          'type': 'pdf',
+          'name': 'guia.pdf',
+          'url': 'attachment:$id',
+          'size': 'PDF',
+        },
+      ],
+    );
+    expect(merged, hasLength(1));
+  });
   test('solo el dominio Drive se trata como visor', () {
     expect(isDriveViewerUrl('https://drive.google.com/file/d/id/view'), isTrue);
     expect(isDriveViewerUrl('https://example.com/foto.png'), isFalse);

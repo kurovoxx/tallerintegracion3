@@ -192,7 +192,8 @@ void main() {
       expect(stored.single.version, local ? isNull : 6);
       if (!local) {
         expect(sent, [4, 5]);
-        // En lectura no se expone QUITAR/X (solo durante la edición).
+        // En lectura no se expone QUITAR/X; en Editar propio sí (sin
+        // flag): ARCHIVOS ADJUNTOS con X individual y nada marcado.
         expect(find.byKey(ValueKey('remove-$image')), findsNothing);
         expect(find.byKey(ValueKey('remove-$pdf')), findsNothing);
         await t.scrollUntilVisible(
@@ -202,7 +203,7 @@ void main() {
         );
         await t.tap(find.text('Editar'));
         await settle(t);
-        expect(find.text('ADJUNTOS VINCULADOS (2)'), findsOneWidget);
+        expect(find.text('ARCHIVOS ADJUNTOS (2)'), findsOneWidget);
         // En edición cada adjunto expone su X; no se pulsa, así que nada se
         // borra y CANCELAR conserva adjuntos e inline.
         expect(find.byKey(ValueKey('remove-$image')), findsOneWidget);
