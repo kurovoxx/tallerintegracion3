@@ -37,6 +37,14 @@ CREATE TABLE identity.refresh_tokens (
 
 CREATE INDEX idx_refresh_tokens_user_id ON identity.refresh_tokens(user_id);
 
+CREATE TABLE identity.password_resets (
+    user_id uuid PRIMARY KEY REFERENCES identity.users(id) ON DELETE CASCADE,
+    code_hash varchar(255) NOT NULL,
+    expires_at timestamptz NOT NULL,
+    requested_at timestamptz NOT NULL DEFAULT now(),
+    attempts integer NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 5)
+);
+
 CREATE TABLE identity.profiles (
     user_id uuid PRIMARY KEY REFERENCES identity.users(id) ON DELETE CASCADE,
     display_name varchar(100) NOT NULL,

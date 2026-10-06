@@ -8,9 +8,9 @@ echo "=== TI3 Frontend Runner ==="
 echo "Detectando SO: $(uname -s)"
 echo ""
 echo "¿Quieres correr Flutter para Linux o Windows?"
-echo "  1) linux         - nativo Linux local (http://localhost:8085, requiere auth local)"
-echo "  2) windows       - nativo Windows local (solo Windows + Visual Studio)"
-echo "  3) web           - flutter run -d chrome (http://localhost:8085)"
+echo "  1) linux         - nativo Linux contra Pillán"
+echo "  2) windows       - nativo Windows contra Pillán (Windows + Visual Studio)"
+echo "  3) web           - flutter run -d chrome contra Pillán"
 echo "  4) docker        - docker compose up front (web via nginx http://localhost:8086)"
 echo "  5) linux-deploy  - nativo Linux contra dominio del Ingress (front/.env.prod.example, sin auth local)"
 echo "  6) windows-deploy - nativo Windows contra dominio del Ingress (solo Windows + Visual Studio, sin auth local)"
@@ -74,7 +74,7 @@ case "$CHOICE" in
     ;;
   5|linux-deploy|deploy)
     echo ">> Linux nativo contra dominio del Ingress (sin auth local)"
-    echo "   Ingress con Fake Certificate: se usa ALLOW_INSECURE=true solo-dev (solo ti3-brojas.dev.censei.cl)"
+    echo "   Certificado de Pillán verificado mediante su huella SHA-256"
     check_fedora_deps
     if ! command -v flutter >/dev/null 2>&1; then echo "Flutter no encontrado"; exit 1; fi
     # Lee dominio de .env.prod o front/.env.prod.example
@@ -89,11 +89,11 @@ case "$CHOICE" in
     echo "API: $API_URL"
     cd "$FRONT_DIR"
     flutter pub get
-    flutter run -d linux --dart-define=API_BASE_URL="$API_URL" --dart-define=NOTES_BASE_URL="$NOTES_URL" --dart-define=SOCIAL_BASE_URL="$SOCIAL_URL" --dart-define=ALLOW_INSECURE=true
+    flutter run -d linux --dart-define=API_BASE_URL="$API_URL" --dart-define=NOTES_BASE_URL="$NOTES_URL" --dart-define=SOCIAL_BASE_URL="$SOCIAL_URL"
     ;;
   6|windows-deploy|wdeploy|windows_deploy)
     echo ">> Windows nativo contra dominio del Ingress (sin auth local)"
-    echo "   Ingress con Fake Certificate: se usa ALLOW_INSECURE=true solo-dev (solo ti3-brojas.dev.censei.cl)"
+    echo "   Certificado de Pillán verificado mediante su huella SHA-256"
     if [[ "$(uname -s)" != *"NT"* && "$(uname -s)" != *"MINGW"* && "$(uname -s)" != *"MSYS"* ]]; then
       echo "Estás en $(uname -s) (Linux). flutter run -d windows solo funciona en Windows."
       echo "En este equipo usa opción 5 (linux-deploy). En Windows nativo elige 6."
@@ -112,7 +112,7 @@ case "$CHOICE" in
     echo "API: $API_URL"
     cd "$FRONT_DIR"
     flutter pub get
-    flutter run -d windows --dart-define=API_BASE_URL="$API_URL" --dart-define=NOTES_BASE_URL="$NOTES_URL" --dart-define=SOCIAL_BASE_URL="$SOCIAL_URL" --dart-define=ALLOW_INSECURE=true
+    flutter run -d windows --dart-define=API_BASE_URL="$API_URL" --dart-define=NOTES_BASE_URL="$NOTES_URL" --dart-define=SOCIAL_BASE_URL="$SOCIAL_URL"
     ;;
   *)
     echo "Opción inválida"

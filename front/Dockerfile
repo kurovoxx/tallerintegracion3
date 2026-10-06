@@ -1,9 +1,9 @@
 # Front Flutter - build web y sirve con nginx
 # Etapa 1: build web con Flutter
 FROM ghcr.io/cirruslabs/flutter:stable AS builder
-ARG BASE_URL=http://localhost:8085
-ARG NOTES_BASE_URL=http://localhost:8082
-ARG SOCIAL_BASE_URL=http://localhost:8083
+ARG BASE_URL=/api-auth
+ARG NOTES_BASE_URL=/api-notes
+ARG SOCIAL_BASE_URL=/api-social
 ARG GOOGLE_CLIENT_ID=
 ARG GOOGLE_REDIRECT_URI=http://localhost:8081/auth/google/callback
 WORKDIR /app
@@ -22,7 +22,7 @@ RUN if [ ! -f web/drift_worker.js ]; then \
       find /home -name drift_worker.js -path "*drift*drift_worker.js" -exec cp {} web/drift_worker.js \; 2>/dev/null || true; \
       ls -lh web/drift_worker.js || echo "drift_worker.js opcional para WasmDatabase.open"; \
     fi
-# Local por defecto http://localhost:8085; para dominio usar --dart-define o .env.prod (ver docker-compose.yml y front/.env.prod.example).
+# Web usa nginx en el mismo origen; desktop/móvil usan el dominio de Pillán.
 RUN flutter build web --release \
     --dart-define=API_BASE_URL=$BASE_URL \
     --dart-define=NOTES_BASE_URL=$NOTES_BASE_URL \

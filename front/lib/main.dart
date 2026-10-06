@@ -10,9 +10,9 @@ import 'features/auth/login_screen.dart';
 final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
-  // Solo-dev desktop: permite self-signed de pillan con ALLOW_INSECURE=true.
-  // En web es no-op. Debe ir antes de cualquier http.Client.
-  maybeAllowInsecureCerts();
+  // Confianza por huella del certificado de Pillán en desktop/móvil.
+  // En web el navegador valida TLS. Debe ir antes de cualquier http.Client.
+  configurePillanCertificateTrust();
   WidgetsFlutterBinding.ensureInitialized();
   SessionManager.onSessionExpired = () async {
     final nav = appNavigatorKey.currentState;

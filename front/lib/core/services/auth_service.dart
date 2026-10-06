@@ -20,6 +20,48 @@ class AuthService {
   static const String refreshPath = '/auth/refresh';
   static const String logoutPath = '/auth/logout';
 
+  Future<LoginResult> forgotPassword(String email) => _passwordRecovery(
+    '/auth/forgot-password',
+    {'email': email.trim().toLowerCase()},
+  );
+
+  Future<LoginResult> resetPassword({
+    required String email,
+    required String code,
+    required String password,
+  }) => _passwordRecovery('/auth/reset-password', {
+    'email': email.trim().toLowerCase(),
+    'code': code.trim(),
+    'password': password,
+  });
+
+  Future<LoginResult> _passwordRecovery(
+    String path,
+    Map<String, String> payload,
+  ) async {
+    try {
+      final response = await _client
+          .post(
+            Uri.parse('$baseUrl$path'),
+            headers: const {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: jsonEncode(payload),
+          )
+          .timeout(const Duration(seconds: 20));
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      if (response.statusCode == 200) return LoginResult.success(body);
+      return LoginResult.failure(
+        _extractErrorMessage(body, response.statusCode),
+      );
+    } catch (_) {
+      return LoginResult.failure(
+        'No se pudo completar la solicitud. Revisa tu conexión e inténtalo de nuevo.',
+      );
+    }
+  }
+
   /// POST /auth/refresh {refresh_token} -> 200 {access_token, refresh_token?, expires_in?}.
   /// El backend rota el refresh: si devuelve uno nuevo debe guardarse.
   /// Nunca lanza: toda falla se reporta como RefreshResult.failure.

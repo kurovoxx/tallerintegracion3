@@ -7,6 +7,7 @@ import '../../core/services/auth_service.dart';
 import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/main_shell.dart';
+import 'password_recovery_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -634,7 +635,13 @@ class _LoginScreenState extends State<LoginScreen> {
                 ],
               ),
               InkWell(
-                onTap: () {},
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => PasswordRecoveryScreen(
+                      initialEmail: _loginEmailController.text.trim(),
+                    ),
+                  ),
+                ),
                 child: const Text(
                   '¿Olvidaste tu clave?',
                   style: TextStyle(

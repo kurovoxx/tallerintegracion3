@@ -1,4 +1,4 @@
-# Postgres propio en el cluster (alternativa a Supabase).
+# PostgreSQL de Pillán: base de datos utilizada por web y aplicaciones.
 # Antes de aplicar:
 #   kubectl create secret generic postgres-auth -n student-brojas --from-literal=POSTGRES_PASSWORD="<password>"
 #   kubectl create configmap postgres-init -n student-brojas --from-file=01-init.sql=docker/postgres/init.sql
