@@ -70,6 +70,49 @@ func TestRealCreateFile_CreaCarpetaSiFalta(t *testing.T) {
 	}
 }
 
+// TestRealUploadAttachment_IndexaAdjuntoEnCarpeta verifica que el binario se
+// sube a la carpeta de la app, con nombre extensionado (foto.png) y con
+// appProperties (notes_note_id / notes_owner_user_id / notes_attachment), para
+// que quede asociado a la misma nota que el archivo .md.
+func TestRealUploadAttachment_IndexaAdjuntoEnCarpeta(t *testing.T) {
+	r := NewRealDriveClient(&stubTokenProvider{token: "tok"})
+	var uploadBody string
+	r.newService = func(ctx context.Context, token string) (*drive.Service, error) {
+		return driveServiceWithTransport(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch {
+			case req.Method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/files"):
+				return jsonResp(200, map[string]any{"files": []any{map[string]any{"id": "folder-9"}}}), nil
+			case strings.HasPrefix(req.URL.Path, "/upload/"):
+				raw, _ := io.ReadAll(req.Body)
+				uploadBody = string(raw)
+				return jsonResp(200, map[string]any{
+					"id":          "att-1",
+					"webViewLink": "https://drive.google.com/file/d/att-1/view",
+				}), nil
+			}
+			t.Fatalf("request inesperado: %s %s", req.Method, req.URL.Path)
+			return nil, nil
+		})), nil
+	}
+	id, url, err := r.UploadAttachment(
+		context.Background(), "user-1", "note-1", "foto", "image/png", []byte("img"), false,
+	)
+	if err != nil || id != "att-1" {
+		t.Fatalf("upload = %q, %v", id, err)
+	}
+	if !strings.Contains(url, "att-1") {
+		t.Fatalf("url = %q, want contiene att-1", url)
+	}
+	if !strings.Contains(uploadBody, "foto.png") {
+		t.Fatalf("debe garantizar extensión .png en el nombre: %s", uploadBody)
+	}
+	if !strings.Contains(uploadBody, "notes_attachment") ||
+		!strings.Contains(uploadBody, "note-1") ||
+		!strings.Contains(uploadBody, "user-1") {
+		t.Fatalf("debe indexar el adjunto con nota y dueño: %s", uploadBody)
+	}
+}
+
 func TestRealCreateFile_ReusaCarpetaExistente(t *testing.T) {
 	r := NewRealDriveClient(&stubTokenProvider{token: "tok"})
 	var folderCreates int

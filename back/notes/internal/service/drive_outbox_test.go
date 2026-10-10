@@ -33,8 +33,8 @@ func TestMemoryDriveCleanupAndRetry(t *testing.T) {
 	if id, err := attachments.DeleteAttachmentWithDriveCleanup(ctx, note.ID, att.ID, "owner"); err != nil || id != "attachment-file" {
 		t.Fatalf("attachment cleanup: %q %v", id, err)
 	}
-	if id, err := notes.DeleteWithDriveCleanup(ctx, note.ID, "owner"); err != nil || id != file {
-		t.Fatalf("note cleanup: %q %v", id, err)
+	if id, err := notes.DeleteWithDriveCleanup(ctx, note.ID, "owner"); err != nil || id.FileID != file {
+		t.Fatalf("note cleanup: %+v %v", id, err)
 	}
 	if _, err := notes.DeleteWithDriveCleanup(ctx, note.ID, "owner"); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("second cleanup: %v", err)

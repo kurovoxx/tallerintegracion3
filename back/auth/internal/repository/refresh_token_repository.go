@@ -134,6 +134,12 @@ func (r *RefreshTokenRepository) Rotate(ctx context.Context, oldID, userID, newH
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	// Bloquear fila vieja
+	// Serialize rotation with password changes so a concurrent reset also
+	// revokes any refresh token created by this transaction.
+	var lockedUserID string
+	if err := tx.QueryRow(ctx, `SELECT id FROM identity.users WHERE id=$1 FOR UPDATE`, userID).Scan(&lockedUserID); err != nil {
+		return "", fmt.Errorf("lock user: %w", err)
+	}
 	var revoked bool
 	var expiresAt time.Time
 	err = tx.QueryRow(ctx, `SELECT revoked, expires_at FROM identity.refresh_tokens WHERE id=$1 FOR UPDATE`, oldID).Scan(&revoked, &expiresAt)

@@ -65,6 +65,9 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	groupRepo := repository.NewGroupRepository(pool)
 	streamRepo := repository.NewStreamRepository(pool)
 	groupSvc := service.NewGroupService(groupRepo, streamNotifierFor(cfg, streamRepo))
+	// Directorio Identity para nombres en GET /groups/{id}/members
+	// (best-effort: sin Auth responde solo IDs, sin romper).
+	groupSvc.SetUserDirectory(service.NewHTTPUserDirectory(cfg.AuthBaseURL, cfg.InternalKey))
 
 	todoRepo := repository.NewTodoRepository(pool)
 	todoSvc := service.NewTodoService(todoRepo)
@@ -90,7 +93,10 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 		))
 	meetingH := httpHandler.NewMeetingHandler(meetingSvc)
 
-	streamTokenSvc := service.NewStreamTokenService(streamRepo, cfg.StreamSecret)
+	streamTokenSvc := service.NewStreamTokenServiceWithKey(streamRepo, cfg.StreamSecret, cfg.StreamAPIKey)
+	// Sincronización server-side de membresía del canal al emitir tokens:
+	// MockClient en modo mock (sin red), RESTClient en modo real.
+	streamTokenSvc.SetClient(streamClientFor(cfg))
 	streamH := httpHandler.NewStreamHandler(streamTokenSvc)
 
 	viewSvc := service.NewViewService(groupSvc, todoSvc, sprintSvc, meetingSvc)
@@ -192,6 +198,10 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 		protected.GET("/groups/:id/todo", todoH.ListTodos)
 		protected.PATCH("/groups/:id/todo/:taskId", todoH.UpdateTodo)
 		protected.DELETE("/groups/:id/todo/:taskId", todoH.DeleteTodo)
+		protected.GET("/groups/:id/sprint-sheets", sprintH.ListSheets)
+		protected.POST("/groups/:id/sprint-sheets", sprintH.CreateSheet)
+		protected.PATCH("/groups/:id/sprint-sheets/:sheetId", sprintH.UpdateSheet)
+		protected.DELETE("/groups/:id/sprint-sheets/:sheetId", sprintH.DeleteSheet)
 		protected.POST("/groups/:id/sprint-sheet", sprintH.CreateSprintTask)
 		protected.GET("/groups/:id/sprint-sheet", sprintH.ListSprintTasks)
 		protected.PATCH("/groups/:id/sprint-sheet/:taskId", sprintH.UpdateSprintTask)

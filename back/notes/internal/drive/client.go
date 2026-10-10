@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -55,6 +56,7 @@ func IsForbidden(err error) bool {
 // En producción delega a google.golang.org/api/drive/v3 con token OAuth desde identity.oauth_connections.
 // En tests se usa MockClient.
 type Client interface {
+	DownloadAttachment(ctx context.Context, ownerID, fileID string) ([]byte, string, error)
 	// CreateFile crea archivo .md en carpeta designada del autor, retorna driveFileID.
 	// El archivo se indexa con appProperties (notes_note_id, notes_owner_user_id)
 	// para poder recuperarlo si el proceso crashea antes de persistir el fileID.
@@ -89,6 +91,16 @@ type Client interface {
 	RevokeAllPermissions(ctx context.Context, ownerUserID string, fileID string) error
 	// VerifyFileAccess comprueba que el usuario puede acceder al archivo.
 	VerifyFileAccess(ctx context.Context, userID string, driveFileID string) error
+	// ListAppFileIDs devuelve los IDs de archivos activos (no en papelera)
+	// de la app que pertenecen al dueño, para reconciliar eliminaciones
+	// externas con 1-2 llamadas en vez de una por archivo.
+	ListAppFileIDs(ctx context.Context, userID string) ([]string, error)
+	// FileGone confirma ausencia definitiva SIN descargar contenido:
+	// 404 de la API o papelera (trashed=true, documentado como eliminado
+	// para la app: el usuario lo borró en Drive) => (true, nil).
+	// Cualquier otro error (OAuth, red, 403, 429, 5xx, timeout) =>
+	// (false, err): NUNCA debe interpretarse como eliminación.
+	FileGone(ctx context.Context, userID string, driveFileID string) (bool, error)
 }
 
 // GrantCall registra un intento de GrantPermission (observable en tests).
@@ -123,9 +135,16 @@ type MockClient struct {
 	// CopyFile solo exige OAuth del destino (dst), replicando el Real desacoplado
 	// que no requiere token del autor original para clonar apuntes públicos.
 	NoOAuth map[string]bool
+	// trashed simula papelera de Drive (el archivo existe pero el usuario lo
+	// eliminó en la UI): FileGone lo reporta como ausente. ListAppFileIDs lo
+	// excluye, igual que Files.List por defecto en producción.
+	trashed map[string]bool
+	// ListErr inyecta un fallo del listado (p. ej. 5xx) para tests.
+	ListErr error
 }
 
 type mockFile struct {
+	Data          []byte
 	ID            string
 	OwnerID       string
 	Title         string
@@ -144,6 +163,42 @@ func noteFileProperties(ownerUserID, noteID string) map[string]string {
 		props["notes_note_id"] = noteID
 	}
 	return props
+}
+
+// attachmentFileProperties indexa el binario adjunto con su dueño y, cuando se
+// conoce, con la nota destino (notes_note_id). Así el adjunto queda asociado a
+// la misma carpeta lógica de la app que el .md y puede auditarse/limpiarse por
+// nota sin depender solo de la fila de Postgres.
+func attachmentFileProperties(ownerUserID, noteID string) map[string]string {
+	props := noteFileProperties(ownerUserID, noteID)
+	props["notes_attachment"] = "1"
+	return props
+}
+
+// ensureAttachmentFileName garantiza una extensión coherente con el MIME
+// canónico (imagen.png, documento.pdf, apunte.md) para que Google Drive
+// previsualice e identifique el binario aunque el cliente no haya enviado
+// extensión en el nombre.
+func ensureAttachmentFileName(name, mimeType string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "adjunto"
+	}
+	if strings.Contains(filepath.Base(name), ".") {
+		return name
+	}
+	switch normalizeMimeType(mimeType) {
+	case MimePNG:
+		return name + ".png"
+	case MimeJPEG:
+		return name + ".jpg"
+	case MimePDF:
+		return name + ".pdf"
+	case MimeMarkdown:
+		return name + ".md"
+	default:
+		return name
+	}
 }
 
 func cloneProperties(props map[string]string) map[string]string {
@@ -302,11 +357,21 @@ func (m *MockClient) UploadAttachment(ctx context.Context, userID string, noteID
 		fileName = "attachment"
 	}
 	// Paridad con RealDriveClient: preserva el MIME declarado si es específico
-	// y lo resuelve por extensión/sniffing cuando viene vacío o genérico.
+	// y lo resuelve por extensión/sniffing cuando viene vacío o genérico, y
+	// garantiza una extensión coherente con el tipo para el nombre en Drive.
 	fileType = DetectMimeType(fileName, fileType, data)
+	fileName = ensureAttachmentFileName(fileName, fileType)
 	id := "att_" + uuid.NewString()
 	url := fmt.Sprintf("https://drive.google.com/file/d/%s/view", id)
-	m.files[id] = &mockFile{ID: id, OwnerID: userID, Title: fileName, Content: string(data), MimeType: fileType, Folder: noteID}
+	m.files[id] = &mockFile{
+		ID:            id,
+		OwnerID:       userID,
+		Title:         fileName,
+		Data:          append([]byte(nil), data...),
+		MimeType:      fileType,
+		Folder:        noteID,
+		AppProperties: attachmentFileProperties(userID, noteID),
+	}
 	return id, url, nil
 }
 
@@ -354,8 +419,9 @@ func (m *MockClient) CopyFile(ctx context.Context, srcUserID string, srcFileID s
 
 // FindFileByNoteID replica Files.List con query appProperties: devuelve el
 // archivo .md del dueño indexado con notes_note_id=noteID ("" si no existe).
-// Ante varios candidatos (p. ej. reintentos previos) elige el de ID menor para
-// ser determinista.
+// Excluye los adjuntos (notes_attachment=1) para no adoptar un binario como si
+// fuera el Markdown de la nota. Ante varios candidatos (p. ej. reintentos
+// previos) elige el de ID menor para ser determinista.
 func (m *MockClient) FindFileByNoteID(ctx context.Context, ownerUserID string, noteID string) (string, error) {
 	if err := m.checkOAuth(ownerUserID); err != nil {
 		return "", err
@@ -368,6 +434,9 @@ func (m *MockClient) FindFileByNoteID(ctx context.Context, ownerUserID string, n
 	found := ""
 	for id, f := range m.files {
 		if f.OwnerID != ownerUserID || f.AppProperties["notes_note_id"] != noteID {
+			continue
+		}
+		if f.AppProperties["notes_attachment"] == "1" {
 			continue
 		}
 		if found == "" || id < found {
@@ -549,6 +618,65 @@ func (m *MockClient) FileAppProperties(fileID string) (map[string]string, bool) 
 		return nil, false
 	}
 	return cloneProperties(f.AppProperties), true
+}
+
+// Trash simula mover un archivo a la papelera de Drive (solo tests).
+func (m *MockClient) Trash(fileID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.trashed == nil {
+		m.trashed = make(map[string]bool)
+	}
+	m.trashed[fileID] = true
+}
+
+// Restore saca un archivo de la papelera simulada (solo tests).
+func (m *MockClient) Restore(fileID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.trashed, fileID)
+}
+
+// ListAppFileIDs replica el listado por appProperties del dueño excluyendo
+// papelera, igual que el query con trashed = false en producción.
+func (m *MockClient) ListAppFileIDs(ctx context.Context, userID string) ([]string, error) {
+	if err := m.checkOAuth(userID); err != nil {
+		return nil, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.ListErr != nil {
+		return nil, m.ListErr
+	}
+	var ids []string
+	for id, f := range m.files {
+		if f.OwnerID != userID {
+			continue
+		}
+		if m.trashed[id] {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// FileGone confirma ausencia definitiva: archivo inexistente (404) o en
+// papelera. Los errores inyectados (GetErr) y OAuth se propagan para que el
+// llamador NUNCA los confunda con una eliminación del usuario.
+func (m *MockClient) FileGone(ctx context.Context, userID string, driveFileID string) (bool, error) {
+	if err := m.checkOAuth(userID); err != nil {
+		return false, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if err, ok := m.GetErr[driveFileID]; ok && err != nil {
+		return false, err
+	}
+	if _, ok := m.files[driveFileID]; !ok {
+		return true, nil
+	}
+	return m.trashed[driveFileID], nil
 }
 
 // Ensure interface compliance

@@ -256,8 +256,8 @@ func (f *failingDeleteStore) Delete(ctx context.Context, id string) error {
 	return fmt.Errorf("db delete failed (simulado)")
 }
 
-func (f *failingDeleteStore) DeleteWithDriveCleanup(ctx context.Context, id, requesterID string) (string, error) {
-	return "", fmt.Errorf("db delete failed (simulado)")
+func (f *failingDeleteStore) DeleteWithDriveCleanup(ctx context.Context, id, requesterID string) (model.NoteDriveCleanup, error) {
+	return model.NoteDriveCleanup{}, fmt.Errorf("db delete failed (simulado)")
 }
 
 func countNotes(s *MemoryNoteStore) int {

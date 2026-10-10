@@ -203,7 +203,7 @@ func (m *MemorySprintStore) ListSheetsByGroup(_ context.Context, groupID pgtype.
 func (m *MemorySprintStore) CreateSheet(_ context.Context, arg sqlc.CreateSheetParams) (sqlc.SocialSprintSheet, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	s := sqlc.SocialSprintSheet{ID: newUUID(), GroupID: arg.GroupID, Name: arg.Name, CreatedAt: nowTSTZ()}
+	s := sqlc.SocialSprintSheet{ID: newUUID(), GroupID: arg.GroupID, Name: arg.Name, PeriodStart: arg.PeriodStart, PeriodEnd: arg.PeriodEnd, CreatedAt: nowTSTZ()}
 	m.sheets[uuidStr(s.ID)] = s
 	return s, nil
 }
@@ -345,3 +345,40 @@ var (
 	_ SprintRepo = (*MemorySprintStore)(nil)
 	_ HoursRepo  = (*MemorySprintStore)(nil)
 )
+
+func (m *MemorySprintStore) UpdateSheet(_ context.Context, arg sqlc.UpdateSheetParams) (sqlc.SocialSprintSheet, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sheets[uuidStr(arg.ID)]
+	if !ok || s.GroupID != arg.GroupID {
+		return sqlc.SocialSprintSheet{}, pgx.ErrNoRows
+	}
+	s.Name, s.PeriodStart, s.PeriodEnd = arg.Name, arg.PeriodStart, arg.PeriodEnd
+	m.sheets[uuidStr(s.ID)] = s
+	return s, nil
+}
+
+func (m *MemorySprintStore) DeleteSheet(_ context.Context, arg sqlc.DeleteSheetParams) (sqlc.SocialSprintSheet, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sheets[uuidStr(arg.ID)]
+	if !ok || s.GroupID != arg.GroupID {
+		return sqlc.SocialSprintSheet{}, pgx.ErrNoRows
+	}
+	delete(m.sheets, uuidStr(arg.ID))
+	// Cascada en memoria (paridad con ON DELETE CASCADE de Postgres):
+	// tareas de la hoja y sus daily hours.
+	for tid, t := range m.tasks {
+		if uuidStr(t.SheetID) != uuidStr(arg.ID) {
+			continue
+		}
+		delete(m.tasks, tid)
+		for hid, h := range m.hours {
+			if uuidStr(h.TaskID) == tid {
+				delete(m.hourKey, uuidStr(h.TaskID)+"|"+logDateStr(h.LogDate))
+				delete(m.hours, hid)
+			}
+		}
+	}
+	return s, nil
+}

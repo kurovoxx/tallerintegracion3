@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"time"
 
@@ -16,7 +17,41 @@ var (
 	ErrMeetingNotFound     = errors.New("meeting not found")
 	ErrScheduledAtRequired = errors.New("scheduled_at is required")
 	ErrInvalidScheduledAt  = errors.New("invalid scheduled_at: must be RFC3339 (e.g. 2026-09-20T15:00:00Z)")
+	// ErrInvalidAttendeeEmail exige emails válidos en attendees (regla: invitados por email).
+	ErrInvalidAttendeeEmail = errors.New("invalid attendee email")
+	// ErrTooManyAttendees acota la lista (Google acepta cientos; 50 es margen sano).
+	ErrTooManyAttendees = errors.New("too many attendees: max 50")
 )
+
+// maxAttendees acota los invitados por reunión.
+const maxAttendees = 50
+
+var attendeeEmailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
+
+// parseAttendees normaliza la lista de invitados: trim, lowercase, dedupe,
+// descarta vacíos. Valida formato y tope; el orden original se conserva.
+func parseAttendees(raw []string) ([]string, error) {
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, r := range raw {
+		email := strings.ToLower(strings.TrimSpace(r))
+		if email == "" {
+			continue
+		}
+		if len(email) > 255 || !attendeeEmailRegex.MatchString(email) {
+			return nil, ErrInvalidAttendeeEmail
+		}
+		if _, ok := seen[email]; ok {
+			continue
+		}
+		seen[email] = struct{}{}
+		out = append(out, email)
+	}
+	if len(out) > maxAttendees {
+		return nil, ErrTooManyAttendees
+	}
+	return out, nil
+}
 
 // MeetingCreatedNotifier dispara integraciones best-effort al agendar una reunión
 // (Google Calendar, Discord, Stream). Un fallo aquí nunca revierte la reunión
@@ -36,7 +71,7 @@ func (NoopMeetingCreatedNotifier) OnMeetingCreated(ctx context.Context, meeting 
 type MeetingRepo interface {
 	GetGroupByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialGroup, error)
 	IsMember(ctx context.Context, groupID, userID pgtype.UUID) (bool, error)
-	CreateMeetingWithNotifications(ctx context.Context, arg sqlc.CreateMeetingParams) (sqlc.SocialMeeting, error)
+	CreateMeetingWithNotifications(ctx context.Context, arg sqlc.CreateMeetingParams, attendeeEmails []string) (sqlc.SocialMeeting, error)
 	ListMeetingsByGroup(ctx context.Context, groupID pgtype.UUID) ([]sqlc.SocialMeeting, error)
 }
 
@@ -128,12 +163,16 @@ func (s *MeetingService) requireMembership(ctx context.Context, gid, uid pgtype.
 // CreateMeeting agenda una reunión: creación local síncrona + notificaciones
 // in-app a los miembros (excepto el creador). Las integraciones externas se
 // disparan en background y son best-effort.
-func (s *MeetingService) CreateMeeting(ctx context.Context, groupID, userID, title string, description *string, scheduledAt string, notifyDiscord *bool) (sqlc.SocialMeeting, error) {
+func (s *MeetingService) CreateMeeting(ctx context.Context, groupID, userID, title string, description *string, scheduledAt string, notifyDiscord *bool, attendees []string) (sqlc.SocialMeeting, error) {
 	title, err := validateTitle(title)
 	if err != nil {
 		return sqlc.SocialMeeting{}, err
 	}
 	scheduled, err := parseScheduledAt(scheduledAt)
+	if err != nil {
+		return sqlc.SocialMeeting{}, err
+	}
+	emails, err := parseAttendees(attendees)
 	if err != nil {
 		return sqlc.SocialMeeting{}, err
 	}
@@ -165,7 +204,7 @@ func (s *MeetingService) CreateMeeting(ctx context.Context, groupID, userID, tit
 		ScheduledAt:     scheduled,
 		CreatedByUserID: uid,
 		NotifyDiscord:   notify,
-	})
+	}, emails)
 	if err != nil {
 		return sqlc.SocialMeeting{}, err
 	}

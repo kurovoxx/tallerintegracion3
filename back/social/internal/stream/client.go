@@ -28,9 +28,14 @@ func (e *StreamError) Error() string { return fmt.Sprintf("stream %d: %s", e.Cod
 // Client abstrae el chat en Stream (getstream.io): canales y mensajes.
 // En tests/dev se usa MockClient.
 type Client interface {
-	// CreateChannel crea un canal del tipo dado (ej. "messaging") con el id y nombre indicados.
-	// Idempotente a nivel de llamada: si el canal ya existe en Stream, no es error.
-	CreateChannel(ctx context.Context, channelType, channelID, name string) error
+	// CreateChannel garantiza que exista el canal (get-or-create server-side).
+	// Idempotente: si el canal ya existe en Stream, lo retorna sin modificar
+	// mensajes ni miembros. Nunca elimina ni recrea nada.
+	CreateChannel(ctx context.Context, channelType, channelID, name, createdByID string) error
+	// EnsureMember agrega al usuario como miembro del canal (server-side).
+	// Idempotente: si ya es miembro, no es error. Solo llamarla después de
+	// verificar en nuestra BD que el usuario pertenece al grupo Sigma.
+	EnsureMember(ctx context.Context, channelType, channelID, userID string) error
 	// SendMessage publica un mensaje de texto en el canal como el usuario indicado.
 	// En modo server-side el sender no necesita existir previamente en Stream.
 	SendMessage(ctx context.Context, channelType, channelID, senderID, text string) error
@@ -41,10 +46,14 @@ type MockClient struct {
 	mu sync.Mutex
 	// CreateErr, si no es nil, lo retorna CreateChannel (para simular fallos).
 	CreateErr error
+	// EnsureErr, si no es nil, lo retorna EnsureMember (para simular fallos).
+	EnsureErr error
 	// SendErr, si no es nil, lo retorna SendMessage (para simular fallos).
 	SendErr error
 	// Calls registra los canales creados (para aserciones).
 	Calls []CreateCall
+	// Ensured registra las membresías garantizadas (para aserciones).
+	Ensured []EnsureCall
 	// Messages registra los mensajes enviados (para aserciones).
 	Messages []SendCall
 }
@@ -53,6 +62,14 @@ type CreateCall struct {
 	ChannelType string
 	ChannelID   string
 	Name        string
+	CreatedByID string
+}
+
+// EnsureCall registra una membresía garantizada en un canal.
+type EnsureCall struct {
+	ChannelType string
+	ChannelID   string
+	UserID      string
 }
 
 // SendCall registra un mensaje enviado al mock.
@@ -65,13 +82,23 @@ type SendCall struct {
 
 func NewMockClient() *MockClient { return &MockClient{} }
 
-func (m *MockClient) CreateChannel(ctx context.Context, channelType, channelID, name string) error {
+func (m *MockClient) CreateChannel(ctx context.Context, channelType, channelID, name, createdByID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.CreateErr != nil {
 		return m.CreateErr
 	}
-	m.Calls = append(m.Calls, CreateCall{ChannelType: channelType, ChannelID: channelID, Name: name})
+	m.Calls = append(m.Calls, CreateCall{ChannelType: channelType, ChannelID: channelID, Name: name, CreatedByID: createdByID})
+	return nil
+}
+
+func (m *MockClient) EnsureMember(ctx context.Context, channelType, channelID, userID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.EnsureErr != nil {
+		return m.EnsureErr
+	}
+	m.Ensured = append(m.Ensured, EnsureCall{ChannelType: channelType, ChannelID: channelID, UserID: userID})
 	return nil
 }
 
@@ -143,10 +170,12 @@ func SignUserToken(apiSecret, userID string) (string, error) {
 	return signJWT(apiSecret, payload)
 }
 
-type createChannelRequest struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
-	Name string `json:"name,omitempty"`
+// queryChannelRequest es el get-or-create oficial de un canal:
+// POST /channels/{type}/{id}/query. OJO: POST /channels a secas es
+// QueryChannels (búsqueda), NO crea nada aunque responda 200.
+type queryChannelRequest struct {
+	State bool                 `json:"state"`
+	Data  map[string]string    `json:"data,omitempty"`
 }
 
 // authHeaders valida credenciales, firma el server token y arma headers comunes.
@@ -192,13 +221,45 @@ func (c *RESTClient) postJSON(ctx context.Context, path string, query string, pa
 	return nil
 }
 
-func (c *RESTClient) CreateChannel(ctx context.Context, channelType, channelID, name string) error {
+func (c *RESTClient) CreateChannel(ctx context.Context, channelType, channelID, name, createdByID string) error {
 	channelType = strings.TrimSpace(channelType)
 	channelID = strings.TrimSpace(channelID)
 	if channelType == "" || channelID == "" {
 		return errors.New("channel type/id vacíos")
 	}
-	return c.postJSON(ctx, "/channels", "", createChannelRequest{ID: channelID, Type: channelType, Name: name})
+	var data map[string]string
+	if strings.TrimSpace(name) != "" || strings.TrimSpace(createdByID) != "" {
+		data = map[string]string{}
+		if strings.TrimSpace(name) != "" {
+			data["name"] = strings.TrimSpace(name)
+		}
+		if strings.TrimSpace(createdByID) != "" {
+			data["created_by_id"] = strings.TrimSpace(createdByID)
+		}
+	}
+	path := "/channels/" + url.PathEscape(channelType) + "/" + url.PathEscape(channelID) + "/query"
+	return c.postJSON(ctx, path, "", queryChannelRequest{State: true, Data: data})
+}
+
+type updateChannelRequest struct {
+	AddMembers []string `json:"add_members"`
+}
+
+// EnsureMember agrega al usuario como miembro del canal vía update server-side.
+// POST /channels/{type}/{id} {"add_members":[...]} es idempotente en Stream:
+// si el usuario ya es miembro, la llamada tiene éxito sin duplicar.
+func (c *RESTClient) EnsureMember(ctx context.Context, channelType, channelID, userID string) error {
+	channelType = strings.TrimSpace(channelType)
+	channelID = strings.TrimSpace(channelID)
+	userID = strings.TrimSpace(userID)
+	if channelType == "" || channelID == "" {
+		return errors.New("channel type/id vacíos")
+	}
+	if userID == "" {
+		return errors.New("user vacío")
+	}
+	path := "/channels/" + url.PathEscape(channelType) + "/" + url.PathEscape(channelID)
+	return c.postJSON(ctx, path, "", updateChannelRequest{AddMembers: []string{userID}})
 }
 
 type sendMessageRequest struct {

@@ -483,6 +483,41 @@ func TestMockCreateFileIndexesAppPropertiesAndFindsByNoteID(t *testing.T) {
 	}
 }
 
+// UploadAttachment indexa el binario con la nota/dueño y una marca
+// notes_attachment, pero FindFileByNoteID nunca debe devolverlo en lugar del
+// .md (rompería la recuperación de huérfanos con bytes de imagen/PDF).
+func TestMockUploadAttachmentIndexedButNotAdoptedAsNoteFile(t *testing.T) {
+	ctx := context.Background()
+	m := NewMockClient()
+	owner := "owner-att"
+	noteID := "note-att"
+	attID, _, err := m.UploadAttachment(ctx, owner, noteID, "foto", "image/png", []byte("img"), false)
+	if err != nil {
+		t.Fatalf("upload attachment failed: %v", err)
+	}
+	props, ok := m.FileAppProperties(attID)
+	if !ok {
+		t.Fatal("el adjunto debe existir")
+	}
+	if props["notes_note_id"] != noteID || props["notes_owner_user_id"] != owner || props["notes_attachment"] != "1" {
+		t.Fatalf("appProperties del adjunto incorrectas: %v", props)
+	}
+	if mt, _ := m.FileMimeType(attID); mt != "image/png" {
+		t.Fatalf("mime del adjunto = %q, want image/png", mt)
+	}
+	mdID, err := m.CreateFile(ctx, owner, noteID, "nota.md", "contenido")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	found, err := m.FindFileByNoteID(ctx, owner, noteID)
+	if err != nil {
+		t.Fatalf("FindFileByNoteID: %v", err)
+	}
+	if found != mdID {
+		t.Fatalf("FindFileByNoteID = %q, want el .md %q (no el adjunto %q)", found, mdID, attID)
+	}
+}
+
 // CopyFile indexa el clon con el notes_note_id de la NUEVA nota y el dueño
 // destino, permitiendo recuperarlo tras un crash.
 func TestMockCopyFileIndexesNewNoteID(t *testing.T) {
@@ -533,6 +568,72 @@ func TestRealFindFileByNoteIDQueriesAppProperties(t *testing.T) {
 	wantQuery := "appProperties has { key='notes_note_id' and value='note-1' }"
 	if !strings.Contains(gotQuery, wantQuery) || !strings.Contains(gotQuery, "trashed = false") {
 		t.Fatalf("query de appProperties incorrecta: %q", gotQuery)
+	}
+}
+
+// FileGone distingue ausencia definitiva (404) y papelera (trashed=true,
+// que para la app cuenta como eliminado) de los errores temporales.
+func TestRealFileGoneMissingTrashedAndErrors(t *testing.T) {
+	ctx := context.Background()
+	prov := &perUserTokenProvider{tokens: map[string]string{"owner": "tok"}}
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		gone   bool
+		hasErr bool
+	}{
+		{"404 es missing", 404, "Not Found", true, false},
+		{"papelera es missing", 200, `{"id":"f","trashed":true}`, true, false},
+		{"activo existe", 200, `{"id":"f","trashed":false}`, false, false},
+		{"500 es error", 500, "boom", false, true},
+		{"403 es error", 403, "denied", false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := NewRealDriveClient(prov)
+			status, body := tc.status, tc.body
+			r.newService = func(context.Context, string) (*drive.Service, error) {
+				return driveServiceWithTransport(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					if !strings.Contains(req.URL.Query().Get("fields"), "trashed") {
+						t.Errorf("FileGone debe pedir el campo trashed: %q", req.URL.Query().Get("fields"))
+					}
+					if status != 200 {
+						return googleErrResp(status, body), nil
+					}
+					return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+				})), nil
+			}
+			gone, err := r.FileGone(ctx, "owner", "f")
+			if gone != tc.gone || (err != nil) != tc.hasErr {
+				t.Fatalf("gone=%v err=%v", gone, err)
+			}
+		})
+	}
+}
+
+// ListAppFileIDs pide en una llamada los IDs activos indexados por dueño.
+func TestRealListAppFileIDsQueriesOwner(t *testing.T) {
+	ctx := context.Background()
+	prov := &perUserTokenProvider{tokens: map[string]string{"owner": "tok"}}
+	r := NewRealDriveClient(prov)
+	var gotQuery, gotFields string
+	r.newService = func(context.Context, string) (*drive.Service, error) {
+		return driveServiceWithTransport(t, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			gotQuery = req.URL.Query().Get("q")
+			gotFields = req.URL.Query().Get("fields")
+			body, _ := json.Marshal(map[string]interface{}{
+				"files": []map[string]interface{}{{"id": "a"}, {"id": "b"}},
+			})
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(bytes.NewReader(body))}, nil
+		})), nil
+	}
+	ids, err := r.ListAppFileIDs(ctx, "owner")
+	if err != nil || len(ids) != 2 {
+		t.Fatalf("ids=%v err=%v", ids, err)
+	}
+	if !strings.Contains(gotQuery, "notes_owner_user_id") || !strings.Contains(gotQuery, "trashed = false") {
+		t.Fatalf("query incorrecta: %q fields=%q", gotQuery, gotFields)
 	}
 }
 

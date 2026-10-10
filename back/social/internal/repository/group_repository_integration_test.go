@@ -272,3 +272,68 @@ func TestIntegrationListMyGroupsDetailed(t *testing.T) {
 		t.Fatalf("sin grupos debe ser slice vacío no nil: %v %v", empty, err)
 	}
 }
+
+// Misma transacción que eliminación de cuenta: dos salidas nunca dejan huérfanos.
+func TestIntegrationConcurrentLeaveSuccession(t *testing.T) {
+	r, _ := testRepo(t)
+	ctx := context.Background()
+	owner, coadmin, member := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	g := newTestGroup(t, r, owner)
+	joinUser(t, r, g, coadmin)
+	joinUser(t, r, g, member)
+	if err := r.ChangeMemberRole(ctx, g.ID, owner, coadmin, model.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, user := range []string{owner, coadmin} {
+		wg.Add(1)
+		go func(user string) { defer wg.Done(); _, err := r.LeaveGroup(ctx, g.ID, user); errs <- err }(user)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if roleIn(t, r, g.ID, member) != model.RoleAdmin {
+		t.Fatal("remaining member not admin")
+	}
+	updated, err := r.GetByID(ctx, g.ID)
+	if err != nil || updated.OwnerUserID != member {
+		t.Fatalf("owner inconsistent: %v", err)
+	}
+	result, err := r.LeaveGroup(ctx, g.ID, member)
+	if err != nil || !result.GroupDeleted {
+		t.Fatalf("final leave did not delete group: %v", err)
+	}
+}
+
+func TestIntegrationLeaveOldestMembership(t *testing.T) {
+	r, pool := testRepo(t)
+	ctx := context.Background()
+	owner, earlier, later := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	g := newTestGroup(t, r, owner)
+	_, strangerErr := r.LeaveGroup(ctx, g.ID, uuid.NewString())
+	wantStoreErr(t, strangerErr, "not_member")
+	joinUser(t, r, g, later)
+	joinUser(t, r, g, earlier)
+	if _, err := pool.Exec(ctx, `UPDATE social.group_memberships SET joined_at = '2020-01-01' WHERE group_id=$1 AND user_id=$2`, g.ID, earlier); err != nil {
+		t.Fatal(err)
+	}
+	result, err := r.LeaveGroup(ctx, g.ID, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PromotedUserID == nil || *result.PromotedUserID != earlier {
+		t.Fatal("wrong successor")
+	}
+	if roleIn(t, r, g.ID, later) != model.RoleMember {
+		t.Fatal("extra promotion")
+	}
+	updated, err := r.GetByID(ctx, g.ID)
+	if err != nil || updated.OwnerUserID != earlier {
+		t.Fatal("wrong owner")
+	}
+}

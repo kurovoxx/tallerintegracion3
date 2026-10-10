@@ -9,13 +9,16 @@ import 'package:flutter/material.dart';
 
 import '../../core/common_widgets.dart';
 import '../../core/models/social_models.dart';
+import '../../core/services/api_config.dart';
 import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import '../auth/google_calendar_service.dart';
+import '../auth/google_drive_service.dart' show LocalPortBusyException;
 
 class ScheduleMeetingScreen extends StatefulWidget {
   const ScheduleMeetingScreen({super.key, this.groupId, SocialService? service})
-      : _serviceOverride = service;
+    : _serviceOverride = service;
 
   final String? groupId;
   final SocialService? _serviceOverride;
@@ -27,29 +30,46 @@ class ScheduleMeetingScreen extends StatefulWidget {
 class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
   final _formKey = GlobalKey<FormState>();
   final _titleCtrl = TextEditingController();
-  final _linkCtrl = TextEditingController(text: 'https://meet.google.com/');
   final _descCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController();
+  final Map<String, String> _guests = {};
+  String? _guestError;
+  final _linkCtrl = TextEditingController();
+  List<GroupMember> _members = const [];
+  bool _loadingMembers = false;
+  String? _membersError;
   DateTime _selectedDate = DateTime.now().add(const Duration(days: 1));
   TimeOfDay _selectedTime = const TimeOfDay(hour: 10, minute: 0);
-  final List<String> _members = ['Sofía', 'Matías', 'Ana', 'Tú'];
-  final Set<String> _selectedMembers = {'Sofía', 'Tú'};
 
   late final SocialService _social;
+  final GoogleCalendarService _calendar = GoogleCalendarService();
   bool _isSubmitting = false;
   String? _createdMeetingId;
   String? _submitError;
+  List<MeetingItem> _upcoming = const [];
+  bool _loadingUpcoming = false;
+  CalendarStatus? _calStatus;
+  bool _calLoading = false;
+  bool _calConnecting = false;
+  String? _calError;
 
   @override
   void initState() {
     super.initState();
     _social = widget._serviceOverride ?? SocialService();
+    if (_isRealGroup) {
+      _loadUpcoming();
+      _loadMembers();
+    }
+    _loadCalendarStatus();
   }
 
   @override
   void dispose() {
     _titleCtrl.dispose();
-    _linkCtrl.dispose();
     _descCtrl.dispose();
+    _linkCtrl.dispose();
+    _emailCtrl.dispose();
     if (widget._serviceOverride == null) _social.dispose();
     super.dispose();
   }
@@ -57,8 +77,170 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
   bool get _isRealGroup {
     final id = widget.groupId?.trim() ?? '';
     final uuid = RegExp(
-        r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$');
+      r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+    );
     return id.isNotEmpty && uuid.hasMatch(id);
+  }
+
+  /// Próximas reuniones desde GET /groups/:id/workspace.meetings.upcoming.
+  /// Best-effort: si falla, el formulario sigue funcionando.
+  Future<void> _loadUpcoming() async {
+    if (!_isRealGroup || !mounted) return;
+    setState(() => _loadingUpcoming = true);
+    try {
+      final ws = await _social.getWorkspace(widget.groupId!.trim());
+      if (!mounted) return;
+      setState(() => _upcoming = ws.upcomingMeetings);
+    } catch (_) {
+      // Silencioso: la creación no depende del listado.
+    } finally {
+      if (mounted) setState(() => _loadingUpcoming = false);
+    }
+  }
+
+  Future<void> _loadMembers() async {
+    setState(() => _loadingMembers = true);
+    try {
+      final members = await _social.listMembers(widget.groupId!.trim());
+      if (!mounted) return;
+      setState(() => _members = members);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _membersError = 'No se pudieron cargar los integrantes.');
+    } finally {
+      if (mounted) setState(() => _loadingMembers = false);
+    }
+  }
+
+  String _memberLabel(GroupMember member) {
+    if (member.displayName?.trim().isNotEmpty == true) {
+      return member.displayName!.trim();
+    }
+    if (member.email?.trim().isNotEmpty == true) return member.email!.trim();
+    return 'Integrante';
+  }
+
+  void _addGuest(String raw, [String? label]) {
+    try {
+      final email = raw.trim().toLowerCase();
+      if (email.isEmpty) {
+        throw const FormatException('Ingresa un correo válido.');
+      }
+      normalizeMeetingAttendees([..._guests.keys, email]);
+      setState(() {
+        _guests[email] = label ?? email;
+        _guestError = null;
+        _emailCtrl.clear();
+      });
+    } on FormatException catch (e) {
+      setState(() => _guestError = e.message);
+    }
+  }
+
+  /// Estado real de Calendar para la cuenta activa (aislado por JWT,
+  /// igual que Drive). null = sin red/sesión: se conserva el estado previo.
+  Future<void> _loadCalendarStatus() async {
+    if (!mounted) return;
+    setState(() {
+      _calLoading = true;
+      _calError = null;
+    });
+    try {
+      await GoogleCalendarService.ensureConfigured(
+        backendBaseUrl: authApiBaseUrl,
+      );
+      final status = await _calendar.fetchStatus(
+        backendBaseUrl: authApiBaseUrl,
+      );
+      if (!mounted) return;
+      setState(() {
+        if (status != null) _calStatus = status;
+        _calLoading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _calLoading = false);
+    }
+  }
+
+  /// Flujo OAuth real: navegador → code → POST connect → status.
+  /// Nunca guarda tokens de Google en el frontend.
+  Future<void> _linkGoogleCalendar() async {
+    if (_calConnecting) return;
+    setState(() {
+      _calConnecting = true;
+      _calError = null;
+    });
+    try {
+      await GoogleCalendarService.ensureConfigured(
+        backendBaseUrl: authApiBaseUrl,
+      );
+      final auth = await _calendar.getCalendarAuthCode();
+      if (!mounted) return;
+      if (auth == null) {
+        setState(() {
+          _calConnecting = false;
+          _calError = 'Autorización cancelada. Vuelve a intentarlo si quieres vincular Calendar.';
+        });
+        return;
+      }
+      final result = await _calendar.connectCalendar(
+        backendBaseUrl: authApiBaseUrl,
+        oauthCode: auth.code,
+        redirectUri: auth.redirectUri.isEmpty ? null : auth.redirectUri,
+      );
+      if (!mounted) return;
+      if (!result.ok) {
+        setState(() {
+          _calConnecting = false;
+          _calError = result.message;
+        });
+        return;
+      }
+      final status = await _calendar.fetchStatus(
+        backendBaseUrl: authApiBaseUrl,
+      );
+      if (!mounted) return;
+      setState(() {
+        _calConnecting = false;
+        if (status != null) _calStatus = status;
+      });
+      if (mounted && (status?.connected ?? false)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Google Calendar vinculado.')),
+        );
+      }
+    } on LocalPortBusyException catch (e) {
+      if (mounted) {
+        setState(() {
+          _calConnecting = false;
+          _calError = e.toString();
+        });
+      }
+    } on StateError catch (e) {
+      if (mounted) {
+        setState(() {
+          _calConnecting = false;
+          _calError = e.message;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _calConnecting = false;
+          _calError =
+              'No se pudo conectar con Google Calendar. Inténtalo nuevamente más tarde.';
+        });
+      }
+    }
+  }
+
+  static String _formatWhen(DateTime when) {
+    final local = when.toLocal();
+    final date =
+        '${local.day.toString().padLeft(2, '0')}/${local.month.toString().padLeft(2, '0')}/${local.year}';
+    final time =
+        '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+    return '$date · $time';
   }
 
   Future<void> _pickDate() async {
@@ -91,25 +273,14 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
     if (t != null) setState(() => _selectedTime = t);
   }
 
-  // POST real: POST /groups/:id/meetings
-  // {title, description?, scheduled_at RFC3339} -> 201 {meeting_id}.
-  // Ver back/social/cmd/server/main.go:198 y meeting_handler.go:32.
-  // No existe GET /groups/:id/meetings: no se inventa listado.
-  // No se envían reuniones de prueba sin autorización: solo envía al pulsar.
+  // POST /groups/:id/meetings {title, description?, scheduled_at}.
+  // Invitados por email; enlace/sala continúa como dato local del formulario.
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
-    if (_selectedMembers.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Selecciona al menos un miembro (local)'),
-          backgroundColor: AppColors.error,
-        ),
-      );
-      return;
-    }
     if (!_isRealGroup) {
-      setState(() => _submitError =
-          'Sin grupo real (UUID): selecciona un grupo para POST /groups/:id/meetings. No se envió nada.');
+      setState(
+        () => _submitError = 'Selecciona un grupo para agendar una reunión.',
+      );
       return;
     }
     setState(() {
@@ -131,21 +302,31 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
         title: _titleCtrl.text.trim(),
         description: desc.isEmpty ? null : desc,
         scheduledAtUtc: when,
+        attendees: _guests.keys.toList(),
       );
       if (!mounted) return;
       setState(() => _createdMeetingId = id);
+      // Refresca el listado para que la reunión quede visible de inmediato.
+      await _loadUpcoming();
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Reunión creada (real): $id'),
+        const SnackBar(
+          content: Text('Reunión agendada.'),
           backgroundColor: AppColors.border,
         ),
       );
     } on SocialApiException catch (e) {
       if (!mounted) return;
-      setState(() => _submitError = 'No se pudo crear: $e');
-    } catch (e) {
+      setState(
+        () => _submitError = e.message.contains('invalid attendee email')
+            ? 'Ingresa un correo válido.'
+            : e.message.contains('too many attendees')
+            ? 'Puedes invitar hasta 50 personas.'
+            : 'No se pudo agendar la reunión.',
+      );
+    } catch (_) {
       if (!mounted) return;
-      setState(() => _submitError = 'No se pudo crear: $e');
+      setState(() => _submitError = 'No se pudo agendar la reunión.');
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
@@ -196,8 +377,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                               decoration: appInputDecoration(
                                 'Ej. Repaso Cálculo II',
                               ),
-                              validator: (v) =>
-                                  (v == null || v.trim().isEmpty)
+                              validator: (v) => (v == null || v.trim().isEmpty)
                                   ? 'Requerido'
                                   : null,
                               style: const TextStyle(
@@ -249,13 +429,13 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                             ],
                           ),
                           const SizedBox(height: AppDimens.spaceMd),
-                          const AppFieldLabel('ENLACE / SALA (LOCAL, NO SE ENVÍA)'),
+                          const AppFieldLabel('ENLACE / SALA'),
                           const SizedBox(height: AppDimens.spaceSm),
                           _FieldShell(
                             child: TextFormField(
                               controller: _linkCtrl,
                               decoration: appInputDecoration(
-                                'https://meet.google.com/... (solo nota local)',
+                                'https://meet.google.com/...',
                               ),
                               style: const TextStyle(
                                 fontWeight: FontWeight.w700,
@@ -264,44 +444,16 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                               ),
                             ),
                           ),
-                          const SizedBox(height: 4),
-                          const Text(
-                            'El contrato POST /groups/:id/meetings solo acepta title, description y scheduled_at. El enlace no se envía.',
-                            style: TextStyle(
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.muted,
-                            ),
-                          ),
                           const SizedBox(height: AppDimens.spaceMd),
-                          const AppFieldLabel('GOOGLE CALENDAR (BACKEND)'),
+                          const AppFieldLabel('GOOGLE CALENDAR'),
                           const SizedBox(height: AppDimens.spaceSm),
-                          Container(
-                            padding: const EdgeInsets.all(AppDimens.spaceMd),
-                            decoration: BoxDecoration(
-                              color: AppColors.bg,
-                              border: Border.all(
-                                color: AppColors.border,
-                                width: AppDimens.borderWidth,
-                              ),
-                              borderRadius: BorderRadius.circular(
-                                AppDimens.radius,
-                              ),
-                            ),
-                            child: const Text(
-                              'Sin vinculación simulada aquí. Tras el POST real, el backend sincroniza con Calendar/Discord/Stream en background (best-effort).',
-                              style: TextStyle(
-                                fontSize: 11.5,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.mutedStrong,
-                                height: 1.35,
-                              ),
-                            ),
-                          ),
-                          if (_createdMeetingId != null) ...[
-                            const SizedBox(height: AppDimens.spaceSm),
+                          if (_calLoading)
+                            const LinearProgressIndicator()
+                          else if (_calStatus?.connected == true) ...[
                             Container(
-                              padding: const EdgeInsets.all(AppDimens.spaceMd),
+                              padding: const EdgeInsets.all(
+                                AppDimens.spaceMd,
+                              ),
                               decoration: BoxDecoration(
                                 color: const Color(0xFFE7F6E7),
                                 border: Border.all(
@@ -312,101 +464,168 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                                   AppDimens.radius,
                                 ),
                               ),
-                              child: Text(
-                                'Reunión creada (real): $_createdMeetingId',
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w800,
-                                  color: AppColors.text,
-                                ),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.check_circle_rounded,
+                                    color: AppColors.text,
+                                    size: 18,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        const Text(
+                                          '✓ Google Calendar vinculado',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w900,
+                                            color: AppColors.text,
+                                          ),
+                                        ),
+                                        if (_calStatus?.externalEmail !=
+                                            null)
+                                          Text(
+                                            _calStatus!.externalEmail!,
+                                            style: const TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w600,
+                                              color: AppColors.muted,
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
-                          ],
-                          if (_submitError != null) ...[
                             const SizedBox(height: AppDimens.spaceSm),
-                            Container(
-                              padding: const EdgeInsets.all(AppDimens.spaceMd),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFDE8E8),
-                                border: Border.all(
-                                  color: AppColors.border,
-                                  width: AppDimens.borderWidth,
-                                ),
-                                borderRadius: BorderRadius.circular(
-                                  AppDimens.radius,
-                                ),
-                              ),
-                              child: Text(
-                                _submitError!,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppColors.text,
-                                ),
+                            NeobrutalistButton(
+                              label: _calConnecting
+                                  ? 'CONECTANDO...'
+                                  : 'RECONECTAR',
+                              icon: Icons.refresh_rounded,
+                              variant:
+                                  NeobrutalistButtonVariant.secondary,
+                              expand: true,
+                              onPressed: _calConnecting
+                                  ? null
+                                  : _linkGoogleCalendar,
+                            ),
+                          ] else ...[
+                            NeobrutalistButton(
+                              label: _calConnecting
+                                  ? 'CONECTANDO...'
+                                  : 'VINCULAR CON GOOGLE CALENDAR',
+                              icon: Icons.calendar_today_rounded,
+                              variant: NeobrutalistButtonVariant.info,
+                              expand: true,
+                              borderWidth: AppDimens.borderWidthAction,
+                              onPressed: _calConnecting
+                                  ? null
+                                  : _linkGoogleCalendar,
+                            ),
+                          ],
+                          if (_calError != null) ...[
+                            const SizedBox(height: AppDimens.spaceSm),
+                            Text(
+                              _calError!,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.error,
                               ),
                             ),
                           ],
                           const SizedBox(height: AppDimens.spaceMd),
-                          const AppFieldLabel('MIEMBROS INVITADOS (LOCAL)'),
-                          const SizedBox(height: 4),
+                          const AppFieldLabel('INVITAR MIEMBROS DEL GRUPO'),
                           const Text(
-                            'Selección local: el contrato no recibe miembros.',
+                            'Toca un integrante para agregarlo con su correo real. El chip muestra el nombre; internamente se guarda el email.',
                             style: TextStyle(
-                              fontSize: 10.5,
+                              fontSize: 11,
                               fontWeight: FontWeight.w600,
                               color: AppColors.muted,
                             ),
                           ),
                           const SizedBox(height: AppDimens.spaceSm),
+                          if (_loadingMembers) const LinearProgressIndicator(),
+                          if (_membersError != null) Text(_membersError!),
+                          if (!_loadingMembers &&
+                              _membersError == null &&
+                              _members.isEmpty)
+                            const Text('No hay integrantes disponibles.'),
                           Wrap(
                             spacing: AppDimens.spaceSm,
                             runSpacing: AppDimens.spaceSm,
                             children: [
                               for (final member in _members)
                                 _MemberStickerChip(
-                                  label: member,
-                                  selected: _selectedMembers.contains(member),
+                                  label: _memberLabel(member),
+                                  selected: _guests.containsKey(
+                                    member.email?.trim().toLowerCase(),
+                                  ),
                                   onTap: () {
-                                    setState(() {
-                                      if (_selectedMembers.contains(member)) {
-                                        _selectedMembers.remove(member);
-                                      } else {
-                                        _selectedMembers.add(member);
-                                      }
-                                    });
+                                    final email =
+                                        member.email?.trim().toLowerCase() ??
+                                        '';
+                                    if (_guests.containsKey(email)) {
+                                      setState(() => _guests.remove(email));
+                                    } else if (email.isEmpty) {
+                                      setState(
+                                        () => _guestError =
+                                            'Este integrante no tiene correo disponible. Escríbelo abajo para invitarlo.',
+                                      );
+                                    } else {
+                                      _addGuest(email, _memberLabel(member));
+                                    }
                                   },
                                 ),
                             ],
                           ),
-                          if (!_isRealGroup) ...[
-                            const SizedBox(height: AppDimens.spaceSm),
-                            Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: AppColors.bg,
-                                border: Border.all(
-                                  color: AppColors.border,
-                                  width: AppDimens.borderWidth,
-                                ),
-                                borderRadius: BorderRadius.circular(
-                                  AppDimens.radius,
-                                ),
-                              ),
-                              child: const Text(
-                                'Sin grupo real: el botón no envía nada. Abre esta vista desde un grupo real para POST /groups/:id/meetings.',
-                                style: TextStyle(
-                                  fontSize: 11.5,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppColors.mutedStrong,
-                                ),
-                              ),
-                            ),
-                          ],
                           const SizedBox(height: AppDimens.spaceXl),
+                          const AppFieldLabel(
+                            'INVITAR POR CORREO (EXTERNO)',
+                          ),
+                          const Text(
+                            'Solo para alguien fuera del grupo. Si es miembro, selecciónalo arriba.',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.muted,
+                            ),
+                          ),
+                          const SizedBox(height: AppDimens.spaceSm),
+                          TextField(
+                            controller: _emailCtrl,
+                            decoration: InputDecoration(
+                              labelText: 'Correo del invitado',
+                              errorText: _guestError,
+                            ),
+                            keyboardType: TextInputType.emailAddress,
+                            onSubmitted: (value) => _addGuest(value),
+                          ),
+                          TextButton(
+                            onPressed: () => _addGuest(_emailCtrl.text),
+                            child: const Text('Añadir invitado'),
+                          ),
+                          Wrap(
+                            spacing: 8,
+                            children: [
+                              for (final guest in _guests.entries)
+                                InputChip(
+                                  label: Text(guest.value),
+                                  onDeleted: () =>
+                                      setState(() => _guests.remove(guest.key)),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
                           NeobrutalistButton(
                             label: _isSubmitting
-                                ? 'Enviando POST real...'
-                                : 'Agendar reunión (POST real)',
+                                ? 'Agendando...'
+                                : 'Agendar reunión',
                             icon: Icons.calendar_month_rounded,
                             variant: NeobrutalistButtonVariant.accent,
                             expand: true,
@@ -416,6 +635,148 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                       ),
                     ),
                   ),
+                  if (_createdMeetingId != null) ...[
+                    const SizedBox(height: AppDimens.spaceSm),
+                    Container(
+                      padding: const EdgeInsets.all(AppDimens.spaceMd),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE7F6E7),
+                        border: Border.all(
+                          color: AppColors.border,
+                          width: AppDimens.borderWidth,
+                        ),
+                        borderRadius: BorderRadius.circular(AppDimens.radius),
+                      ),
+                      child: const Text(
+                        'Reunión agendada.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.text,
+                        ),
+                      ),
+                    ),
+                  ],
+                  if (_submitError != null) ...[
+                    const SizedBox(height: AppDimens.spaceSm),
+                    Container(
+                      padding: const EdgeInsets.all(AppDimens.spaceMd),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFDE8E8),
+                        border: Border.all(
+                          color: AppColors.border,
+                          width: AppDimens.borderWidth,
+                        ),
+                        borderRadius: BorderRadius.circular(AppDimens.radius),
+                      ),
+                      child: Text(
+                        _submitError!,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.text,
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: AppDimens.spaceMd),
+                  if (!_isRealGroup) ...[
+                    const SizedBox(height: AppDimens.spaceSm),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppColors.bg,
+                        border: Border.all(
+                          color: AppColors.border,
+                          width: AppDimens.borderWidth,
+                        ),
+                        borderRadius: BorderRadius.circular(AppDimens.radius),
+                      ),
+                      child: const Text(
+                        'Selecciona un grupo para agendar una reunión.',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.mutedStrong,
+                        ),
+                      ),
+                    ),
+                  ],
+                  if (_isRealGroup) ...[
+                    const SizedBox(height: AppDimens.spaceXl),
+                    const AppFieldLabel('PRÓXIMAS REUNIONES'),
+                    const SizedBox(height: AppDimens.spaceSm),
+                    if (_loadingUpcoming)
+                      const Center(
+                        child: SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    else if (_upcoming.isEmpty)
+                      const Text(
+                        'Aún no hay reuniones agendadas.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.mutedStrong,
+                        ),
+                      )
+                    else
+                      for (final m in _upcoming)
+                        Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: AppColors.bg,
+                            border: Border.all(
+                              color: AppColors.border,
+                              width: AppDimens.borderWidth,
+                            ),
+                            borderRadius: BorderRadius.circular(
+                              AppDimens.radius,
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                m.title,
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
+                                  color: AppColors.text,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                _formatWhen(m.scheduledAt),
+                                style: const TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.mutedStrong,
+                                ),
+                              ),
+                              if (m.description != null &&
+                                  m.description!.trim().isNotEmpty) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  m.description!.trim(),
+                                  maxLines: 3,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.text,
+                                    height: 1.35,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                  ],
                 ],
               ),
             ),
@@ -440,7 +801,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
         ),
         const SizedBox(height: AppDimens.spaceXs),
         const Text(
-          'POST real /groups/:id/meetings. No hay GET de reuniones: no se lista aquí.',
+          'Elige fecha y hora para reunir al grupo.',
           style: TextStyle(
             fontSize: 12.5,
             fontWeight: FontWeight.w700,

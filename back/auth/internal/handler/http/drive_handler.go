@@ -2,6 +2,7 @@ package http
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/middleware"
@@ -9,13 +10,38 @@ import (
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/utils"
 )
 
-// DriveHandler maneja POST /auth/google-drive/connect
+// DriveHandler maneja POST /auth/google-drive/connect y la config pública
+// de Google OAuth (GET /auth/google-config).
 type DriveHandler struct {
-	svc *service.DriveOAuthService
+	svc               *service.DriveOAuthService
+	googleClientID    string
+	googleRedirectURI string
 }
 
 func NewDriveHandler(svc *service.DriveOAuthService) *DriveHandler {
 	return &DriveHandler{svc: svc}
+}
+
+// NewDriveHandlerWithGoogleConfig inyecta los valores públicos de OAuth que
+// expone GET /auth/google-config. El client_id es público por diseño; el
+// secret jamás sale del backend.
+func NewDriveHandlerWithGoogleConfig(svc *service.DriveOAuthService, clientID, redirectURI string) *DriveHandler {
+	return &DriveHandler{svc: svc, googleClientID: clientID, googleRedirectURI: redirectURI}
+}
+
+type googleConfigResponse struct {
+	ClientID    string `json:"client_id"`
+	RedirectURI string `json:"redirect_uri"`
+}
+
+// GetGoogleConfig maneja GET /auth/google-config (público, sin middleware de auth).
+// Responde 200 con client_id y redirect_uri para que el front no necesite
+// --dart-define ni IDs quemados.
+func (h *DriveHandler) GetGoogleConfig(c *gin.Context) {
+	c.JSON(http.StatusOK, googleConfigResponse{
+		ClientID:    h.googleClientID,
+		RedirectURI: h.googleRedirectURI,
+	})
 }
 
 type driveConnectRequest struct {
@@ -23,56 +49,120 @@ type driveConnectRequest struct {
 	// expected_email opcional: correo declarado en la app; si difiere del
 	// email real de Google se rechaza con 400 email_mismatch.
 	ExpectedEmail *string `json:"expected_email"`
+	// redirect_uri opcional: flujo desktop RFC 8252 con puerto efímero.
+	// Se valida con allowlist; vacío = redirect configurado del servidor.
+	RedirectURI *string `json:"redirect_uri"`
 }
 
 type driveConnectResponse struct {
 	Connected bool `json:"connected"`
 }
 
-// Connect maneja POST /auth/google-drive/connect
-// Requiere Authorization: Bearer <access_token> (via middleware)
-// Body {oauth_code}
-func (h *DriveHandler) Connect(c *gin.Context) {
+// Disconnect maneja DELETE /auth/google-drive/connection
+// Desvincula por completo: revoca en Google (best-effort) y borra la fila.
+// Idempotente: sin conexión previa responde 204 igual.
+func (h *DriveHandler) Disconnect(c *gin.Context) {
+	started := time.Now()
 	userID, ok := middleware.GetUserID(c)
 	if !ok || userID == "" {
 		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		logAuthOp(c, "DriveDisconnect", http.StatusUnauthorized, "", started, "code="+utils.ErrUnauthorized)
+		return
+	}
+	if err := h.svc.Disconnect(c.Request.Context(), userID); err != nil {
+		if se, ok := err.(*service.ServiceError); ok && se.Code == utils.ErrUnauthorized {
+			utils.RespondError(c, http.StatusUnauthorized, se.Code, se.Message)
+			logAuthOp(c, "DriveDisconnect", http.StatusUnauthorized, userID, started, "code="+se.Code)
+			return
+		}
+		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
+		logAuthOp(c, "DriveDisconnect", http.StatusInternalServerError, userID, started, "code=internal_error")
+		return
+	}
+	// AbortWithStatus (igual que logout): vuelca el 204 también sin engine en tests.
+	c.AbortWithStatus(http.StatusNoContent)
+	logAuthOp(c, "DriveDisconnect", http.StatusNoContent, userID, started, "connected=false")
+}
+
+// Status consulta únicamente la conexión del usuario autenticado; nunca expone tokens.
+func (h *DriveHandler) Status(c *gin.Context) {
+	started := time.Now()
+	userID, ok := middleware.GetUserID(c)
+	if !ok || userID == "" {
+		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		logAuthOp(c, "DriveStatus", http.StatusUnauthorized, "", started, "code="+utils.ErrUnauthorized)
+		return
+	}
+	status, err := h.svc.GetGoogleDriveConnectionStatus(c.Request.Context(), userID)
+	if err != nil {
+		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "No se pudo consultar Drive")
+		logAuthOp(c, "DriveStatus", http.StatusInternalServerError, userID, started, "code=internal_error")
+		return
+	}
+	c.Header("Cache-Control", "private, no-store")
+	c.JSON(http.StatusOK, gin.H{"connected": status.Connected, "reconnect_required": status.ReconnectRequired})
+	logAuthOp(c, "DriveStatus", http.StatusOK, userID, started, boolDetail("connected", status.Connected)+" "+boolDetail("reconnect_required", status.ReconnectRequired))
+}
+
+// Connect maneja POST /auth/google-drive/connect
+// Requiere Authorization: Bearer <access_token> (via middleware)
+// Body {oauth_code}. Nunca se loguea el oauth_code ni tokens.
+func (h *DriveHandler) Connect(c *gin.Context) {
+	started := time.Now()
+	userID, ok := middleware.GetUserID(c)
+	if !ok || userID == "" {
+		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		logAuthOp(c, "DriveConnect", http.StatusUnauthorized, "", started, "code="+utils.ErrUnauthorized)
 		return
 	}
 	var req driveConnectRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		utils.RespondError(c, http.StatusBadRequest, "bad_request", "Request inválido")
+		logAuthOp(c, "DriveConnect", http.StatusBadRequest, userID, started, "code=bad_request")
 		return
 	}
 	// Trim y validar oauth_code
 	if req.OAuthCode == "" {
 		// ShouldBindJSON con binding no tiene required, validamos manual
 		utils.RespondError(c, http.StatusBadRequest, "bad_request", "oauth_code requerido")
+		logAuthOp(c, "DriveConnect", http.StatusBadRequest, userID, started, "code=bad_request")
 		return
 	}
 	// El Service hace TrimSpace y valida vacío
-	err := h.svc.Connect(c.Request.Context(), userID, req.OAuthCode, req.ExpectedEmail)
+	var redirectURI string
+	if req.RedirectURI != nil {
+		redirectURI = *req.RedirectURI
+	}
+	err := h.svc.Connect(c.Request.Context(), userID, req.OAuthCode, req.ExpectedEmail, redirectURI)
 	if err != nil {
 		if se, ok := err.(*service.ServiceError); ok {
 			switch se.Code {
-			case "bad_request", "email_mismatch":
+			case "bad_request", "email_mismatch", "invalid_redirect_uri":
 				utils.RespondError(c, http.StatusBadRequest, se.Code, se.Message)
+				logAuthOp(c, "DriveConnect", http.StatusBadRequest, userID, started, "code="+se.Code)
 				return
 			case "invalid_oauth_code":
 				utils.RespondError(c, http.StatusBadRequest, se.Code, se.Message)
+				logAuthOp(c, "DriveConnect", http.StatusBadRequest, userID, started, "code="+se.Code)
 				return
 			case "google_unavailable":
 				utils.RespondError(c, http.StatusBadGateway, se.Code, se.Message)
+				logAuthOp(c, "DriveConnect", http.StatusBadGateway, userID, started, "code="+se.Code)
 				return
 			case utils.ErrUnauthorized:
 				utils.RespondError(c, http.StatusUnauthorized, se.Code, se.Message)
+				logAuthOp(c, "DriveConnect", http.StatusUnauthorized, userID, started, "code="+se.Code)
 				return
 			default:
 				utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
+				logAuthOp(c, "DriveConnect", http.StatusInternalServerError, userID, started, "code=internal_error")
 				return
 			}
 		}
 		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
+		logAuthOp(c, "DriveConnect", http.StatusInternalServerError, userID, started, "code=internal_error")
 		return
 	}
 	c.JSON(http.StatusOK, driveConnectResponse{Connected: true})
+	logAuthOp(c, "DriveConnect", http.StatusOK, userID, started, "connected=true")
 }

@@ -1,23 +1,26 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 
-// Local por defecto (http://localhost:8085) para `flutter run -d linux` y Docker local sin .env.
-// Para dominio ngrok/tunnel, build con --dart-define o .env.prod (ver front/.env.prod.example)
-// Para web con nginx, también puedes usar relativo '/api-auth' -> _resolve lo convierte a origin.
-const _authBase =
-    String.fromEnvironment('API_BASE_URL', defaultValue: 'http://localhost:8085');
-const _notesBase =
-    String.fromEnvironment('NOTES_BASE_URL', defaultValue: 'http://localhost:8082');
-const _socialBase =
-    String.fromEnvironment('SOCIAL_BASE_URL', defaultValue: 'http://localhost:8083');
+// Web y aplicaciones instaladas usan los mismos servicios y PostgreSQL de Pillán.
+// Desarrollo local sigue disponible con --dart-define (front/.env.local.example).
+const _pillanOrigin = 'https://ti3-brojas.dev.censei.cl';
+const _authBase = String.fromEnvironment(
+  'API_BASE_URL',
+  defaultValue: '$_pillanOrigin/api-auth',
+);
+const _notesBase = String.fromEnvironment(
+  'NOTES_BASE_URL',
+  defaultValue: '$_pillanOrigin/api-notes',
+);
+const _socialBase = String.fromEnvironment(
+  'SOCIAL_BASE_URL',
+  defaultValue: '$_pillanOrigin/api-social',
+);
 
 String _resolve(String v) {
   if (!v.startsWith('/')) return v;
   if (kIsWeb) return '${Uri.base.origin}$v';
-  // Nativo (linux/windows) no tiene origin http, mapea relativo a localhost
-  if (v == '/api-auth') return 'http://localhost:8085';
-  if (v == '/api-notes') return 'http://localhost:8082';
-  if (v == '/api-social') return 'http://localhost:8083';
-  return v;
+  // Nativo no tiene origen web. Los paths del build web apuntan también a Pillán.
+  return '$_pillanOrigin$v';
 }
 
 String get authApiBaseUrl => _resolve(_authBase);

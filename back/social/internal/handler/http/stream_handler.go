@@ -40,7 +40,7 @@ func (h *StreamHandler) Token(c *gin.Context) {
 		return
 	}
 
-	token, channelID, err := h.svc.IssueToken(c.Request.Context(), groupID, userID)
+	token, channelID, apiKey, err := h.svc.IssueTokenWithKey(c.Request.Context(), groupID, userID)
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrGroupNotFound):
@@ -49,6 +49,8 @@ func (h *StreamHandler) Token(c *gin.Context) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "you must be a member of the group", "code": "forbidden"})
 		case errors.Is(err, service.ErrStreamNotConfigured):
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error(), "code": "stream_not_configured"})
+		case errors.Is(err, service.ErrStreamSyncFailed):
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "no se pudo habilitar el chat para este grupo", "code": "stream_sync_failed"})
 		case errors.Is(err, service.ErrInvalidGroupID):
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_group_id"})
 		case errors.Is(err, service.ErrInvalidUserID):
@@ -63,5 +65,9 @@ func (h *StreamHandler) Token(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"token":      token,
 		"channel_id": channelID,
+		// api_key pública (por diseño de Stream): el cliente la necesita
+		// para conectarse; el secret jamás sale del backend. Puede venir
+		// vacía si el servidor no la tiene configurada.
+		"api_key": apiKey,
 	})
 }

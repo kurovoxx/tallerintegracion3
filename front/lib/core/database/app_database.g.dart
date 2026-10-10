@@ -69,6 +69,28 @@ class $LocalNotesTable extends LocalNotes
     type: DriftSqlType.dateTime,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _versionMeta = const VerificationMeta(
+    'version',
+  );
+  @override
+  late final GeneratedColumn<int> version = GeneratedColumn<int>(
+    'version',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _ownerUserIdMeta = const VerificationMeta(
+    'ownerUserId',
+  );
+  @override
+  late final GeneratedColumn<String> ownerUserId = GeneratedColumn<String>(
+    'owner_user_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -76,6 +98,8 @@ class $LocalNotesTable extends LocalNotes
     content,
     visibility,
     updatedAt,
+    version,
+    ownerUserId,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -124,6 +148,21 @@ class $LocalNotesTable extends LocalNotes
     } else if (isInserting) {
       context.missing(_updatedAtMeta);
     }
+    if (data.containsKey('version')) {
+      context.handle(
+        _versionMeta,
+        version.isAcceptableOrUnknown(data['version']!, _versionMeta),
+      );
+    }
+    if (data.containsKey('owner_user_id')) {
+      context.handle(
+        _ownerUserIdMeta,
+        ownerUserId.isAcceptableOrUnknown(
+          data['owner_user_id']!,
+          _ownerUserIdMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -153,6 +192,14 @@ class $LocalNotesTable extends LocalNotes
         DriftSqlType.dateTime,
         data['${effectivePrefix}updated_at'],
       )!,
+      version: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}version'],
+      ),
+      ownerUserId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}owner_user_id'],
+      ),
     );
   }
 
@@ -168,12 +215,16 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
   final String content;
   final String visibility;
   final DateTime updatedAt;
+  final int? version;
+  final String? ownerUserId;
   const LocalNote({
     required this.id,
     required this.title,
     required this.content,
     required this.visibility,
     required this.updatedAt,
+    this.version,
+    this.ownerUserId,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -183,6 +234,12 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
     map['content'] = Variable<String>(content);
     map['visibility'] = Variable<String>(visibility);
     map['updated_at'] = Variable<DateTime>(updatedAt);
+    if (!nullToAbsent || version != null) {
+      map['version'] = Variable<int>(version);
+    }
+    if (!nullToAbsent || ownerUserId != null) {
+      map['owner_user_id'] = Variable<String>(ownerUserId);
+    }
     return map;
   }
 
@@ -193,6 +250,12 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
       content: Value(content),
       visibility: Value(visibility),
       updatedAt: Value(updatedAt),
+      version: version == null && nullToAbsent
+          ? const Value.absent()
+          : Value(version),
+      ownerUserId: ownerUserId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(ownerUserId),
     );
   }
 
@@ -207,6 +270,8 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
       content: serializer.fromJson<String>(json['content']),
       visibility: serializer.fromJson<String>(json['visibility']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+      version: serializer.fromJson<int?>(json['version']),
+      ownerUserId: serializer.fromJson<String?>(json['ownerUserId']),
     );
   }
   @override
@@ -218,6 +283,8 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
       'content': serializer.toJson<String>(content),
       'visibility': serializer.toJson<String>(visibility),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
+      'version': serializer.toJson<int?>(version),
+      'ownerUserId': serializer.toJson<String?>(ownerUserId),
     };
   }
 
@@ -227,12 +294,16 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
     String? content,
     String? visibility,
     DateTime? updatedAt,
+    Value<int?> version = const Value.absent(),
+    Value<String?> ownerUserId = const Value.absent(),
   }) => LocalNote(
     id: id ?? this.id,
     title: title ?? this.title,
     content: content ?? this.content,
     visibility: visibility ?? this.visibility,
     updatedAt: updatedAt ?? this.updatedAt,
+    version: version.present ? version.value : this.version,
+    ownerUserId: ownerUserId.present ? ownerUserId.value : this.ownerUserId,
   );
   LocalNote copyWithCompanion(LocalNotesCompanion data) {
     return LocalNote(
@@ -243,6 +314,10 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
           ? data.visibility.value
           : this.visibility,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      version: data.version.present ? data.version.value : this.version,
+      ownerUserId: data.ownerUserId.present
+          ? data.ownerUserId.value
+          : this.ownerUserId,
     );
   }
 
@@ -253,13 +328,23 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
           ..write('title: $title, ')
           ..write('content: $content, ')
           ..write('visibility: $visibility, ')
-          ..write('updatedAt: $updatedAt')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('version: $version, ')
+          ..write('ownerUserId: $ownerUserId')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(id, title, content, visibility, updatedAt);
+  int get hashCode => Object.hash(
+    id,
+    title,
+    content,
+    visibility,
+    updatedAt,
+    version,
+    ownerUserId,
+  );
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -268,7 +353,9 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
           other.title == this.title &&
           other.content == this.content &&
           other.visibility == this.visibility &&
-          other.updatedAt == this.updatedAt);
+          other.updatedAt == this.updatedAt &&
+          other.version == this.version &&
+          other.ownerUserId == this.ownerUserId);
 }
 
 class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
@@ -277,6 +364,8 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
   final Value<String> content;
   final Value<String> visibility;
   final Value<DateTime> updatedAt;
+  final Value<int?> version;
+  final Value<String?> ownerUserId;
   final Value<int> rowid;
   const LocalNotesCompanion({
     this.id = const Value.absent(),
@@ -284,6 +373,8 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
     this.content = const Value.absent(),
     this.visibility = const Value.absent(),
     this.updatedAt = const Value.absent(),
+    this.version = const Value.absent(),
+    this.ownerUserId = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   LocalNotesCompanion.insert({
@@ -292,6 +383,8 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
     required String content,
     this.visibility = const Value.absent(),
     required DateTime updatedAt,
+    this.version = const Value.absent(),
+    this.ownerUserId = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        title = Value(title),
@@ -303,6 +396,8 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
     Expression<String>? content,
     Expression<String>? visibility,
     Expression<DateTime>? updatedAt,
+    Expression<int>? version,
+    Expression<String>? ownerUserId,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -311,6 +406,8 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
       if (content != null) 'content': content,
       if (visibility != null) 'visibility': visibility,
       if (updatedAt != null) 'updated_at': updatedAt,
+      if (version != null) 'version': version,
+      if (ownerUserId != null) 'owner_user_id': ownerUserId,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -321,6 +418,8 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
     Value<String>? content,
     Value<String>? visibility,
     Value<DateTime>? updatedAt,
+    Value<int?>? version,
+    Value<String?>? ownerUserId,
     Value<int>? rowid,
   }) {
     return LocalNotesCompanion(
@@ -329,6 +428,8 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
       content: content ?? this.content,
       visibility: visibility ?? this.visibility,
       updatedAt: updatedAt ?? this.updatedAt,
+      version: version ?? this.version,
+      ownerUserId: ownerUserId ?? this.ownerUserId,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -351,6 +452,12 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
     if (updatedAt.present) {
       map['updated_at'] = Variable<DateTime>(updatedAt.value);
     }
+    if (version.present) {
+      map['version'] = Variable<int>(version.value);
+    }
+    if (ownerUserId.present) {
+      map['owner_user_id'] = Variable<String>(ownerUserId.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -365,6 +472,8 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
           ..write('content: $content, ')
           ..write('visibility: $visibility, ')
           ..write('updatedAt: $updatedAt, ')
+          ..write('version: $version, ')
+          ..write('ownerUserId: $ownerUserId, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -607,6 +716,8 @@ typedef $$LocalNotesTableCreateCompanionBuilder =
       required String content,
       Value<String> visibility,
       required DateTime updatedAt,
+      Value<int?> version,
+      Value<String?> ownerUserId,
       Value<int> rowid,
     });
 typedef $$LocalNotesTableUpdateCompanionBuilder =
@@ -616,6 +727,8 @@ typedef $$LocalNotesTableUpdateCompanionBuilder =
       Value<String> content,
       Value<String> visibility,
       Value<DateTime> updatedAt,
+      Value<int?> version,
+      Value<String?> ownerUserId,
       Value<int> rowid,
     });
 
@@ -650,6 +763,16 @@ class $$LocalNotesTableFilterComposer
 
   ColumnFilters<DateTime> get updatedAt => $composableBuilder(
     column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get version => $composableBuilder(
+    column: $table.version,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get ownerUserId => $composableBuilder(
+    column: $table.ownerUserId,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -687,6 +810,16 @@ class $$LocalNotesTableOrderingComposer
     column: $table.updatedAt,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<int> get version => $composableBuilder(
+    column: $table.version,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get ownerUserId => $composableBuilder(
+    column: $table.ownerUserId,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$LocalNotesTableAnnotationComposer
@@ -714,6 +847,14 @@ class $$LocalNotesTableAnnotationComposer
 
   GeneratedColumn<DateTime> get updatedAt =>
       $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<int> get version =>
+      $composableBuilder(column: $table.version, builder: (column) => column);
+
+  GeneratedColumn<String> get ownerUserId => $composableBuilder(
+    column: $table.ownerUserId,
+    builder: (column) => column,
+  );
 }
 
 class $$LocalNotesTableTableManager
@@ -752,6 +893,8 @@ class $$LocalNotesTableTableManager
                 Value<String> content = const Value.absent(),
                 Value<String> visibility = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
+                Value<int?> version = const Value.absent(),
+                Value<String?> ownerUserId = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => LocalNotesCompanion(
                 id: id,
@@ -759,6 +902,8 @@ class $$LocalNotesTableTableManager
                 content: content,
                 visibility: visibility,
                 updatedAt: updatedAt,
+                version: version,
+                ownerUserId: ownerUserId,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -768,6 +913,8 @@ class $$LocalNotesTableTableManager
                 required String content,
                 Value<String> visibility = const Value.absent(),
                 required DateTime updatedAt,
+                Value<int?> version = const Value.absent(),
+                Value<String?> ownerUserId = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => LocalNotesCompanion.insert(
                 id: id,
@@ -775,6 +922,8 @@ class $$LocalNotesTableTableManager
                 content: content,
                 visibility: visibility,
                 updatedAt: updatedAt,
+                version: version,
+                ownerUserId: ownerUserId,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taller_integracion_front/core/services/session_manager.dart';
 import 'package:taller_integracion_front/core/services/social_service.dart';
 import 'package:taller_integracion_front/features/workspace/kanban_screen.dart';
@@ -35,7 +36,7 @@ MockClient _workspaceClient() {
       },
       'sprint_sheet': {
         'sheets': [
-          {'id': 'cccccccc-0000-4000-8000-000000000001', 'name': 'Sprint 1'}
+          {'id': 'cccccccc-0000-4000-8000-000000000001', 'name': 'Sprint 1'},
         ],
         'tasks': [
           {
@@ -56,8 +57,11 @@ MockClient _workspaceClient() {
       'meetings': {'upcoming': []},
       'chat': {'provider': 'stream', 'token_endpoint': ''},
     };
-    return http.Response(jsonEncode(body), 200,
-        headers: {'content-type': 'application/json'});
+    return http.Response(
+      jsonEncode(body),
+      200,
+      headers: {'content-type': 'application/json'},
+    );
   });
 }
 
@@ -71,47 +75,58 @@ Future<void> _pump(WidgetTester tester, Widget w, Size size) async {
 }
 
 void main() {
-  testWidgets('sprint con grupo real muestra real y oculta preview',
-      (tester) async {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
+  testWidgets('sprint con grupo real muestra real y oculta preview', (
+    tester,
+  ) async {
     SessionManager.saveSession('jwt-test', {'id': 'u'});
     addTearDown(SessionManager.clear);
     final service = SocialService(client: _workspaceClient());
     addTearDown(service.dispose);
 
-    await _pump(tester, SprintSheetScreen(groupId: _gid, service: service),
-        const Size(1280, 900));
+    await _pump(
+      tester,
+      SprintSheetScreen(groupId: _gid, service: service),
+      const Size(1280, 900),
+    );
 
-    expect(find.textContaining('HOJA REAL'), findsWidgets);
+    expect(find.text('HOJA DE SPRINT'), findsWidgets);
     expect(find.textContaining('Tarea Real Sprint'), findsOneWidget);
     expect(find.text('Setup Drift FTS5'), findsNothing);
     expect(find.textContaining('vista previa local'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('sprint sin grupo conserva preview local rotulada',
-      (tester) async {
-    await _pump(
-        tester, const SprintSheetScreen(), const Size(1280, 900));
+  testWidgets('sprint sin grupo conserva preview local rotulada', (
+    tester,
+  ) async {
+    await _pump(tester, const SprintSheetScreen(), const Size(1280, 900));
 
     expect(find.text('HOJA DE SPRINT'), findsOneWidget);
     expect(find.textContaining('Vista previa local'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('kanban con grupo real muestra real y oculta preview',
-      (tester) async {
+  testWidgets('kanban con grupo real muestra real y oculta preview', (
+    tester,
+  ) async {
     SessionManager.saveSession('jwt-test', {'id': 'u'});
     addTearDown(SessionManager.clear);
     final service = SocialService(client: _workspaceClient());
     addTearDown(service.dispose);
 
-    await _pump(tester, KanbanScreen(groupId: _gid, service: service),
-        const Size(1440, 900));
+    await _pump(
+      tester,
+      KanbanScreen(groupId: _gid, service: service),
+      const Size(1440, 900),
+    );
 
-    expect(find.textContaining('TABLERO REAL'), findsWidgets);
+    expect(find.text('TABLERO KANBAN'), findsOneWidget);
     expect(find.textContaining('Tarea Real Kanban'), findsWidgets);
     expect(find.text('Investigar derivadas'), findsNothing);
-    expect(find.text('TABLERO KANBAN'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 

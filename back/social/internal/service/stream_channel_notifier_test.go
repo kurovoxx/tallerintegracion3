@@ -45,9 +45,16 @@ func (f *fakeStreamStore) CreateChannel(ctx context.Context, arg sqlc.CreateStre
 
 func streamTestGroup() (string, sqlc.SocialGroup) {
 	gid := uuid.NewString()
-	var g pgtype.UUID
+	owner := uuid.NewString()
+	var g, o pgtype.UUID
 	_ = g.Scan(gid)
-	return gid, sqlc.SocialGroup{ID: g, Name: "Grupo Stream"}
+	_ = o.Scan(owner)
+	return gid, sqlc.SocialGroup{ID: g, Name: "Grupo Stream", OwnerUserID: o}
+}
+
+func streamTestOwner(group sqlc.SocialGroup) string {
+	id, _ := uuid.FromBytes(group.OwnerUserID.Bytes[:])
+	return id.String()
 }
 
 func TestChannelIDForGroup(t *testing.T) {
@@ -71,6 +78,9 @@ func TestStreamNotifier_CreaYPersiste(t *testing.T) {
 	call := cli.Calls[0]
 	if call.ChannelType != "messaging" || call.ChannelID != ChannelIDForGroup(gid) || call.Name != "Grupo Stream" {
 		t.Fatalf("llamada inesperada: %+v", call)
+	}
+	if call.CreatedByID != streamTestOwner(group) {
+		t.Fatalf("el dueño debe quedar como creador: %+v", call)
 	}
 	if store.created == nil || store.created.ChannelID != ChannelIDForGroup(gid) {
 		t.Fatalf("no se persistió el canal: %+v", store.created)

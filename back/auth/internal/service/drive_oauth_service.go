@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -16,17 +19,17 @@ import (
 
 // Errores de dominio para Drive OAuth
 var (
-	ErrInvalidOAuthCode     = errors.New("invalid_oauth_code")
-	ErrGoogleUnavailable    = errors.New("google_unavailable")
-	ErrDriveNotConnected    = errors.New("not_connected")
+	ErrInvalidOAuthCode       = errors.New("invalid_oauth_code")
+	ErrGoogleUnavailable      = errors.New("google_unavailable")
+	ErrDriveNotConnected      = errors.New("not_connected")
 	ErrDriveConnectionInvalid = errors.New("drive_connection_invalid")
 )
 
 // DriveOAuthResult es lo que devuelve el proveedor tras intercambiar oauth_code.
 type DriveOAuthResult struct {
-	AccessToken  string
-	RefreshToken *string
-	ExpiresAt    *time.Time
+	AccessToken   string
+	RefreshToken  *string
+	ExpiresAt     *time.Time
 	ExternalEmail *string
 }
 
@@ -34,6 +37,56 @@ type DriveOAuthResult struct {
 // Permite mock en tests y aislar la integración real con Google.
 type DriveOAuthProvider interface {
 	Exchange(ctx context.Context, oauthCode string) (*DriveOAuthResult, error)
+}
+
+// DriveRedirectExchanger extiende el provider para flujos desktop con puerto
+// efímero (RFC 8252): el redirect_uri viaja en el request y debe validarse
+// con ValidateRedirectURI antes de usarse. ConfigDriveOAuthProvider la implementa.
+type DriveRedirectExchanger interface {
+	ExchangeWithRedirect(ctx context.Context, oauthCode, redirectURI string) (*DriveOAuthResult, error)
+}
+
+// ErrInvalidRedirectURI se responde 400: el redirect no está en la allowlist.
+var ErrInvalidRedirectURI = errors.New("invalid_redirect_uri")
+
+// ValidateRedirectURI allowlist para redirect_uri provisto por el cliente:
+//   - loopback 127.0.0.1 por http en cualquier puerto y path /callback
+//     (flujo desktop RFC 8252, válido sin pre-registro para clientes Desktop);
+//   - legacy exacto http://localhost:8081/auth/google/callback;
+//   - la redirect configurada (fallback web / prod https).
+//
+// Todo lo demás (incluido cualquier host externo) se rechaza: aceptar un
+// redirect arbitrario filtraría el code a un atacante.
+func ValidateRedirectURI(raw, configured, legacy string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ErrInvalidRedirectURI
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return ErrInvalidRedirectURI
+	}
+	if u.Scheme == "http" && u.Hostname() == "127.0.0.1" && u.Path == "/callback" {
+		return nil
+	}
+	if raw == strings.TrimSpace(legacy) || raw == strings.TrimSpace(configured) {
+		return nil
+	}
+	return ErrInvalidRedirectURI
+}
+
+// legacyDesktopRedirect es el redirect fijo histórico del flujo desktop.
+const legacyDesktopRedirect = "http://localhost:8081/auth/google/callback"
+
+// redirectConfigured lo implementa el provider real para exponer la redirect
+// configurada (fallback web/prod) en la validación de la allowlist.
+type redirectConfigured interface {
+	ConfiguredRedirectURI() string
+}
+
+// ConfiguredRedirectURI expone el RedirectURL configurado.
+func (p *ConfigDriveOAuthProvider) ConfiguredRedirectURI() string {
+	return strings.TrimSpace(p.RedirectURI)
 }
 
 // DriveTokenRefresher es la interfaz para refrescar access_token vía refresh_token.
@@ -56,8 +109,18 @@ type ConfigDriveOAuthProvider struct {
 }
 
 func (p *ConfigDriveOAuthProvider) Exchange(ctx context.Context, oauthCode string) (*DriveOAuthResult, error) {
+	return p.exchangeWithRedirect(ctx, oauthCode, strings.TrimSpace(p.RedirectURI))
+}
+
+// ExchangeWithRedirect intercambia usando un redirect_uri validado por el
+// llamador (flujo desktop con puerto efímero). Sin validación previa no usar.
+func (p *ConfigDriveOAuthProvider) ExchangeWithRedirect(ctx context.Context, oauthCode, redirectURI string) (*DriveOAuthResult, error) {
+	return p.exchangeWithRedirect(ctx, oauthCode, strings.TrimSpace(redirectURI))
+}
+
+func (p *ConfigDriveOAuthProvider) exchangeWithRedirect(ctx context.Context, oauthCode, redirectURI string) (*DriveOAuthResult, error) {
 	oauthCode = strings.TrimSpace(oauthCode)
-	if strings.TrimSpace(p.ClientID) == "" || strings.TrimSpace(p.ClientSecret) == "" || strings.TrimSpace(p.RedirectURI) == "" {
+	if strings.TrimSpace(p.ClientID) == "" || strings.TrimSpace(p.ClientSecret) == "" || redirectURI == "" {
 		return nil, ErrGoogleUnavailable
 	}
 	if oauthCode == "" {
@@ -80,7 +143,7 @@ func (p *ConfigDriveOAuthProvider) Exchange(ctx context.Context, oauthCode strin
 	cfg := &oauth2.Config{
 		ClientID:     p.ClientID,
 		ClientSecret: p.ClientSecret,
-		RedirectURL:  p.RedirectURI,
+		RedirectURL:  redirectURI,
 		Endpoint:     endpoint,
 		Scopes:       []string{"https://www.googleapis.com/auth/drive.file", "openid", "email", "profile"},
 	}
@@ -257,6 +320,7 @@ type OAuthRepository interface {
 	GetByUserIDAndProvider(ctx context.Context, userID, provider string) (*model.OAuthConnection, error)
 	UpdateGoogleDriveAccessToken(ctx context.Context, userID, accessToken string, refreshToken *string, expiresAt time.Time) error
 	MarkGoogleDriveConnectionRevoked(ctx context.Context, userID string) error
+	DeleteGoogleDriveConnection(ctx context.Context, userID string) error
 }
 
 func NewDriveOAuthService(repo OAuthRepository, provider DriveOAuthProvider) *DriveOAuthService {
@@ -267,7 +331,9 @@ func NewDriveOAuthService(repo OAuthRepository, provider DriveOAuthProvider) *Dr
 // expectedEmail (opcional, el correo declarado en la app): si viene y el email
 // real de userinfo difiere, se rechaza con email_mismatch sin guardar nada
 // (evita vincular la cuenta de Google equivocada).
-func (s *DriveOAuthService) Connect(ctx context.Context, userID, oauthCode string, expectedEmail *string) error {
+// redirectURI (opcional, flujo desktop RFC 8252): si viene se valida con
+// ValidateRedirectURI (allowlist) y se usa en el Exchange; vacío = configurado.
+func (s *DriveOAuthService) Connect(ctx context.Context, userID, oauthCode string, expectedEmail *string, redirectURI string) error {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
 		return NewServiceError(utils.ErrUnauthorized)
@@ -276,8 +342,26 @@ func (s *DriveOAuthService) Connect(ctx context.Context, userID, oauthCode strin
 	if oauthCode == "" {
 		return NewServiceError("bad_request")
 	}
+	redirectURI = strings.TrimSpace(redirectURI)
+	exchanger := s.provider.Exchange
+	if redirectURI != "" {
+		ex, ok := s.provider.(DriveRedirectExchanger)
+		if !ok {
+			return NewServiceError("internal_error")
+		}
+		configured := ""
+		if rc, ok := s.provider.(redirectConfigured); ok {
+			configured = rc.ConfiguredRedirectURI()
+		}
+		if err := ValidateRedirectURI(redirectURI, configured, legacyDesktopRedirect); err != nil {
+			return NewServiceError("invalid_redirect_uri")
+		}
+		exchanger = func(ctx context.Context, code string) (*DriveOAuthResult, error) {
+			return ex.ExchangeWithRedirect(ctx, code, redirectURI)
+		}
+	}
 	// Intercambiar con proveedor
-	result, err := s.provider.Exchange(ctx, oauthCode)
+	result, err := exchanger(ctx, oauthCode)
 	if err != nil {
 		if errors.Is(err, ErrInvalidOAuthCode) {
 			return NewServiceError("invalid_oauth_code")
@@ -340,9 +424,11 @@ func (s *DriveOAuthService) GetValidAccessToken(ctx context.Context, userID stri
 				if markErr := s.oauthRepo.MarkGoogleDriveConnectionRevoked(ctx, userID); markErr != nil {
 					return "", NewServiceError("internal_error")
 				}
+				log.Printf("drive oauth refresh failed user_id=%s code=drive_connection_invalid", userID)
 				return "", NewServiceError("drive_connection_invalid")
 			}
 			if errors.Is(err, ErrGoogleUnavailable) {
+				log.Printf("drive oauth refresh failed user_id=%s code=google_unavailable", userID)
 				return "", NewServiceError("google_unavailable")
 			}
 			return "", NewServiceError("internal_error")
@@ -358,6 +444,7 @@ func (s *DriveOAuthService) GetValidAccessToken(ctx context.Context, userID stri
 		if err := s.oauthRepo.UpdateGoogleDriveAccessToken(ctx, userID, result.AccessToken, result.RefreshToken, expiresAt); err != nil {
 			return "", NewServiceError("internal_error")
 		}
+		log.Printf("drive oauth refresh ok user_id=%s", userID)
 		return result.AccessToken, nil
 	}
 	// Si el provider no implementa Refresh, intentar con Exchange no es correcto; retornar google_unavailable
@@ -402,4 +489,55 @@ func (s *DriveOAuthService) ReportGoogleDrivePermissionDenied(ctx context.Contex
 		return NewServiceError("internal_error")
 	}
 	return nil
+}
+
+// revokeURL de Google: revocar cualquier token del par invalida todo el grant.
+const googleRevokeURL = "https://oauth2.googleapis.com/revoke"
+
+// Disconnect desvincula Drive por petición explícita del usuario:
+// revoca el grant en Google (best-effort, con timeout) y borra la fila local.
+// Sin fila previa es éxito silencioso (idempotente). Nunca expone tokens.
+func (s *DriveOAuthService) Disconnect(ctx context.Context, userID string) error {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return NewServiceError(utils.ErrUnauthorized)
+	}
+	conn, err := s.oauthRepo.GetByUserIDAndProvider(ctx, userID, model.ProviderGoogleDrive)
+	if err != nil {
+		return NewServiceError("internal_error")
+	}
+	if conn != nil {
+		revokeGoogleGrant(ctx, conn.AccessToken, conn.RefreshToken)
+	}
+	if err := s.oauthRepo.DeleteGoogleDriveConnection(ctx, userID); err != nil {
+		return NewServiceError("internal_error")
+	}
+	return nil
+}
+
+// revokeGoogleGrant intenta invalidar el grant en Google. Best-effort puro:
+// cualquier fallo se loguea y se ignora (la fila local se borra igual,
+// y el token huérfano expira solo).
+func revokeGoogleGrant(ctx context.Context, accessToken string, refreshToken *string) {
+	token := strings.TrimSpace(accessToken)
+	if token == "" && refreshToken != nil {
+		token = strings.TrimSpace(*refreshToken)
+	}
+	if token == "" {
+		return
+	}
+	client := &http.Client{Timeout: 8 * time.Second}
+	form := url.Values{"token": {token}}.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, googleRevokeURL, strings.NewReader(form))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("drive: revoke en Google falló (best-effort): %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
 }

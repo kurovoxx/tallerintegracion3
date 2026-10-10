@@ -76,7 +76,13 @@ func (n *StreamChannelNotifier) OnGroupCreated(ctx context.Context, groupID stri
 	}
 
 	channelID := ChannelIDForGroup(groupID)
-	if err := n.client.CreateChannel(ctx, ChannelTypeStream, channelID, group.Name); err != nil {
+	ownerID := ""
+	if group.OwnerUserID.Valid {
+		if parsed, err := uuid.FromBytes(group.OwnerUserID.Bytes[:]); err == nil {
+			ownerID = parsed.String()
+		}
+	}
+	if err := n.client.CreateChannel(ctx, ChannelTypeStream, channelID, group.Name, ownerID); err != nil {
 		log.Printf("stream sync: no se pudo crear canal: %v", err)
 		return
 	}

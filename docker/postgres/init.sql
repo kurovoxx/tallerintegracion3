@@ -37,6 +37,14 @@ CREATE TABLE identity.refresh_tokens (
 
 CREATE INDEX idx_refresh_tokens_user_id ON identity.refresh_tokens(user_id);
 
+CREATE TABLE identity.password_resets (
+    user_id uuid PRIMARY KEY REFERENCES identity.users(id) ON DELETE CASCADE,
+    code_hash varchar(255) NOT NULL,
+    expires_at timestamptz NOT NULL,
+    requested_at timestamptz NOT NULL DEFAULT now(),
+    attempts integer NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 5)
+);
+
 CREATE TABLE identity.profiles (
     user_id uuid PRIMARY KEY REFERENCES identity.users(id) ON DELETE CASCADE,
     display_name varchar(100) NOT NULL,
@@ -478,6 +486,15 @@ CREATE TABLE social.meeting_notifications (
 );
 
 CREATE INDEX idx_meeting_notifications_user_id ON social.meeting_notifications(user_id);
+
+-- Invitados por email de una reunión (selección del creador en la agenda).
+CREATE TABLE social.meeting_attendees (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    meeting_id uuid NOT NULL REFERENCES social.meetings(id) ON DELETE CASCADE,
+    email varchar(255) NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (meeting_id, email)
+);
 
 -- =====================================================
 -- AI ASSISTANT SERVICE

@@ -32,6 +32,10 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       JWT: ${JWT}
       PORT: 8080
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-sigmaacademy.noreply@gmail.com}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI}
@@ -88,10 +92,10 @@ services:
       SOCIAL_PORT: 8083
       AUTH_BASE_URL: http://auth:8080
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
-      CALENDAR_MODE: mock
+      CALENDAR_MODE: ${CALENDAR_MODE:-mock}
       STREAM_API_KEY: ${STREAM_API_KEY}
       STREAM_API_SECRET: ${STREAM_API_SECRET:-dev-stream-secret-change-me}
-      STREAM_MODE: mock
+      STREAM_MODE: ${STREAM_MODE:-mock}
     depends_on:
       postgres:
         condition: service_healthy
@@ -99,15 +103,15 @@ services:
       - ti3-net
     restart: unless-stopped
 
-  # Frontend Flutter Web (nginx) - estatico, apunta a los endpoints publicos de pillan (dominio ngrok)
+  # Frontend Flutter Web (nginx) - estatico, apunta a los endpoints publicos de pillan (Ingress ti3-brojas.dev.censei.cl)
   front:
     build:
       context: ./front
       dockerfile: Dockerfile
       args:
-        BASE_URL: ${API_BASE_URL:-http://localhost:8085}
-        NOTES_BASE_URL: ${NOTES_BASE_URL:-http://localhost:8082}
-        SOCIAL_BASE_URL: ${SOCIAL_BASE_URL:-http://localhost:8083}
+        BASE_URL: ${API_BASE_URL:-/api-auth}
+        NOTES_BASE_URL: ${NOTES_BASE_URL:-/api-notes}
+        SOCIAL_BASE_URL: ${SOCIAL_BASE_URL:-/api-social}
         GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
         GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8081/auth/google/callback}
     container_name: ti3-front

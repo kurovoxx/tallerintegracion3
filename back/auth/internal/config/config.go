@@ -10,13 +10,14 @@ import (
 )
 
 type Config struct {
+	SMTPHost           string
+	SMTPPort           string
+	SMTPUsername       string
+	SMTPPassword       string
 	DatabaseURL        string
 	DirectURL          string
-	SupabaseURL        string
-	SupabaseKey        string // SQL_API_KEY / SERVICE_ROLE
 	JWT                string // kid for ES256 (discovery)
 	JWTSecret          string // HS256 secret para access tokens propios
-	DiscoveryURL       string
 	Port               string
 	AccessExpiresIn    int // segundos, default 900
 	RefreshExpiresIn   int // segundos, default 604800 (7d)
@@ -46,18 +47,28 @@ func Load() *Config {
 	_ = godotenv.Load()
 
 	cfg := &Config{
+		SMTPHost:           os.Getenv("SMTP_HOST"),
+		SMTPPort:           os.Getenv("SMTP_PORT"),
+		SMTPUsername:       os.Getenv("SMTP_USERNAME"),
+		SMTPPassword:       os.Getenv("SMTP_PASSWORD"),
 		DatabaseURL:        os.Getenv("DATABASE_URL"),
 		DirectURL:          os.Getenv("DIRECT_URL"),
-		SupabaseURL:        os.Getenv("SUPABASE_URL"),
-		SupabaseKey:        os.Getenv("SQL_API_KEY"),
 		JWT:                os.Getenv("JWT"),
 		JWTSecret:          os.Getenv("JWT_SECRET"),
-		DiscoveryURL:       os.Getenv("DISCOVERY_URL"),
 		Port:               os.Getenv("PORT"),
 		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
 		GoogleRedirectURI:  os.Getenv("GOOGLE_REDIRECT_URI"),
 		InternalAPIKey:     os.Getenv("INTERNAL_API_KEY"),
+	}
+	if cfg.SMTPHost == "" {
+		cfg.SMTPHost = "smtp.gmail.com"
+	}
+	if cfg.SMTPPort == "" {
+		cfg.SMTPPort = "587"
+	}
+	if cfg.SMTPUsername == "" {
+		cfg.SMTPUsername = "sigmaacademy.noreply@gmail.com"
 	}
 	if cfg.Port == "" {
 		cfg.Port = "8080"

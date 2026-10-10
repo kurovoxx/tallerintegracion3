@@ -88,3 +88,24 @@ func TestStreamToken_Errores(t *testing.T) {
 		t.Fatalf("sin secret debe dar ErrStreamNotConfigured, got %v", err)
 	}
 }
+
+func TestStreamToken_WithKey_DevuelveApiKey(t *testing.T) {
+	gid, admin, member := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	store := NewMemoryMeetingStore()
+	store.AddGroup(gid, admin, member)
+	svc := NewStreamTokenServiceWithKey(store, "test-secret", "test-key")
+	token, channelID, apiKey, err := svc.IssueTokenWithKey(context.Background(), gid, member)
+	if err != nil {
+		t.Fatalf("miembro debe obtener token: %v", err)
+	}
+	if token == "" || channelID == "" {
+		t.Fatalf("token/channel vacíos")
+	}
+	if apiKey != "test-key" {
+		t.Fatalf("api_key esperada test-key, got %q", apiKey)
+	}
+	// Compat: IssueToken clásico sigue devolviendo 3 valores.
+	if _, _, err := svc.IssueToken(context.Background(), gid, member); err != nil {
+		t.Fatalf("IssueToken clásico: %v", err)
+	}
+}

@@ -34,35 +34,35 @@ type CreateTodoRequest struct {
 func (h *TodoHandler) CreateTodo(c *gin.Context) {
 	groupID := strings.TrimSpace(c.Param("id"))
 	if groupID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "group ID is required", "code": "invalid_group_id"})
+		fail(c, "CreateTodo", http.StatusBadRequest, "invalid_group_id", "group ID is required")
 		return
 	}
 	if _, err := uuid.Parse(groupID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid group ID format", "code": "invalid_group_id"})
+		fail(c, "CreateTodo", http.StatusBadRequest, "invalid_group_id", "invalid group ID format")
 		return
 	}
 
 	var req CreateTodoRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_body"})
+		fail(c, "CreateTodo", http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
 	if strings.TrimSpace(req.BoardID) != "" {
 		if _, err := uuid.Parse(strings.TrimSpace(req.BoardID)); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid board_id format", "code": "invalid_board_id"})
+			fail(c, "CreateTodo", http.StatusBadRequest, "invalid_board_id", "invalid board_id format")
 			return
 		}
 	}
 	if strings.TrimSpace(req.AssignedTo) != "" {
 		if _, err := uuid.Parse(strings.TrimSpace(req.AssignedTo)); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid assigned_to user ID format", "code": "invalid_user_id"})
+			fail(c, "CreateTodo", http.StatusBadRequest, "invalid_user_id", "invalid assigned_to user ID format")
 			return
 		}
 	}
 
 	uidVal, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized", "code": "unauthorized"})
+		fail(c, "CreateTodo", http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 	userID, _ := uidVal.(string)
@@ -80,30 +80,31 @@ func (h *TodoHandler) CreateTodo(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrGroupNotFound):
-			c.JSON(http.StatusNotFound, gin.H{"error": "group not found", "code": "group_not_found"})
+			fail(c, "CreateTodo", http.StatusNotFound, "group_not_found", "group not found")
 		case errors.Is(err, service.ErrBoardNotFound):
-			c.JSON(http.StatusNotFound, gin.H{"error": "board not found in group", "code": "board_not_found"})
+			fail(c, "CreateTodo", http.StatusNotFound, "board_not_found", "board not found in group")
 		case errors.Is(err, service.ErrForbidden):
-			c.JSON(http.StatusForbidden, gin.H{"error": "you must be a member of the group", "code": "forbidden"})
+			fail(c, "CreateTodo", http.StatusForbidden, "forbidden", "you must be a member of the group")
 		case errors.Is(err, service.ErrInvalidGroupID):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_group_id"})
+			fail(c, "CreateTodo", http.StatusBadRequest, "invalid_group_id", err.Error())
 		case errors.Is(err, service.ErrInvalidBoardID):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_board_id"})
+			fail(c, "CreateTodo", http.StatusBadRequest, "invalid_board_id", err.Error())
 		case errors.Is(err, service.ErrInvalidUserID):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_user_id"})
+			fail(c, "CreateTodo", http.StatusBadRequest, "invalid_user_id", err.Error())
 		case errors.Is(err, service.ErrInvalidTitle),
 			errors.Is(err, service.ErrTitleTooLong),
 			errors.Is(err, service.ErrInvalidStatus),
 			errors.Is(err, service.ErrInvalidDueDate),
 			errors.Is(err, service.ErrAssigneeNotMember):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_body"})
+			fail(c, "CreateTodo", http.StatusBadRequest, "invalid_body", err.Error())
 		default:
 			log.Printf("CreateTodo internal error: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not create todo", "code": "internal"})
+			fail(c, "CreateTodo", http.StatusInternalServerError, "internal", "could not create todo")
 		}
 		return
 	}
 
+	logOp(c, "CreateTodo", http.StatusCreated, "task_id="+uuidToString(view.Task.ID))
 	c.JSON(http.StatusCreated, gin.H{
 		"message": "todo created successfully",
 		"data":    todoToJSON(view),
@@ -113,17 +114,17 @@ func (h *TodoHandler) CreateTodo(c *gin.Context) {
 func (h *TodoHandler) ListTodos(c *gin.Context) {
 	groupID := strings.TrimSpace(c.Param("id"))
 	if groupID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "group ID is required", "code": "invalid_group_id"})
+		fail(c, "ListTodos", http.StatusBadRequest, "invalid_group_id", "group ID is required")
 		return
 	}
 	if _, err := uuid.Parse(groupID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid group ID format", "code": "invalid_group_id"})
+		fail(c, "ListTodos", http.StatusBadRequest, "invalid_group_id", "invalid group ID format")
 		return
 	}
 
 	uidVal, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized", "code": "unauthorized"})
+		fail(c, "ListTodos", http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 	userID, _ := uidVal.(string)
@@ -138,20 +139,20 @@ func (h *TodoHandler) ListTodos(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrGroupNotFound):
-			c.JSON(http.StatusNotFound, gin.H{"error": "group not found", "code": "group_not_found"})
+			fail(c, "ListTodos", http.StatusNotFound, "group_not_found", "group not found")
 		case errors.Is(err, service.ErrBoardNotFound):
-			c.JSON(http.StatusNotFound, gin.H{"error": "board not found in group", "code": "board_not_found"})
+			fail(c, "ListTodos", http.StatusNotFound, "board_not_found", "board not found in group")
 		case errors.Is(err, service.ErrForbidden):
-			c.JSON(http.StatusForbidden, gin.H{"error": "you must be a member of the group", "code": "forbidden"})
+			fail(c, "ListTodos", http.StatusForbidden, "forbidden", "you must be a member of the group")
 		case errors.Is(err, service.ErrInvalidGroupID):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_group_id"})
+			fail(c, "ListTodos", http.StatusBadRequest, "invalid_group_id", err.Error())
 		case errors.Is(err, service.ErrInvalidBoardID):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_board_id"})
+			fail(c, "ListTodos", http.StatusBadRequest, "invalid_board_id", err.Error())
 		case errors.Is(err, service.ErrInvalidStatus):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_status"})
+			fail(c, "ListTodos", http.StatusBadRequest, "invalid_status", err.Error())
 		default:
 			log.Printf("ListTodos internal error: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not list todos", "code": "internal"})
+			fail(c, "ListTodos", http.StatusInternalServerError, "internal", "could not list todos")
 		}
 		return
 	}
@@ -160,6 +161,7 @@ func (h *TodoHandler) ListTodos(c *gin.Context) {
 	for _, v := range views {
 		data = append(data, todoToJSON(v))
 	}
+	logOp(c, "ListTodos", http.StatusOK, "")
 	c.JSON(http.StatusOK, gin.H{"data": data})
 }
 
@@ -173,32 +175,32 @@ type UpdateTodoRequest struct {
 func (h *TodoHandler) UpdateTodo(c *gin.Context) {
 	groupID := strings.TrimSpace(c.Param("id"))
 	if groupID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "group ID is required", "code": "invalid_group_id"})
+		fail(c, "UpdateTodo", http.StatusBadRequest, "invalid_group_id", "group ID is required")
 		return
 	}
 	if _, err := uuid.Parse(groupID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid group ID format", "code": "invalid_group_id"})
+		fail(c, "UpdateTodo", http.StatusBadRequest, "invalid_group_id", "invalid group ID format")
 		return
 	}
 	todoID := strings.TrimSpace(c.Param("taskId"))
 	if todoID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "todo ID is required", "code": "invalid_todo_id"})
+		fail(c, "UpdateTodo", http.StatusBadRequest, "invalid_todo_id", "todo ID is required")
 		return
 	}
 	if _, err := uuid.Parse(todoID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid todo ID format", "code": "invalid_todo_id"})
+		fail(c, "UpdateTodo", http.StatusBadRequest, "invalid_todo_id", "invalid todo ID format")
 		return
 	}
 
 	var req UpdateTodoRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_body"})
+		fail(c, "UpdateTodo", http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
 
 	uidVal, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized", "code": "unauthorized"})
+		fail(c, "UpdateTodo", http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 	userID, _ := uidVal.(string)
@@ -216,31 +218,32 @@ func (h *TodoHandler) UpdateTodo(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrGroupNotFound):
-			c.JSON(http.StatusNotFound, gin.H{"error": "group not found", "code": "group_not_found"})
+			fail(c, "UpdateTodo", http.StatusNotFound, "group_not_found", "group not found")
 		case errors.Is(err, service.ErrTodoNotFound):
-			c.JSON(http.StatusNotFound, gin.H{"error": "todo not found", "code": "todo_not_found"})
+			fail(c, "UpdateTodo", http.StatusNotFound, "todo_not_found", "todo not found")
 		case errors.Is(err, service.ErrForbidden):
-			c.JSON(http.StatusForbidden, gin.H{"error": "you must be a member of the group", "code": "forbidden"})
+			fail(c, "UpdateTodo", http.StatusForbidden, "forbidden", "you must be a member of the group")
 		case errors.Is(err, service.ErrInvalidGroupID):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_group_id"})
+			fail(c, "UpdateTodo", http.StatusBadRequest, "invalid_group_id", err.Error())
 		case errors.Is(err, service.ErrInvalidTodoID):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_todo_id"})
+			fail(c, "UpdateTodo", http.StatusBadRequest, "invalid_todo_id", err.Error())
 		case errors.Is(err, service.ErrInvalidUserID):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_user_id"})
+			fail(c, "UpdateTodo", http.StatusBadRequest, "invalid_user_id", err.Error())
 		case errors.Is(err, service.ErrInvalidTitle),
 			errors.Is(err, service.ErrTitleTooLong),
 			errors.Is(err, service.ErrInvalidStatus),
 			errors.Is(err, service.ErrInvalidDueDate),
 			errors.Is(err, service.ErrAssigneeNotMember),
 			errors.Is(err, service.ErrNothingToPatch):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_body"})
+			fail(c, "UpdateTodo", http.StatusBadRequest, "invalid_body", err.Error())
 		default:
 			log.Printf("UpdateTodo internal error: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not update todo", "code": "internal"})
+			fail(c, "UpdateTodo", http.StatusInternalServerError, "internal", "could not update todo")
 		}
 		return
 	}
 
+	logOp(c, "UpdateTodo", http.StatusOK, "task_id="+uuidToString(view.Task.ID))
 	c.JSON(http.StatusOK, gin.H{
 		"message": "todo updated successfully",
 		"data":    todoToJSON(view),
@@ -250,26 +253,26 @@ func (h *TodoHandler) UpdateTodo(c *gin.Context) {
 func (h *TodoHandler) DeleteTodo(c *gin.Context) {
 	groupID := strings.TrimSpace(c.Param("id"))
 	if groupID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "group ID is required", "code": "invalid_group_id"})
+		fail(c, "DeleteTodo", http.StatusBadRequest, "invalid_group_id", "group ID is required")
 		return
 	}
 	if _, err := uuid.Parse(groupID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid group ID format", "code": "invalid_group_id"})
+		fail(c, "DeleteTodo", http.StatusBadRequest, "invalid_group_id", "invalid group ID format")
 		return
 	}
 	todoID := strings.TrimSpace(c.Param("taskId"))
 	if todoID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "todo ID is required", "code": "invalid_todo_id"})
+		fail(c, "DeleteTodo", http.StatusBadRequest, "invalid_todo_id", "todo ID is required")
 		return
 	}
 	if _, err := uuid.Parse(todoID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid todo ID format", "code": "invalid_todo_id"})
+		fail(c, "DeleteTodo", http.StatusBadRequest, "invalid_todo_id", "invalid todo ID format")
 		return
 	}
 
 	uidVal, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized", "code": "unauthorized"})
+		fail(c, "DeleteTodo", http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 	userID, _ := uidVal.(string)
@@ -278,22 +281,23 @@ func (h *TodoHandler) DeleteTodo(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrGroupNotFound):
-			c.JSON(http.StatusNotFound, gin.H{"error": "group not found", "code": "group_not_found"})
+			fail(c, "DeleteTodo", http.StatusNotFound, "group_not_found", "group not found")
 		case errors.Is(err, service.ErrTodoNotFound):
-			c.JSON(http.StatusNotFound, gin.H{"error": "todo not found", "code": "todo_not_found"})
+			fail(c, "DeleteTodo", http.StatusNotFound, "todo_not_found", "todo not found")
 		case errors.Is(err, service.ErrForbidden):
-			c.JSON(http.StatusForbidden, gin.H{"error": "you must be a member of the group", "code": "forbidden"})
+			fail(c, "DeleteTodo", http.StatusForbidden, "forbidden", "you must be a member of the group")
 		case errors.Is(err, service.ErrInvalidGroupID):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_group_id"})
+			fail(c, "DeleteTodo", http.StatusBadRequest, "invalid_group_id", err.Error())
 		case errors.Is(err, service.ErrInvalidTodoID):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_todo_id"})
+			fail(c, "DeleteTodo", http.StatusBadRequest, "invalid_todo_id", err.Error())
 		default:
 			log.Printf("DeleteTodo internal error: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not delete todo", "code": "internal"})
+			fail(c, "DeleteTodo", http.StatusInternalServerError, "internal", "could not delete todo")
 		}
 		return
 	}
 
+	logOp(c, "DeleteTodo", http.StatusOK, "task_id="+uuidToString(view.Task.ID))
 	c.JSON(http.StatusOK, gin.H{
 		"message": "todo deleted successfully",
 		"data":    todoToJSON(view),

@@ -2,7 +2,9 @@ package repository
 
 import (
 	"context"
+	"errors"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository/sqlc"
@@ -32,10 +34,12 @@ func (r *MeetingRepository) IsMember(ctx context.Context, groupID, userID pgtype
 }
 
 // CreateMeetingWithNotifications crea la reunión y, en la misma transacción,
-// una fila en meeting_notifications por cada miembro del grupo excepto el creador.
+// una fila en meeting_notifications por cada miembro del grupo excepto el creador,
+// más una fila en meeting_attendees por cada email invitado (ya validados y
+// deduplicados por el service; el ON CONFLICT es red de seguridad anti-carrera).
 // La creación local es síncrona y obligatoria; las integraciones externas
 // (Calendar/Discord/Stream) se disparan después, en background, desde el service.
-func (r *MeetingRepository) CreateMeetingWithNotifications(ctx context.Context, arg sqlc.CreateMeetingParams) (sqlc.SocialMeeting, error) {
+func (r *MeetingRepository) CreateMeetingWithNotifications(ctx context.Context, arg sqlc.CreateMeetingParams, attendeeEmails []string) (sqlc.SocialMeeting, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return sqlc.SocialMeeting{}, err
@@ -69,10 +73,28 @@ func (r *MeetingRepository) CreateMeetingWithNotifications(ctx context.Context, 
 		}
 	}
 
+	for _, email := range attendeeEmails {
+		if _, err := qtx.CreateMeetingAttendee(ctx, sqlc.CreateMeetingAttendeeParams{
+			MeetingID: meeting.ID,
+			Email:     email,
+		}); err != nil {
+			// ON CONFLICT DO NOTHING no devuelve fila en carrera: pgx.ErrNoRows
+			// significa que otro writer ganó; no es error.
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			return sqlc.SocialMeeting{}, err
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return sqlc.SocialMeeting{}, err
 	}
 	return meeting, nil
+}
+
+func (r *MeetingRepository) ListAttendeesByMeeting(ctx context.Context, meetingID pgtype.UUID) ([]sqlc.SocialMeetingAttendee, error) {
+	return r.queries.ListMeetingAttendees(ctx, meetingID)
 }
 
 func (r *MeetingRepository) GetMeetingByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialMeeting, error) {

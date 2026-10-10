@@ -183,6 +183,43 @@ func TestHandlerAttachmentPreservesDeclaredMime(t *testing.T) {
 	}
 }
 
+// TestHandlerAttachmentPersistsNoteIDAndDriveURL verifica el ciclo completo del
+// endpoint POST /notes/:id/attachments con binario multipart: procesa el archivo,
+// crea la fila en notes.note_attachments con el note_id correspondiente y, con
+// Drive conectado, rellena external_file_id y file_url.
+func TestHandlerAttachmentPersistsNoteIDAndDriveURL(t *testing.T) {
+	r, svc, driveMock, _ := setupRouter()
+	userID := uuid.NewString()
+	token := genToken(userID, "student")
+	nid := createNoteHTTP(t, r, token, "Ciclo de vida adjunto", "private", "c")
+
+	w := doMultipart(t, r, "/notes/"+nid+"/attachments", token, "foto.png", "image/png", testPNGBytes)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("adjunto esperaba 201, got %d %s", w.Code, w.Body.String())
+	}
+
+	list, err := svc.ListAttachments(context.Background(), nid)
+	if err != nil {
+		t.Fatalf("ListAttachments: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("adjuntos = %d, want 1", len(list))
+	}
+	att := list[0]
+	if att.NoteID != nid {
+		t.Fatalf("note_id persistido = %q, want %q", att.NoteID, nid)
+	}
+	if att.ExternalFileID == "" {
+		t.Fatal("external_file_id no rellenado")
+	}
+	if att.FileURL == "" || !strings.Contains(att.FileURL, att.ExternalFileID) {
+		t.Fatalf("file_url %q no contiene el external_file_id %q", att.FileURL, att.ExternalFileID)
+	}
+	if mt, ok := driveMock.FileMimeType(att.ExternalFileID); !ok || mt != "image/png" {
+		t.Fatalf("mime en Drive = %q (ok=%v), want image/png", mt, ok)
+	}
+}
+
 // TestHandlerAttachmentSniffingWinsOverExtension: el contenido real manda; una
 // extensión .pdf con bytes PNG se persiste como image/png (nunca por extensión).
 func TestHandlerAttachmentSniffingWinsOverExtension(t *testing.T) {

@@ -31,7 +31,7 @@ func discordFlowSetup(t *testing.T, withWebhook bool) (*MeetingService, *MemoryM
 func TestMeetingDiscordFlow_ConWebhook_Envia(t *testing.T) {
 	svc, _, cli, gid, admin := discordFlowSetup(t, true)
 
-	if _, err := svc.CreateMeeting(context.Background(), gid, admin, "Reunión flujo dc", nil, "2026-09-25T15:00:00Z", nil); err != nil {
+	if _, err := svc.CreateMeeting(context.Background(), gid, admin, "Reunión flujo dc", nil, "2026-09-25T15:00:00Z", nil, nil); err != nil {
 		t.Fatalf("crear no debe fallar: %v", err)
 	}
 	waitFor(t, "aviso discord", func() bool { return cli.Count == 1 })
@@ -46,7 +46,7 @@ func TestMeetingDiscordFlow_ConWebhook_Envia(t *testing.T) {
 func TestMeetingDiscordFlow_SinWebhook_CreadaIgual(t *testing.T) {
 	svc, _, cli, gid, admin := discordFlowSetup(t, false)
 
-	if _, err := svc.CreateMeeting(context.Background(), gid, admin, "Sin webhook", nil, "2026-09-25T15:00:00Z", nil); err != nil {
+	if _, err := svc.CreateMeeting(context.Background(), gid, admin, "Sin webhook", nil, "2026-09-25T15:00:00Z", nil, nil); err != nil {
 		t.Fatalf("sin webhook igual debe crear (201): %v", err)
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -59,7 +59,7 @@ func TestMeetingDiscordFlow_NotifyFalse_CreadaIgual(t *testing.T) {
 	svc, _, cli, gid, admin := discordFlowSetup(t, true)
 	notify := false
 
-	if _, err := svc.CreateMeeting(context.Background(), gid, admin, "Silenciosa", nil, "2026-09-25T15:00:00Z", &notify); err != nil {
+	if _, err := svc.CreateMeeting(context.Background(), gid, admin, "Silenciosa", nil, "2026-09-25T15:00:00Z", &notify, nil); err != nil {
 		t.Fatalf("con notify=false igual debe crear (201): %v", err)
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -72,7 +72,7 @@ func TestMeetingDiscordFlow_ErrorWebhook_CreadaIgual(t *testing.T) {
 	svc, _, cli, gid, admin := discordFlowSetup(t, true)
 	cli.SendErr = &discord.WebhookError{Code: 404, Message: "webhook borrado"}
 
-	if _, err := svc.CreateMeeting(context.Background(), gid, admin, "Webhook roto", nil, "2026-09-25T15:00:00Z", nil); err != nil {
+	if _, err := svc.CreateMeeting(context.Background(), gid, admin, "Webhook roto", nil, "2026-09-25T15:00:00Z", nil, nil); err != nil {
 		t.Fatalf("con webhook roto igual debe crear (201): %v", err)
 	}
 	time.Sleep(200 * time.Millisecond)

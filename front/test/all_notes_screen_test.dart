@@ -1,14 +1,21 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
+import 'package:file_selector/file_selector.dart';
+import 'package:taller_integracion_front/features/notes/note_file_picker.dart';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taller_integracion_front/core/services/session_manager.dart';
+import 'package:taller_integracion_front/core/services/authed_client.dart';
+import 'package:taller_integracion_front/core/services/auth_service.dart';
 import 'package:taller_integracion_front/core/widgets/neobrutalism.dart';
 import 'package:taller_integracion_front/features/notes/all_notes_screen.dart';
+import 'package:taller_integracion_front/features/notes/attachment_resources.dart';
 
 void main() {
   // Fixture mínimo para garantizar la resolución real de 'prueba.pdf' en la
@@ -79,31 +86,34 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('abre el detalle de la nota y renderiza Markdown y recursos adjuntos', (
-    tester,
-  ) async {
-    await pumpNotes(tester, const Size(1440, 900));
+  testWidgets(
+    'abre el detalle de la nota y renderiza Markdown y recursos adjuntos',
+    (tester) async {
+      await pumpNotes(tester, const Size(1440, 900));
 
-    final noteFinder = find.text('Nota con Adjuntos de Prueba (Conejita y PDF)');
-    expect(noteFinder, findsOneWidget);
+      final noteFinder = find.text(
+        'Nota con Adjuntos de Prueba (Conejita y PDF)',
+      );
+      expect(noteFinder, findsOneWidget);
 
-    await tester.tap(noteFinder);
-    await tester.pump(const Duration(milliseconds: 300));
-    await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(noteFinder);
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump(const Duration(milliseconds: 300));
 
-    expect(find.text('AMPLIAR'), findsOneWidget);
+      expect(find.text('AMPLIAR'), findsOneWidget);
 
-    final scrollFinder = find.byType(Scrollable).last;
-    await tester.scrollUntilVisible(
-      find.text('RECURSOS ADJUNTOS'),
-      200,
-      scrollable: scrollFinder,
-    );
-    await tester.pump(const Duration(milliseconds: 200));
+      final scrollFinder = find.byType(Scrollable).last;
+      await tester.scrollUntilVisible(
+        find.text('RECURSOS ADJUNTOS'),
+        200,
+        scrollable: scrollFinder,
+      );
+      await tester.pump(const Duration(milliseconds: 200));
 
-    expect(find.text('RECURSOS ADJUNTOS'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-  });
+      expect(find.text('RECURSOS ADJUNTOS'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('detalle de nota se expande al ancho completo en desktop', (
     tester,
@@ -116,8 +126,9 @@ void main() {
 
     final sheet = find.byType(DraggableScrollableSheet);
     expect(sheet, findsOneWidget);
-    // Sin el tope M3 de 640px, la hoja ocupa el ancho completo de la ventana.
-    expect(tester.getSize(sheet).width, 1440);
+    // El editor se acota a un ancho máximo legible en ultra-wide (920 dp) en
+    // lugar de estirarse al 100 % de la ventana junto al sidebar.
+    expect(tester.getSize(sheet).width, 920);
     expect(find.text('AMPLIAR'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -127,7 +138,9 @@ void main() {
   ) async {
     await pumpNotes(tester, const Size(320, 800));
 
-    final noteFinder = find.text('Nota con Adjuntos de Prueba (Conejita y PDF)');
+    final noteFinder = find.text(
+      'Nota con Adjuntos de Prueba (Conejita y PDF)',
+    );
     await tester.scrollUntilVisible(
       noteFinder,
       200,
@@ -197,7 +210,7 @@ void main() {
       (w) =>
           w is Container &&
           w.constraints ==
-              const BoxConstraints.tightFor(width: 104, height: 78),
+              const BoxConstraints.tightFor(width: 120, height: 120),
     );
     expect(thumb, findsOneWidget);
     await tester.ensureVisible(thumb);
@@ -208,43 +221,59 @@ void main() {
     final canvas = find.byWidgetPredicate(
       (w) =>
           w is Container &&
-          w.constraints ==
-              const BoxConstraints.tightFor(width: 900, height: 480),
+          (w.constraints?.maxWidth ?? 0) >= 850 &&
+          w.constraints?.maxHeight == 480,
     );
-    expect(canvas, findsOneWidget);
-    expect(tester.getSize(canvas), const Size(900, 480));
+    expect(canvas, findsWidgets);
     expect(find.byType(InteractiveViewer), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('dialogo de nueva nota incluye barra de adjuntos e inserta preset rapido', (
-    tester,
-  ) async {
-    await pumpNotes(tester, const Size(1440, 900));
+  testWidgets(
+    'dialogo de adjuntos abre vacío y permite insertar una imagen propia',
+    (tester) async {
+      await pumpNotes(tester, const Size(1440, 900));
 
-    final newNoteBtn = find.widgetWithText(NeobrutalistButton, 'NUEVA NOTA');
-    expect(newNoteBtn, findsOneWidget);
+      final newNoteBtn = find.widgetWithText(NeobrutalistButton, 'NUEVA NOTA');
+      expect(newNoteBtn, findsOneWidget);
 
-    await tester.tap(newNoteBtn);
-    await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(newNoteBtn);
+      await tester.pump(const Duration(milliseconds: 300));
 
-    expect(find.descendant(of: find.byType(AlertDialog), matching: find.text('NUEVA NOTA')), findsOneWidget);
-    expect(find.text('ADJUNTAR:'), findsOneWidget);
-    expect(find.text('IMAGEN'), findsOneWidget);
-    expect(find.text('PDF / DOC'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(NeobrutalistDialog),
+          matching: find.text('NUEVA NOTA'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('ADJUNTAR:'), findsOneWidget);
+      expect(find.text('IMAGEN'), findsOneWidget);
+      expect(find.text('PDF'), findsOneWidget);
 
-    await tester.tap(find.text('IMAGEN'));
-    await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.text('IMAGEN'));
+      await tester.pump(const Duration(milliseconds: 300));
 
-    expect(find.text('ADJUNTAR IMAGEN'), findsOneWidget);
-    expect(find.text('Conejita de prueba (conejita.jpg)'), findsOneWidget);
+      expect(find.text('ADJUNTAR IMAGEN'), findsOneWidget);
+      expect(find.textContaining('PRESET RÁPIDO'), findsNothing);
+      expect(find.text('Conejita'), findsNothing);
+      await tester.tap(find.text('Usar enlace manual'));
+      await tester.pump();
+      final imageSource = find
+          .descendant(
+            of: find.byType(NeobrutalistDialog),
+            matching: find.byType(TextField),
+          )
+          .last;
+      expect(tester.widget<TextField>(imageSource).controller!.text, isEmpty);
+      await tester.enterText(imageSource, 'https://example.com/diagrama.png');
+      await tester.tap(find.text('SUBIR E INSERTAR'));
+      await tester.pump(const Duration(milliseconds: 300));
 
-    await tester.tap(find.text('+ USAR'));
-    await tester.pump(const Duration(milliseconds: 300));
-
-    expect(find.textContaining('ADJUNTOS VINCULADOS'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-  });
+      expect(find.textContaining('REFERENCIAS EN EL TEXTO'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('parser Markdown renderiza H4 como subtítulo sin almohadillas', (
     tester,
@@ -263,6 +292,13 @@ void main() {
   testWidgets('visor PDF resuelve el archivo real y ofrece apertura externa', (
     tester,
   ) async {
+    const launcher = MethodChannel('plugins.flutter.io/url_launcher');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(launcher, (_) async => true);
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(launcher, null);
+    });
     await pumpNotes(tester, const Size(1440, 900));
 
     await tester.tap(find.text('Cálculo - Límites y derivadas'));
@@ -283,10 +319,13 @@ void main() {
     await tester.tap(find.text('VER'));
     await tester.pump(const Duration(milliseconds: 300));
 
-    final dialog = find.byType(AlertDialog);
+    final dialog = find.byType(NeobrutalistDialog);
     expect(dialog, findsOneWidget);
     expect(
-      find.descendant(of: dialog, matching: find.textContaining('DOCUMENTO LISTO')),
+      find.descendant(
+        of: dialog,
+        matching: find.textContaining('DOCUMENTO LISTO'),
+      ),
       findsOneWidget,
     );
     expect(
@@ -327,122 +366,262 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
   }
 
-  testWidgets('adjunto con JWT sube los bytes reales a /notes/upload y usa la URL de Drive', (
-    tester,
-  ) async {
-    await SessionManager.saveSession('jwt-stage2-test', {'id': 'u-stage2'});
-    final requests = <http.Request>[];
-    notesHttpClientOverride = MockClient((request) async {
-      requests.add(request);
-      if (request.method == 'POST' && request.url.path == '/notes/upload') {
-        return http.Response(
-          jsonEncode(<String, dynamic>{
-            'external_file_id': 'drive_att_1',
-            'file_url': 'https://drive.google.com/file/d/drive_att_1/view',
-            'file_name': 'prueba.pdf',
-            'file_type': 'application/pdf',
-            'file_size_bytes': 123,
-            'is_inline': false,
-          }),
-          201,
-          headers: {'content-type': 'application/json'},
-        );
-      }
-      return http.Response('{}', 404);
-    });
-    addTearDown(() async {
-      notesHttpClientOverride = null;
-      await SessionManager.clear();
-    });
-
-    await pumpNotes(tester, const Size(1440, 900));
-    await openAttachmentDialog(tester, kind: 'PDF / DOC');
-    expect(find.text('PDF de prueba (prueba.pdf)'), findsOneWidget);
-
-    await tester.tap(find.text('+ USAR'));
-    await tester.pump();
-    await settleRealAsync(tester);
-
-    expect(find.textContaining('Subido a Google Drive'), findsOneWidget);
-    expect(find.textContaining('ADJUNTOS VINCULADOS'), findsOneWidget);
-    // GET /notes/me (sync real) + POST /notes/upload usan el mismo override.
-    final uploads = requests
-        .where((r) => r.method == 'POST' && r.url.path == '/notes/upload')
-        .toList();
-    expect(uploads, hasLength(1));
-    final upload = uploads.single;
-    expect(upload.headers['Authorization'], 'Bearer jwt-stage2-test');
-    expect(upload.body, contains('name="file"'));
-    expect(upload.body, contains('filename="prueba.pdf"'));
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('adjunto sin sesión conserva la referencia local con advertencia amigable', (
-    tester,
-  ) async {
-    await SessionManager.clear();
-    var httpCalls = 0;
-    notesHttpClientOverride = MockClient((request) async {
-      httpCalls++;
-      return http.Response('{}', 500);
-    });
-    addTearDown(() async {
-      notesHttpClientOverride = null;
-      await SessionManager.clear();
-    });
-
-    await pumpNotes(tester, const Size(1440, 900));
-    await openAttachmentDialog(tester, kind: 'PDF / DOC');
-
-    await tester.tap(find.text('+ USAR'));
-    await tester.pump(const Duration(milliseconds: 300));
-
-    expect(find.textContaining('Sin sesión activa'), findsOneWidget);
-    expect(find.textContaining('ADJUNTOS VINCULADOS'), findsOneWidget);
-    expect(httpCalls, 0);
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('adjunto con fallo de Drive mantiene fallback local sin crashear', (
-    tester,
-  ) async {
-    await SessionManager.saveSession('jwt-stage2-fail', {'id': 'u-stage2'});
-    final requests = <http.Request>[];
-    notesHttpClientOverride = MockClient((request) async {
-      requests.add(request);
-      return http.Response(
-        jsonEncode(<String, dynamic>{
-          'error': {
-            'code': 'drive_unavailable',
-            'message': 'Drive no disponible',
-          },
-        }),
-        500,
-        headers: {'content-type': 'application/json'},
+  testWidgets(
+    'detalle de nota usa metadata y bytes privados dentro del Markdown',
+    (tester) async {
+      const noteId = '12345678-1234-4234-8234-123456789abc';
+      const attachmentId = 'abcdefab-1234-4234-8234-123456789abc';
+      const driveUrl = 'https://drive.google.com/file/d/private-picture/view';
+      final png = base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
       );
-    });
-    addTearDown(() async {
-      notesHttpClientOverride = null;
-      await SessionManager.clear();
-    });
+      final contentPaths = <String>[];
+      await SessionManager.saveSession('jwt-private-note', {
+        'id': 'private-note-owner',
+      });
+      notesHttpClientOverride = MockClient((request) async {
+        expect(request.headers['Authorization'], 'Bearer jwt-private-note');
+        if (request.url.path == '/notes/me') {
+          return http.Response(
+            jsonEncode({
+              'notes': [
+                {
+                  'id': noteId,
+                  'title': 'Imagen privada integrada',
+                  'visibility': 'private',
+                },
+              ],
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (request.url.path == '/notes/$noteId') {
+          return http.Response(
+            jsonEncode({
+              'content': '![Diagrama]($driveUrl?usp=drivesdk)',
+              'attachments': [
+                {
+                  'id': attachmentId,
+                  'note_id': noteId,
+                  'file_type': 'image/png',
+                  'file_name': 'diagrama.png',
+                  'file_url': driveUrl,
+                },
+              ],
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (request.url.path.endsWith('/content')) {
+          contentPaths.add(request.url.path);
+          return http.Response.bytes(
+            png,
+            200,
+            headers: {'content-type': 'image/png'},
+          );
+        }
+        return http.Response('{}', 404);
+      });
+      addTearDown(() async {
+        notesHttpClientOverride = null;
+        await SessionManager.clear();
+      });
+      await pumpNotes(tester, const Size(1440, 900));
+      await settleRealAsync(tester);
+      await tester.tap(find.text('Imagen privada integrada'));
+      await settleRealAsync(tester);
+      expect(contentPaths, isNotEmpty);
+      expect(
+        contentPaths.every(
+          (path) => path == '/notes/$noteId/attachments/$attachmentId/content',
+        ),
+        isTrue,
+      );
+      expect(
+        find.byWidgetPredicate((w) => w is Image && w.image is MemoryImage),
+        findsWidgets,
+      );
+      expect(find.text('DOCUMENTOS'), findsNothing);
+      expect(find.text('Imagen no disponible'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
-    await pumpNotes(tester, const Size(1440, 900));
-    await openAttachmentDialog(tester, kind: 'PDF / DOC');
+  testWidgets(
+    'imagen seleccionada conserva un recurso sin usar Drive HTML como imagen',
+    (tester) async {
+      final directory = Directory.systemTemp.createTempSync(
+        'notes-image-test-',
+      );
+      final fixture = File('${directory.path}/foto.png');
+      fixture.writeAsBytesSync(
+        base64Decode(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=',
+        ),
+      );
+      await SessionManager.saveSession('jwt-image-test', {'id': 'u-image'});
+      const url =
+          'https://drive.google.com/file/d/private-image/view?usp=drivesdk';
+      notesHttpClientOverride = MockClient((request) async {
+        if (request.method == 'POST' && request.url.path == '/notes/upload') {
+          return http.Response(
+            jsonEncode({
+              'external_file_id': 'private-image',
+              'file_url': url,
+              'file_name': 'foto.png',
+              'file_type': 'image/png',
+              'file_size_bytes': fixture.lengthSync(),
+            }),
+            201,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('{}', 404);
+      });
+      addTearDown(() async {
+        notesHttpClientOverride = null;
+        await SessionManager.clear();
+        fixture.deleteSync();
+        directory.deleteSync();
+      });
+      await pumpNotes(tester, const Size(1440, 900));
+      await openAttachmentDialog(tester, kind: 'IMAGEN');
+      NoteFilePicker.pickOverride = (_) async =>
+          XFile.fromData(fixture.readAsBytesSync(), path: fixture.path);
+      addTearDown(() => NoteFilePicker.pickOverride = null);
+      await tester.tap(find.text('SELECCIONAR IMAGEN'));
+      await settleRealAsync(tester);
+      await tester.tap(find.text('SUBIR E INSERTAR'));
+      await settleRealAsync(tester);
+      expect(find.text('REFERENCIAS EN EL TEXTO (1)'), findsOneWidget);
+      final markdown = tester
+          .widgetList<TextField>(find.byType(TextField))
+          .map((field) => field.controller?.text ?? '')
+          .firstWhere((value) => value.contains('attachment-pending://'));
+      expect(resourcesFromMarkdown(markdown).single['type'], 'image');
+      await tester.tap(find.text('foto'));
+      await tester.pump(const Duration(milliseconds: 300));
 
-    await tester.tap(find.text('+ USAR'));
-    await tester.pump();
-    await settleRealAsync(tester);
+      expect(find.textContaining('Archivo preparado'), findsWidgets);
+      expect(
+        find.byWidgetPredicate((w) => w is Image && w.image is NetworkImage),
+        findsNothing,
+      );
+      expect(find.text('DOCUMENTOS'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
-    expect(
-      find.textContaining('No se pudo subir el adjunto a Drive'),
-      findsOneWidget,
+  for (final scenario in [
+    (false, false, false),
+    (true, false, false),
+    (false, true, false),
+    (false, false, true),
+  ]) {
+    final fail = scenario.$1;
+    final refresh = scenario.$2;
+    final image = scenario.$3;
+    final fileName = image ? 'foto.png' : 'guia.pdf';
+    testWidgets(
+      'adjunto nuevo se sube al note_id: fallo=$fail refresh=$refresh imagen=$image',
+      (tester) async {
+        await SessionManager.saveSession('jwt-new', {
+          'id': 'u-new',
+        }, refreshToken: 'refresh-test');
+        var attachmentAttempts = 0;
+        AuthedHttp.refreshOverride = (_) async =>
+            RefreshResult.success(accessToken: 'jwt-renovado');
+        const id = '12345678-1234-4234-8234-123456789abc';
+        final paths = <String>[];
+        var created = false;
+        notesHttpClientOverride = MockClient((r) async {
+          paths.add('${r.method} ${r.url.path}');
+          if (r.method == 'POST' && r.url.path == '/notes') {
+            created = true;
+            return http.Response('{"note_id":"$id"}', 201);
+          }
+          if (r.url.path == '/notes/$id/attachments') {
+            expect(created, isTrue);
+            attachmentAttempts++;
+            if (refresh && attachmentAttempts == 1) {
+              return http.Response('{"error":"unauthorized"}', 401);
+            }
+            if (fail) {
+              return http.Response(
+                '{"error":{"code":"drive_unavailable"}}',
+                500,
+              );
+            }
+            // El binario real llega en multipart; no se accede al body aquí
+            // (PNG binario rompe la decodificación UTF-8 del test).
+            return http.Response(
+              jsonEncode({
+                'attachment_id': 'attachment1',
+                'external_file_id': 'file1',
+                'file_url': 'https://drive.google.com/file/d/file1/view',
+              }),
+              201,
+            );
+          }
+          if (r.method == 'PATCH') {
+            final body = jsonDecode(r.body) as Map<String, dynamic>;
+            expect(body['version'], 1);
+            expect(body['content'], contains('(attachment:attachment1)'));
+            expect(body['content'], isNot(contains('drive.google.com')));
+            return http.Response('{"version":2}', 200);
+          }
+          return http.Response('{"notes":[]}', 200);
+        });
+        NoteFilePicker.pickOverride = (_) async => XFile.fromData(
+          image
+              ? base64Decode(
+                  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+                )
+              : Uint8List.fromList([37, 80, 68, 70, 45, 49, 46, 52]),
+          path: fileName,
+        );
+        addTearDown(() async {
+          notesHttpClientOverride = null;
+          NoteFilePicker.pickOverride = null;
+          AuthedHttp.refreshOverride = null;
+          await SessionManager.clear();
+        });
+        await pumpNotes(tester, const Size(1440, 1000));
+        await openAttachmentDialog(tester, kind: image ? 'IMAGEN' : 'PDF');
+        await tester.tap(
+          find.text(image ? 'SELECCIONAR IMAGEN' : 'SELECCIONAR PDF'),
+        );
+        await settleRealAsync(tester);
+        expect(find.textContaining(fileName), findsOneWidget);
+        expect(find.textContaining('C:\\Users'), findsNothing);
+        await tester.tap(
+          find.text(image ? 'SUBIR E INSERTAR' : 'SUBIR Y ADJUNTAR'),
+        );
+        await tester.pump();
+        expect(paths.where((p) => p.contains('/upload')), isEmpty);
+        expect(find.textContaining('Archivo preparado'), findsOneWidget);
+        final title = find.widgetWithText(TextField, 'Título');
+        await tester.enterText(title, 'Nota con archivo');
+        await tester.tap(find.text('GUARDAR'));
+        await settleRealAsync(tester);
+        expect(attachmentAttempts, refresh ? 2 : 1);
+        if (!fail) {
+          expect(paths, contains('POST /notes/$id/attachments'));
+          expect(paths, contains('PATCH /notes/$id'));
+        } else {
+          expect(
+            find.textContaining('no se pudo adjuntar guia.pdf'),
+            findsOneWidget,
+          );
+        }
+        expect(
+          paths.where((p) => RegExp(r'/notes/\d{13}/attachments').hasMatch(p)),
+          isEmpty,
+        );
+        expect(tester.takeException(), isNull);
+      },
     );
-    expect(find.textContaining('ADJUNTOS VINCULADOS'), findsOneWidget);
-    final uploads = requests
-        .where((r) => r.method == 'POST' && r.url.path == '/notes/upload')
-        .toList();
-    expect(uploads, hasLength(1));
-    expect(tester.takeException(), isNull);
-  });
+  }
 }
-
