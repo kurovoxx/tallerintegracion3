@@ -6,9 +6,9 @@ import 'package:crypto/crypto.dart';
 const pillanCertificateSha256 = String.fromEnvironment(
   'PILLAN_CERT_SHA256',
   defaultValue:
-      '19c7ea107b9d3063cf86f9a204bd75d9bc220cc08f4bc10942a4c854c06f7665,'
-      'aed37feef51290d0fc0b4dded16770b3deac9970feb7128b5ae54b65f5bbcdf6,'
-      'e85a783d4d7bcbe0bfebf0a1b27ac6d4f400ee4fd8c0acf69f8d914e243b458a',
+      '38d5ec7aa9fd2e2323ef73055e40c888927191a813320e04e02f607d417d395d,'
+      'bbc1e730ad1937be888500b3705abcb7560990ba9a590041ff5359c4f69480aa,'
+      'd68cbdf6646dc6e49c17d01d0282a6d214c6acd9d2845278ef89701a0200ec7e',
 );
 
 bool isTrustedPillanCertificate(X509Certificate cert, String host, int port) {
