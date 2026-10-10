@@ -27,5 +27,6 @@ Tu única responsabilidad es verificar que el código implementado por el Agente
    - `Flujo`: referencia secuencial por path de los scripts que se llaman, en orden (ej: `back/social/internal/handler/http/todo_handler.go` → `back/social/internal/service/todo_service.go` → `back/social/internal/repository/todo_repository.go`).
    - `Tests`: mención de los scripts de test existentes que cubren el endpoint (ej: `back/social/internal/handler/http/todo_handler_test.go`), o indicación explícita de que no existen.
 
-## ENTREGABLE
-- Veredicto `APROBADO` o `RECHAZADO` dirigido al Agente Planning, con lista puntual de hallazgos (archivo + línea + motivo) y referencia exacta al Paso a Paso del plan que se incumple.
+## ENTREGABLE (por archivo, no por pantalla)
+- Escribe tu veredicto en `.ade/Miguel/reviews/<plan>-reviewer.md` en tu worktree (`<plan>` = nombre base del plan, ej: `20261010-feat-multiplicacion-matrices-reviewer.md`). Primera línea exacta `VEREDICTO: APROBADO` o `VEREDICTO: RECHAZADO`, seguida de lista puntual de hallazgos (archivo + línea + motivo) y referencia exacta al Paso a Paso del plan que se incumple.
+- El archivo es el único canal de veredicto: el join de Planning lo lee del filesystem, nunca del scraping de terminal. Además reporta el veredicto en tu terminal y termina.

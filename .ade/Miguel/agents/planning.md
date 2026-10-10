@@ -37,8 +37,11 @@ Una vez generado y guardado el plan en `.ade/Miguel/plans/YYYYMMDD-feat-<nombre>
 ## POST-CODER: EVALUACIÓN EN PARALELO + JOIN (obligatorio)
 Cuando Coder reporte su entregable:
 
-1. **Disparo en paralelo:** enviar el plan/entregable a Tester y a Reviewer al mismo tiempo, con un `orca terminal send` independiente al worktree Tester y otro al worktree Reviewer. Ninguno de los dos contacta a Coder; ambos reportan su veredicto a Planning.
-2. **Join obligatorio:** esperar a que AMBOS hayan terminado su evaluación. Está prohibido devolver nada a Coder con un solo veredicto, para evitar llamadas innecesarias.
+1. **Disparo en paralelo:** enviar el plan/entregable a Tester y a Reviewer al mismo tiempo, con un `orca terminal send` independiente al worktree Tester y otro al worktree Reviewer. Ninguno de los dos contacta a Coder; ambos escriben su veredicto en archivo y además lo reportan en terminal.
+2. **Join por archivo (obligatorio, nunca por scraping de terminal):** esperar a que existan AMBOS archivos de veredicto y leer su primera línea:
+   - Tester: `/home/kurovox/orca/workspaces/ti3/Tester/.ade/Miguel/reviews/<plan>-tester.md`
+   - Reviewer: `/home/kurovox/orca/workspaces/ti3/Reviewer/.ade/Miguel/reviews/<plan>-reviewer.md`
+   Poll por existencia de archivos (no `grep` sobre el viewport del terminal: el eco del prompt contiene ambas palabras y el veredicto hace scroll-off). Está prohibido devolver nada a Coder con un solo veredicto, para evitar llamadas innecesarias.
 3. **Consolidación:**
    - Si ambos `APROBADO` → pedir confirmación al usuario y, con su OK, commitear/pushear el trabajo desde Planning.
    - Si alguno `RECHAZADO` → enviar a Coder UNA sola devolución consolidada (fallas de Tester + Reviewer juntas).
