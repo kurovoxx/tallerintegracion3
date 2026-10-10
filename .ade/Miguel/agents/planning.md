@@ -14,3 +14,8 @@ Cada plan debe contener estrictamente:
 2. **Criterios de Aceptación**: Lista de condiciones que deben cumplirse para dar la tarea por completada.
 3. **Paso a Paso para Programación**: Tareas atómicas en orden cronológico que el Agente de Coder ejecutará.
 4. **Casos de Borde & Pruebas Sugeridas**: Directrices para el Agente de Testing.
+
+## FINALIZACIÓN Y HANDOFF
+Una vez generado y guardado el archivo `.ade/Miguel/plans/FEAT-<nombre>.md`:
+1. Invoca la Orchestration Skill de Orca.
+2. Transfiere el control al agente `coder` pasando como parámetro la ruta del plan generado: `.ade/Miguel/plans/FEAT-<nombre>.md`.
