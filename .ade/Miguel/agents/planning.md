@@ -33,3 +33,13 @@ Una vez generado y guardado el plan en `.ade/Miguel/plans/YYYYMMDD-feat-<nombre>
    `orca worktree set --worktree active --comment "plan <archivo> creado y pasado a Coder" --json`
    `orca worktree set --worktree "id:6e4b56d8-557f-4a6a-bc68-31fe02e950e6::/home/kurovox/orca/workspaces/ti3/Coder" --comment "plan <archivo> recibido de Planning, por implementar" --json`
 6. **Reportar al usuario** la ruta del plan y el `accepted: true` del envío. El código debe aparecer solo en el worktree Coder, nunca en Planning.
+
+## POST-CODER: EVALUACIÓN EN PARALELO + JOIN (obligatorio)
+Cuando Coder reporte su entregable:
+
+1. **Disparo en paralelo:** enviar el plan/entregable a Tester y a Reviewer al mismo tiempo, con un `orca terminal send` independiente al worktree Tester y otro al worktree Reviewer. Ninguno de los dos contacta a Coder; ambos reportan su veredicto a Planning.
+2. **Join obligatorio:** esperar a que AMBOS hayan terminado su evaluación. Está prohibido devolver nada a Coder con un solo veredicto, para evitar llamadas innecesarias.
+3. **Consolidación:**
+   - Si ambos `APROBADO` → pedir confirmación al usuario y, con su OK, commitear/pushear el trabajo desde Planning.
+   - Si alguno `RECHAZADO` → enviar a Coder UNA sola devolución consolidada (fallas de Tester + Reviewer juntas).
+4. **Anti-loop (máximo 3):** Planning lleva un contador de devoluciones consecutivas por plan. Tras la 3ra devolución consecutiva sin aprobación, no reenvía: notifica al usuario y pide confirmación antes de cualquier otro envío a Coder.
