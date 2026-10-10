@@ -14,6 +14,8 @@ package service
 // Sin AUTH_TEST_DATABASE_URL el test hace skip (único skip permitido).
 // Aplica el schema identity mínimo (subset de docker/postgres/init.sql) +
 // db/migrations/*.sql en la BD vacía y limpia con DROP SCHEMA identity CASCADE.
+// Nota: comparte la BD con TestPasswordResetRepository (mismo CREATE/DROP de
+// SCHEMA identity); si fijas ambas URLs a la misma BD, corre con -p 1.
 
 import (
 	"context"

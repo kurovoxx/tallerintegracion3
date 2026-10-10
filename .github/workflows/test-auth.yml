@@ -1,0 +1,214 @@
+name: test-auth
+
+# Tests de back/auth en GitHub Actions: unitarios, integración (postgres
+# service container, BD dedicada auth_test), e2e críticos in-process,
+# smoke manual y e2e-cluster manual contra Pillán (solo lectura).
+# Solo auth. Sin secretos reales en el repo; Go fijado a 1.26 (go.mod).
+on:
+  pull_request:
+    paths: ["back/auth/**", ".github/workflows/test-auth.yml"]
+  push:
+    paths: ["back/auth/**", ".github/workflows/test-auth.yml"]
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Base URL de auth con prefijo incluido (ej: https://ti3-brojas.dev.censei.cl/api-auth). Vacío = Pillán para e2e-cluster; smoke se omite."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  lint-vet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: back/auth
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: back/auth/go.sum
+      # Alcance acotado: el repo arrastra deuda de formato preexistente
+      # (auth_handler_test.go, auth_service.go, oauth_connection.go,
+      # auth_service_test.go); se exige gofmt limpio en los tests nuevos.
+      - name: gofmt check (tests nuevos)
+        run: test -z "$(gofmt -l internal/handler/http/auth_extra_coverage_test.go internal/handler/http/e2e_full_flow_test.go internal/service/auth_integration_test.go)"
+      - name: go vet
+        run: go vet ./...
+
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: back/auth
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: back/auth/go.sum
+      # Excluye integración (opt-in por env, hace skip sin ella) y e2e.
+      - name: unitarios
+        run: go test ./... -skip 'TestAuthIntegration_|TestE2E_|TestPasswordResetRepository' -count=1
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: back/auth
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: auth_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d auth_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # BD dedicada de prueba, nunca la de desarrollo.
+      AUTH_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/auth_test?sslmode=disable
+      PASSWORD_RESET_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/auth_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: back/auth/go.sum
+      # -p 1: ambas suites crean/borran SCHEMA identity; secuencial evita carreras.
+      - name: integración (postgres service container)
+        run: go test ./... -p 1 -run 'TestAuthIntegration_|TestPasswordResetRepository' -count=1 -v
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: back/auth
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: back/auth/go.sum
+      - name: build
+        run: go build ./...
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [unit, integration]
+    defaults:
+      run:
+        working-directory: back/auth
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: back/auth/go.sum
+      # Críticos: register→login→me→refresh→logout, forgot→reset,
+      # un error por grupo OAuth/perfil/internas/health (OAuth moqueado, sin red).
+      - name: e2e críticos
+        run: go test ./... -run 'TestE2E_' -count=1 -v
+
+  smoke:
+    # Etapa 3 como referencia: solo manual, sin infraestructura dedicada
+    # ni despliegues desde este workflow.
+    if: github.event_name == 'workflow_dispatch' && inputs.base_url != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: smoke /health + login inválido 401
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+        run: |
+          set -euo pipefail
+          echo "smoke contra $BASE_URL"
+          code=$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 10 "$BASE_URL/health")
+          test "$code" = "200"
+          grep -q '"UP"' /tmp/health.json
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$BASE_URL/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"smoke@test.invalid","password":"WrongPass1"}')
+          test "$code" = "401"
+          echo "smoke OK"
+
+  e2e-cluster:
+    # Etapa 3 cluster: solo manual contra el ingress de Pillán.
+    # Solo lectura/no destructivo: health, login inválido 401, login válido,
+    # /auth/me, refresh y logout del usuario de prueba. Prohibido registrar
+    # usuarios, resetear claves u otras escrituras. Las URLs llevan el prefijo
+    # /api-auth porque el ingress publica solo el front (k8s/ingress.yaml) y
+    # nginx reescribe ^/api-auth/(.*) -> /$1 hacia auth:8080 (front/nginx.conf);
+    # /api-auth/internal/ está bloqueado con 404 y no se toca.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: e2e-cluster contra Pillán (no destructivo)
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+          TEST_USER_EMAIL: ${{ secrets.TEST_USER_EMAIL }}
+          TEST_USER_PASSWORD: ${{ secrets.TEST_USER_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TEST_USER_EMAIL:-}" ] || [ -z "${TEST_USER_PASSWORD:-}" ]; then
+            echo "e2e-cluster: faltan secrets TEST_USER_EMAIL / TEST_USER_PASSWORD (Settings > Secrets and variables > Actions)" >&2
+            exit 1
+          fi
+          BASE_URL="${BASE_URL:-https://ti3-brojas.dev.censei.cl/api-auth}"
+          BASE_URL="${BASE_URL%/}"
+          echo "e2e-cluster contra $BASE_URL (usuario de prueba, sin registros ni resets)"
+          # /health con reintentos (solo lectura).
+          ok=0
+          for i in 1 2 3; do
+            code=$(curl -sS -o /tmp/cluster_health.json -w '%{http_code}' --max-time 20 "$BASE_URL/health" || true)
+            if [ "$code" = "200" ] && grep -q '"UP"' /tmp/cluster_health.json; then ok=1; break; fi
+            echo "health intento $i: code=${code:-curl-error}, reintentando..." >&2
+            sleep 10
+          done
+          test "$ok" = "1"
+          # Login inválido -> 401 (no revela existencia).
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -X POST "$BASE_URL/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"nadie@test.invalid","password":"WrongPass1"}')
+          test "$code" = "401"
+          # Login válido con el usuario de prueba (credenciales solo de Secrets, nunca se loguean).
+          login_body=$(python3 -c 'import json,os; print(json.dumps({"email": os.environ["TEST_USER_EMAIL"], "password": os.environ["TEST_USER_PASSWORD"]}))')
+          code=$(curl -sS -o /tmp/cluster_login.json -w '%{http_code}' --max-time 20 -X POST "$BASE_URL/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d "$login_body")
+          test "$code" = "200"
+          access=$(python3 -c 'import json; print(json.load(open("/tmp/cluster_login.json"))["access_token"])')
+          refresh=$(python3 -c 'import json; print(json.load(open("/tmp/cluster_login.json"))["refresh_token"])')
+          test -n "$access" && test -n "$refresh"
+          # /auth/me con el token -> 200.
+          code=$(curl -sS -o /tmp/cluster_me.json -w '%{http_code}' --max-time 20 "$BASE_URL/auth/me" \
+            -H "Authorization: Bearer $access")
+          test "$code" = "200"
+          grep -q '"user_id"' /tmp/cluster_me.json
+          # Refresh rota el token -> 200.
+          refresh_body=$(python3 -c 'import json,sys; print(json.dumps({"refresh_token": sys.argv[1]}))' "$refresh")
+          code=$(curl -sS -o /tmp/cluster_refresh.json -w '%{http_code}' --max-time 20 -X POST "$BASE_URL/auth/refresh" \
+            -H 'Content-Type: application/json' \
+            -d "$refresh_body")
+          test "$code" = "200"
+          new_refresh=$(python3 -c 'import json; print(json.load(open("/tmp/cluster_refresh.json"))["refresh_token"])')
+          test -n "$new_refresh"
+          # Logout idempotente -> 204 (revoca, no borra nada).
+          logout_body=$(python3 -c 'import json,sys; print(json.dumps({"refresh_token": sys.argv[1]}))' "$new_refresh")
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -X POST "$BASE_URL/auth/logout" \
+            -H 'Content-Type: application/json' \
+            -d "$logout_body")
+          test "$code" = "204"
+          echo "e2e-cluster OK (sin operaciones destructivas)"
