@@ -24,14 +24,6 @@ type scheduleRequest struct {
 	EndTime   string `json:"end_time"`
 }
 
-type scheduleResponse struct {
-	ID        string `json:"id"`
-	SubjectID string `json:"subject_id"`
-	DayOfWeek int    `json:"day_of_week"`
-	StartTime string `json:"start_time"`
-	EndTime   string `json:"end_time"`
-}
-
 // Create maneja POST /subjects/:id/schedules → 201 {id}.
 // 404 si la materia no existe o no es propia.
 func (h *SchedulesHandler) Create(c *gin.Context) {
@@ -74,13 +66,7 @@ func (h *SchedulesHandler) ListBySubject(c *gin.Context) {
 	}
 	items := make([]scheduleResponse, 0, len(out))
 	for _, s := range out {
-		items = append(items, scheduleResponse{
-			ID:        s.ID,
-			SubjectID: s.SubjectID,
-			DayOfWeek: s.DayOfWeek,
-			StartTime: s.StartTime.Format("15:04:05"),
-			EndTime:   s.EndTime.Format("15:04:05"),
-		})
+		items = append(items, toScheduleResponse(s))
 	}
 	logAcademicOp(c, "ListSchedules", http.StatusOK, userID, started, "")
 	c.JSON(http.StatusOK, gin.H{"items": items})

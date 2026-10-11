@@ -23,22 +23,6 @@ type absenceRequest struct {
 	Justified *bool  `json:"justified"`
 }
 
-type absenceResponse struct {
-	ID        string `json:"id"`
-	SubjectID string `json:"subject_id"`
-	Date      string `json:"date"`
-	Justified bool   `json:"justified"`
-	CreatedAt string `json:"created_at"`
-}
-
-func toAbsenceResponse(subjectID, id string, date time.Time, justified bool, createdAt time.Time) absenceResponse {
-	return absenceResponse{
-		ID: id, SubjectID: subjectID,
-		Date: date.Format("2006-01-02"), Justified: justified,
-		CreatedAt: createdAt.UTC().Format(time.RFC3339),
-	}
-}
-
 // Create maneja POST /subjects/:id/absences → 201 {id}.
 // 409 si ya hay una falta en esa fecha.
 func (h *AbsencesHandler) Create(c *gin.Context) {
@@ -77,7 +61,7 @@ func (h *AbsencesHandler) ListBySubject(c *gin.Context) {
 	}
 	items := make([]absenceResponse, 0, len(out))
 	for _, a := range out {
-		items = append(items, toAbsenceResponse(a.SubjectID, a.ID, a.Date, a.Justified, a.CreatedAt))
+		items = append(items, toAbsenceResponse(a))
 	}
 	logAcademicOp(c, "ListAbsences", http.StatusOK, userID, started, "")
 	c.JSON(http.StatusOK, gin.H{"items": items})
@@ -96,7 +80,7 @@ func (h *AbsencesHandler) Get(c *gin.Context) {
 		return
 	}
 	logAcademicOp(c, "GetAbsence", http.StatusOK, userID, started, "")
-	c.JSON(http.StatusOK, toAbsenceResponse(a.SubjectID, a.ID, a.Date, a.Justified, a.CreatedAt))
+	c.JSON(http.StatusOK, toAbsenceResponse(*a))
 }
 
 // Update maneja PATCH /absences/:id {justified} → 200.
@@ -119,7 +103,7 @@ func (h *AbsencesHandler) Update(c *gin.Context) {
 		return
 	}
 	logAcademicOp(c, "UpdateAbsence", http.StatusOK, userID, started, "")
-	c.JSON(http.StatusOK, toAbsenceResponse(a.SubjectID, a.ID, a.Date, a.Justified, a.CreatedAt))
+	c.JSON(http.StatusOK, toAbsenceResponse(*a))
 }
 
 // Delete maneja DELETE /absences/:id → 204.

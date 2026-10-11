@@ -22,6 +22,46 @@ func NewSubjectRepository(pool *pgxpool.Pool) *SubjectRepository {
 	return &SubjectRepository{pool: pool}
 }
 
+// SubjectCounts agrega conteos por malla para el overview.
+type SubjectCounts struct {
+	Total      int
+	Approved   int
+	InProgress int
+}
+
+// CountsByCurricula cuenta materias por malla propia en UNA query
+// (GROUP BY + FILTER, sin N+1). Mallas sin materias no aparecen
+// (el service las completa con ceros).
+func (r *SubjectRepository) CountsByCurricula(ctx context.Context, userID string) (map[string]SubjectCounts, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT s.curriculum_id,
+		       count(*),
+		       count(*) FILTER (WHERE s.status = 'approved'),
+		       count(*) FILTER (WHERE s.status = 'in_progress')
+		FROM academic.subjects s
+		JOIN academic.curricula c ON c.id = s.curriculum_id
+		WHERE c.user_id = $1
+		GROUP BY s.curriculum_id
+	`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("count subjects: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]SubjectCounts)
+	for rows.Next() {
+		var id string
+		var c SubjectCounts
+		if err := rows.Scan(&id, &c.Total, &c.Approved, &c.InProgress); err != nil {
+			return nil, fmt.Errorf("count subjects: %w", err)
+		}
+		out[id] = c
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("count subjects: %w", err)
+	}
+	return out, nil
+}
+
 // SubjectCreate agrupa los campos de alta (name + opcionales).
 type SubjectCreate struct {
 	Name                 string
