@@ -16,6 +16,8 @@ type Config struct {
 	// JWTSecret es el secreto HS256 compartido con auth para validar
 	// access tokens localmente. Nunca hardcodeado: solo entorno.
 	JWTSecret string
+	// GRPCPort es el puerto del servidor gRPC (GetSubject para Notes).
+	GRPCPort string
 }
 
 // Load lee .env (si existe) y el entorno, aplicando defaults.
@@ -41,9 +43,13 @@ func Load() *Config {
 		DatabaseURL: os.Getenv("DATABASE_URL"),
 		Port:        os.Getenv("PORT"),
 		JWTSecret:   os.Getenv("JWT_SECRET"),
+		GRPCPort:    os.Getenv("GRPC_PORT"),
 	}
 	if cfg.Port == "" {
 		cfg.Port = "8081"
+	}
+	if cfg.GRPCPort == "" {
+		cfg.GRPCPort = "9081"
 	}
 	if cfg.JWTSecret == "" {
 		cfg.JWTSecret = "dev-jwt-secret-change-me"

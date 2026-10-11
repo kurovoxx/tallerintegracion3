@@ -13,6 +13,11 @@ package service
 //
 // Sin ACADEMIC_TEST_DATABASE_URL hace skip. Crea SCHEMA academic + tablas
 // mínimas (subset de docker/postgres/init.sql) y limpia con DROP SCHEMA.
+// Nota: el paquete handler/grpc usa la misma BD y el mismo schema en su test
+// de integración; con la env fijada, correr el suite completo con -p 1
+// (misma solución que back/auth: evita crear el schema en paralelo con 42P06):
+//
+//   go test ./... -p 1 -count=1
 
 import (
 	"context"

@@ -3,16 +3,23 @@ package main
 import (
 	"context"
 	"log"
+	"net"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kurovoxx/tallerintegracion3/back/infacadem/internal/config"
+	academicv1 "github.com/kurovoxx/tallerintegracion3/back/infacadem/internal/gen/academicv1"
+	grpcHandler "github.com/kurovoxx/tallerintegracion3/back/infacadem/internal/handler/grpc"
 	httpHandler "github.com/kurovoxx/tallerintegracion3/back/infacadem/internal/handler/http"
 	"github.com/kurovoxx/tallerintegracion3/back/infacadem/internal/middleware"
 	"github.com/kurovoxx/tallerintegracion3/back/infacadem/internal/repository"
 	"github.com/kurovoxx/tallerintegracion3/back/infacadem/internal/service"
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -174,9 +181,48 @@ func main() {
 
 	addr := ":" + cfg.Port
 	log.Printf("Servidor de Academic corriendo en http://localhost%s", addr)
-	if err := r.Run(addr); err != nil {
-		log.Fatalf("Error al iniciar el servidor: %v", err)
+	httpSrv := &http.Server{Addr: addr, Handler: r}
+	go func() {
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Error HTTP: %v", err)
+		}
+	}()
+
+	// gRPC para Notes (GetSubject con ownership). Requiere pool: sin BD
+	// no se sirve (el HTTP sigue independiente).
+	var grpcSrv *grpc.Server
+	if pool != nil {
+		lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
+		if err != nil {
+			log.Fatalf("Error gRPC (puerto %s ocupado?): %v", cfg.GRPCPort, err)
+		}
+		grpcSrv = grpc.NewServer()
+		academicv1.RegisterAcademicServiceServer(grpcSrv,
+			grpcHandler.NewAcademicServer(repository.NewSubjectRepository(pool)))
+		go func() {
+			log.Printf("Servidor gRPC de Academic en :%s", cfg.GRPCPort)
+			if err := grpcSrv.Serve(lis); err != nil {
+				log.Printf("gRPC detenido: %v", err)
+			}
+		}()
+	} else {
+		log.Print("gRPC no servido (sin pool de BD)")
 	}
+
+	// Apagado gracioso: SIGINT/SIGTERM drenan gRPC y HTTP sin colgar.
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Print("apagando servidores...")
+	if grpcSrv != nil {
+		grpcSrv.GracefulStop()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := httpSrv.Shutdown(ctx); err != nil {
+		log.Printf("apagado HTTP: %v", err)
+	}
+	log.Print("apagado OK")
 }
 
 // serviceUnavailable responde 503 cuando el servicio arrancó sin pool
