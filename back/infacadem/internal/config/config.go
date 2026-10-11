@@ -13,6 +13,9 @@ import (
 type Config struct {
 	DatabaseURL string
 	Port        string
+	// JWTSecret es el secreto HS256 compartido con auth para validar
+	// access tokens localmente. Nunca hardcodeado: solo entorno.
+	JWTSecret string
 }
 
 // Load lee .env (si existe) y el entorno, aplicando defaults.
@@ -37,9 +40,14 @@ func Load() *Config {
 	cfg := &Config{
 		DatabaseURL: os.Getenv("DATABASE_URL"),
 		Port:        os.Getenv("PORT"),
+		JWTSecret:   os.Getenv("JWT_SECRET"),
 	}
 	if cfg.Port == "" {
 		cfg.Port = "8081"
+	}
+	if cfg.JWTSecret == "" {
+		cfg.JWTSecret = "dev-jwt-secret-change-me"
+		log.Print("config: JWT_SECRET no seteado, usando fallback (no usar en prod)")
 	}
 	return cfg
 }
