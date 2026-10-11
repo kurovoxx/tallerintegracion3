@@ -489,3 +489,137 @@ func (f *fakeRequirements) GradeSubjectOf(_ context.Context, gradeID, subjectID,
 	}
 	return f.ownedSubjectLocked(subjectID, userID), nil
 }
+
+type fakeAbsences struct {
+	mu    sync.Mutex
+	items map[string]*model.Absence
+	sub   *fakeSubjects
+}
+
+func newFakeAbsences(sub *fakeSubjects) *fakeAbsences {
+	return &fakeAbsences{items: map[string]*model.Absence{}, sub: sub}
+}
+
+func (f *fakeAbsences) ownedSubjectLocked(subjectID, userID string) bool {
+	f.sub.cur.mu.Lock()
+	defer f.sub.cur.mu.Unlock()
+	for _, s := range f.sub.items {
+		if s.ID == subjectID {
+			c, ok := f.sub.cur.items[s.CurriculumID]
+			return ok && c.UserID == userID
+		}
+	}
+	return false
+}
+
+func sameDay(a, b time.Time) bool {
+	y1, m1, d1 := a.Date()
+	y2, m2, d2 := b.Date()
+	return y1 == y2 && m1 == m2 && d1 == d2
+}
+
+func (f *fakeAbsences) Create(_ context.Context, userID, subjectID string, date time.Time, justified bool) (*model.Absence, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	if !f.ownedSubjectLocked(subjectID, userID) {
+		return nil, nil
+	}
+	a := &model.Absence{ID: uuid.NewString(), SubjectID: subjectID, Date: date, Justified: justified, CreatedAt: time.Now()}
+	f.items[a.ID] = a
+	cp := *a
+	return &cp, nil
+}
+
+func (f *fakeAbsences) ExistsOnDate(_ context.Context, userID, subjectID string, date time.Time) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	if !f.ownedSubjectLocked(subjectID, userID) {
+		return false, nil
+	}
+	for _, a := range f.items {
+		if a.SubjectID == subjectID && sameDay(a.Date, date) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (f *fakeAbsences) GetByID(_ context.Context, id, userID string) (*model.Absence, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	if a, ok := f.items[id]; ok && f.ownedSubjectLocked(a.SubjectID, userID) {
+		cp := *a
+		return &cp, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeAbsences) ListBySubject(_ context.Context, subjectID, userID string) ([]model.Absence, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	if !f.ownedSubjectLocked(subjectID, userID) {
+		return nil, false, nil
+	}
+	out := []model.Absence{}
+	for _, a := range f.items {
+		if a.SubjectID == subjectID {
+			out = append(out, *a)
+		}
+	}
+	return out, true, nil
+}
+
+func (f *fakeAbsences) UpdateJustified(_ context.Context, id, userID string, justified bool) (*model.Absence, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	if a, ok := f.items[id]; ok && f.ownedSubjectLocked(a.SubjectID, userID) {
+		a.Justified = justified
+		cp := *a
+		return &cp, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeAbsences) Delete(_ context.Context, id, userID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	if a, ok := f.items[id]; ok && f.ownedSubjectLocked(a.SubjectID, userID) {
+		delete(f.items, id)
+		return true, nil
+	}
+	return false, nil
+}
+
+func (f *fakeAbsences) CountsBySubject(_ context.Context, subjectID, userID string) (int, int, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	if !f.ownedSubjectLocked(subjectID, userID) {
+		return 0, 0, false, nil
+	}
+	un, just := 0, 0
+	for _, a := range f.items {
+		if a.SubjectID != subjectID {
+			continue
+		}
+		if a.Justified {
+			just++
+		} else {
+			un++
+		}
+	}
+	return un, just, true, nil
+}
