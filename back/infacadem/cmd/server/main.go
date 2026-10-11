@@ -9,7 +9,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kurovoxx/tallerintegracion3/back/infacadem/internal/config"
+	httpHandler "github.com/kurovoxx/tallerintegracion3/back/infacadem/internal/handler/http"
+	"github.com/kurovoxx/tallerintegracion3/back/infacadem/internal/middleware"
 	"github.com/kurovoxx/tallerintegracion3/back/infacadem/internal/repository"
+	"github.com/kurovoxx/tallerintegracion3/back/infacadem/internal/service"
 )
 
 func main() {
@@ -55,7 +58,6 @@ func main() {
 			"service": "academic-service",
 		})
 	})
-
 	r.GET("/health/db", func(c *gin.Context) {
 		if pool == nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
@@ -90,9 +92,58 @@ func main() {
 		})
 	})
 
+	// CRUD académico (100% personal): todo filtrado por user_id del token.
+	// Sin pool no hay storage: las rutas responden 503 (no 404) para no
+	// confundir "sin BD" con "recurso ajeno".
+	authMw := middleware.NewAuthMiddleware(&middleware.SimpleHS256Validator{
+		Secret:   []byte(cfg.JWTSecret),
+		Issuer:   middleware.TokenIssuer,
+		Audience: middleware.TokenAudience,
+	})
+	protected := r.Group("")
+	protected.Use(authMw.RequireAuth())
+	if pool != nil {
+		curH := httpHandler.NewCurriculaHandler(service.NewCurriculumService(repository.NewCurriculumRepository(pool)))
+		subH := httpHandler.NewSubjectsHandler(service.NewSubjectService(repository.NewSubjectRepository(pool)))
+		schH := httpHandler.NewSchedulesHandler(service.NewScheduleService(repository.NewScheduleRepository(pool)))
+
+		protected.POST("/curricula", curH.Create)
+		protected.GET("/curricula", curH.List)
+		protected.GET("/curricula/:id", curH.Get)
+		protected.PATCH("/curricula/:id", curH.Update)
+		protected.DELETE("/curricula/:id", curH.Delete)
+
+		protected.POST("/curricula/:id/subjects", subH.Create)
+		protected.GET("/curricula/:id/subjects", subH.ListByCurriculum)
+		protected.GET("/subjects/:id", subH.Get)
+		protected.PATCH("/subjects/:id", subH.Update)
+		protected.DELETE("/subjects/:id", subH.Delete)
+
+		protected.POST("/subjects/:id/schedules", schH.Create)
+		protected.GET("/subjects/:id/schedules", schH.ListBySubject)
+		protected.DELETE("/schedules/:id", schH.Delete)
+	} else {
+		for _, method := range []string{"GET", "POST", "PATCH", "DELETE"} {
+			for _, path := range []string{"/curricula", "/curricula/:id", "/curricula/:id/subjects", "/subjects/:id", "/subjects/:id/schedules", "/schedules/:id"} {
+				protected.Handle(method, path, serviceUnavailable)
+			}
+		}
+	}
+
 	addr := ":" + cfg.Port
 	log.Printf("Servidor de Academic corriendo en http://localhost%s", addr)
 	if err := r.Run(addr); err != nil {
 		log.Fatalf("Error al iniciar el servidor: %v", err)
 	}
+}
+
+// serviceUnavailable responde 503 cuando el servicio arrancó sin pool
+// (sin DATABASE_URL o BD caída al inicio).
+func serviceUnavailable(c *gin.Context) {
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"error": gin.H{
+			"code":    "db_unconfigured",
+			"message": "Almacenamiento no disponible",
+		},
+	})
 }
