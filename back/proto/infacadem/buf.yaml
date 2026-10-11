@@ -1,0 +1,10 @@
+# Módulo buf de Academic (v1). `buf lint` corre en generate.sh.
+# PACKAGE_DIRECTORY_MATCH exceptuada a propósito: el contrato vive en
+# back/proto/infacadem/academic.proto (ruta fijada) en vez del layout
+# canónico academic/v1/.
+version: v1
+lint:
+  use:
+    - DEFAULT
+  except:
+    - PACKAGE_DIRECTORY_MATCH
