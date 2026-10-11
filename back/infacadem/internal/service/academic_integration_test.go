@@ -77,6 +77,13 @@ CREATE TABLE academic.grade_requirements (
     created_at timestamptz NOT NULL DEFAULT now(),
     CHECK (checks_final_average = true OR source_grade_id IS NOT NULL)
 );
+CREATE TABLE academic.absences (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    subject_id uuid NOT NULL REFERENCES academic.subjects(id) ON DELETE CASCADE,
+    date date NOT NULL,
+    justified boolean NOT NULL DEFAULT false,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
 `
 
 func setupIntegration(t *testing.T) (*CurriculumService, *SubjectService, *ScheduleService, *pgxpool.Pool) {
@@ -245,6 +252,7 @@ func TestAcademicIntegration_GradesCascada(t *testing.T) {
 
 func ptrFloat(f float64) *float64 { return &f }
 func ptrBool(b bool) *bool        { return &b }
+func ptrInt(i int) *int           { return &i }
 
 // Final único contra Postgres real (los fakes no cubren este SQL).
 // Regresión: CountFinalExams con excludeID vacío rompía con 22P02
@@ -303,5 +311,75 @@ func TestAcademicIntegration_FinalUnico(t *testing.T) {
 	}
 	if _, err := gradeSvc.Update(ctx, intUserA, finalID, GradeInput{IsFinalExam: ptrBool(true), Name: &finalName}); err != nil {
 		t.Fatalf("re-guardar la propia final: %v", err)
+	}
+}
+
+// Asistencia contra Postgres real: conteos, duplicado 409 y cascada
+// subject→absences verificada por query directa.
+func TestAcademicIntegration_Attendance(t *testing.T) {
+	curSvc, subSvc, _, pool := setupIntegration(t)
+	ctx := context.Background()
+	absSvc := NewAbsenceService(repository.NewAbsenceRepository(pool))
+	attSvc := NewAttendanceService(repository.NewSubjectRepository(pool), repository.NewAbsenceRepository(pool))
+
+	malla, err := curSvc.Create(ctx, intUserA, "Malla asistencia")
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "Historia"
+	total, min := 32, 75.0
+	mat, err := subSvc.Create(ctx, intUserA, malla.ID, SubjectInput{Name: &name, TotalClasses: &total, MinAttendancePct: &min})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{"2026-03-01", "2026-03-02", "2026-03-03", "2026-03-04", "2026-03-05"} {
+		if _, err := absSvc.Create(ctx, intUserA, mat.ID, d, false); err != nil {
+			t.Fatalf("falta %s: %v", d, err)
+		}
+	}
+	for _, d := range []string{"2026-03-06", "2026-03-07"} {
+		if _, err := absSvc.Create(ctx, intUserA, mat.ID, d, true); err != nil {
+			t.Fatalf("justificada %s: %v", d, err)
+		}
+	}
+	if _, err := absSvc.Create(ctx, intUserA, mat.ID, "2026-03-01", false); err == nil {
+		t.Fatal("duplicada debe ser 409")
+	} else if se, ok := err.(*ServiceError); !ok || se.Code != "conflict" {
+		t.Fatalf("esperado conflict, got %v", err)
+	}
+	res, err := attSvc.Summary(ctx, intUserA, mat.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Percentage == nil || *res.Percentage != 0.84375 {
+		t.Fatalf("percentage 0.84375: %+v", res)
+	}
+	if res.MeetsMinimum == nil || !*res.MeetsMinimum || res.Remaining == nil || *res.Remaining != 3 {
+		t.Fatalf("meets true + remaining 3: %+v", res)
+	}
+	// total_classes null → nulos (materia sin configurar).
+	name2 := "Sin total"
+	mat2, err := subSvc.Create(ctx, intUserA, malla.ID, SubjectInput{Name: &name2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := absSvc.Create(ctx, intUserA, mat2.ID, "2026-03-01", false); err != nil {
+		t.Fatal(err)
+	}
+	if res2, err := attSvc.Summary(ctx, intUserA, mat2.ID); err != nil {
+		t.Fatal(err)
+	} else if res2.Percentage != nil || res2.MeetsMinimum != nil || res2.Remaining != nil {
+		t.Fatalf("sin total → nulos: %+v", res2)
+	}
+	// Borrar materia: absences huérfanas cero.
+	if err := subSvc.Delete(ctx, intUserA, mat.ID); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM academic.absences WHERE subject_id=$1`, mat.ID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("cascada incompleta: %d", n)
 	}
 }
