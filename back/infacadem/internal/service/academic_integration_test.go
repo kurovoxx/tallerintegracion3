@@ -51,6 +51,32 @@ CREATE TABLE academic.schedules (
     end_time time NOT NULL,
     CHECK (end_time > start_time)
 );
+CREATE TABLE academic.grades (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    subject_id uuid NOT NULL REFERENCES academic.subjects(id) ON DELETE CASCADE,
+    parent_grade_id uuid REFERENCES academic.grades(id) ON DELETE CASCADE,
+    is_final_exam boolean NOT NULL DEFAULT false,
+    status varchar(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('graded', 'pending', 'excused', 'missing')),
+    name varchar(200) NOT NULL,
+    score smallint CHECK (score BETWEEN 10 AND 70),
+    weight decimal(4,3) NOT NULL,
+    scheduled_date date,
+    topics text,
+    notify_discord boolean NOT NULL DEFAULT false,
+    google_calendar_event_id varchar(255),
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE academic.grade_requirements (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    subject_id uuid NOT NULL REFERENCES academic.subjects(id) ON DELETE CASCADE,
+    source_grade_id uuid REFERENCES academic.grades(id) ON DELETE CASCADE,
+    checks_final_average boolean NOT NULL DEFAULT false,
+    comparator varchar(2) NOT NULL CHECK (comparator IN ('>', '>=', '<', '<=', '=')),
+    threshold_value decimal(5,2) NOT NULL,
+    action varchar(20) NOT NULL CHECK (action IN ('force_exam', 'force_fail', 'force_pass')),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CHECK (checks_final_average = true OR source_grade_id IS NOT NULL)
+);
 `
 
 func setupIntegration(t *testing.T) (*CurriculumService, *SubjectService, *ScheduleService, *pgxpool.Pool) {
@@ -142,5 +168,140 @@ func TestAcademicIntegration_CRUDCascada(t *testing.T) {
 	}
 	if nSub != 0 || nSch != 0 {
 		t.Fatalf("cascada incompleta: subjects=%d schedules=%d", nSub, nSch)
+	}
+}
+
+// Notas + requisitos + promedio contra Postgres real, con cascada
+// subject→grades/requirements verificada por query directa.
+func TestAcademicIntegration_GradesCascada(t *testing.T) {
+	curSvc, subSvc, _, pool := setupIntegration(t)
+	ctx := context.Background()
+	gradeRepo := repository.NewGradeRepository(pool)
+	reqRepo := repository.NewRequirementRepository(pool)
+	gradeSvc := NewGradeService(gradeRepo)
+	reqSvc := NewRequirementService(reqRepo)
+	avgSvc := NewAverageService(repository.NewSubjectRepository(pool), gradeRepo, reqRepo)
+
+	malla, err := curSvc.Create(ctx, intUserA, "Malla notas")
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "Cálculo"
+	mat, err := subSvc.Create(ctx, intUserA, malla.ID, SubjectInput{Name: &name})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s70, s50 := 70, 50
+	if _, err := gradeSvc.Create(ctx, intUserA, mat.ID, GradeInput{Name: &name, Weight: ptrFloat(0.5), Score: &s70}); err != nil {
+		t.Fatalf("grade A: %v", err)
+	}
+	padre, err := gradeSvc.Create(ctx, intUserA, mat.ID, GradeInput{Name: &name, Weight: ptrFloat(0.5)})
+	if err != nil {
+		t.Fatalf("padre: %v", err)
+	}
+	if _, err := gradeSvc.CreateChild(ctx, intUserA, padre.ID, GradeInput{Name: &name, Weight: ptrFloat(1), Score: &s50}); err != nil {
+		t.Fatalf("hija: %v", err)
+	}
+	// (70*.5 + 50*.5)/10 = 6.0 aprobado.
+	res, err := avgSvc.Average(ctx, intUserA, mat.ID)
+	if err != nil || res.Average == nil || *res.Average != 6.0 || res.Status != "approved" {
+		t.Fatalf("average 6.0 approved: %+v %v", res, err)
+	}
+	// Final único real: segundo → 409.
+	finalName := "Examen"
+	if _, err := gradeSvc.Create(ctx, intUserA, mat.ID, GradeInput{Name: &finalName, Weight: ptrFloat(0.2), IsFinalExam: ptrBool(true)}); err != nil {
+		t.Fatalf("final: %v", err)
+	}
+	if _, err := gradeSvc.Create(ctx, intUserA, mat.ID, GradeInput{Name: &finalName, Weight: ptrFloat(0.2), IsFinalExam: ptrBool(true)}); err == nil {
+		t.Fatal("segundo final debe ser 409")
+	} else if se := err.(*ServiceError); se.Code != "conflict" {
+		t.Fatalf("code: %v", err)
+	}
+	// Requisito + borrado directo.
+	tf, ge, fe, thr := true, ">=", "force_exam", 4.0
+	req, err := reqSvc.Create(ctx, intUserA, mat.ID, RequirementInput{ChecksFinalAverage: &tf, Comparator: &ge, ThresholdValue: &thr, Action: &fe})
+	if err != nil {
+		t.Fatalf("requirement: %v", err)
+	}
+	if err := reqSvc.Delete(ctx, intUserA, req.ID); err != nil {
+		t.Fatalf("delete requirement: %v", err)
+	}
+
+	// Borrar la materia: grades, hijas y requisitos huérfanos cero.
+	if err := subSvc.Delete(ctx, intUserA, mat.ID); err != nil {
+		t.Fatalf("delete subject: %v", err)
+	}
+	for _, tc := range []struct{ table string }{{"academic.grades"}, {"academic.grade_requirements"}} {
+		var n int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM `+tc.table).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 0 {
+			t.Fatalf("cascada incompleta en %s: %d", tc.table, n)
+		}
+	}
+}
+
+func ptrFloat(f float64) *float64 { return &f }
+func ptrBool(b bool) *bool        { return &b }
+
+// Final único contra Postgres real (los fakes no cubren este SQL).
+// Regresión: CountFinalExams con excludeID vacío rompía con 22P02
+// (” casteado a uuid) y el error crudo subía como 500 en POST con
+// is_final_exam:true. Cubre crear (201) + duplicado por POST y por
+// PATCH (409 conflict) en ambas ramas del conteo.
+func TestAcademicIntegration_FinalUnico(t *testing.T) {
+	curSvc, subSvc, _, pool := setupIntegration(t)
+	ctx := context.Background()
+	gradeSvc := NewGradeService(repository.NewGradeRepository(pool))
+
+	malla, err := curSvc.Create(ctx, intUserA, "Malla final")
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "Álgebra"
+	mat, err := subSvc.Create(ctx, intUserA, malla.ID, SubjectInput{Name: &name})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Crear con is_final_exam:true (rama excludeID vacío) → éxito, no 500.
+	finalName := "Examen Final"
+	if _, err := gradeSvc.Create(ctx, intUserA, mat.ID, GradeInput{Name: &finalName, Weight: ptrFloat(0.3), IsFinalExam: ptrBool(true)}); err != nil {
+		t.Fatalf("crear final: %v", err)
+	}
+	// Duplicado por POST → 409 conflict (no 500).
+	if _, err := gradeSvc.Create(ctx, intUserA, mat.ID, GradeInput{Name: &finalName, Weight: ptrFloat(0.3), IsFinalExam: ptrBool(true)}); err == nil {
+		t.Fatal("segundo final debe ser 409")
+	} else if se, ok := err.(*ServiceError); !ok || se.Code != "conflict" {
+		t.Fatalf("esperado conflict, got %v", err)
+	}
+	// Duplicado por PATCH en otra nota (rama excludeID con UUID) → 409.
+	otra, err := gradeSvc.Create(ctx, intUserA, mat.ID, GradeInput{Name: &name, Weight: ptrFloat(0.2)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gradeSvc.Update(ctx, intUserA, otra.ID, GradeInput{IsFinalExam: ptrBool(true)}); err == nil {
+		t.Fatal("patch a final duplicado debe ser 409")
+	} else if se, ok := err.(*ServiceError); !ok || se.Code != "conflict" {
+		t.Fatalf("esperado conflict, got %v", err)
+	}
+	// La propia final puede re-guardarse como final sin chocar consigo misma.
+	final, err := gradeSvc.List(ctx, intUserA, mat.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var finalID string
+	for _, n := range final {
+		if n.Grade.IsFinalExam {
+			finalID = n.Grade.ID
+		}
+	}
+	if finalID == "" {
+		t.Fatal("final no encontrada")
+	}
+	if _, err := gradeSvc.Update(ctx, intUserA, finalID, GradeInput{IsFinalExam: ptrBool(true), Name: &finalName}); err != nil {
+		t.Fatalf("re-guardar la propia final: %v", err)
 	}
 }

@@ -103,9 +103,16 @@ func main() {
 	protected := r.Group("")
 	protected.Use(authMw.RequireAuth())
 	if pool != nil {
+		subjectRepo := repository.NewSubjectRepository(pool)
+		gradeRepo := repository.NewGradeRepository(pool)
+		reqRepo := repository.NewRequirementRepository(pool)
+		gradeSvc := service.NewGradeService(gradeRepo)
+		avgSvc := service.NewAverageService(subjectRepo, gradeRepo, reqRepo)
 		curH := httpHandler.NewCurriculaHandler(service.NewCurriculumService(repository.NewCurriculumRepository(pool)))
-		subH := httpHandler.NewSubjectsHandler(service.NewSubjectService(repository.NewSubjectRepository(pool)))
+		subH := httpHandler.NewSubjectsHandler(service.NewSubjectService(subjectRepo))
 		schH := httpHandler.NewSchedulesHandler(service.NewScheduleService(repository.NewScheduleRepository(pool)))
+		grdH := httpHandler.NewGradesHandler(gradeSvc, avgSvc)
+		reqH := httpHandler.NewRequirementsHandler(service.NewRequirementService(reqRepo))
 
 		protected.POST("/curricula", curH.Create)
 		protected.GET("/curricula", curH.List)
@@ -122,9 +129,21 @@ func main() {
 		protected.POST("/subjects/:id/schedules", schH.Create)
 		protected.GET("/subjects/:id/schedules", schH.ListBySubject)
 		protected.DELETE("/schedules/:id", schH.Delete)
+
+		protected.POST("/subjects/:id/grades", grdH.Create)
+		protected.GET("/subjects/:id/grades", grdH.List)
+		protected.GET("/grades/:id", grdH.Get)
+		protected.PATCH("/grades/:id", grdH.Update)
+		protected.DELETE("/grades/:id", grdH.Delete)
+		protected.POST("/grades/:id/children", grdH.CreateChild)
+		protected.GET("/subjects/:id/average", grdH.Average)
+
+		protected.POST("/subjects/:id/requirements", reqH.Create)
+		protected.GET("/subjects/:id/requirements", reqH.List)
+		protected.DELETE("/requirements/:id", reqH.Delete)
 	} else {
 		for _, method := range []string{"GET", "POST", "PATCH", "DELETE"} {
-			for _, path := range []string{"/curricula", "/curricula/:id", "/curricula/:id/subjects", "/subjects/:id", "/subjects/:id/schedules", "/schedules/:id"} {
+			for _, path := range []string{"/curricula", "/curricula/:id", "/curricula/:id/subjects", "/subjects/:id", "/subjects/:id/schedules", "/schedules/:id", "/subjects/:id/grades", "/grades/:id", "/grades/:id/children", "/subjects/:id/average", "/subjects/:id/requirements", "/requirements/:id"} {
 				protected.Handle(method, path, serviceUnavailable)
 			}
 		}

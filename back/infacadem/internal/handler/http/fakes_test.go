@@ -248,3 +248,244 @@ func newServiceFixture() (*fakeCurricula, *fakeSubjects, *fakeSchedules) {
 	sch := newFakeSchedules(sub)
 	return cur, sub, sch
 }
+
+type fakeGrades struct {
+	mu    sync.Mutex
+	items map[string]*model.Grade
+	sub   *fakeSubjects
+}
+
+func newFakeGrades(sub *fakeSubjects) *fakeGrades {
+	return &fakeGrades{items: map[string]*model.Grade{}, sub: sub}
+}
+
+func (f *fakeGrades) ownedSubjectLocked(subjectID, userID string) bool {
+	f.sub.cur.mu.Lock()
+	defer f.sub.cur.mu.Unlock()
+	for _, s := range f.sub.items {
+		if s.ID == subjectID {
+			c, ok := f.sub.cur.items[s.CurriculumID]
+			return ok && c.UserID == userID
+		}
+	}
+	// La materia puede existir sin subjects creados: buscar en curricula.
+	for _, c := range f.sub.cur.items {
+		if c.ID == subjectID {
+			return c.UserID == userID
+		}
+	}
+	return false
+}
+
+func (f *fakeGrades) Create(_ context.Context, userID, subjectID string, in repository.GradeCreate) (*model.Grade, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	if !f.ownedSubjectLocked(subjectID, userID) {
+		return nil, nil
+	}
+	g := &model.Grade{ID: uuid.NewString(), SubjectID: subjectID, ParentGradeID: in.ParentGradeID,
+		IsFinalExam: in.IsFinalExam, Status: in.Status, Name: in.Name, Score: in.Score,
+		Weight: in.Weight, ScheduledDate: in.ScheduledDate, Topics: in.Topics,
+		NotifyDiscord: in.NotifyDiscord, GoogleCalendarEventID: in.GoogleCalendarEventID,
+		CreatedAt: time.Now()}
+	f.items[g.ID] = g
+	cp := *g
+	return &cp, nil
+}
+
+func (f *fakeGrades) GetByID(_ context.Context, id, userID string) (*model.Grade, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	if g, ok := f.items[id]; ok && f.ownedSubjectLocked(g.SubjectID, userID) {
+		cp := *g
+		return &cp, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeGrades) ListBySubject(_ context.Context, subjectID, userID string) ([]model.Grade, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	if !f.ownedSubjectLocked(subjectID, userID) {
+		return nil, false, nil
+	}
+	out := []model.Grade{}
+	for _, g := range f.items {
+		if g.SubjectID == subjectID {
+			out = append(out, *g)
+		}
+	}
+	return out, true, nil
+}
+
+func (f *fakeGrades) Update(_ context.Context, id, userID string, p repository.GradePatch) (*model.Grade, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	g, ok := f.items[id]
+	if !ok || !f.ownedSubjectLocked(g.SubjectID, userID) {
+		return nil, nil
+	}
+	if p.Name != nil {
+		g.Name = *p.Name
+	}
+	if p.ClearScore {
+		g.Score = nil
+	} else if p.Score != nil {
+		g.Score = p.Score
+	}
+	if p.Weight != nil {
+		g.Weight = *p.Weight
+	}
+	if p.Status != nil {
+		g.Status = *p.Status
+	}
+	if p.ClearScheduledAt {
+		g.ScheduledDate = nil
+	} else if p.ScheduledDate != nil {
+		g.ScheduledDate = p.ScheduledDate
+	}
+	if p.ClearTopics {
+		g.Topics = nil
+	} else if p.Topics != nil {
+		g.Topics = p.Topics
+	}
+	if p.NotifyDiscord != nil {
+		g.NotifyDiscord = *p.NotifyDiscord
+	}
+	if p.ClearCalendarEvt {
+		g.GoogleCalendarEventID = nil
+	} else if p.GoogleCalendarEventID != nil {
+		g.GoogleCalendarEventID = p.GoogleCalendarEventID
+	}
+	if p.IsFinalExam != nil {
+		g.IsFinalExam = *p.IsFinalExam
+	}
+	cp := *g
+	return &cp, nil
+}
+
+func (f *fakeGrades) Delete(_ context.Context, id, userID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	if g, ok := f.items[id]; ok && f.ownedSubjectLocked(g.SubjectID, userID) {
+		delete(f.items, id)
+		for cid, ch := range f.items {
+			if ch.ParentGradeID != nil && *ch.ParentGradeID == id {
+				delete(f.items, cid)
+			}
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func (f *fakeGrades) CountFinalExams(_ context.Context, subjectID, userID, excludeID string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	if !f.ownedSubjectLocked(subjectID, userID) {
+		return 0, nil
+	}
+	n := 0
+	for _, g := range f.items {
+		if g.SubjectID == subjectID && g.IsFinalExam && g.ID != excludeID {
+			n++
+		}
+	}
+	return n, nil
+}
+
+type fakeRequirements struct {
+	mu    sync.Mutex
+	items map[string]*model.Requirement
+	sub   *fakeSubjects
+	grd   *fakeGrades
+}
+
+func newFakeRequirements(sub *fakeSubjects, grd *fakeGrades) *fakeRequirements {
+	return &fakeRequirements{items: map[string]*model.Requirement{}, sub: sub, grd: grd}
+}
+
+func (f *fakeRequirements) ownedSubjectLocked(subjectID, userID string) bool {
+	f.sub.cur.mu.Lock()
+	defer f.sub.cur.mu.Unlock()
+	for _, s := range f.sub.items {
+		if s.ID == subjectID {
+			c, ok := f.sub.cur.items[s.CurriculumID]
+			return ok && c.UserID == userID
+		}
+	}
+	for _, c := range f.sub.cur.items {
+		if c.ID == subjectID {
+			return c.UserID == userID
+		}
+	}
+	return false
+}
+
+func (f *fakeRequirements) Create(_ context.Context, userID, subjectID string, source *string, checks bool, comp string, thr float64, action string) (*model.Requirement, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	if !f.ownedSubjectLocked(subjectID, userID) {
+		return nil, nil
+	}
+	r := &model.Requirement{ID: uuid.NewString(), SubjectID: subjectID, SourceGradeID: source,
+		ChecksFinalAverage: checks, Comparator: comp, ThresholdValue: thr, Action: action, CreatedAt: time.Now()}
+	f.items[r.ID] = r
+	cp := *r
+	return &cp, nil
+}
+
+func (f *fakeRequirements) ListBySubject(_ context.Context, subjectID, userID string) ([]model.Requirement, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	if !f.ownedSubjectLocked(subjectID, userID) {
+		return nil, false, nil
+	}
+	out := []model.Requirement{}
+	for _, r := range f.items {
+		if r.SubjectID == subjectID {
+			out = append(out, *r)
+		}
+	}
+	return out, true, nil
+}
+
+func (f *fakeRequirements) Delete(_ context.Context, id, userID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	if r, ok := f.items[id]; ok && f.ownedSubjectLocked(r.SubjectID, userID) {
+		delete(f.items, id)
+		return true, nil
+	}
+	return false, nil
+}
+
+func (f *fakeRequirements) GradeSubjectOf(_ context.Context, gradeID, subjectID, userID string) (bool, error) {
+	f.grd.mu.Lock()
+	defer f.grd.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	g, ok := f.grd.items[gradeID]
+	if !ok || g.SubjectID != subjectID {
+		return false, nil
+	}
+	return f.ownedSubjectLocked(subjectID, userID), nil
+}
