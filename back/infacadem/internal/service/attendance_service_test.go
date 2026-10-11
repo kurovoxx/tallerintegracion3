@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -79,6 +80,13 @@ func (f *fakeAbsences) ListBySubject(_ context.Context, subjectID, userID string
 			out = append(out, *a)
 		}
 	}
+	// Orden determinista como el SQL (ORDER BY date ASC, id ASC).
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].Date.Equal(out[j].Date) {
+			return out[i].Date.Before(out[j].Date)
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out, true, nil
 }
 
@@ -247,9 +255,20 @@ func TestAttendance_FormulaFrente(t *testing.T) {
 	if res.Remaining == nil || *res.Remaining != 3 {
 		t.Fatalf("remaining 3: %+v", res)
 	}
-	// Toggle una a justificada → 1-4/32 = 0.875, restantes 4.
+	// Toggle una injustificada a justificada → 1-4/32 = 0.875, restantes 4.
+	// Se elige explícitamente (no list[0]: el orden no debe importar).
 	list, _ := svc.List(ctx, userA, subID)
-	if _, err := svc.SetJustified(ctx, userA, list[0].ID, boolPtr(true)); err != nil {
+	var target string
+	for _, a := range list {
+		if !a.Justified {
+			target = a.ID
+			break
+		}
+	}
+	if target == "" {
+		t.Fatal("sin injustificadas para togglear")
+	}
+	if _, err := svc.SetJustified(ctx, userA, target, boolPtr(true)); err != nil {
 		t.Fatal(err)
 	}
 	res, _ = att.Summary(ctx, userA, subID)
@@ -257,7 +276,7 @@ func TestAttendance_FormulaFrente(t *testing.T) {
 		t.Fatalf("tras toggle: %+v", res)
 	}
 	// Delete restaura.
-	if err := svc.Delete(ctx, userA, list[0].ID); err != nil {
+	if err := svc.Delete(ctx, userA, target); err != nil {
 		t.Fatal(err)
 	}
 	res, _ = att.Summary(ctx, userA, subID)

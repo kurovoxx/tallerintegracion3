@@ -107,15 +107,25 @@ func main() {
 		gradeRepo := repository.NewGradeRepository(pool)
 		reqRepo := repository.NewRequirementRepository(pool)
 		absenceRepo := repository.NewAbsenceRepository(pool)
+		curSvc := service.NewCurriculumService(repository.NewCurriculumRepository(pool))
+		subjectSvc := service.NewSubjectService(subjectRepo)
+		scheduleSvc := service.NewScheduleService(repository.NewScheduleRepository(pool))
 		gradeSvc := service.NewGradeService(gradeRepo)
+		reqSvc := service.NewRequirementService(reqRepo)
+		absenceSvc := service.NewAbsenceService(absenceRepo)
 		avgSvc := service.NewAverageService(subjectRepo, gradeRepo, reqRepo)
-		curH := httpHandler.NewCurriculaHandler(service.NewCurriculumService(repository.NewCurriculumRepository(pool)))
-		subH := httpHandler.NewSubjectsHandler(service.NewSubjectService(subjectRepo))
-		schH := httpHandler.NewSchedulesHandler(service.NewScheduleService(repository.NewScheduleRepository(pool)))
+		attSvc := service.NewAttendanceService(subjectRepo, absenceRepo)
+		curH := httpHandler.NewCurriculaHandler(curSvc)
+		subH := httpHandler.NewSubjectsHandler(subjectSvc)
+		schH := httpHandler.NewSchedulesHandler(scheduleSvc)
 		grdH := httpHandler.NewGradesHandler(gradeSvc, avgSvc)
-		reqH := httpHandler.NewRequirementsHandler(service.NewRequirementService(reqRepo))
-		absH := httpHandler.NewAbsencesHandler(service.NewAbsenceService(absenceRepo))
-		attH := httpHandler.NewAttendanceHandler(service.NewAttendanceService(subjectRepo, absenceRepo))
+		reqH := httpHandler.NewRequirementsHandler(reqSvc)
+		absH := httpHandler.NewAbsencesHandler(absenceSvc)
+		attH := httpHandler.NewAttendanceHandler(attSvc)
+		ovH := httpHandler.NewOverviewHandler(
+			service.NewOverviewService(curSvc, subjectRepo),
+			service.NewDetailService(subjectSvc, scheduleSvc, gradeSvc, avgSvc, attSvc),
+		)
 
 		protected.POST("/curricula", curH.Create)
 		protected.GET("/curricula", curH.List)
@@ -151,9 +161,12 @@ func main() {
 		protected.PATCH("/absences/:id", absH.Update)
 		protected.DELETE("/absences/:id", absH.Delete)
 		protected.GET("/subjects/:id/attendance", attH.Get)
+
+		protected.GET("/academic/overview", ovH.Overview)
+		protected.GET("/subjects/:id/detail", ovH.SubjectDetail)
 	} else {
 		for _, method := range []string{"GET", "POST", "PATCH", "DELETE"} {
-			for _, path := range []string{"/curricula", "/curricula/:id", "/curricula/:id/subjects", "/subjects/:id", "/subjects/:id/schedules", "/schedules/:id", "/subjects/:id/grades", "/grades/:id", "/grades/:id/children", "/subjects/:id/average", "/subjects/:id/requirements", "/requirements/:id", "/subjects/:id/absences", "/absences/:id", "/subjects/:id/attendance"} {
+			for _, path := range []string{"/curricula", "/curricula/:id", "/curricula/:id/subjects", "/subjects/:id", "/subjects/:id/schedules", "/schedules/:id", "/subjects/:id/grades", "/grades/:id", "/grades/:id/children", "/subjects/:id/average", "/subjects/:id/requirements", "/requirements/:id", "/subjects/:id/absences", "/absences/:id", "/subjects/:id/attendance", "/academic/overview", "/subjects/:id/detail"} {
 				protected.Handle(method, path, serviceUnavailable)
 			}
 		}

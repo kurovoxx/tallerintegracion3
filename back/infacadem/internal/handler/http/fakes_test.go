@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 
@@ -9,6 +10,32 @@ import (
 	"github.com/kurovoxx/tallerintegracion3/back/infacadem/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/infacadem/internal/repository"
 )
+
+// CountsByCurricula agrega conteos de materias propias (una pasada, como el
+// GROUP BY real) para satisfacer service.SubjectCounter en tests.
+func (f *fakeSubjects) CountsByCurricula(_ context.Context, userID string) (map[string]repository.SubjectCounts, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cur.mu.Lock()
+	defer f.cur.mu.Unlock()
+	out := make(map[string]repository.SubjectCounts)
+	for _, s := range f.items {
+		c, ok := f.cur.items[s.CurriculumID]
+		if !ok || c.UserID != userID {
+			continue
+		}
+		agg := out[s.CurriculumID]
+		agg.Total++
+		if s.Status == model.SubjectStatusApproved {
+			agg.Approved++
+		}
+		if s.Status == model.SubjectStatusInProgress {
+			agg.InProgress++
+		}
+		out[s.CurriculumID] = agg
+	}
+	return out, nil
+}
 
 // Fakes en memoria con semántica de propiedad (duplicados del service test:
 // distinto paquete, misma semántica). Hilo-seguros.
@@ -574,6 +601,13 @@ func (f *fakeAbsences) ListBySubject(_ context.Context, subjectID, userID string
 			out = append(out, *a)
 		}
 	}
+	// Orden determinista como el SQL (ORDER BY date ASC, id ASC).
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].Date.Equal(out[j].Date) {
+			return out[i].Date.Before(out[j].Date)
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out, true, nil
 }
 

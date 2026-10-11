@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/kurovoxx/tallerintegracion3/back/infacadem/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/infacadem/internal/service"
 	"github.com/kurovoxx/tallerintegracion3/back/infacadem/internal/utils"
 )
@@ -32,46 +31,6 @@ type gradeRequest struct {
 	NotifyDiscord         *bool    `json:"notify_discord"`
 	GoogleCalendarEventID *string  `json:"google_calendar_event_id"`
 	IsFinalExam           *bool    `json:"is_final_exam"`
-}
-
-type gradeResponse struct {
-	ID                    string  `json:"id"`
-	SubjectID             string  `json:"subject_id"`
-	ParentGradeID         *string `json:"parent_grade_id"`
-	IsFinalExam           bool    `json:"is_final_exam"`
-	Status                string  `json:"status"`
-	Name                  string  `json:"name"`
-	Score                 *int    `json:"score"`
-	Weight                float64 `json:"weight"`
-	ScheduledDate         *string `json:"scheduled_date"`
-	Topics                *string `json:"topics"`
-	NotifyDiscord         bool    `json:"notify_discord"`
-	GoogleCalendarEventID *string `json:"google_calendar_event_id"`
-	CreatedAt             string  `json:"created_at"`
-}
-
-type gradeNodeResponse struct {
-	Grade    gradeResponse   `json:"grade"`
-	Children []gradeResponse `json:"children"`
-}
-
-func formatDate(t *time.Time) *string {
-	if t == nil {
-		return nil
-	}
-	s := t.Format("2006-01-02")
-	return &s
-}
-
-func toGradeResponse(g model.Grade) gradeResponse {
-	return gradeResponse{
-		ID: g.ID, SubjectID: g.SubjectID, ParentGradeID: g.ParentGradeID,
-		IsFinalExam: g.IsFinalExam, Status: g.Status, Name: g.Name,
-		Score: g.Score, Weight: g.Weight, ScheduledDate: formatDate(g.ScheduledDate),
-		Topics: g.Topics, NotifyDiscord: g.NotifyDiscord,
-		GoogleCalendarEventID: g.GoogleCalendarEventID,
-		CreatedAt:             g.CreatedAt.UTC().Format(time.RFC3339),
-	}
 }
 
 // parseGradeInput decodifica el body; en update, un null JSON explícito en
@@ -147,11 +106,7 @@ func (h *GradesHandler) List(c *gin.Context) {
 	}
 	items := make([]gradeNodeResponse, 0, len(nodes))
 	for _, n := range nodes {
-		children := make([]gradeResponse, 0, len(n.Children))
-		for _, ch := range n.Children {
-			children = append(children, toGradeResponse(ch))
-		}
-		items = append(items, gradeNodeResponse{Grade: toGradeResponse(n.Grade), Children: children})
+		items = append(items, toGradeNodeResponse(n))
 	}
 	logAcademicOp(c, "ListGrades", http.StatusOK, userID, started, "")
 	c.JSON(http.StatusOK, gin.H{"items": items})

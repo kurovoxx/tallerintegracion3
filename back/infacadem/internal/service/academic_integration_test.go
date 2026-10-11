@@ -383,3 +383,55 @@ func TestAcademicIntegration_Attendance(t *testing.T) {
 		t.Fatalf("cascada incompleta: %d", n)
 	}
 }
+
+// Overview agregado contra Postgres real (cubre el GROUP BY de conteos).
+func TestAcademicIntegration_Overview(t *testing.T) {
+	curSvc, subSvc, _, pool := setupIntegration(t)
+	ctx := context.Background()
+	ovSvc := NewOverviewService(curSvc, repository.NewSubjectRepository(pool))
+
+	m1, err := curSvc.Create(ctx, intUserA, "M1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m2, err := curSvc.Create(ctx, intUserA, "M2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved, inprog := "approved", "in_progress"
+	name := "S"
+	if _, err := subSvc.Create(ctx, intUserA, m1.ID, SubjectInput{Name: &name, Status: &approved}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := subSvc.Create(ctx, intUserA, m1.ID, SubjectInput{Name: &name}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := subSvc.Create(ctx, intUserA, m2.ID, SubjectInput{Name: &name, Status: &inprog}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := ovSvc.Get(ctx, intUserA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Curricula) != 2 || out.Stats.CurriculaCount != 2 || out.Stats.SubjectsCount != 3 {
+		t.Fatalf("overview: %+v", out)
+	}
+	byID := map[string]CurriculumOverview{}
+	for _, c := range out.Curricula {
+		byID[c.ID] = c
+	}
+	if byID[m1.ID].SubjectsCount != 2 || byID[m1.ID].ApprovedCount != 1 || byID[m1.ID].InProgressCount != 1 {
+		t.Fatalf("m1: %+v", byID[m1.ID])
+	}
+	if byID[m2.ID].SubjectsCount != 1 || byID[m2.ID].ApprovedCount != 0 {
+		t.Fatalf("m2: %+v", byID[m2.ID])
+	}
+	// Solo propias.
+	outB, err := ovSvc.Get(ctx, intUserB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outB.Curricula) != 0 || outB.Stats.SubjectsCount != 0 {
+		t.Fatalf("B vacío: %+v", outB)
+	}
+}
