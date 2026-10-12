@@ -123,6 +123,7 @@ func (f *fakeSubjects) Create(_ context.Context, userID, curriculumID string, in
 		return nil, nil
 	}
 	s := &model.Subject{ID: uuid.NewString(), CurriculumID: curriculumID, Name: in.Name,
+		Code: in.Code, Professor: in.Professor, Room: in.Room,
 		Semester: in.Semester, Credits: in.Credits, TotalClasses: in.TotalClasses,
 		MinAttendancePct: in.MinAttendancePct, AverageDecimalPlaces: in.AverageDecimalPlaces, Status: in.Status}
 	f.items[s.ID] = s
@@ -170,6 +171,21 @@ func (f *fakeSubjects) Update(_ context.Context, id, userID string, p repository
 	}
 	if p.Name != nil {
 		s.Name = *p.Name
+	}
+	if p.ClearCode {
+		s.Code = nil
+	} else if p.Code != nil {
+		s.Code = p.Code
+	}
+	if p.ClearProfessor {
+		s.Professor = nil
+	} else if p.Professor != nil {
+		s.Professor = p.Professor
+	}
+	if p.ClearRoom {
+		s.Room = nil
+	} else if p.Room != nil {
+		s.Room = p.Room
 	}
 	if p.Semester != nil {
 		s.Semester = p.Semester
@@ -226,7 +242,7 @@ func (f *fakeSchedules) ownedSubjectLocked(subjectID, userID string) bool {
 	return ok && c.UserID == userID
 }
 
-func (f *fakeSchedules) Create(_ context.Context, userID, subjectID string, day int, start, end time.Time) (*model.Schedule, error) {
+func (f *fakeSchedules) Create(_ context.Context, userID, subjectID string, day int, start, end time.Time, modality *string) (*model.Schedule, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sub.mu.Lock()
@@ -234,7 +250,7 @@ func (f *fakeSchedules) Create(_ context.Context, userID, subjectID string, day 
 	if !f.ownedSubjectLocked(subjectID, userID) {
 		return nil, nil
 	}
-	s := &model.Schedule{ID: uuid.NewString(), SubjectID: subjectID, DayOfWeek: day, StartTime: start, EndTime: end}
+	s := &model.Schedule{ID: uuid.NewString(), SubjectID: subjectID, DayOfWeek: day, StartTime: start, EndTime: end, Modality: modality}
 	f.items[s.ID] = s
 	cp := *s
 	return &cp, nil

@@ -3,7 +3,7 @@
 ## Req
 - Método: `PATCH`, ruta: `/subjects/:id` (protegida, `back/infacadem/cmd/server/main.go:119`).
 - Headers: `Authorization: Bearer <access_token>`, `Content-Type: application/json`.
-- Body parcial: `{"credits":10}` (cualquiera de `name`, `semester`, `credits`, `total_classes`, `min_attendance_pct`, `average_decimal_places`, `status`; al menos un campo).
+- Body parcial: `{"credits":10}` (cualquiera de `name`, `code`, `professor`, `room`, `semester`, `credits`, `total_classes`, `min_attendance_pct`, `average_decimal_places`, `status`; `""` en `code/professor/room` limpia a NULL; al menos un campo).
 
 ## Res
 - `200`: recurso actualizado.

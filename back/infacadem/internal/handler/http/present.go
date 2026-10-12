@@ -33,11 +33,12 @@ type gradeNodeResponse struct {
 }
 
 type scheduleResponse struct {
-	ID        string `json:"id"`
-	SubjectID string `json:"subject_id"`
-	DayOfWeek int    `json:"day_of_week"`
-	StartTime string `json:"start_time"`
-	EndTime   string `json:"end_time"`
+	ID        string  `json:"id"`
+	SubjectID string  `json:"subject_id"`
+	DayOfWeek int     `json:"day_of_week"`
+	StartTime string  `json:"start_time"`
+	EndTime   string  `json:"end_time"`
+	Modality  *string `json:"modality"`
 }
 
 type absenceResponse struct {
@@ -82,6 +83,7 @@ func toScheduleResponse(s model.Schedule) scheduleResponse {
 		DayOfWeek: s.DayOfWeek,
 		StartTime: s.StartTime.Format("15:04:05"),
 		EndTime:   s.EndTime.Format("15:04:05"),
+		Modality:  s.Modality,
 	}
 }
 

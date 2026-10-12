@@ -20,6 +20,9 @@ func NewSubjectsHandler(svc *service.SubjectService) *SubjectsHandler {
 
 type subjectRequest struct {
 	Name                 *string  `json:"name"`
+	Code                 *string  `json:"code"`
+	Professor            *string  `json:"professor"`
+	Room                 *string  `json:"room"`
 	Semester             *int     `json:"semester"`
 	Credits              *int     `json:"credits"`
 	TotalClasses         *int     `json:"total_classes"`
@@ -31,6 +34,9 @@ type subjectRequest struct {
 func toSubjectInput(req subjectRequest) service.SubjectInput {
 	return service.SubjectInput{
 		Name:                 req.Name,
+		Code:                 req.Code,
+		Professor:            req.Professor,
+		Room:                 req.Room,
 		Semester:             req.Semester,
 		Credits:              req.Credits,
 		TotalClasses:         req.TotalClasses,

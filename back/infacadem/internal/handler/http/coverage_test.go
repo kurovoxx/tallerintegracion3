@@ -62,7 +62,7 @@ func (f *boomSubjects) CountsByCurricula(ctx context.Context, u string) (map[str
 
 type boomSchedules struct{ e error }
 
-func (f *boomSchedules) Create(ctx context.Context, u, s string, d int, st, en time.Time) (*model.Schedule, error) {
+func (f *boomSchedules) Create(ctx context.Context, u, s string, d int, st, en time.Time, mod *string) (*model.Schedule, error) {
 	return nil, f.e
 }
 

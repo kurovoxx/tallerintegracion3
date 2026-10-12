@@ -4,6 +4,9 @@ import '../../core/common_widgets.dart';
 import '../../core/services/courses_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import 'academic_api.dart';
+import 'academic_mappers.dart';
+import 'academic_models.dart';
 import 'attendance_screen.dart';
 
 const String kSubjectApproved = 'approved';
@@ -47,6 +50,12 @@ class _CoursesScreenState extends State<CoursesScreen> {
   String? _selectedCourseId;
   _CourseDetailTab _detailTab = _CourseDetailTab.unidades;
 
+  // Backend Academic: con sesión se listan/crean materias por API
+  // (fan-out de horarios multi-día); sin sesión rige el mock local.
+  final AcademicApi _academicApi = AcademicApi();
+  bool _backendMode = false;
+  String? _curriculumId;
+
   List<Map<String, dynamic>> get _courses => CoursesService.instance.courses;
 
   @override
@@ -63,6 +72,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
   @override
   void dispose() {
     CoursesService.instance.removeListener(_handleCoursesChanged);
+    _academicApi.dispose();
     super.dispose();
   }
 
@@ -73,6 +83,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
     });
     try {
       await Future.delayed(const Duration(milliseconds: 620));
+      await _loadFromBackend();
       if (!mounted) return;
       setState(() => _isLoading = false);
     } catch (_) {
@@ -82,6 +93,113 @@ class _CoursesScreenState extends State<CoursesScreen> {
         _hasError = true;
       });
     }
+  }
+
+  /// Lista malla + materias + horarios agregados por materia desde el
+  /// backend y reconstruye el store local. Silencioso ante no_session:
+  /// se conserva el mock.
+  Future<void> _loadFromBackend() async {
+    try {
+      final malla = await _academicApi.ensureCurriculum();
+      final subjects = await _academicApi.listSubjects(malla.id);
+      final rebuilt = <Map<String, dynamic>>[];
+      for (final s in subjects) {
+        final slots = await _academicApi.listSchedules(s.id);
+        rebuilt.add(_courseFromBackend(s, slots));
+      }
+      if (!mounted) return;
+      for (final c in List.of(CoursesService.instance.courses)) {
+        final id = c['id'] as String?;
+        if (id != null) CoursesService.instance.removeCourse(id);
+      }
+      for (final c in rebuilt) {
+        CoursesService.instance.addCourse(c);
+      }
+      setState(() {
+        _backendMode = true;
+        _curriculumId = malla.id;
+      });
+    } on AcademicApiException {
+      if (mounted) {
+        setState(() {
+          _backendMode = false;
+          _curriculumId = null;
+        });
+      }
+    }
+  }
+
+  /// Materia + slots backend -> mapa de curso (misma forma que el mock).
+  Map<String, dynamic> _courseFromBackend(
+    AcademicSubject s,
+    List<AcademicScheduleSlot> slots,
+  ) {
+    final byBlock = <String, List<int>>{};
+    for (final slot in slots) {
+      final start = _shortTime(slot.startTime);
+      final end = _shortTime(slot.endTime);
+      byBlock.putIfAbsent('$start–$end', () => []).add(slot.dayOfWeek);
+    }
+    final entries = byBlock.entries.map((e) {
+      final days = e.value.toSet().toList()
+        ..sort((a, b) => (a == 0 ? 7 : a).compareTo(b == 0 ? 7 : b));
+      return '${days.map(dayNumberToLabel).join(' / ')} · ${e.key}';
+    }).toList();
+    final status = s.status;
+    return {
+      'id': s.id,
+      'code': s.code ?? '',
+      'name': s.name,
+      'credits': s.credits ?? 5,
+      'status': status,
+      'professor': s.professor ?? 'Por asignar',
+      'schedule': entries.isEmpty ? 'Por definir' : entries.join(' · '),
+      'room': s.room ?? 'Por asignar',
+      'requisite': 'REQ: —',
+      'requisite_alert': false,
+      'progress': status == kSubjectApproved
+          ? 100
+          : (status == kSubjectPending ? 0 : 15),
+      'semester': 'Semestre ${s.semester ?? 6}',
+      'icon': Icons.book_rounded,
+      'units': [
+        {
+          'title': 'Unidad 1: Introducción',
+          'badge': 'próximo',
+          'items': [
+            {'title': 'Contenido inicial por definir', 'checked': false, 'tag': 'Clase 1 – 2'},
+          ]
+        },
+      ],
+      'materials': [
+        {'name': 'Sin materiales aún', 'meta': 'Añade PDFs desde el detalle', 'icon': Icons.description_rounded},
+      ],
+      'grades': [
+        {'name': 'Evaluación 1 (100%)', 'weight': 1.0, 'score': null, 'status': 'pending'},
+      ],
+    };
+  }
+
+  /// "HH:MM:SS" de la API -> "HH:MM" para render.
+  String _shortTime(String raw) {
+    final m = hhMmToMinutes(raw);
+    return m == null ? raw : minutesToHhMm(m);
+  }
+
+  /// Texto HORARIO ("A · B · C" con separador '·' también dentro de cada
+  /// entrada) -> entradas individuales "días · bloque".
+  List<String> _splitScheduleEntries(String text) {
+    final parts = text
+        .split('·')
+        .map((p) => p.trim())
+        .where((p) => p.isNotEmpty)
+        .toList();
+    if (parts.length.isOdd) return const [];
+    final out = <String>[];
+    for (var i = 0; i < parts.length; i += 2) {
+      out.add('${parts[i]} · ${parts[i + 1]}');
+    }
+    return out;
   }
 
   Map<String, dynamic>? get _selectedCourse {
@@ -130,6 +248,11 @@ class _CoursesScreenState extends State<CoursesScreen> {
 
     if (result == null || !mounted) return;
 
+    if (_backendMode && _curriculumId != null) {
+      await _createCourseBackend(result);
+      return;
+    }
+
     CoursesService.instance.addCourse({
       'id': 'course-${DateTime.now().microsecondsSinceEpoch}',
       'code': result['code'],
@@ -164,6 +287,103 @@ class _CoursesScreenState extends State<CoursesScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('Curso creado correctamente'),
+        backgroundColor: AppColors.border,
+      ),
+    );
+  }
+
+  /// Alta por API: POST materia + fan-out de bloques multi-día (un POST
+  /// por día). Falla la materia -> error visible sin alta local. Falla un
+  /// día -> error visible con los días afectados (reintentable sin
+  /// duplicar: el fan-out verifica por GET antes de reintentar).
+  Future<void> _createCourseBackend(Map<String, dynamic> result) async {
+    final messenger = ScaffoldMessenger.of(context);
+    String subjectId;
+    try {
+      subjectId = await _academicApi.createSubject(
+        curriculumId: _curriculumId!,
+        name: (result['name'] as String?) ?? '',
+        code: result['code'] as String?,
+        professor: result['professor'] as String?,
+        room: result['room'] as String?,
+        credits: result['credits'] as int?,
+        status: (result['status'] as String?) ?? kSubjectPending,
+        semester: 6,
+      );
+    } on AcademicApiException catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('No se pudo crear el curso: ${e.message}'),
+          backgroundColor: AppColors.border,
+        ),
+      );
+      return;
+    }
+
+    final failedDays = <String>[];
+    final scheduleText = (result['schedule'] as String?) ?? '';
+    if (scheduleText.trim().isNotEmpty && scheduleText != 'Por definir') {
+      for (final entry in _splitScheduleEntries(scheduleText)) {
+        List<ScheduleDraft> drafts;
+        try {
+          drafts = expandScheduleEntry(entry);
+        } on FormatException {
+          failedDays.add(entry);
+          continue;
+        }
+        if (drafts.isEmpty) continue;
+        final res = await _academicApi.createSchedulesFanOut(
+          subjectId: subjectId,
+          days: drafts.map((d) => d.dayOfWeek).toList(),
+          startTime: drafts.first.startTime,
+          endTime: drafts.first.endTime,
+        );
+        for (final day in res.failed.keys) {
+          failedDays.add(dayNumberToLabel(day));
+        }
+      }
+    }
+
+    if (!mounted) return;
+    CoursesService.instance.addCourse({
+      'id': subjectId,
+      'code': result['code'],
+      'name': result['name'],
+      'credits': result['credits'],
+      'status': result['status'],
+      'professor': result['professor'],
+      'schedule': result['schedule'],
+      'room': result['room'],
+      'requisite': 'REQ: —',
+      'requisite_alert': false,
+      'progress': result['status'] == kSubjectPending ? 0 : 15,
+      'semester': 'Semestre 6',
+      'icon': Icons.book_rounded,
+      'units': [
+        {
+          'title': 'Unidad 1: Introducción',
+          'badge': 'próximo',
+          'items': [
+            {'title': 'Contenido inicial por definir', 'checked': false, 'tag': 'Clase 1 – 2'},
+          ]
+        },
+      ],
+      'materials': [
+        {'name': 'Sin materiales aún', 'meta': 'Añade PDFs desde el detalle', 'icon': Icons.description_rounded},
+      ],
+      'grades': [
+        {'name': 'Evaluación 1 (100%)', 'weight': 1.0, 'score': null, 'status': 'pending'},
+      ],
+    });
+
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          failedDays.isEmpty
+              ? 'Curso creado correctamente'
+              : 'Curso creado, pero fallaron horarios: ${failedDays.join(', ')}. Verifica y reintenta.',
+        ),
         backgroundColor: AppColors.border,
       ),
     );

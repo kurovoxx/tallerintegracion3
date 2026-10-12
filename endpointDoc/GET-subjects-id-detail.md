@@ -5,7 +5,7 @@
 - Headers: `Authorization: Bearer <access_token>`. Sin body.
 
 ## Res
-- `200`: `{"subject":{...},"schedules":[],"grades":[{"grade":{...},"children":[]}],"average":{"average":6.0,"status":"approved"},"attendance":{"unjustified_count":1,"percentage":0.9,...}}` (misma forma que las rutas individuales; listas `[]` nunca `null`; materia vacía → `average: {"average":null,"status":"pending"}` + `percentage: null`).
+- `200`: `{"subject":{...,"code","professor","room"},...,"schedules":[{"modality":...}],...}` (misma forma que las rutas individuales, con los campos nuevos; listas `[]` nunca `null`; materia vacía → `average: {"average":null,"status":"pending"}` + `percentage: null`).
 - `400`: `{"error":{"code":"invalid_uuid","message":"..."}}`.
 - `401`: `{"error":{"code":"unauthorized|invalid_token|token_expired","message":"..."}}`.
 - `404`: `{"error":{"code":"not_found","message":"..."}}` (ajena/inexistente).

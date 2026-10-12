@@ -5,7 +5,7 @@
 - Headers: `Authorization: Bearer <access_token>`. Sin body.
 
 ## Res
-- `200`: `{"items":[{"id":"...","subject_id":"...","day_of_week":2,"start_time":"10:00:00","end_time":"11:30:00"}]}` (horas serializadas `"15:04:05"`; `[]` nunca `null`).
+- `200`: `{"items":[{"id":"...","subject_id":"...","day_of_week":2,"start_time":"10:00:00","end_time":"11:30:00","modality":"Cátedra"}]}` (horas serializadas `"15:04:05"`; `modality` null si ausente; `[]` nunca `null`).
 - `400`: `{"error":{"code":"invalid_uuid","message":"..."}}`.
 - `401`: `{"error":{"code":"unauthorized|invalid_token|token_expired","message":"..."}}`.
 - `404`: `{"error":{"code":"not_found","message":"..."}}` (materia no existe o es ajena).

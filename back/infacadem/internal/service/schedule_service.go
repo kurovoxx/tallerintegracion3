@@ -11,7 +11,7 @@ import (
 
 // ScheduleStore es el contrato que el service espera del repository.
 type ScheduleStore interface {
-	Create(ctx context.Context, userID, subjectID string, dayOfWeek int, start, end time.Time) (*model.Schedule, error)
+	Create(ctx context.Context, userID, subjectID string, dayOfWeek int, start, end time.Time, modality *string) (*model.Schedule, error)
 	ListBySubject(ctx context.Context, subjectID, userID string) ([]model.Schedule, bool, error)
 	Delete(ctx context.Context, id, userID string) (bool, error)
 }
@@ -39,7 +39,8 @@ func parseDayTime(raw string) (time.Time, error) {
 }
 
 // Create crea un horario en una materia propia; 404 si la materia no existe o es ajena.
-func (s *ScheduleService) Create(ctx context.Context, userID, subjectID string, dayOfWeek int, startRaw, endRaw string) (*model.Schedule, error) {
+// modality nil o vacía (tras trim) = NULL.
+func (s *ScheduleService) Create(ctx context.Context, userID, subjectID string, dayOfWeek int, startRaw, endRaw string, modality *string) (*model.Schedule, error) {
 	if err := requireUser(userID); err != nil {
 		return nil, err
 	}
@@ -61,7 +62,13 @@ func (s *ScheduleService) Create(ctx context.Context, userID, subjectID string, 
 	if !end.After(start) {
 		return nil, NewServiceError(utils.ErrInvalidTimeRange)
 	}
-	out, err := s.repo.Create(ctx, strings.TrimSpace(userID), subjectID, dayOfWeek, start, end)
+	var mod *string
+	if modality != nil {
+		if t := strings.TrimSpace(*modality); t != "" {
+			mod = &t
+		}
+	}
+	out, err := s.repo.Create(ctx, strings.TrimSpace(userID), subjectID, dayOfWeek, start, end, mod)
 	if err != nil {
 		return nil, err
 	}
