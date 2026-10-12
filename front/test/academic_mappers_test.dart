@@ -146,4 +146,24 @@ void main() {
     res = computeNeeded(target: 4.0, weightedKnown: 3.0, pendingWeight: 0);
     expect(res.status, NeededStatus.unreachable);
   });
+
+  test('validador de rango 1.0-7.0: reporte 70/50 y bordes', () {
+    // Reporte: 70 y 50 (escala backend) bloquean el cálculo.
+    expect(allScoresInRange([70.0, 50.0]), isFalse);
+    expect(isValidGradeScore(70.0), isFalse);
+    expect(isValidGradeScore(50.0), isFalse);
+
+    // Bordes: 0.9 y 7.1 fuera; 1.0 y 7.0 dentro.
+    expect(allScoresInRange([0.9]), isFalse);
+    expect(allScoresInRange([7.1]), isFalse);
+    expect(allScoresInRange([1.0, 7.0]), isTrue);
+
+    // Vacía (pendiente) no dispara el error, ni mezclada con válidas.
+    expect(allScoresInRange([null]), isTrue);
+    expect(allScoresInRange([4.5, null, 6.0]), isTrue);
+
+    // Hija inválida con resto válido bloquea igual.
+    expect(allScoresInRange([5.0, 4.0, 80.0]), isFalse);
+    expect(allScoresInRange([]), isTrue);
+  });
 }

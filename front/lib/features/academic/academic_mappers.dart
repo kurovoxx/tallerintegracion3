@@ -181,6 +181,22 @@ double? gradeRawToUi(dynamic raw) {
 /// Nota máxima válida en la UI (escala 1-7).
 const double maxValidGrade = 7.0;
 
+/// Nota mínima válida en la UI (escala 1-7).
+const double minValidGrade = 1.0;
+
+/// Una nota conocida es válida solo en [1.0, 7.0]; null/vacía = pendiente
+/// (siempre OK). La escala 10-70 es solo del backend.
+bool isValidGradeScore(double? score) {
+  if (score == null) return true;
+  return score >= minValidGrade && score <= maxValidGrade;
+}
+
+/// Todas las notas conocidas (tops, hijas, examen/final) en rango.
+/// Una sola fuera de rango bloquea el cálculo.
+bool allScoresInRange(Iterable<double?> scores) {
+  return scores.every(isValidGradeScore);
+}
+
 /// Resultado sellado de [computeNeeded].
 enum NeededStatus {
   /// La meta ya está alcanzada: nunca se muestra un needed <= 0 como nota.
