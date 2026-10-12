@@ -1,0 +1,313 @@
+// Contrato gRPC de Notes (tarea 1: definición de protos).
+//
+// El server vivirá en back/notes (internal/handler/grpc); el consumidor
+// interno principal es Social (UnshareAll) y futuros clientes servicio-a-servicio.
+// El HTTP actual (Gin, :8082) se mantiene intacto durante la migración
+// (dual-serve): este contrato replica su semántica, no la reemplaza aún.
+//
+// Auth: el user_id del llamante se extrae del JWT (metadata
+// "authorization: Bearer …", mismo validador HS256 iss=apuntes-auth
+// aud=apuntes-client); NUNCA viaja como campo de request. Excepción:
+// UnshareAll es servicio-a-servicio y se autentica con "x-internal-key"
+// (el user_id ahí es el usuario objetivo de la limpieza, no el llamante).
+//
+// Mapeo canónico ServiceError → código gRPC (el detalle snake_case viaja en
+// el status, mismo catálogo que los handlers HTTP):
+//   not_found / note_unavailable       → NOT_FOUND (zero-knowledge: una nota
+//                                         privada sin acceso es indistinguible
+//                                         de una inexistente, igual que en HTTP)
+//   forbidden                          → PERMISSION_DENIED
+//   bad_request / invalid_*            → INVALID_ARGUMENT
+//   already_saved / already_liked /
+//   conflict                           → ALREADY_EXISTS (duplicado) / ABORTED
+//                                         (versión desactualizada, carrera)
+//   rate_limited                       → RESOURCE_EXHAUSTED
+//   file_too_large / unsupported_media  → INVALID_ARGUMENT / correspondiente
+//   almacenamiento no disponible (502) → UNAVAILABLE
+//   error interno                      → INTERNAL
+//   sin token / token inválido         → UNAUTHENTICATED
+//
+// Regenerar (hermético, sin protoc del sistema):
+//   ./generate.sh   (desde back/proto/notes; instala el toolchain fijado)
+syntax = "proto3";
+
+package notes.v1;
+
+option go_package = "github.com/kurovoxx/tallerintegracion3/back/notes/internal/gen/notesv1";
+
+// NotesService agrupa metadata de apuntes, notas compartidas/notas de grupo
+// y la limpieza interna de acceso. Un solo servicio (no uno por recurso)
+// porque Share/Unshare/Update comparten el lock por nota y la convergencia
+// de permisos de Drive: separarlos rompería la atomicidad del dominio.
+service NotesService {
+  // CreateNote crea metadata en PG + archivo .md en el Drive del autor.
+  // Equivale a POST /notes → 201 {note_id}.
+  // INVALID_ARGUMENT si título/visibilidad/subject_id inválidos o contenido
+  // > 1MB; PERMISSION_DENIED si el autor no tiene Drive conectado; UNAVAILABLE
+  // si Drive falla (la fila queda failed_sync, reconciliable).
+  rpc CreateNote(CreateNoteRequest) returns (CreateNoteResponse);
+
+  // GetNote lee metadata + contenido (Drive) + URL pública.
+  // Equivale a GET /notes/:id → 200. NOT_FOUND si no existe o si es privada
+  // sin acceso (zero-knowledge, nunca PERMISSION_DENIED por existencia).
+  rpc GetNote(GetNoteRequest) returns (GetNoteResponse);
+
+  // ListMyNotes lista las notas propias paginadas.
+  // Equivale a GET /notes/me → 200 {notes, next_cursor}.
+  rpc ListMyNotes(ListMyNotesRequest) returns (ListMyNotesResponse);
+
+  // UpdateNote aplica PATCH de metadata/contenido con versionado optimista.
+  // Equivale a PATCH /notes/:id → 200. Solo el autor (ajeno → NOT_FOUND).
+  // expected_version > 0 exige esa versión vigente; 0 usa la versión leída
+  // bajo lock (igual que el servicio HTTP). Conflicto → ABORTED.
+  rpc UpdateNote(UpdateNoteRequest) returns (UpdateNoteResponse);
+
+  // DeleteNote borra PG-primero + cleanup Drive best-effort (outbox durable).
+  // Equivale a DELETE /notes/:id → 204. Solo el autor (ajeno → NOT_FOUND).
+  rpc DeleteNote(DeleteNoteRequest) returns (DeleteNoteResponse);
+
+  // ShareNote comparte una nota con un grupo (link | restricted).
+  // Equivale a POST /notes/:id/share → 201 {shared_note_id}. Solo el autor y
+  // miembro del grupo (no-miembro → PERMISSION_DENIED; Social caído →
+  // UNAVAILABLE/INTERNAL, fail-closed). En restricted converge permisos
+  // nominales por email en Drive; si Drive falla el share persiste con
+  // permission_sync_status=failed para el reconciliador.
+  rpc ShareNote(ShareNoteRequest) returns (ShareNoteResponse);
+
+  // UnshareNote retira un vínculo nota↔grupo y reconverge el ACL restante.
+  // Equivale a DELETE /notes/shared/:sharedNoteId → 204. Autor de la nota o
+  // admin del grupo; otro → PERMISSION_DENIED.
+  rpc UnshareNote(UnshareNoteRequest) returns (UnshareNoteResponse);
+
+  // ListGroupNotes lista las notas compartidas con un grupo, ordenadas
+  // admin → likes → fecha (server-side).
+  // Equivale a GET /groups/:id/notes → 200 {notes, next_cursor}.
+  // Exige membresía del solicitante (no-miembro → PERMISSION_DENIED).
+  rpc ListGroupNotes(ListGroupNotesRequest) returns (ListGroupNotesResponse);
+
+  // GetNoteAccess resuelve el contrato de acceso sin descargar contenido.
+  // Equivale a GET /notes/:id/access → 200. Sin acceso → NOT_FOUND
+  // (zero-knowledge). Nunca falla por Drive: el estado remoto viaja como
+  // metadato (drive_sync_status, drive_connection_required).
+  rpc GetNoteAccess(GetNoteAccessRequest) returns (GetNoteAccessResponse);
+
+  // UnshareAll retira TODOS los shares de un usuario en un grupo (limpieza al
+  // salir del grupo / borrado de cuenta). Equivale a POST /notes/unshare-all.
+  // INTERNA servicio-a-servicio (Social → Notes): se autentica con
+  // "x-internal-key", NO con JWT de usuario. El HTTP actual se mantiene como
+  // fallback durante la migración.
+  rpc UnshareAll(UnshareAllRequest) returns (UnshareAllResponse);
+}
+
+// Note es la metadata de un apunte (notes.notes). El contenido Markdown vive
+// en el Drive del autor (external_file_id) y solo viaja en GetNote.
+message Note {
+  // UUID de la nota.
+  string id = 1;
+  // UUID del autor (del JWT, nunca del request).
+  string user_id = 2;
+  // UUID de la materia (opcional, solo formato UUID; sin FK física).
+  optional string subject_id = 3;
+  string title = 4;
+  // ID del archivo .md en el Drive del autor; ausente pre-sync.
+  optional string external_file_id = 5;
+  // public | private.
+  string visibility = 6;
+  int64 likes_count = 7;
+  // UUID de la nota origen si es fork (copy); ausente si es original.
+  optional string forked_from_note_id = 8;
+  // synced | pending_drive | failed_sync.
+  string sync_status = 9;
+  // Contador de versionado optimista (PATCH condicional).
+  int64 version = 10;
+  // Timestamps RFC3339 UTC.
+  string created_at = 11;
+  string updated_at = 12;
+  // Contenido Markdown descargado de Drive. Solo GetNote; el resto de
+  // respuestas lo omite (el contenido grande viaja a Drive, no al RPC).
+  optional string content = 13;
+  // Enlace web de Drive cuando hay external_file_id.
+  optional string drive_url = 14;
+}
+
+// SharedNote es el vínculo nota↔grupo (notes.shared_notes).
+message SharedNote {
+  string id = 1;
+  string note_id = 2;
+  string group_id = 3;
+  // True si quien compartió era admin del grupo al compartir.
+  bool is_admin_note = 4;
+  // link | restricted.
+  string access_mode = 5;
+  // Seguidores del autor al compartir (desempate de prestigio).
+  int32 author_followers_snapshot = 6;
+  // in_sync | pending | failed (convergencia del ACL en Drive).
+  string permission_sync_status = 7;
+  // Timestamp RFC3339 UTC.
+  string shared_at = 8;
+}
+
+// NoteWithShare empaqueta la nota con su vínculo al grupo (ListGroupNotes).
+message NoteWithShare {
+  Note note = 1;
+  SharedNote share = 2;
+}
+
+// NoteAccess es el contrato de acceso + estado Drive (sin contenido).
+message NoteAccess {
+  bool can_read = 1;
+  bool can_write = 2;
+  string visibility = 3;
+  // owner | public | link | restricted.
+  string access_mode = 4;
+  // failed > pending > synced (convergencia de managed permissions).
+  string drive_sync_status = 5;
+  // True solo si Drive confirmó el acceso del autor.
+  bool drive_access_verified = 6;
+  // True solo si el autor (nota no pública, modo owner) no tiene OAuth vigente.
+  bool drive_connection_required = 7;
+  optional string drive_url = 8;
+}
+
+// PageRequest/PageResponse: espejo exacto de common.v1
+// (back/proto/common/v1/pagination.proto). Se duplica a propósito para no
+// acoplar módulos buf (prohibido el descubrimiento cruzado desde back/proto
+// raíz): mismo wire-shape (1=int32 page_size, 2=string page_token /
+// 1=string next_page_token), por lo que una futura workspace los unifica sin
+// romper compatibilidad.
+// Mapeo HTTP: page_token = cursor, page_size = limit,
+// next_page_token = next_cursor.
+message PageRequest {
+  // Máximo de elementos. 0 = default del servidor (20, tope 100, como HTTP).
+  int32 page_size = 1;
+  // Cursor opaco del servidor; vacío = primera página.
+  string page_token = 2;
+}
+
+message PageResponse {
+  // Cursor para la próxima página; vacío = no hay más.
+  string next_page_token = 1;
+}
+
+// CreateNoteRequest crea una nota (POST /notes).
+message CreateNoteRequest {
+  // Requerido, 1-255 tras trim; "/" y "\" se normalizan a "_".
+  string title = 1;
+  // Opcional; vacío = sin materia; no-vacío debe ser UUID.
+  optional string subject_id = 2;
+  // Requerida: public | private.
+  string visibility = 3;
+  // Opcional; default "# {title}\n\n". Tope 1MB, sanitizado XSS.
+  optional string content = 4;
+  // Idempotencia opcional (header X-Idempotency-Key en HTTP).
+  optional string idempotency_key = 5;
+}
+
+// CreateNoteResponse devuelve el id creado (201 {note_id}).
+message CreateNoteResponse {
+  string note_id = 1;
+}
+
+// GetNoteRequest lee una nota por id (GET /notes/:id).
+message GetNoteRequest {
+  // UUID; malformado → NOT_FOUND (no INVALID_ARGUMENT, paridad HTTP).
+  string id = 1;
+}
+
+// GetNoteResponse trae metadata + contenido + URL de Drive.
+message GetNoteResponse {
+  Note note = 1;
+}
+
+// ListMyNotesRequest lista notas propias (GET /notes/me).
+message ListMyNotesRequest {
+  PageRequest page = 1;
+}
+
+// ListMyNotesResponse pagina con el truco limit+1 (sin total).
+message ListMyNotesResponse {
+  repeated Note notes = 1;
+  PageResponse page = 2;
+}
+
+// UpdateNoteRequest aplica PATCH (PATCH /notes/:id).
+message UpdateNoteRequest {
+  // UUID de la nota.
+  string id = 1;
+  // Al menos uno de title/visibility/content debe venir (si no, INVALID_ARGUMENT).
+  optional string title = 2;
+  optional string visibility = 3;
+  optional string content = 4;
+  // Precondición optimista: > 0 exige esa versión vigente (ABORTED si cambió);
+  // 0 = versión leída bajo lock (igual que el servicio HTTP).
+  int64 expected_version = 5;
+  // Idempotencia opcional (header X-Idempotency-Key en HTTP).
+  optional string idempotency_key = 6;
+}
+
+// UpdateNoteResponse devuelve la nota tras el cambio (200 HTTP devuelve
+// {id, title, visibility, version, updated_at}; aquí la entidad completa).
+message UpdateNoteResponse {
+  Note note = 1;
+}
+
+// DeleteNoteRequest borra una nota (DELETE /notes/:id → 204).
+message DeleteNoteRequest {
+  string id = 1;
+}
+
+message DeleteNoteResponse {}
+
+// ShareNoteRequest comparte con un grupo (POST /notes/:id/share).
+message ShareNoteRequest {
+  // UUID de la nota (solo su autor puede compartir).
+  string note_id = 1;
+  // UUID del grupo (el autor debe ser miembro).
+  string group_id = 2;
+  // Requerido: link | restricted.
+  string access_mode = 3;
+}
+
+// ShareNoteResponse devuelve el vínculo creado (201 {shared_note_id}).
+message ShareNoteResponse {
+  string shared_note_id = 1;
+}
+
+// UnshareNoteRequest retira un share (DELETE /notes/shared/:id → 204).
+message UnshareNoteRequest {
+  // UUID del vínculo (notes.shared_notes.id), no de la nota.
+  string shared_note_id = 1;
+}
+
+message UnshareNoteResponse {}
+
+// ListGroupNotesRequest lista notas de un grupo (GET /groups/:id/notes).
+message ListGroupNotesRequest {
+  // UUID del grupo (el solicitante debe ser miembro).
+  string group_id = 1;
+  PageRequest page = 2;
+}
+
+message ListGroupNotesResponse {
+  repeated NoteWithShare notes = 1;
+  PageResponse page = 2;
+}
+
+// GetNoteAccessRequest resuelve acceso (GET /notes/:id/access).
+message GetNoteAccessRequest {
+  string id = 1;
+}
+
+message GetNoteAccessResponse {
+  NoteAccess access = 1;
+}
+
+// UnshareAllRequest limpia los shares de un usuario en un grupo
+// (POST /notes/unshare-all → 204). RPC INTERNO: auth con x-internal-key.
+message UnshareAllRequest {
+  // Usuario objetivo de la limpieza (quien salió del grupo).
+  string user_id = 1;
+  string group_id = 2;
+}
+
+message UnshareAllResponse {}
