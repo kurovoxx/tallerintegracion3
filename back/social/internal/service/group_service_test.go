@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,7 +12,12 @@ import (
 	"testing"
 	"time"
 
+	notesv1 "github.com/kurovoxx/tallerintegracion3/back/social/internal/gen/notesv1"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/model"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/test/bufconn"
 )
 
 // Ids fijos con formato uuid válido: el servicio rechaza ids mal formados.
@@ -529,6 +535,8 @@ func TestLeaveCleansSharedNotes(t *testing.T) {
 
 	svc, store := newTestSvc()
 	svc.SetNotesBaseURL(notes.URL)
+	// gRPC caído -> debe caer al fallback HTTP (lo que valida este test).
+	svc.SetNotesUnsharer(&fakeUnsharer{err: errors.New("grpc down")})
 	g := newGroup(t, svc, uAdmin)
 	joinAs(t, svc, store, g.ID, uMember)
 
@@ -573,6 +581,8 @@ func TestLeaveSucceedsWhenNotesIsDown(t *testing.T) {
 
 	svc, store := newTestSvc()
 	svc.SetNotesBaseURL(url)
+	// Ambos transportes caídos: gRPC (fake) y HTTP (servidor cerrado).
+	svc.SetNotesUnsharer(&fakeUnsharer{err: errors.New("grpc down")})
 	g := newGroup(t, svc, uAdmin)
 	joinAs(t, svc, store, g.ID, uMember)
 	if err := svc.LeaveGroup(ctx, g.ID, uMember, true, "jwt"); err != nil {
@@ -808,5 +818,118 @@ func TestConcurrentAdminLeaveRetainsAdminAndOwner(t *testing.T) {
 	updated, _ := store.GetByID(ctx, g.ID)
 	if updated.OwnerUserID != uMember {
 		t.Fatal("owner not transferred")
+	}
+}
+
+// --- Limpieza de apuntes al salir del grupo (migración unshare-all a gRPC) ---
+
+type unsharerCall struct{ userID, groupID string }
+
+type fakeUnsharer struct {
+	mu    sync.Mutex
+	calls []unsharerCall
+	err   error
+}
+
+func (f *fakeUnsharer) UnshareAll(ctx context.Context, userID, groupID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, unsharerCall{userID: userID, groupID: groupID})
+	return f.err
+}
+
+func (f *fakeUnsharer) snapshot() []unsharerCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]unsharerCall(nil), f.calls...)
+}
+
+// gRPC operativo: se usa el unsharer y NO se toca el HTTP legacy.
+func TestLeavePrefersGRPCUnsharer(t *testing.T) {
+	httpCalled := make(chan struct{}, 1)
+	notes := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { httpCalled <- struct{}{} }))
+	defer notes.Close()
+
+	svc, store := newTestSvc()
+	svc.SetNotesBaseURL(notes.URL)
+	fake := &fakeUnsharer{}
+	svc.SetNotesUnsharer(fake)
+	g := newGroup(t, svc, uAdmin)
+	joinAs(t, svc, store, g.ID, uMember)
+
+	if err := svc.LeaveGroup(ctx, g.ID, uMember, true, "jwt"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(2 * time.Second)
+	for len(fake.snapshot()) == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("no se llamó al unsharer gRPC")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	calls := fake.snapshot()
+	if calls[0].userID != uMember || calls[0].groupID != g.ID {
+		t.Fatalf("args inesperados: %+v", calls[0])
+	}
+	select {
+	case <-httpCalled:
+		t.Fatal("no debe usarse HTTP cuando gRPC funciona")
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+// fakeNotesServer captura el RPC UnshareAll y su metadata.
+type fakeNotesServer struct {
+	notesv1.UnimplementedNotesServiceServer
+	gotUser  string
+	gotGroup string
+	gotKey   string
+	called   chan struct{}
+}
+
+func (s *fakeNotesServer) UnshareAll(ctx context.Context, req *notesv1.UnshareAllRequest) (*notesv1.UnshareAllResponse, error) {
+	s.gotUser = req.GetUserId()
+	s.gotGroup = req.GetGroupId()
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if v := md.Get(metadataInternalKey); len(v) > 0 {
+			s.gotKey = v[0]
+		}
+	}
+	close(s.called)
+	return &notesv1.UnshareAllResponse{}, nil
+}
+
+// El cliente gRPC real (bufconn) envía user_id, group_id y x-internal-key.
+func TestNotesGRPCUnsharerSendsInternalKey(t *testing.T) {
+	lis := bufconn.Listen(1024 * 1024)
+	srv := grpc.NewServer()
+	fake := &fakeNotesServer{called: make(chan struct{})}
+	notesv1.RegisterNotesServiceServer(srv, fake)
+	go func() { _ = srv.Serve(lis) }()
+	defer srv.Stop()
+
+	u := newNotesGRPCUnsharer("bufnet", "secreto-interno")
+	u.dial = func(target string) (*grpc.ClientConn, error) {
+		return grpc.NewClient("passthrough:///bufnet",
+			grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+				return lis.DialContext(ctx)
+			}),
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		)
+	}
+
+	callCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := u.UnshareAll(callCtx, uMember, "grupo-1"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-fake.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("el servidor gRPC no recibió el RPC")
+	}
+	if fake.gotUser != uMember || fake.gotGroup != "grupo-1" || fake.gotKey != "secreto-interno" {
+		t.Fatalf("RPC inesperado: user=%q group=%q key=%q", fake.gotUser, fake.gotGroup, fake.gotKey)
 	}
 }
