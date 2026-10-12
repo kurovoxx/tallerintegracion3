@@ -68,4 +68,82 @@ void main() {
     expect(percentToFraction(null), isNull);
     expect(fractionToPercent(0.25), 25.0);
   });
+
+  test('nota UI (1-7) <-> score backend (10-70)', () {
+    expect(gradeUiToRaw(6.2), 62);
+    expect(gradeUiToRaw('4,0'), 40);
+    expect(gradeUiToRaw(7), 70);
+    expect(gradeUiToRaw(1), 10);
+    expect(gradeUiToRaw('x'), isNull);
+    expect(gradeUiToRaw(null), isNull);
+    expect(gradeRawToUi(62), 6.2);
+    expect(gradeRawToUi('40'), 4.0);
+    expect(gradeRawToUi(null), isNull);
+    expect(gradeRawToUi('x'), isNull);
+  });
+
+  test('computeNeeded: reporte -150 -> ya alcanzada, nunca negativo', () {
+    // Reporte: conocidos 5.5, pendiente 1%, meta 4.0 -> (4-5.5)/0.01 = -150.
+    final res = computeNeeded(
+      target: 4.0,
+      weightedKnown: 5.5,
+      pendingWeight: 0.01,
+    );
+    expect(res.status, NeededStatus.reached);
+    expect(res.needed, isNull);
+  });
+
+  test('computeNeeded: bordes 0/1.0/7.0/7.1 y sin pendientes', () {
+    // needed exactamente 0 -> ya alcanzada.
+    var res = computeNeeded(
+      target: 4.0,
+      weightedKnown: 4.0,
+      pendingWeight: 0.5,
+    );
+    expect(res.status, NeededStatus.reached);
+
+    // needed 1.0 -> flujo normal (nota mínima válida, se muestra).
+    res = computeNeeded(
+      target: 4.0,
+      weightedKnown: 3.5,
+      pendingWeight: 0.5,
+    );
+    expect(res.status, NeededStatus.needed);
+    expect(res.needed, closeTo(1.0, 1e-9));
+
+    // needed 4.5 normal.
+    res = computeNeeded(
+      target: 4.0,
+      weightedKnown: 1.75,
+      pendingWeight: 0.5,
+    );
+    expect(res.status, NeededStatus.needed);
+    expect(res.needed, closeTo(4.5, 1e-9));
+
+    // needed 7.0 -> alcanzable; 7.1 -> no alcanzable.
+    res = computeNeeded(
+      target: 4.0,
+      weightedKnown: 1.2,
+      pendingWeight: 0.4,
+    );
+    expect(res.status, NeededStatus.needed);
+    expect(res.needed, closeTo(7.0, 1e-9));
+    res = computeNeeded(
+      target: 4.0,
+      weightedKnown: 1.16,
+      pendingWeight: 0.4,
+    );
+    expect(res.status, NeededStatus.unreachable);
+
+    // needed 7.5 inalcanzable.
+    res = computeNeeded(target: 4.0, weightedKnown: 1.0, pendingWeight: 0.4);
+    expect(res.status, NeededStatus.unreachable);
+    expect(res.needed, isNull);
+
+    // Sin pendientes: intacto según promedio conocido.
+    res = computeNeeded(target: 4.0, weightedKnown: 5.0, pendingWeight: 0);
+    expect(res.status, NeededStatus.reached);
+    res = computeNeeded(target: 4.0, weightedKnown: 3.0, pendingWeight: 0);
+    expect(res.status, NeededStatus.unreachable);
+  });
 }
