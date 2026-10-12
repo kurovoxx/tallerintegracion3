@@ -321,9 +321,49 @@ func (s *GroupService) ListMembersEnriched(ctx context.Context, groupID string, 
 	if err != nil {
 		return nil, err
 	}
+	return s.enrichMembers(ctx, members), nil
+}
+
+// GroupMembers lista los miembros enriquecidos sin exigir que quien consulta
+// sea miembro: solo para llamadas servicio-a-servicio (gRPC con clave interna).
+func (s *GroupService) GroupMembers(ctx context.Context, groupID string) ([]model.MemberView, error) {
+	if !utils.ValidateUUID(groupID) {
+		return nil, ErrNotFound
+	}
+	members, err := s.groups.ListMembers(ctx, groupID)
+	if err != nil {
+		return nil, mapStoreErr(err)
+	}
+	return s.enrichMembers(ctx, members), nil
+}
+
+// MembershipRole devuelve el rol del usuario en el grupo, "" si no es miembro
+// y ErrNotFound si el grupo no existe. Solo servicio-a-servicio.
+func (s *GroupService) MembershipRole(ctx context.Context, groupID, userID string) (string, error) {
+	if !utils.ValidateUUID(groupID) {
+		return "", ErrNotFound
+	}
+	g, err := s.groups.GetByID(ctx, groupID)
+	if err != nil {
+		return "", err
+	}
+	if g == nil {
+		return "", ErrNotFound
+	}
+	role, err := s.groups.GetMemberRole(ctx, groupID, userID)
+	if err != nil {
+		if err.Error() == "not_member" {
+			return "", nil
+		}
+		return "", err
+	}
+	return role, nil
+}
+
+func (s *GroupService) enrichMembers(ctx context.Context, members []*model.GroupMembership) []model.MemberView {
 	views := make([]model.MemberView, 0, len(members))
 	if len(members) == 0 {
-		return views, nil
+		return views
 	}
 	var names map[string]UserPublic
 	if s.users != nil {
@@ -356,7 +396,7 @@ func (s *GroupService) ListMembersEnriched(ctx context.Context, groupID string, 
 		}
 		views = append(views, v)
 	}
-	return views, nil
+	return views
 }
 
 // checkAdminAction valida los ids comunes a las acciones administrativas sobre

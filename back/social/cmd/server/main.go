@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -13,11 +14,15 @@ import (
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/calendar"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/config"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/discord"
+	socialv1 "github.com/kurovoxx/tallerintegracion3/back/social/internal/gen/socialv1"
+	grpcHandler "github.com/kurovoxx/tallerintegracion3/back/social/internal/handler/grpc"
 	httpHandler "github.com/kurovoxx/tallerintegracion3/back/social/internal/handler/http"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/interceptor"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/middleware"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/service"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/stream"
+	"google.golang.org/grpc"
 )
 
 func corsMiddleware() gin.HandlerFunc {
@@ -99,10 +104,35 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	streamTokenSvc.SetClient(streamClientFor(cfg))
 	streamH := httpHandler.NewStreamHandler(streamTokenSvc)
 
+	startGRPC(groupSvc, cfg)
+
 	viewSvc := service.NewViewService(groupSvc, todoSvc, sprintSvc, meetingSvc)
 	viewH := httpHandler.NewViewHandler(groupSvc, viewSvc)
 
 	startGin(groupSvc, todoH, sprintH, hoursH, meetingH, discordH, viewH, streamH, pool, cfg)
+}
+
+// startGRPC sirve SocialService (membresía/admin/limpieza) para Notes e
+// Identity. Logging va afuera para auditar también los rechazos de clave.
+func startGRPC(groupSvc *service.GroupService, cfg *config.Config) {
+	if cfg.InternalKey == "" {
+		log.Printf("gRPC social: INTERNAL_API_KEY vacía, todas las llamadas fallarán (fail-closed)")
+	}
+	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
+	if err != nil {
+		log.Fatalf("Error gRPC (puerto %s ocupado?): %v", cfg.GRPCPort, err)
+	}
+	s := grpc.NewServer(grpc.ChainUnaryInterceptor(
+		interceptor.NewLogging(log.Default()),
+		interceptor.NewInternalAuth(cfg.InternalKey),
+	))
+	socialv1.RegisterSocialServiceServer(s, grpcHandler.NewSocialServer(groupSvc))
+	go func() {
+		log.Printf("Servidor gRPC de Social en :%s", cfg.GRPCPort)
+		if err := s.Serve(lis); err != nil {
+			log.Printf("gRPC detenido: %v", err)
+		}
+	}()
 }
 
 func calendarNotifierFor(cfg *config.Config, meetingRepo *repository.MeetingRepository) service.MeetingCreatedNotifier {

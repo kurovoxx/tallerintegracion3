@@ -115,6 +115,42 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  name: infacadem
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: infacadem}
+  template:
+    metadata:
+      labels: {app: infacadem}
+    spec:
+      imagePullSecrets: [{name: ghcr-cred}]
+      containers:
+        - name: infacadem
+          image: ghcr.io/kurovoxx/tallerintegracion3-infacadem:latest
+          ports: [{containerPort: 8081}]
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 256Mi}
+          envFrom: [{secretRef: {name: ti3-secrets}}]
+          env:
+            - {name: PORT, value: "8081"}
+            - {name: GRPC_PORT, value: "9081"}
+---
+# El front (nginx) reenvía /api-academic a "academic:8081"; por eso el Service no se llama infacadem.
+apiVersion: v1
+kind: Service
+metadata:
+  name: academic
+spec:
+  selector: {app: infacadem}
+  ports: [{port: 8081, targetPort: 8081}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
   name: front
 spec:
   replicas: 1

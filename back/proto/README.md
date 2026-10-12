@@ -4,7 +4,7 @@
 
 - `make tools` — instala `buf` + `protoc-gen-go` + `protoc-gen-go-grpc` en `./bin/`
   (los plugins se compilan en docker, no se exige Go local).
-- `make generate` — genera los stubs Go de cada módulo (`back/proto/common`;
+- `make generate` — genera los stubs Go de cada módulo (`back/proto/common`, `back/proto/social`;
   infacadem genera lo suyo con `back/proto/infacadem/generate.sh`).
 - `make clean-tools` — borra `./bin/`.
 
@@ -13,7 +13,8 @@
 Cada equipo es dueño de su módulo (`buf.yaml` + `buf.gen.yaml` propios) y su
 generación:
 
-- `back/proto/common/` → stubs en `back/proto/gen/go/` (vía `make generate`).
+- `back/proto/common/` → stubs en `back/proto/gen/go/common/` (vía `make generate`).
+- `back/proto/social/` → stubs en `back/social/internal/gen/socialv1/` (vía `make generate`).
 - `back/proto/infacadem/` → stubs en `back/infacadem/internal/gen/` (vía su `generate.sh`).
 
 ## Regla
