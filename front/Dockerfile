@@ -4,6 +4,7 @@ FROM ghcr.io/cirruslabs/flutter:stable AS builder
 ARG BASE_URL=/api-auth
 ARG NOTES_BASE_URL=/api-notes
 ARG SOCIAL_BASE_URL=/api-social
+ARG ACADEMIC_BASE_URL=/api-academic
 ARG GOOGLE_CLIENT_ID=
 ARG GOOGLE_REDIRECT_URI=http://localhost:8081/auth/google/callback
 WORKDIR /app
@@ -27,6 +28,7 @@ RUN flutter build web --release \
     --dart-define=API_BASE_URL=$BASE_URL \
     --dart-define=NOTES_BASE_URL=$NOTES_BASE_URL \
     --dart-define=SOCIAL_BASE_URL=$SOCIAL_BASE_URL \
+    --dart-define=ACADEMIC_BASE_URL=$ACADEMIC_BASE_URL \
     --dart-define=GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID \
     --dart-define=GOOGLE_REDIRECT_URI=$GOOGLE_REDIRECT_URI
 

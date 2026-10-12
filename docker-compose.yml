@@ -112,6 +112,7 @@ services:
         BASE_URL: ${API_BASE_URL:-/api-auth}
         NOTES_BASE_URL: ${NOTES_BASE_URL:-/api-notes}
         SOCIAL_BASE_URL: ${SOCIAL_BASE_URL:-/api-social}
+        ACADEMIC_BASE_URL: ${ACADEMIC_BASE_URL:-/api-academic}
         GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
         GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8081/auth/google/callback}
     container_name: ti3-front
@@ -121,8 +122,31 @@ services:
       - auth
       - notes
       - social
+      - infacadem
     networks:
       - ti3-net
+    restart: unless-stopped
+
+  infacadem:
+    build:
+      context: ./back/infacadem
+      dockerfile: Dockerfile
+    container_name: ti3-academic
+    ports:
+      - "8087:8081" # host 8081 reservado para callback OAuth local de Drive
+    environment:
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable}
+      DIRECT_URL: ${DOCKER_DATABASE_URL:-postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable}
+      JWT_SECRET: ${JWT_SECRET}
+      PORT: 8081
+      GRPC_PORT: 9081
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      ti3-net:
+        aliases:
+          - academic
     restart: unless-stopped
 
 volumes:
