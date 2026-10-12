@@ -55,7 +55,9 @@ spec:
       containers:
         - name: notes
           image: ghcr.io/kurovoxx/tallerintegracion3-notes:latest
-          ports: [{containerPort: 8082}]
+          ports:
+            - {name: http, containerPort: 8082}
+            - {name: grpc, containerPort: 9082}
           resources:
             requests: {cpu: 50m, memory: 64Mi}
             limits: {cpu: 250m, memory: 256Mi}
@@ -63,6 +65,7 @@ spec:
           env:
             - {name: PORT, value: "8082"}
             - {name: NOTES_PORT, value: "8082"}
+            - {name: NOTES_GRPC_PORT, value: "9082"}
             - {name: STORAGE_MODE, value: drive}
             - {name: SOCIAL_SERVICE_URL, value: "http://social:8083"}
             - {name: SOCIAL_TIMEOUT, value: "5s"}
@@ -73,7 +76,9 @@ metadata:
   name: notes
 spec:
   selector: {app: notes}
-  ports: [{port: 8082, targetPort: 8082}]
+  ports:
+    - {name: http, port: 8082, targetPort: 8082}
+    - {name: grpc, port: 9082, targetPort: 9082}
 ---
 apiVersion: apps/v1
 kind: Deployment

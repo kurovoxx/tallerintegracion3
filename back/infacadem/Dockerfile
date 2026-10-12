@@ -13,6 +13,6 @@ FROM alpine:3.19
 RUN apk --no-cache add ca-certificates tzdata
 WORKDIR /app
 COPY --from=builder /academic-server .
-EXPOSE 8081
+EXPOSE 8081 9081
 ENV PORT=8081
 CMD ["./academic-server"]

@@ -16,8 +16,12 @@ type Config struct {
 	DirectURL   string
 	SupabaseURL string
 	SupabaseKey string
-	JWTSecret   string
-	Port        string
+	JWTSecret string
+	Port      string
+	// GRPCPort es el puerto del servidor gRPC dual-serve (NotesService para
+	// Social y futuros consumidores). Default 9082 (convención 90xx: 9081
+	// Academic, 9082 Notes).
+	GRPCPort    string
 	AccessTTL   int
 	RefreshTTL  int
 	StorageMode string // "mock" | "drive"
@@ -62,6 +66,7 @@ func Load() *Config {
 		SupabaseKey:        os.Getenv("SQL_API_KEY"),
 		JWTSecret:          os.Getenv("JWT_SECRET"),
 		Port:               os.Getenv("NOTES_PORT"),
+		GRPCPort:           firstNonEmpty(os.Getenv("NOTES_GRPC_PORT"), os.Getenv("GRPC_PORT")),
 		StorageMode:        os.Getenv("STORAGE_MODE"),
 		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
@@ -93,6 +98,9 @@ func Load() *Config {
 	if cfg.Port == "" {
 		cfg.Port = "8082"
 	}
+	if cfg.GRPCPort == "" {
+		cfg.GRPCPort = "9082"
+	}
 	if cfg.JWTSecret == "" {
 		cfg.JWTSecret = os.Getenv("JWT")
 		if cfg.JWTSecret == "" {
@@ -116,4 +124,15 @@ func Load() *Config {
 		}
 	}
 	return cfg
+}
+
+// firstNonEmpty devuelve el primer valor no vacío (tras TrimSpace). Permite
+// aceptar NOTES_GRPC_PORT o GRPC_PORT indistintamente.
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	return ""
 }

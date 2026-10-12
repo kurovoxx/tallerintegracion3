@@ -2535,7 +2535,19 @@ func DriveSyncStatusFromManagedPermissions(rows []*model.DriveManagedPermission)
 	return status
 }
 
-func (s *NoteService) ListGroupNotes(ctx context.Context, requesterID string, groupID string, cursor string, limit int) ([]*model.Note, string, error) {
+// GroupNote asocia una nota con su vínculo a grupo (notes.shared_notes). Es el
+// shape de GET /groups/{id}/notes y del RPC ListGroupNotes; se expone para que
+// la capa gRPC pueda mapear Note + SharedNote sin volver a consultar el store.
+type GroupNote struct {
+	Note   *model.Note
+	Shared *model.SharedNote
+}
+
+// ListGroupNotePairs resuelve las notas compartidas con un grupo junto a su
+// vínculo, aplicando membresía y el orden formal (admin → likes → fecha). Es
+// la única implementación de la lógica; ListGroupNotes (HTTP) delega en ella
+// para no duplicarla en el handler gRPC.
+func (s *NoteService) ListGroupNotePairs(ctx context.Context, requesterID string, groupID string, cursor string, limit int) ([]GroupNote, string, error) {
 	if !utils.ValidateUUID(groupID) {
 		return nil, "", newServiceErrorMsg(utils.ErrNotFound, "grupo no encontrado")
 	}
@@ -2553,30 +2565,36 @@ func (s *NoteService) ListGroupNotes(ctx context.Context, requesterID string, gr
 		return nil, "", ErrInternalDatabase
 	}
 	// Asociar cada shared con su nota para ordenar por criterios formales
-	type pair struct {
-		note   *model.Note
-		shared *model.SharedNote
-	}
-	var pairs []pair
+	var pairs []GroupNote
 	for _, sh := range sharedList {
 		n, _ := s.observedNotesGetByID(ctx, sh.NoteID)
 		if n != nil {
-			pairs = append(pairs, pair{note: n, shared: sh})
+			pairs = append(pairs, GroupNote{Note: n, Shared: sh})
 		}
 	}
 	// Orden formal: 1) is_admin_note == true primero, 2) likes_count DESC, 3) shared_at DESC
 	sort.SliceStable(pairs, func(i, j int) bool {
-		if pairs[i].shared.IsAdminNote != pairs[j].shared.IsAdminNote {
-			return pairs[i].shared.IsAdminNote && !pairs[j].shared.IsAdminNote
+		if pairs[i].Shared.IsAdminNote != pairs[j].Shared.IsAdminNote {
+			return pairs[i].Shared.IsAdminNote && !pairs[j].Shared.IsAdminNote
 		}
-		if pairs[i].note.LikesCount != pairs[j].note.LikesCount {
-			return pairs[i].note.LikesCount > pairs[j].note.LikesCount
+		if pairs[i].Note.LikesCount != pairs[j].Note.LikesCount {
+			return pairs[i].Note.LikesCount > pairs[j].Note.LikesCount
 		}
-		return pairs[i].shared.SharedAt.After(pairs[j].shared.SharedAt)
+		return pairs[i].Shared.SharedAt.After(pairs[j].Shared.SharedAt)
 	})
-	var notes []*model.Note
+	return pairs, next, nil
+}
+
+// ListGroupNotes (HTTP) devuelve solo las notas del grupo, delegando en
+// ListGroupNotePairs para compartir membresía y orden con el RPC gRPC.
+func (s *NoteService) ListGroupNotes(ctx context.Context, requesterID string, groupID string, cursor string, limit int) ([]*model.Note, string, error) {
+	pairs, next, err := s.ListGroupNotePairs(ctx, requesterID, groupID, cursor, limit)
+	if err != nil {
+		return nil, "", err
+	}
+	notes := make([]*model.Note, 0, len(pairs))
 	for _, p := range pairs {
-		notes = append(notes, p.note)
+		notes = append(notes, p.Note)
 	}
 	return notes, next, nil
 }
