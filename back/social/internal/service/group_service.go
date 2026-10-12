@@ -311,6 +311,43 @@ func (s *GroupService) ListMembers(ctx context.Context, groupID string, userID s
 	return members, nil
 }
 
+// ListMembersInternal lista miembros sin exigir membresía del solicitante.
+// Solo para consumo servicio-a-servicio tras RequireInternalKey (tarea 3_5_4:
+// checks is_admin/member de Notes). Grupo inexistente → ErrNotFound.
+func (s *GroupService) ListMembersInternal(ctx context.Context, groupID string) ([]*model.GroupMembership, error) {
+	if !utils.ValidateUUID(groupID) {
+		return nil, ErrNotFound
+	}
+	members, err := s.groups.ListMembers(ctx, groupID)
+	if err != nil {
+		return nil, mapStoreErr(err)
+	}
+	if members == nil {
+		members = []*model.GroupMembership{}
+	}
+	return members, nil
+}
+
+// ListMemberEmailsInternal resuelve los emails de los miembros para shares
+// restricted de Notes. Fail-closed: sin directorio o con fallo de Identity
+// devuelve error (Notes no debe calcular permisos sobre listas incompletas).
+func (s *GroupService) ListMemberEmailsInternal(ctx context.Context, groupID string) ([]string, error) {
+	members, err := s.ListMembersInternal(ctx, groupID)
+	if err != nil {
+		return nil, err
+	}
+	if s.users == nil {
+		return nil, newServiceError(utils.ErrInternal)
+	}
+	ids := make([]string, 0, len(members))
+	for _, m := range members {
+		if m != nil && strings.TrimSpace(m.UserID) != "" {
+			ids = append(ids, m.UserID)
+		}
+	}
+	return s.users.LookupEmailsStrict(ctx, ids)
+}
+
 // ListMembersEnriched igual que ListMembers pero con display_name/email
 // resueltos vía Identity cuando el directorio está configurado.
 // Best-effort: si el directorio falla, devuelve miembros sin nombres

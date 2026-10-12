@@ -243,6 +243,16 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 		discordH.RegisterRoutes(protected)
 	}
 
+	// Interno servicio-a-servicio (Notes → Social): secreto compartido, sin JWT.
+	// Tarea 3_5_4: checks is_admin/member + member-emails para share.
+	internalH := httpHandler.NewInternalHandler(groupSvc)
+	internal := r.Group("/internal")
+	internal.Use(middleware.RequireInternalKey(cfg.InternalKey))
+	{
+		internal.GET("/groups/:id/members", internalH.Members)
+		internal.GET("/groups/:id/member-emails", internalH.MemberEmails)
+	}
+
 	addr := ":" + cfg.Port
 	log.Printf("Social service corriendo en http://localhost%s", addr)
 	if err := r.Run(addr); err != nil {
