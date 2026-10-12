@@ -1,39 +1,55 @@
 # Documentación de tareas — Martín
-## 3_5_3 — Interceptores (auth interno, logging)
 
-### Decisión
+Doc vivo: una sección por tarea (3_5_N), en orden de ejecución. Endpoints por
+separado en `endpointDoc/`.
 
-Opción B: copia por servicio, sin dependencias entre microservicios.
-Implementado en `social` (`back/social/internal/interceptor/`); notes/auth
-copian el mismo archivo cuando lo necesiten. No se tocó código de otros equipos.
+## 3_5_1 — buf + protoc-gen-go + buf.gen.yaml + make generate
 
-### Archivos
+Rama: `feat/buf-+-protoc-gen-go-+-buf.gen.yaml-+-make-generate`
+
+### Objetivo
+
+Montar la toolchain para generar stubs Go desde `.proto`, sin invocar `protoc`
+a mano. No crea ningún endpoint ni ningún proto: solo configuración + Makefile.
+
+### Archivos creados
 
 | Archivo | Contenido |
 |---|---|
-| `back/social/internal/interceptor/auth.go` | `NewInternalAuth(secret)`: exige `x-internal-key` en metadata (equivale a `X-Internal-Key` HTTP). Sin secreto configurado → `Internal` (fail closed); sin key o mala → `Unauthenticated`. Comparación en tiempo constante |
-| `back/social/internal/interceptor/logging.go` | `NewLogging(logger)`: registra método, duración y código por RPC (equivale a `logOp`/`fail` HTTP). Logger inyectable para tests |
-| `back/social/internal/interceptor/interceptor_test.go` | 5 tests con `bufconn` (gRPC en memoria, servicio falso con `emptypb`/`wrapperspb`, sin protos ni red) |
-| `back/social/go.mod` | `+ google.golang.org/grpc v1.83.2` (igual que notes) |
+| `back/proto/common/buf.yaml` | Módulo buf v2, lint `STANDARD`, breaking `FILE` (base del check de 3_5_9). Vive en el módulo (no en la raíz: ver 3_5_2) |
+| `back/proto/common/buf.gen.yaml` | Plugins `protoc-gen-go` + `protoc-gen-go-grpc`, salida `../gen/go/common` |
+| `Makefile` (raíz) | Targets `tools`, `generate` (por módulo, desde su dir), `clean-tools` |
+| `back/proto/README.md` | Uso y convenciones de paquetes |
+| `.gitignore` | `+ /bin/` (binarios locales, no se commitean) |
 
-### Uso (cuando haya servidor gRPC)
+### Versiones fijadas
 
-```go
-s := grpc.NewServer(grpc.ChainUnaryInterceptor(
-    interceptor.NewLogging(log.Default()), // afuera: audita también rechazos
-    interceptor.NewInternalAuth(cfg.InternalKey),
-))
-```
+- `buf v1.73.0` (tarball oficial Linux x86_64)
+- `protoc-gen-go v1.36.12` (igual que el runtime `protobuf` de los go.mod)
+- `protoc-gen-go-grpc v1.6.2`
+- Imagen de compilación: `golang:1.26` (igual que `go 1.26.0` de los servicios)
+
+### Comandos
+
+- `make tools` — deja `buf` + plugins en `./bin/` (los plugins se compilan en
+  docker, no exige Go local).
+- `make generate` — corre `buf generate` dentro de cada módulo con `./bin` en el PATH.
+- `make clean-tools` — borra `./bin/`.
+
+### Convenciones (detalle en `back/proto/README.md`)
+
+- Protos en `back/proto/<servicio>/v<N>/<recurso>.proto`.
+- `package <servicio>.v<N>;` — debe coincidir con el directorio (`buf lint` lo exige).
+- `option go_package = ".../back/proto/gen/go/<servicio>/v<N>;<paquete>"`.
+- El código generado **se commitea**.
 
 ### Verificación
 
-- `TestInternalAuth_AcceptsCorrectKey` / `RejectsMissingOrWrongKey` /
-  `MisconfiguredFailsClosed` / `TestLogging_EmitsMethodAndCode` (OK + NotFound) /
-  `TestChain_LoggingAuditsAuthRejection`: 5/5 PASS.
-- `go build ./...` + `go test ./...` (social, con Postgres local): `ok` en
-  todos los paquetes, sin regresiones.
-- **No entra**: JWT de usuario (3_5_6), interceptores stream (sin uso hoy),
-  cableado en servidores (no hay servidores gRPC propios aún).
+Con un proto temporal (`smoke/v1/smoke.proto`, borrado tras verificar):
+
+- `buf lint` limpio (se corrigió `DEFAULT` → `STANDARD` por deprecación en buf v1.73).
+- `buf generate` produjo `smoke.pb.go` + `smoke_grpc.pb.go`.
+- `go build` + `go vet` del generado: `ok`.
 
 ## 3_5_2 — Protos comunes (errores, paginación)
 
@@ -84,56 +100,67 @@ Mensajes `.proto` compartidos que todos los servicios gRPC van a reutilizar.
   `../gen/go/common`); `make generate` corre `buf` dentro de cada módulo.
   Regla: nunca correr buf en `back/proto` raíz.
 
-## 3_5_1 — buf + protoc-gen-go + buf.gen.yaml + make generate
+## 3_5_3 — Interceptores (auth interno, logging)
 
-Rama: `feat/buf-+-protoc-gen-go-+-buf.gen.yaml-+-make-generate`
+### Decisión
 
-### Objetivo
+Opción B: copia por servicio, sin dependencias entre microservicios.
+Implementado en `social` (`back/social/internal/interceptor/`); notes/auth
+copian el mismo archivo cuando lo necesiten. No se tocó código de otros equipos.
 
-Montar la toolchain para generar stubs Go desde `.proto`, sin invocar `protoc`
-a mano. No crea ningún endpoint ni ningún proto: solo configuración + Makefile.
-
-### Archivos creados
+### Archivos
 
 | Archivo | Contenido |
 |---|---|
-| `back/proto/common/buf.yaml` | Módulo buf v2, lint `STANDARD`, breaking `FILE` (base del check de 3_5_9). Vive en el módulo (no en la raíz: ver 3_5_2) |
-| `back/proto/common/buf.gen.yaml` | Plugins `protoc-gen-go` + `protoc-gen-go-grpc`, salida `../gen/go/common` |
-| `Makefile` (raíz) | Targets `tools`, `generate` (por módulo, desde su dir), `clean-tools` |
-| `back/proto/README.md` | Uso y convenciones de paquetes |
-| `.gitignore` | `+ /bin/` (binarios locales, no se commitean) |
+| `back/social/internal/interceptor/auth.go` | `NewInternalAuth(secret)`: exige `x-internal-key` en metadata (equivale a `X-Internal-Key` HTTP). Sin secreto configurado → `Internal` (fail closed); sin key o mala → `Unauthenticated`. Comparación en tiempo constante |
+| `back/social/internal/interceptor/logging.go` | `NewLogging(logger)`: registra método, duración y código por RPC (equivale a `logOp`/`fail` HTTP). Logger inyectable para tests |
+| `back/social/internal/interceptor/interceptor_test.go` | 5 tests con `bufconn` (gRPC en memoria, servicio falso con `emptypb`/`wrapperspb`, sin protos ni red) |
+| `back/social/go.mod` | `+ google.golang.org/grpc v1.83.2` (igual que notes) |
 
-### Versiones fijadas
+### Uso (cuando haya servidor gRPC)
 
-- `buf v1.73.0` (tarball oficial Linux x86_64)
-- `protoc-gen-go v1.36.12` (igual que el runtime `protobuf` de los go.mod)
-- `protoc-gen-go-grpc v1.6.2`
-- Imagen de compilación: `golang:1.26` (igual que `go 1.26.0` de los servicios)
-
-### Comandos
-
-- `make tools` — deja `buf` + plugins en `./bin/` (los plugins se compilan en
-  docker, no exige Go local).
-- `make generate` — corre `buf generate` desde `back/proto` con `./bin` en el PATH.
-- `make clean-tools` — borra `./bin/`.
-
-### Convenciones (detalle en `back/proto/README.md`)
-
-- Protos en `back/proto/<servicio>/v<N>/<recurso>.proto`.
-- `package <servicio>.v<N>;` (debe coincidir con el directorio, lo exige el lint).
-- `option go_package = ".../back/proto/gen/go/<servicio>/v<N>;<paquete>"`.
-- El código generado **se commitea**.
+```go
+s := grpc.NewServer(grpc.ChainUnaryInterceptor(
+    interceptor.NewLogging(log.Default()), // afuera: audita también rechazos
+    interceptor.NewInternalAuth(cfg.InternalKey),
+))
+```
 
 ### Verificación
 
-Con un proto temporal (`smoke/v1/smoke.proto`, borrado tras verificar):
+- `TestInternalAuth_AcceptsCorrectKey` / `RejectsMissingOrWrongKey` /
+  `MisconfiguredFailsClosed` / `TestLogging_EmitsMethodAndCode` (OK + NotFound) /
+  `TestChain_LoggingAuditsAuthRejection`: 5/5 PASS.
+- `go build ./...` + `go test ./...` (social, con Postgres local): `ok` en
+  todos los paquetes, sin regresiones.
+- **No entra**: JWT de usuario (3_5_6), interceptores stream (sin uso hoy),
+  cableado en servidores (no hay servidores gRPC propios aún).
 
-- `buf lint` limpio (se corrigió `DEFAULT` → `STANDARD` por deprecación en buf v1.73).
-- `buf generate` produjo `smoke.pb.go` + `smoke_grpc.pb.go`.
-- `go build` + `go vet` del generado: `ok`.
+## 3_5_6 — Conexión servicios→Identity: VerifyToken/GetUser en middlewares
 
-### Notas
+### Alcance
 
-- `make generate` falla con "no .proto files" hasta que la 3_5_2 agregue el
-  primer proto real — esperado, no es bug.
-- Siguiente: 3_5_2 (protos comunes: errores, paginación).
+Lado Identity (endpoints, con tests) + cliente en social (probado contra falso,
+sin cableado productivo aún: los consumidores llegan en 3_5_4/3_5_5). Sin
+cambios de comportamiento en prod. GetUser batch (`lookup`) ya existía y se
+reusa; VerifyToken no existía (los servicios solo validaban firma local).
+
+### Archivos
+
+| Archivo | Contenido |
+|---|---|
+| `back/auth/.../handler/http/internal_auth_handler.go` | `POST /internal/auth/verify`: `{token}` → `200 {valid, user_id}` / `401 invalid_token\|token_expired` / `400` sin token. Reusa `JWTService.ValidarAccessToken` (sin DB) |
+| `back/auth/.../handler/http/internal_users_handler.go` | `+ GetByID`: `GET /internal/users/:id` → `200 PublicUser` / `404 user_not_found` (reusa `UsersService.Lookup`) |
+| `back/auth/internal/utils/response.go` | `+ ErrUserNotFound` (mensaje + map a 404). `400` usa el literal `bad_request` como los otros handlers internos |
+| `back/auth/cmd/server/main.go:84,106-107` | Wire + registro de ambas rutas en el grupo `/internal` (tras `RequireInternalKey`) |
+| `back/auth/.../handler/http/internal_auth_test.go` | Verify OK con JWT real, rechazos (malo/expirado/vacío), GetByID 200/404, sin-key 401 |
+| `back/social/internal/identity/client.go` | `Client{VerifyToken, GetUser}` contra Identity con `X-Internal-Key` (copia local, opción B). Fail-closed: red/status inesperado = error, nunca éxito silencioso |
+| `back/social/internal/identity/client_test.go` | Cliente contra Identity falso (200/401/404, key mala, sin baseURL) |
+| `endpointDoc/POST-internal-auth-verify.md`, `GET-internal-users-id.md` | Docs de los 2 endpoints |
+
+### Verificación
+
+- Auth `go test ./...`: `ok` todo. Social `go test ./...` (con Postgres local): `ok` todo.
+- **No entra**: cablear Verify en middlewares productivos (latencia por request;
+  se usa donde importe: 3_5_4/3_5_5), interceptores gRPC sobre esto (3_5_3 ya
+  cubre internal-key), cambios en Notes.
