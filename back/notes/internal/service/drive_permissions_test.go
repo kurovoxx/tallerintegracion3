@@ -393,6 +393,110 @@ func TestLegacyPublicNoteRevokesLinkOnVisibilityChange(t *testing.T) {
 	}
 }
 
+// Share restricted: cada miembro con correo válido recibe permiso nominal y su
+// drive_permission_id queda persistido (habilita revocación por ID sin
+// re-listar el ACL). El MockClient registra email + permission ID.
+func TestRestrictedSharePersistsEmailPermissionIDs(t *testing.T) {
+	svc, d, md, social := newRestrictedService()
+	ctx := context.Background()
+	owner, group := uuid.NewString(), uuid.NewString()
+	social.AddAdmin(owner, group)
+	md.SetEmails(group, []string{"ana@example.com", "ben@example.com"})
+	n, err := svc.Create(ctx, owner, "note", nil, "private", stringPtr("body"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Share(ctx, owner, n.ID, group, "restricted"); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := svc.shared.ListManagedPermissions(ctx, n.ID)
+	if len(rows) != 2 {
+		t.Fatalf("expected one row per member: %+v", rows)
+	}
+	for _, row := range rows {
+		if row.PrincipalType != model.PermissionPrincipalEmail || row.SyncStatus != model.PermissionSyncInSync {
+			t.Fatalf("unexpected managed permission: %+v", row)
+		}
+		if row.DrivePermissionID == nil || *row.DrivePermissionID == "" {
+			t.Fatalf("email permission must persist the Drive permission ID: %+v", row)
+		}
+	}
+	if len(d.GrantCalls) != 2 {
+		t.Fatalf("expected two grants: %v", d.GrantCalls)
+	}
+	for _, gc := range d.GrantCalls {
+		if gc.Email == "" || gc.PermissionID == "" {
+			t.Fatalf("grant must record email + permission id: %+v", gc)
+		}
+	}
+}
+
+// Correos malformados de un miembro no cancelan el share: se descartan y se
+// otorgan los válidos.
+func TestRestrictedShareFiltersMalformedEmails(t *testing.T) {
+	svc, d, md, social := newRestrictedService()
+	ctx := context.Background()
+	owner, group := uuid.NewString(), uuid.NewString()
+	social.AddAdmin(owner, group)
+	md.SetEmails(group, []string{"good@example.com", "no-es-email", "", "sin@dominio", " Otro@Ok.cl "})
+	n, err := svc.Create(ctx, owner, "note", nil, "private", stringPtr("body"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Share(ctx, owner, n.ID, group, "restricted"); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.GrantCalls) != 2 {
+		t.Fatalf("only valid emails must be granted: %v", d.GrantCalls)
+	}
+	seen := map[string]bool{}
+	for _, gc := range d.GrantCalls {
+		seen[gc.Email] = true
+	}
+	if !seen["good@example.com"] || !seen["otro@ok.cl"] {
+		t.Fatalf("valid emails must be granted: %v", seen)
+	}
+	rows, _ := svc.shared.ListManagedPermissions(ctx, n.ID)
+	if len(rows) != 2 {
+		t.Fatalf("only valid members must have rows: %+v", rows)
+	}
+}
+
+// Unshare revoca el permiso nominal por email, registra el permission ID
+// revocado y elimina la fila de drive_managed_permissions.
+func TestUnshareRevokesNominalPermissionAndClearsRow(t *testing.T) {
+	svc, d, md, social := newRestrictedService()
+	ctx := context.Background()
+	owner, group := uuid.NewString(), uuid.NewString()
+	social.AddAdmin(owner, group)
+	md.SetEmails(group, []string{"ana@example.com"})
+	n, err := svc.Create(ctx, owner, "note", nil, "private", stringPtr("body"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh, err := svc.Share(ctx, owner, n.ID, group, "restricted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := svc.shared.ListManagedPermissions(ctx, n.ID)
+	if len(rows) != 1 || rows[0].DrivePermissionID == nil {
+		t.Fatalf("grant must persist a permission id: %+v", rows)
+	}
+	granted := *rows[0].DrivePermissionID
+	if err := svc.Unshare(ctx, owner, sh.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.RevokeCalls) != 1 || d.RevokeCalls[0].Email != "ana@example.com" {
+		t.Fatalf("nominal revoke must target the member email: %v", d.RevokeCalls)
+	}
+	if d.RevokeCalls[0].PermissionID != granted {
+		t.Fatalf("revoke must carry the granted permission id: got %q want %q", d.RevokeCalls[0].PermissionID, granted)
+	}
+	if rows, _ = svc.shared.ListManagedPermissions(ctx, n.ID); len(rows) != 0 {
+		t.Fatalf("revoked permission row must be removed: %+v", rows)
+	}
+}
+
 func TestRecreatedPublicFileGetsLinkPermission(t *testing.T) {
 	svc, d, notes, _, _, _, _, _ := newTestService()
 	ctx := context.Background()
@@ -419,10 +523,10 @@ type cancelGrantDrive struct {
 	cancel context.CancelFunc
 }
 
-func (d *cancelGrantDrive) GrantPermission(ctx context.Context, owner, file, email, role string) error {
+func (d *cancelGrantDrive) GrantPermission(ctx context.Context, owner, file, email, role string) (string, error) {
 	if email == "fail@example.com" {
 		d.cancel()
-		return context.Canceled
+		return "", context.Canceled
 	}
 	return d.MockClient.GrantPermission(ctx, owner, file, email, role)
 }

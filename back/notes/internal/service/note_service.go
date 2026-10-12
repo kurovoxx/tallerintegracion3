@@ -2167,10 +2167,15 @@ func (s *NoteService) syncDrivePermissions(ctx context.Context, note *model.Note
 	}
 
 	// 4) Drive: otorgar altas (409 = ya otorgado, cuenta como convergencia).
+	// Se captura el ID nominal devuelto por Drive y se persiste para poder
+	// revocarlo después por ID, sin re-listar el ACL.
 	for _, email := range toGrant {
 		driveCtx, cancel := withDriveTimeout(ctx)
+		var permissionID string
 		grantErr := retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
-			return s.observedDriveGrantPermission(driveCtx, ownerID, fileID, email, "reader")
+			var opErr error
+			permissionID, opErr = s.observedDriveGrantPermission(driveCtx, ownerID, fileID, email, "reader")
+			return opErr
 		})
 		cancel()
 		if grantErr != nil && !isPermissionAlreadyExists(grantErr) {
@@ -2180,7 +2185,13 @@ func (s *NoteService) syncDrivePermissions(ctx context.Context, note *model.Note
 			noteErr(ErrDriveUnavailable)
 			continue
 		}
-		if err := s.persistManagedPermission(ctx, note.ID, fileID, model.PermissionPrincipalEmail, email, nil, model.PermissionSyncInSync); err != nil {
+		// En un 409 (ya otorgado) Drive no devuelve ID: se persiste in_sync sin
+		// ID y la revocación futura cae al camino por email.
+		var pid *string
+		if strings.TrimSpace(permissionID) != "" {
+			pid = &permissionID
+		}
+		if err := s.persistManagedPermission(ctx, note.ID, fileID, model.PermissionPrincipalEmail, email, pid, model.PermissionSyncInSync); err != nil {
 			noteErr(err)
 		}
 	}
