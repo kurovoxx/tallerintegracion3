@@ -22,16 +22,15 @@ type ServiceError struct {
 }
 
 var (
-	ErrNotFound             = errors.New("group_not_found")
-	ErrUnauthorized         = errors.New("unauthorized")
-	ErrForbidden            = errors.New("forbidden")
-	ErrBanned               = errors.New("user_banned")
-	ErrInvalidInviteToken   = errors.New("invalid_invite_token")
-	ErrCannotModifySelf     = errors.New("cannot_modify_self")
-	ErrTargetIsAdmin        = errors.New("target_is_admin")
-	ErrTargetNotFound       = errors.New("target_not_found")
-	ErrInvalidRole          = errors.New("invalid_role")
-	ErrCannotLeaveOnlyAdmin = errors.New("cannot_leave_only_admin")
+	ErrNotFound           = errors.New("group_not_found")
+	ErrUnauthorized       = errors.New("unauthorized")
+	ErrForbidden          = errors.New("forbidden")
+	ErrBanned             = errors.New("user_banned")
+	ErrInvalidInviteToken = errors.New("invalid_invite_token")
+	ErrCannotModifySelf   = errors.New("cannot_modify_self")
+	ErrTargetIsAdmin      = errors.New("target_is_admin")
+	ErrTargetNotFound     = errors.New("target_not_found")
+	ErrInvalidRole        = errors.New("invalid_role")
 )
 
 func (e *ServiceError) Error() string { return e.Code + ": " + e.Message }

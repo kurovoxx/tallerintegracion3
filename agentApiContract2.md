@@ -86,7 +86,7 @@ servicio pertenece" son ejes independientes.
 | PATCH | `/groups/{id}/members/{userId}/role` | `{role}` | `200` | `403` no eres admin |
 | POST | `/groups/{id}/transfer-admin` | `{new_admin_user_id}` | `200` | `403` no eres admin |
 | GET | `/groups/{id}/members` | — | `200 {items: [{user_id, role, joined_at}]}` | — |
-| POST | `/groups/{id}/leave` | `{cleanup_shared_notes: bool}` | `204` — si `cleanup_shared_notes`, llama a `/notes/unshare-all`; si eras el último miembro, el grupo se elimina | `400` eres el único admin y quedan otros miembros, transfiere primero |
+| POST | `/groups/{id}/leave` | `{cleanup_shared_notes: bool}` | `204` — si `cleanup_shared_notes`, llama a `/notes/unshare-all`; si eras el único admin se promueve al miembro más antiguo (`joined_at`, RN-GRUPO-10); si eras el último miembro, el grupo se elimina | `403` no eres miembro; `404` el grupo no existe |
 | gRPC | `Social.AccountDeletionCleanup` *(interno, invocado por Identity — no expuesto por HTTP)* | `{user_id}` | — | sucesión automática de admin (promueve al miembro más antiguo por grupo donde eras único admin); elimina grupos sin más miembros; limpia tus baneos. Idempotente |
 
 **Nota**: se convirtió de endpoint HTTP a llamada gRPC interna para ser consistente con

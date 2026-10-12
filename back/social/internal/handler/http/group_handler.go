@@ -34,8 +34,7 @@ func (h *GroupHandler) RegisterRoutes(r gin.IRoutes) {
 	r.PATCH("/groups/:id/members/:user_id/role", h.ChangeRole)
 	r.POST("/groups/:id/transfer-admin", h.TransferAdmin)
 	r.POST("/groups/:id/leave", h.LeaveGroup)
-	// Sucesión automática de admin al eliminar la cuenta (tarea 2_3_9)
-	r.POST("/groups/account-deletion", h.AccountDeletion)
+	// La sucesión por borrado de cuenta es solo gRPC (Social.AccountDeletionCleanup).
 }
 
 // respondGroupError traduce los errores de dominio de grupos a HTTP.
@@ -61,8 +60,6 @@ func respondGroupError(c *gin.Context, err error, forbiddenMsg string) {
 		status, msg = http.StatusBadRequest, "No puedes aplicar esta acción sobre ti mismo"
 	case errors.Is(err, service.ErrInvalidRole):
 		status, msg = http.StatusBadRequest, "Rol inválido. Usa 'admin' o 'member'"
-	case errors.Is(err, service.ErrCannotLeaveOnlyAdmin):
-		status, msg = http.StatusBadRequest, "Eres el único administrador. Transfiere la administración antes de salir."
 	default:
 		log.Printf("social: error interno en grupos: %v", err)
 	}
@@ -304,20 +301,5 @@ func (h *GroupHandler) LeaveGroup(c *gin.Context) {
 		return
 	}
 	// Contrato: 204
-	c.Status(http.StatusNoContent)
-}
-
-// AccountDeletion maneja POST /groups/account-deletion (tarea 2_3_9).
-// Lo invoca el flujo de eliminación de cuenta con el JWT del propio usuario:
-// aplica la sucesión automática de admin en todos sus grupos.
-func (h *GroupHandler) AccountDeletion(c *gin.Context) {
-	userID, ok := requireUser(c)
-	if !ok {
-		return
-	}
-	if _, err := h.svc.HandleAccountDeletion(c.Request.Context(), userID); err != nil {
-		respondGroupError(c, err, "")
-		return
-	}
 	c.Status(http.StatusNoContent)
 }

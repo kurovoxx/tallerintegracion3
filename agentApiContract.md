@@ -67,7 +67,7 @@ inexistente, eliminar la nota y sus `shared_notes`.
 | PATCH | `/groups/{id}/members/{userId}/role` | `{role}` | `200` | `403` no eres admin |
 | POST | `/groups/{id}/transfer-admin` | `{new_admin_user_id}` | `200` | `403` no eres admin |
 | GET | `/groups/{id}/members` | — | `200 [{user_id, role, joined_at}]` | — |
-| POST | `/groups/{id}/leave` | `{cleanup_shared_notes: bool}` | `204` — si `cleanup_shared_notes`, llama a `/notes/unshare-all` | `400` eres el único admin y quedan otros miembros, transfiere primero (si eres el último miembro, el grupo se elimina) |
+| POST | `/groups/{id}/leave` | `{cleanup_shared_notes: bool}` | `204` — si `cleanup_shared_notes`, llama a `/notes/unshare-all`; si eras el único admin se promueve al miembro más antiguo (`joined_at`, RN-GRUPO-10); si eras el último miembro, el grupo se elimina | `403` no eres miembro; `404` el grupo no existe |
 | POST | `/groups/account-deletion` *(interno, lo llama el flujo de eliminación de cuenta con el JWT del propio usuario)* | — | `204` — sucesión automática de admin: en cada grupo donde eres el único admin se promueve al miembro más antiguo (`joined_at`); si eras el último miembro el grupo se elimina; se limpian tus baneos. Idempotente | — |
 | GET | `/groups/{id}/notes` | query: `cursor`, `limit` | `200 {notes: [...], next_cursor}` — orden: admin primero, luego likes, seguidores, fecha | `403` no eres miembro |
 

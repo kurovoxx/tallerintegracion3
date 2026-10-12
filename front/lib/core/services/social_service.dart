@@ -653,8 +653,8 @@ class SocialService {
   }
 
   // POST /groups/:id/leave -> 204. Solo miembros.
-  // Si eres el único admin con más miembros, el backend responde 400
-  // (debes transferir antes). Si eres el último miembro, el grupo se elimina.
+  // Si eres el único admin, el backend promueve al miembro más antiguo
+  // (RN-GRUPO-10). Si eres el último miembro, el grupo se elimina.
   // Ver back/social/internal/handler/http/group_handler.go:277 LeaveGroup.
   Future<void> leaveGroup(String groupId) async {
     final id = groupId.trim();
