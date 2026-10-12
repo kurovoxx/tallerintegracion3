@@ -5,6 +5,8 @@ import '../../core/common_widgets.dart';
 import '../../core/services/courses_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import 'academic_api.dart';
+import 'academic_models.dart';
 
 const String kSubjectApproved = 'approved';
 const String kSubjectInProgress = 'in_progress';
@@ -42,6 +44,12 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   // snapshot para limpiar
   Map<int, List<Map<String, dynamic>>>? _snapshot;
 
+  // Backend Academic: si hay sesión y backend, la malla se lista/crea por
+  // API; si no, se usa el mock local (mismo comportamiento que antes).
+  final AcademicApi _academicApi = AcademicApi();
+  bool _backendMode = false;
+  String? _curriculumId;
+
   @override
   void initState() {
     super.initState();
@@ -58,6 +66,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   void dispose() {
     CoursesService.instance.removeListener(_onCoursesChanged);
     _horizontalScrollController.dispose();
+    _academicApi.dispose();
     super.dispose();
   }
 
@@ -68,6 +77,14 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     });
     try {
       await Future.delayed(const Duration(milliseconds: 620));
+      if (await _loadFromBackend()) {
+        _syncWithCoursesService();
+        // snapshot deep copy
+        _snapshot = _deepCopy(_semesters);
+        if (!mounted) return;
+        setState(() => _isLoading = false);
+        return;
+      }
       _semesters = {
         1: [
           {
@@ -205,6 +222,45 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         _isLoading = false;
         _hasError = true;
       });
+    }
+  }
+
+  /// Carga la malla desde el backend (primera malla propia + sus materias).
+  /// Retorna false si no hay sesión/backend: la pantalla usa el mock local.
+  Future<bool> _loadFromBackend() async {
+    try {
+      final malla = await _academicApi.ensureCurriculum();
+      final subjects = await _academicApi.listSubjects(malla.id);
+      if (!mounted) return true;
+      final map = <int, List<Map<String, dynamic>>>{};
+      for (final s in subjects) {
+        final sem = s.semester;
+        final key = (sem != null && sem >= 1 && sem <= 8)
+            ? sem
+            : _kCoursesInsertSemester;
+        (map[key] ??= []).add({
+          'id': s.id,
+          'code': s.code ?? '',
+          'name': s.name,
+          'credits': s.credits ?? 5,
+          'status': s.status,
+          'requisite': null,
+        });
+      }
+      setState(() {
+        _semesters = map;
+        _curriculumId = malla.id;
+        _backendMode = true;
+      });
+      return true;
+    } on AcademicApiException {
+      if (mounted) {
+        setState(() {
+          _backendMode = false;
+          _curriculumId = null;
+        });
+      }
+      return false;
     }
   }
 
@@ -389,10 +445,33 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     );
 
     if (result != null) {
+      String subjectId = 'ramo-${DateTime.now().microsecondsSinceEpoch}';
+      if (_backendMode && _curriculumId != null) {
+        try {
+          subjectId = await _academicApi.createSubject(
+            curriculumId: _curriculumId!,
+            name: (result['name'] as String?) ?? '',
+            code: result['code'] as String?,
+            credits: result['credits'] as int?,
+            status: (result['status'] as String?) ?? kSubjectPending,
+            semester: semester,
+          );
+        } on AcademicApiException catch (e) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('No se pudo crear el ramo: ${e.message}'),
+              backgroundColor: AppColors.border,
+            ),
+          );
+          return;
+        }
+      }
+      if (!mounted) return;
       setState(() {
         final list = _semesters[semester] ?? [];
         list.add({
-          'id': 'ramo-${DateTime.now().microsecondsSinceEpoch}',
+          'id': subjectId,
           'code': result['code'],
           'name': result['name'],
           'credits': result['credits'],

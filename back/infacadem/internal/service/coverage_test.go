@@ -120,11 +120,11 @@ func (f *errSchedules) Delete(ctx context.Context, id, u string) (bool, error) {
 	return f.fakeSchedules.Delete(ctx, id, u)
 }
 
-func (f *errSchedules) Create(ctx context.Context, u, s string, d int, st, en time.Time) (*model.Schedule, error) {
+func (f *errSchedules) Create(ctx context.Context, u, s string, d int, st, en time.Time, mod *string) (*model.Schedule, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	return f.fakeSchedules.Create(ctx, u, s, d, st, en)
+	return f.fakeSchedules.Create(ctx, u, s, d, st, en, mod)
 }
 
 type errGrades struct {
@@ -424,12 +424,12 @@ func TestCoverage_Schedule_Errores(t *testing.T) {
 	} else {
 		mustCode(t, err, "invalid_uuid")
 	}
-	if _, err := svcOK.Create(ctx, "", mat.ID, 1, "08:00", "09:00"); err == nil {
+	if _, err := svcOK.Create(ctx, "", mat.ID, 1, "08:00", "09:00", nil); err == nil {
 		t.Fatal("sin user")
 	} else {
 		mustCode(t, err, "unauthorized")
 	}
-	if _, err := svcOK.Create(ctx, userA, "x", 1, "08:00", "09:00"); err == nil {
+	if _, err := svcOK.Create(ctx, userA, "x", 1, "08:00", "09:00", nil); err == nil {
 		t.Fatal("uuid")
 	} else {
 		mustCode(t, err, "invalid_uuid")

@@ -61,6 +61,9 @@ CREATE TABLE academic.subjects (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     curriculum_id uuid NOT NULL REFERENCES academic.curricula(id) ON DELETE CASCADE,
     name varchar(200) NOT NULL,
+    code varchar(50),
+    professor varchar(200),
+    room varchar(100),
     semester int,
     credits int,
     total_classes int,
@@ -75,6 +78,7 @@ CREATE TABLE academic.schedules (
     day_of_week int NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
     start_time time NOT NULL,
     end_time time NOT NULL,
+    modality varchar(50),
     CHECK (end_time > start_time)
 );
 CREATE TABLE academic.grades (
@@ -210,9 +214,13 @@ func TestRepository_Subjects(t *testing.T) {
 	curB := mustCurriculum(t, pool, repoUserB, "B")
 
 	sem, cred := 3, 10
-	s, err := r.Create(ctx, repoUserA, curA, SubjectCreate{Name: "Álgebra", Semester: &sem, Credits: &cred, AverageDecimalPlaces: 1, Status: "approved"})
+	code, prof, room := "MAT-101", "M. Soto", "CJP11-204"
+	s, err := r.Create(ctx, repoUserA, curA, SubjectCreate{Name: "Álgebra", Code: &code, Professor: &prof, Room: &room, Semester: &sem, Credits: &cred, AverageDecimalPlaces: 1, Status: "approved"})
 	if err != nil || s == nil || s.Semester == nil || *s.Semester != 3 || s.Status != "approved" {
 		t.Fatalf("create: %+v %v", s, err)
+	}
+	if s.Code == nil || *s.Code != "MAT-101" || s.Professor == nil || *s.Professor != "M. Soto" || s.Room == nil || *s.Room != "CJP11-204" {
+		t.Fatalf("create campos nuevos: %+v", s)
 	}
 	if s2, _ := r.Create(ctx, repoUserB, curA, SubjectCreate{Name: "X", Status: "in_progress"}); s2 != nil {
 		t.Fatal("malla ajena nil")
@@ -237,6 +245,12 @@ func TestRepository_Subjects(t *testing.T) {
 	upd, err := r.Update(ctx, s.ID, repoUserA, SubjectPatch{Name: &newName})
 	if err != nil || upd == nil || upd.Name != "Álgebra II" || *upd.Semester != 3 {
 		t.Fatalf("patch parcial conserva resto: %+v %v", upd, err)
+	}
+	newCode := "MAT-102"
+	upd, err = r.Update(ctx, s.ID, repoUserA, SubjectPatch{Code: &newCode, ClearProfessor: true, ClearRoom: true})
+	if err != nil || upd == nil || upd.Code == nil || *upd.Code != "MAT-102" ||
+		upd.Professor != nil || upd.Room != nil || upd.Name != "Álgebra II" {
+		t.Fatalf("patch set/limpia nuevos: %+v %v", upd, err)
 	}
 	if _, err := r.Update(ctx, s.ID, repoUserA, SubjectPatch{}); err == nil {
 		t.Fatal("patch vacío debe fallar")
@@ -265,11 +279,15 @@ func TestRepository_Schedules(t *testing.T) {
 
 	start, _ := timeParseHM("08:00")
 	end, _ := timeParseHM("09:30")
-	h, err := r.Create(ctx, repoUserA, mat, 1, start, end)
+	mod := "Cátedra"
+	h, err := r.Create(ctx, repoUserA, mat, 1, start, end, &mod)
 	if err != nil || h == nil || h.DayOfWeek != 1 {
 		t.Fatalf("create: %+v %v", h, err)
 	}
-	if h2, _ := r.Create(ctx, repoUserB, mat, 1, start, end); h2 != nil {
+	if h.Modality == nil || *h.Modality != "Cátedra" {
+		t.Fatalf("modality: %+v", h)
+	}
+	if h2, _ := r.Create(ctx, repoUserB, mat, 1, start, end, nil); h2 != nil {
 		t.Fatal("materia ajena nil")
 	}
 	list, owned, err := r.ListBySubject(ctx, mat, repoUserA)
@@ -495,7 +513,7 @@ func TestRepository_Cascadas(t *testing.T) {
 	mat := mustSubject(t, pool, repoUserA, curA, "S")
 	start, _ := timeParseHM("08:00")
 	end, _ := timeParseHM("09:00")
-	if _, err := NewScheduleRepository(pool).Create(ctx, repoUserA, mat, 1, start, end); err != nil {
+	if _, err := NewScheduleRepository(pool).Create(ctx, repoUserA, mat, 1, start, end, nil); err != nil {
 		t.Fatal(err)
 	}
 	score := 50

@@ -5,7 +5,7 @@
 - Headers: `Authorization: Bearer <access_token>`. Sin body.
 
 ## Res
-- `200`: `{"id":"...","curriculum_id":"...","name":"...","semester":null,"credits":10,...,"status":"..."}`.
+- `200`: `{"id":"...","curriculum_id":"...","name":"...","code":"MAT-101","professor":"...","room":"...","semester":null,"credits":10,...,"status":"..."}` (`code/professor/room` null si ausentes).
 - `400`: `{"error":{"code":"invalid_uuid","message":"..."}}`.
 - `401`: `{"error":{"code":"unauthorized|invalid_token|token_expired","message":"..."}}`.
 - `404`: `{"error":{"code":"not_found","message":"..."}}` (no existe o su malla es ajena).

@@ -65,6 +65,9 @@ func (r *SubjectRepository) CountsByCurricula(ctx context.Context, userID string
 // SubjectCreate agrupa los campos de alta (name + opcionales).
 type SubjectCreate struct {
 	Name                 string
+	Code                 *string
+	Professor            *string
+	Room                 *string
 	Semester             *int
 	Credits              *int
 	TotalClasses         *int
@@ -76,6 +79,9 @@ type SubjectCreate struct {
 // SubjectPatch agrupa actualización parcial (nil = no tocar).
 type SubjectPatch struct {
 	Name                 *string
+	Code                 *string
+	Professor            *string
+	Room                 *string
 	Semester             *int
 	Credits              *int
 	TotalClasses         *int
@@ -88,14 +94,20 @@ type SubjectPatch struct {
 	ClearCredits      bool
 	ClearTotalClasses bool
 	ClearAttendance   bool
+	// ClearCode/ClearProfessor/ClearRoom piden NULL explícito en los
+	// varchar nuevos (el service los deriva de "" JSON).
+	ClearCode      bool
+	ClearProfessor bool
+	ClearRoom      bool
 }
 
-const subjectColumns = `id, curriculum_id, name, semester, credits, total_classes, min_attendance_pct, average_decimal_places, status`
+const subjectColumns = `id, curriculum_id, name, code, professor, room, semester, credits, total_classes, min_attendance_pct, average_decimal_places, status`
 
 func scanSubject(row pgx.Row) (*model.Subject, error) {
 	var s model.Subject
-	if err := row.Scan(&s.ID, &s.CurriculumID, &s.Name, &s.Semester, &s.Credits,
-		&s.TotalClasses, &s.MinAttendancePct, &s.AverageDecimalPlaces, &s.Status); err != nil {
+	if err := row.Scan(&s.ID, &s.CurriculumID, &s.Name, &s.Code, &s.Professor,
+		&s.Room, &s.Semester, &s.Credits, &s.TotalClasses, &s.MinAttendancePct,
+		&s.AverageDecimalPlaces, &s.Status); err != nil {
 		return nil, err
 	}
 	return &s, nil
@@ -104,7 +116,16 @@ func scanSubject(row pgx.Row) (*model.Subject, error) {
 // Create inserta una materia solo si la malla es propia (atómico vía
 // INSERT..SELECT..WHERE); nil si la malla no existe o es ajena.
 func (r *SubjectRepository) Create(ctx context.Context, userID, curriculumID string, in SubjectCreate) (*model.Subject, error) {
-	var sem, cred, tot any
+	var code, prof, room, sem, cred, tot any
+	if in.Code != nil {
+		code = *in.Code
+	}
+	if in.Professor != nil {
+		prof = *in.Professor
+	}
+	if in.Room != nil {
+		room = *in.Room
+	}
 	if in.Semester != nil {
 		sem = *in.Semester
 	}
@@ -119,11 +140,11 @@ func (r *SubjectRepository) Create(ctx context.Context, userID, curriculumID str
 		att = *in.MinAttendancePct
 	}
 	s, err := scanSubject(r.pool.QueryRow(ctx, `
-		INSERT INTO academic.subjects (curriculum_id, name, semester, credits, total_classes, min_attendance_pct, average_decimal_places, status)
-		SELECT $1::uuid, $3, $4, $5, $6, $7, $8, $9
+		INSERT INTO academic.subjects (curriculum_id, name, code, professor, room, semester, credits, total_classes, min_attendance_pct, average_decimal_places, status)
+		SELECT $1::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
 		WHERE EXISTS (SELECT 1 FROM academic.curricula WHERE id = $1::uuid AND user_id = $2)
 		RETURNING `+subjectColumns+`
-	`, curriculumID, userID, in.Name, sem, cred, tot, att, in.AverageDecimalPlaces, in.Status))
+	`, curriculumID, userID, in.Name, code, prof, room, sem, cred, tot, att, in.AverageDecimalPlaces, in.Status))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -175,8 +196,9 @@ func (r *SubjectRepository) ListByCurriculum(ctx context.Context, curriculumID, 
 	out := make([]model.Subject, 0)
 	for rows.Next() {
 		var s model.Subject
-		if err := rows.Scan(&s.ID, &s.CurriculumID, &s.Name, &s.Semester, &s.Credits,
-			&s.TotalClasses, &s.MinAttendancePct, &s.AverageDecimalPlaces, &s.Status); err != nil {
+		if err := rows.Scan(&s.ID, &s.CurriculumID, &s.Name, &s.Code, &s.Professor,
+			&s.Room, &s.Semester, &s.Credits, &s.TotalClasses, &s.MinAttendancePct,
+			&s.AverageDecimalPlaces, &s.Status); err != nil {
 			return nil, true, fmt.Errorf("list subjects: %w", err)
 		}
 		out = append(out, s)
@@ -197,6 +219,21 @@ func (r *SubjectRepository) Update(ctx context.Context, id, userID string, p Sub
 	}
 	if p.Name != nil {
 		add("name = $%d", *p.Name)
+	}
+	if p.ClearCode {
+		set = append(set, "code = NULL")
+	} else if p.Code != nil {
+		add("code = $%d", *p.Code)
+	}
+	if p.ClearProfessor {
+		set = append(set, "professor = NULL")
+	} else if p.Professor != nil {
+		add("professor = $%d", *p.Professor)
+	}
+	if p.ClearRoom {
+		set = append(set, "room = NULL")
+	} else if p.Room != nil {
+		add("room = $%d", *p.Room)
 	}
 	if p.ClearSemester {
 		set = append(set, "semester = NULL")

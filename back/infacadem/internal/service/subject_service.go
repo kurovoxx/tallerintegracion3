@@ -21,8 +21,12 @@ type SubjectStore interface {
 // SubjectInput agrupa el alta/edición de materias (nil = omitido).
 // Semester/Credits/TotalClasses/Attendance no tienen validación extra:
 // se persisten tal cual (NULL si nil).
+// Code/Professor/Room son varchar libres: nil = omitido, "" = limpiar (NULL).
 type SubjectInput struct {
 	Name                 *string
+	Code                 *string
+	Professor            *string
+	Room                 *string
 	Semester             *int
 	Credits              *int
 	TotalClasses         *int
@@ -61,6 +65,20 @@ func cleanStatus(v *string) (string, error) {
 	return s, nil
 }
 
+// cleanSubjectText normaliza un varchar opcional (code/professor/room).
+// Retorna (valor, limpiar): nil = omitido (sin cambios); "" tras trim =
+// limpiar (NULL); resto = valor con trim aplicado.
+func cleanSubjectText(v *string) (val *string, clear bool) {
+	if v == nil {
+		return nil, false
+	}
+	t := strings.TrimSpace(*v)
+	if t == "" {
+		return nil, true
+	}
+	return &t, false
+}
+
 // Create crea una materia en una malla propia; 404 si la malla no existe o es ajena.
 func (s *SubjectService) Create(ctx context.Context, userID, curriculumID string, in SubjectInput) (*model.Subject, error) {
 	if err := requireUser(userID); err != nil {
@@ -85,8 +103,14 @@ func (s *SubjectService) Create(ctx context.Context, userID, curriculumID string
 	if err != nil {
 		return nil, err
 	}
+	code, _ := cleanSubjectText(in.Code)
+	professor, _ := cleanSubjectText(in.Professor)
+	room, _ := cleanSubjectText(in.Room)
 	out, err := s.repo.Create(ctx, strings.TrimSpace(userID), curriculumID, repository.SubjectCreate{
 		Name:                 name,
+		Code:                 code,
+		Professor:            professor,
+		Room:                 room,
 		Semester:             in.Semester,
 		Credits:              in.Credits,
 		TotalClasses:         in.TotalClasses,
@@ -162,6 +186,21 @@ func (s *SubjectService) Update(ctx context.Context, userID, id string, in Subje
 		}
 		p.Name = &name
 	}
+	if code, clear := cleanSubjectText(in.Code); clear {
+		p.ClearCode = true
+	} else if code != nil {
+		p.Code = code
+	}
+	if professor, clear := cleanSubjectText(in.Professor); clear {
+		p.ClearProfessor = true
+	} else if professor != nil {
+		p.Professor = professor
+	}
+	if room, clear := cleanSubjectText(in.Room); clear {
+		p.ClearRoom = true
+	} else if room != nil {
+		p.Room = room
+	}
 	if in.Semester != nil {
 		p.Semester = in.Semester
 	}
@@ -189,7 +228,9 @@ func (s *SubjectService) Update(ctx context.Context, userID, id string, in Subje
 		p.Status = &status
 	}
 	if p.Name == nil && p.Semester == nil && p.Credits == nil && p.TotalClasses == nil &&
-		p.MinAttendancePct == nil && p.AverageDecimalPlaces == nil && p.Status == nil {
+		p.MinAttendancePct == nil && p.AverageDecimalPlaces == nil && p.Status == nil &&
+		p.Code == nil && p.Professor == nil && p.Room == nil &&
+		!p.ClearCode && !p.ClearProfessor && !p.ClearRoom {
 		return nil, NewServiceError(utils.ErrBadRequest)
 	}
 	out, err := s.repo.Update(ctx, id, strings.TrimSpace(userID), p)

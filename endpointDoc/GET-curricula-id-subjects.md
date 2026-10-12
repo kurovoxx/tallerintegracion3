@@ -5,7 +5,7 @@
 - Headers: `Authorization: Bearer <access_token>`. Sin body.
 
 ## Res
-- `200`: `{"items":[...]}` (materias de la malla; `[]` nunca `null`).
+- `200`: `{"items":[...]}` (materias de la malla con `code/professor/room` — null si ausentes; `[]` nunca `null`).
 - `400`: `{"error":{"code":"invalid_uuid","message":"..."}}`.
 - `401`: `{"error":{"code":"unauthorized|invalid_token|token_expired","message":"..."}}`.
 - `404`: `{"error":{"code":"not_found","message":"..."}}` (malla no existe o es ajena).

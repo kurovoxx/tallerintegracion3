@@ -21,29 +21,33 @@ func NewScheduleRepository(pool *pgxpool.Pool) *ScheduleRepository {
 	return &ScheduleRepository{pool: pool}
 }
 
-const scheduleColumns = `id, subject_id, day_of_week, start_time, end_time`
+const scheduleColumns = `id, subject_id, day_of_week, start_time, end_time, modality`
 
 func scanSchedule(row pgx.Row) (*model.Schedule, error) {
 	var s model.Schedule
-	if err := row.Scan(&s.ID, &s.SubjectID, &s.DayOfWeek, &s.StartTime, &s.EndTime); err != nil {
+	if err := row.Scan(&s.ID, &s.SubjectID, &s.DayOfWeek, &s.StartTime, &s.EndTime, &s.Modality); err != nil {
 		return nil, err
 	}
 	return &s, nil
 }
 
 // Create inserta un horario solo si la materia es propia (atómico);
-// nil si la materia no existe o es ajena.
-func (r *ScheduleRepository) Create(ctx context.Context, userID, subjectID string, dayOfWeek int, start, end time.Time) (*model.Schedule, error) {
+// nil si la materia no existe o es ajena. modality nil = NULL.
+func (r *ScheduleRepository) Create(ctx context.Context, userID, subjectID string, dayOfWeek int, start, end time.Time, modality *string) (*model.Schedule, error) {
+	var mod any
+	if modality != nil {
+		mod = *modality
+	}
 	s, err := scanSchedule(r.pool.QueryRow(ctx, `
-		INSERT INTO academic.schedules (subject_id, day_of_week, start_time, end_time)
-		SELECT $1::uuid, $2, $3, $4
+		INSERT INTO academic.schedules (subject_id, day_of_week, start_time, end_time, modality)
+		SELECT $1::uuid, $2, $3, $4, $5
 		WHERE EXISTS (
 			SELECT 1 FROM academic.subjects s
 			JOIN academic.curricula c ON c.id = s.curriculum_id
-			WHERE s.id = $1::uuid AND c.user_id = $5
+			WHERE s.id = $1::uuid AND c.user_id = $6
 		)
 		RETURNING `+scheduleColumns+`
-	`, subjectID, dayOfWeek, start, end, userID))
+	`, subjectID, dayOfWeek, start, end, mod, userID))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -82,7 +86,7 @@ func (r *ScheduleRepository) ListBySubject(ctx context.Context, subjectID, userI
 	out := make([]model.Schedule, 0)
 	for rows.Next() {
 		var s model.Schedule
-		if err := rows.Scan(&s.ID, &s.SubjectID, &s.DayOfWeek, &s.StartTime, &s.EndTime); err != nil {
+		if err := rows.Scan(&s.ID, &s.SubjectID, &s.DayOfWeek, &s.StartTime, &s.EndTime, &s.Modality); err != nil {
 			return nil, true, fmt.Errorf("list schedules: %w", err)
 		}
 		out = append(out, s)

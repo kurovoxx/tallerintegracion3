@@ -3,7 +3,7 @@
 ## Req
 - Método: `POST`, ruta: `/subjects/:id/schedules` (protegida, `back/infacadem/cmd/server/main.go:122`).
 - Headers: `Authorization: Bearer <access_token>`, `Content-Type: application/json`.
-- Body: `{"day_of_week":2,"start_time":"10:00","end_time":"11:30"}` (`day_of_week` 0-6 requerido; horas `"HH:MM"` o `"HH:MM:SS"`, `end_time > start_time`).
+- Body: `{"day_of_week":2,"start_time":"10:00","end_time":"11:30"}` (`day_of_week` 0-6 requerido; horas `"HH:MM"` o `"HH:MM:SS"`, `end_time > start_time`; opcional `modality` varchar libre, `""` = NULL).
 
 ## Res
 - `201`: `{"id":"<uuid>"}`.

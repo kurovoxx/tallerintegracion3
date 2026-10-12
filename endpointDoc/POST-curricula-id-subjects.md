@@ -3,7 +3,7 @@
 ## Req
 - Método: `POST`, ruta: `/curricula/:id/subjects` (protegida, `back/infacadem/cmd/server/main.go:116`).
 - Headers: `Authorization: Bearer <access_token>`, `Content-Type: application/json`.
-- Body: `{"name":"Cálculo"}` + opcionales `semester`, `credits`, `total_classes`, `min_attendance_pct`, `average_decimal_places` (0-2, default 2), `status` (enum, default `in_progress`).
+- Body: `{"name":"Cálculo"}` + opcionales `code`, `professor`, `room` (varchar libres, `""` = limpiar), `semester`, `credits`, `total_classes`, `min_attendance_pct`, `average_decimal_places` (0-2, default 2), `status` (enum, default `in_progress`).
 
 ## Res
 - `201`: `{"id":"<uuid>"}`.

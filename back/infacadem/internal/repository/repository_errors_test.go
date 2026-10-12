@@ -90,7 +90,7 @@ func TestRepository_ClosedPool_Errores(t *testing.T) {
 	sch := NewScheduleRepository(pool)
 	st, _ := timeParseHM("08:00")
 	en, _ := timeParseHM("09:00")
-	if _, err := sch.Create(ctx, repoUserA, repoUserA, 1, st, en); err == nil {
+	if _, err := sch.Create(ctx, repoUserA, repoUserA, 1, st, en, nil); err == nil {
 		t.Fatal("sch.Create")
 	}
 	if _, _, err := sch.ListBySubject(ctx, repoUserA, repoUserA); err == nil {
