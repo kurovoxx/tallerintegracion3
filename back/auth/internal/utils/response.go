@@ -39,6 +39,7 @@ const (
 	ErrTokenExpired       = "token_expired"
 	ErrEmailMismatch      = "email_mismatch"
 	ErrInvalidRedirect    = "invalid_redirect_uri"
+	ErrUserNotFound       = "user_not_found"
 )
 
 func MessageForCode(code string) string {
@@ -67,6 +68,8 @@ func MessageForCode(code string) string {
 		return "El correo declarado no coincide con la cuenta de Google conectada"
 	case ErrInvalidRedirect:
 		return "redirect_uri no permitido para este cliente"
+	case ErrUserNotFound:
+		return "Usuario no encontrado"
 	default:
 		return "Error"
 	}
@@ -84,6 +87,8 @@ func StatusForCode(code string) int {
 		return http.StatusUnauthorized
 	case ErrForbidden:
 		return http.StatusForbidden
+	case ErrUserNotFound:
+		return http.StatusNotFound
 	default:
 		return http.StatusInternalServerError
 	}
