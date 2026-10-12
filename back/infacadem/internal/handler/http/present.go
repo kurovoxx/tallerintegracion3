@@ -42,11 +42,13 @@ type scheduleResponse struct {
 }
 
 type absenceResponse struct {
-	ID        string `json:"id"`
-	SubjectID string `json:"subject_id"`
-	Date      string `json:"date"`
-	Justified bool   `json:"justified"`
-	CreatedAt string `json:"created_at"`
+	ID        string  `json:"id"`
+	SubjectID string  `json:"subject_id"`
+	Date      string  `json:"date"`
+	Justified bool    `json:"justified"`
+	Source    *string `json:"source"`
+	Type      *string `json:"type"`
+	CreatedAt string  `json:"created_at"`
 }
 
 func formatDate(t *time.Time) *string {
@@ -91,6 +93,7 @@ func toAbsenceResponse(a model.Absence) absenceResponse {
 	return absenceResponse{
 		ID: a.ID, SubjectID: a.SubjectID,
 		Date: a.Date.Format("2006-01-02"), Justified: a.Justified,
+		Source: a.Source, Type: a.Type,
 		CreatedAt: a.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }

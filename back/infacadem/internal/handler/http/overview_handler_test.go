@@ -68,7 +68,7 @@ func newOverviewFixture(t *testing.T) *overviewFixture {
 	if _, err := gradeSvc.Create(ctx, testUserA, matA.ID, service.GradeInput{Name: gsptr("P1"), Weight: fptr(1), Score: iptr(60)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := absSvc.Create(ctx, testUserA, matA.ID, "2026-03-01", false); err != nil {
+	if _, err := absSvc.Create(ctx, testUserA, matA.ID, "2026-03-01", false, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 

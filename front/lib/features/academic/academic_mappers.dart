@@ -141,3 +141,39 @@ double? percentToFraction(dynamic raw) {
 
 /// Fracción backend -> % front (para render).
 double fractionToPercent(double fraction) => fraction * 100.0;
+
+double _roundHalfUp(double value, int decimals) {
+  var factor = 1.0;
+  for (var i = 0; i < decimals; i++) {
+    factor *= 10;
+  }
+  return ((value * factor + 0.5).floorToDouble()) / factor;
+}
+
+/// Nota UI (1-7) -> score backend (10-70, half-up, clamp). null si inválida.
+int? gradeUiToRaw(dynamic raw) {
+  double? v;
+  if (raw == null) return null;
+  if (raw is num) {
+    v = raw.toDouble();
+  } else {
+    v = double.tryParse(raw.toString().trim().replaceAll(',', '.'));
+  }
+  if (v == null) return null;
+  return _roundHalfUp(v * 10, 0).round().clamp(10, 70);
+}
+
+/// Score backend (10-70) -> nota UI (1-7). null si inválido.
+double? gradeRawToUi(dynamic raw) {
+  int? n;
+  if (raw == null) return null;
+  if (raw is int) {
+    n = raw;
+  } else if (raw is num) {
+    n = raw.round();
+  } else {
+    n = int.tryParse(raw.toString().trim());
+  }
+  if (n == null) return null;
+  return n / 10.0;
+}

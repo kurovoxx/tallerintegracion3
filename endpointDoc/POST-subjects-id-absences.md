@@ -3,7 +3,7 @@
 ## Req
 - Método: `POST`, ruta: `/subjects/:id/absences` (protegida, `back/infacadem/cmd/server/main.go:148`).
 - Headers: `Authorization: Bearer <access_token>`, `Content-Type: application/json`.
-- Body: `{"date":"2026-10-05","justified":false}` (`date` YYYY-MM-DD requerida; cualquier fecha válida pasada/hoy/futura — decisión documentada en `absence_service.go:32-35`).
+- Body: `{"date":"2026-10-05","justified":false}` (`date` YYYY-MM-DD requerida; cualquier fecha válida pasada/hoy/futura — decisión documentada en `absence_service.go:32-35`; opcionales `source` —self/teacher— y `type` —Teoría/Lab/…—, varchar libres).
 
 ## Res
 - `201`: `{"id":"<uuid>"}`.

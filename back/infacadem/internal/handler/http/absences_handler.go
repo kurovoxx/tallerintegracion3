@@ -19,8 +19,10 @@ func NewAbsencesHandler(svc *service.AbsenceService) *AbsencesHandler {
 }
 
 type absenceRequest struct {
-	Date      string `json:"date"`
-	Justified *bool  `json:"justified"`
+	Date      string  `json:"date"`
+	Justified *bool   `json:"justified"`
+	Source    *string `json:"source"`
+	Type      *string `json:"type"`
 }
 
 // Create maneja POST /subjects/:id/absences → 201 {id}.
@@ -38,7 +40,7 @@ func (h *AbsencesHandler) Create(c *gin.Context) {
 		return
 	}
 	justified := req.Justified != nil && *req.Justified
-	a, err := h.svc.Create(c.Request.Context(), userID, c.Param("id"), req.Date, justified)
+	a, err := h.svc.Create(c.Request.Context(), userID, c.Param("id"), req.Date, justified, req.Source, req.Type)
 	if err != nil {
 		respondServiceError(c, "CreateAbsence", userID, started, err)
 		return
@@ -83,7 +85,7 @@ func (h *AbsencesHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, toAbsenceResponse(*a))
 }
 
-// Update maneja PATCH /absences/:id {justified} → 200.
+// Update maneja PATCH /absences/:id {justified, source, type} → 200.
 func (h *AbsencesHandler) Update(c *gin.Context) {
 	started := time.Now()
 	userID, ok := requireUserID(c, "UpdateAbsence", started)
@@ -91,13 +93,17 @@ func (h *AbsencesHandler) Update(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Justified *bool `json:"justified"`
+		Justified *bool   `json:"justified"`
+		Source    *string `json:"source"`
+		Type      *string `json:"type"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		badBody(c, "UpdateAbsence", userID, started)
 		return
 	}
-	a, err := h.svc.SetJustified(c.Request.Context(), userID, c.Param("id"), req.Justified)
+	a, err := h.svc.Update(c.Request.Context(), userID, c.Param("id"), service.AbsenceUpdate{
+		Justified: req.Justified, Source: req.Source, Type: req.Type,
+	})
 	if err != nil {
 		respondServiceError(c, "UpdateAbsence", userID, started, err)
 		return

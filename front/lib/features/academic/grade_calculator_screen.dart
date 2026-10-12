@@ -6,6 +6,9 @@ import 'package:flutter/services.dart';
 
 import '../../core/common_widgets.dart';
 import '../../core/theme/app_theme.dart';
+import 'academic_api.dart';
+import 'academic_mappers.dart';
+import 'academic_models.dart';
 
 enum _ResultState { none, success, invalid }
 
@@ -62,6 +65,9 @@ class _GradeItem {
   final TextEditingController scoreController;
   final TextEditingController weightController;
   List<_GradeItem> children;
+
+  /// Nombre backend preservado al hidratar (para guardar sin renombrar).
+  String? backendName;
 
   bool get isSubdivided => children.isNotEmpty;
 
@@ -120,11 +126,23 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
   double? _neededPendingGrade;
   bool _isReachable = true;
 
+  // Backend Academic: con sesión se hidratan las notas (GET anidados +
+  // average) y se persiste el árbol (fan-out de hijas); sin sesión rige
+  // el estado local.
+  final AcademicApi _academicApi = AcademicApi();
+  bool _backendMode = false;
+  String? _backendSubjectId;
+  double? _backendAverage;
+  String? _backendAverageStatus;
+  String? _backendError;
+  bool _isSavingBackend = false;
+
   @override
   void initState() {
     super.initState();
     _selectedCourse = _courses.first;
     _initializeNormalGrades();
+    _loadFromBackend();
   }
 
   @override
@@ -133,6 +151,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     _disposeNormalGrades();
     _finalGrade?.dispose();
     _exam?.dispose();
+    _academicApi.dispose();
     super.dispose();
   }
 
@@ -188,6 +207,226 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       item.weightController.text = _formatWeight(weight);
     }
     return item;
+  }
+
+  // ---------------------------------------------------------------------
+  // BACKEND (hidratar + persistir)
+  // ---------------------------------------------------------------------
+
+  /// Curso visible -> materia backend (match por nombre, insensible a caso).
+  AcademicSubject? _matchSubject(List<AcademicSubject> subjects, String course) {
+    final want = course.trim().toLowerCase();
+    for (final s in subjects) {
+      if (s.name.trim().toLowerCase() == want) return s;
+    }
+    for (final s in subjects) {
+      final name = s.name.trim().toLowerCase();
+      if (name.contains(want) || want.contains(name)) return s;
+    }
+    return null;
+  }
+
+  String _formatScore(double v) {
+    if (v == v.roundToDouble()) return v.toStringAsFixed(0);
+    return v.toStringAsFixed(1);
+  }
+
+  _GradeItem _itemFromGrade(AcademicGrade g, String id) {
+    final item = _GradeItem(id: id)..backendName = g.name;
+    final ui = gradeRawToUi(g.score);
+    if (ui != null) item.scoreController.text = _formatScore(ui);
+    item.weightController.text = _formatWeight(fractionToPercent(g.weight));
+    return item;
+  }
+
+  /// Hidrata el estado desde GET grades anidados + average. Sin match o sin
+  /// sesión: modo local (comportamiento previo).
+  Future<void> _loadFromBackend() async {
+    AcademicSubject? match;
+    List<AcademicGradeNode> nodes = const [];
+    AcademicAverage? avg;
+    try {
+      final malla = await _academicApi.ensureCurriculum();
+      final subjects = await _academicApi.listSubjects(malla.id);
+      match = _matchSubject(subjects, _selectedCourse);
+      if (match == null) {
+        if (!mounted) return;
+        setState(() {
+          _backendMode = false;
+          _backendSubjectId = null;
+          _backendAverage = null;
+          _backendAverageStatus = null;
+          _backendError = null;
+        });
+        return;
+      }
+      nodes = await _academicApi.listGrades(match.id);
+      try {
+        avg = await _academicApi.getAverage(match.id);
+      } catch (_) {
+        avg = null;
+      }
+    } on AcademicApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _backendMode = false;
+        _backendSubjectId = null;
+        _backendAverage = null;
+        _backendAverageStatus = null;
+        // Sin sesión es el modo local esperado: sin error visible.
+        _backendError = e.code == 'no_session' ? null : e.message;
+      });
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _resetResult();
+      _disposeNormalGrades();
+      _normalGrades = nodes.map((n) {
+        final item = _itemFromGrade(n.grade, 'backend-${n.grade.id}');
+        item.children = n.children
+            .map((c) => _itemFromGrade(c, 'backend-${c.id}'))
+            .toList();
+        return item;
+      }).toList();
+      if (_normalGrades.isEmpty) _initializeNormalGrades();
+      _backendMode = true;
+      _backendSubjectId = match!.id;
+      _backendAverage = avg?.average;
+      _backendAverageStatus = avg?.status;
+      _backendError = null;
+    });
+  }
+
+  /// Estado local -> borradores (pesos %→fracción, notas UI→10–70).
+  /// Omite filas totalmente vacías (sin nota, sin peso y sin hijas).
+  List<GradeDraft> _normalDrafts() {
+    final out = <GradeDraft>[];
+    for (var i = 0; i < _normalGrades.length; i++) {
+      final item = _normalGrades[i];
+      final score = gradeUiToRaw(_parseNumber(item.scoreController.text));
+      final weight = percentToFraction(_readWeight(item)) ?? 0;
+      final children = <GradeDraft>[];
+      for (var j = 0; j < item.children.length; j++) {
+        final ch = item.children[j];
+        final cs = gradeUiToRaw(_parseNumber(ch.scoreController.text));
+        final cw = percentToFraction(_readWeight(ch)) ?? 0;
+        if (cs == null && cw == 0) continue;
+        children.add(
+          GradeDraft(
+            name: ch.backendName ?? 'SUBNOTA ${j + 1}',
+            score: cs,
+            weight: cw,
+            status: cs != null ? 'graded' : 'pending',
+          ),
+        );
+      }
+      if (score == null && weight == 0 && children.isEmpty) continue;
+      out.add(
+        GradeDraft(
+          name: item.backendName ?? 'NOTA ${i + 1}',
+          score: score,
+          weight: weight,
+          status: score != null ? 'graded' : 'pending',
+          children: children,
+        ),
+      );
+    }
+    return out;
+  }
+
+  /// Persiste el árbol (borra y recrea con fan-out de hijas). Reintentable
+  /// sin duplicar.
+  Future<void> _saveToBackend() async {
+    final subjectId = _backendSubjectId;
+    if (!_backendMode || subjectId == null || _isSavingBackend) return;
+    setState(() {
+      _isSavingBackend = true;
+      _backendError = null;
+    });
+    try {
+      final List<GradeDraft> tops;
+      if (_finalExamMode && _finalGrade != null && _exam != null) {
+        final fs = gradeUiToRaw(_parseNumber(_finalGrade!.scoreController.text));
+        final es = gradeUiToRaw(_parseNumber(_exam!.scoreController.text));
+        tops = [
+          GradeDraft(
+            name: _finalGrade!.backendName ?? 'Final',
+            score: fs,
+            weight: (percentToFraction(_readWeight(_finalGrade!)) ?? 0.7),
+            status: fs != null ? 'graded' : 'pending',
+          ),
+          GradeDraft(
+            name: _exam!.backendName ?? 'Examen',
+            score: es,
+            weight: (percentToFraction(_readWeight(_exam!)) ?? 0.3),
+            status: es != null ? 'graded' : 'pending',
+            isFinalExam: true,
+          ),
+        ];
+      } else {
+        tops = _normalDrafts();
+      }
+      final res = await _academicApi.saveGradeTree(subjectId: subjectId, tops: tops);
+      AcademicAverage? avg;
+      try {
+        avg = await _academicApi.getAverage(subjectId);
+      } catch (_) {
+        avg = null;
+      }
+      if (!mounted) return;
+      setState(() {
+        _backendAverage = avg?.average;
+        _backendAverageStatus = avg?.status;
+      });
+      final problems = [
+        ...res.failedTops.entries.map((e) => '${e.key}: ${e.value}'),
+        ...res.failedChildren.entries.map((e) => '${e.key}: ${e.value}'),
+        if (res.deleteError != null) 'borrado: ${res.deleteError}',
+      ];
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            problems.isEmpty
+                ? 'Notas guardadas correctamente'
+                : 'Guardado parcial: ${problems.join(' · ')}',
+          ),
+          backgroundColor: AppColors.border,
+        ),
+      );
+    } on AcademicApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _backendError = e.message);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo guardar: ${e.message}'), backgroundColor: AppColors.border),
+      );
+    } finally {
+      if (mounted) setState(() => _isSavingBackend = false);
+    }
+  }
+
+  /// Línea de estado backend (promedio oficial + errores). Oculta en local.
+  Widget _buildBackendStatus() {
+    if (!_backendMode && _backendError == null) {
+      return const SizedBox.shrink();
+    }
+    final parts = <String>[];
+    if (_backendAverage != null) {
+      parts.add(
+        'PROMEDIO BACKEND: ${_backendAverage!.toStringAsFixed(1)}${_backendAverageStatus != null ? ' (${_backendAverageStatus!})' : ''}',
+      );
+    } else if (_backendMode) {
+      parts.add('PROMEDIO BACKEND: SIN NOTAS');
+    }
+    if (_backendError != null) parts.add('ERROR: $_backendError');
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Text(
+        parts.join(' · '),
+        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: AppColors.muted),
+      ),
+    );
   }
 
   // ---------------------------------------------------------------------
@@ -609,6 +848,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
                   const SizedBox(height: 20),
                   _buildConfiguration(isDesktop),
                   const SizedBox(height: 18),
+                  _buildBackendStatus(),
                   _finalExamMode
                       ? _buildFinalExamMode()
                       : _buildNormalMode(isDesktop),
@@ -661,6 +901,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
                     _selectedCourse = course;
                     _resetResult();
                   });
+                  _loadFromBackend();
                 },
               ),
             ],
@@ -837,6 +1078,16 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
             onPressed: _calculate,
           ),
         ),
+        if (_backendMode) ...[
+          const SizedBox(width: 12),
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: _isSavingBackend ? null : _saveToBackend,
+              icon: const Icon(Icons.cloud_upload_rounded),
+              label: Text(_isSavingBackend ? 'GUARDANDO…' : 'GUARDAR'),
+            ),
+          ),
+        ],
       ],
     );
   }

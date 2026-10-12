@@ -112,7 +112,7 @@ func (f *boomRequirements) GradeSubjectOf(ctx context.Context, g, s, u string) (
 
 type boomAbsences struct{ e error }
 
-func (f *boomAbsences) Create(ctx context.Context, u, s string, d time.Time, j bool) (*model.Absence, error) {
+func (f *boomAbsences) Create(ctx context.Context, u, s string, d time.Time, j bool, src, typ *string) (*model.Absence, error) {
 	return nil, f.e
 }
 func (f *boomAbsences) ExistsOnDate(ctx context.Context, u, s string, d time.Time) (bool, error) {
@@ -125,6 +125,9 @@ func (f *boomAbsences) ListBySubject(ctx context.Context, s, u string) ([]model.
 	return nil, false, f.e
 }
 func (f *boomAbsences) UpdateJustified(ctx context.Context, id, u string, j bool) (*model.Absence, error) {
+	return nil, f.e
+}
+func (f *boomAbsences) Update(ctx context.Context, id, u string, p repository.AbsencePatch) (*model.Absence, error) {
 	return nil, f.e
 }
 func (f *boomAbsences) Delete(ctx context.Context, id, u string) (bool, error) {

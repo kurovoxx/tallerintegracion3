@@ -91,6 +91,8 @@ CREATE TABLE academic.absences (
     subject_id uuid NOT NULL REFERENCES academic.subjects(id) ON DELETE CASCADE,
     date date NOT NULL,
     justified boolean NOT NULL DEFAULT false,
+    source varchar(20),
+    type varchar(50),
     created_at timestamptz NOT NULL DEFAULT now()
 );
 `
@@ -342,16 +344,16 @@ func TestAcademicIntegration_Attendance(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, d := range []string{"2026-03-01", "2026-03-02", "2026-03-03", "2026-03-04", "2026-03-05"} {
-		if _, err := absSvc.Create(ctx, intUserA, mat.ID, d, false); err != nil {
+		if _, err := absSvc.Create(ctx, intUserA, mat.ID, d, false, nil, nil); err != nil {
 			t.Fatalf("falta %s: %v", d, err)
 		}
 	}
 	for _, d := range []string{"2026-03-06", "2026-03-07"} {
-		if _, err := absSvc.Create(ctx, intUserA, mat.ID, d, true); err != nil {
+		if _, err := absSvc.Create(ctx, intUserA, mat.ID, d, true, nil, nil); err != nil {
 			t.Fatalf("justificada %s: %v", d, err)
 		}
 	}
-	if _, err := absSvc.Create(ctx, intUserA, mat.ID, "2026-03-01", false); err == nil {
+	if _, err := absSvc.Create(ctx, intUserA, mat.ID, "2026-03-01", false, nil, nil); err == nil {
 		t.Fatal("duplicada debe ser 409")
 	} else if se, ok := err.(*ServiceError); !ok || se.Code != "conflict" {
 		t.Fatalf("esperado conflict, got %v", err)
@@ -372,7 +374,7 @@ func TestAcademicIntegration_Attendance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := absSvc.Create(ctx, intUserA, mat2.ID, "2026-03-01", false); err != nil {
+	if _, err := absSvc.Create(ctx, intUserA, mat2.ID, "2026-03-01", false, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if res2, err := attSvc.Summary(ctx, intUserA, mat2.ID); err != nil {

@@ -561,7 +561,7 @@ func sameDay(a, b time.Time) bool {
 	return y1 == y2 && m1 == m2 && d1 == d2
 }
 
-func (f *fakeAbsences) Create(_ context.Context, userID, subjectID string, date time.Time, justified bool) (*model.Absence, error) {
+func (f *fakeAbsences) Create(_ context.Context, userID, subjectID string, date time.Time, justified bool, source, typ *string) (*model.Absence, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sub.mu.Lock()
@@ -569,7 +569,7 @@ func (f *fakeAbsences) Create(_ context.Context, userID, subjectID string, date 
 	if !f.ownedSubjectLocked(subjectID, userID) {
 		return nil, nil
 	}
-	a := &model.Absence{ID: uuid.NewString(), SubjectID: subjectID, Date: date, Justified: justified, CreatedAt: time.Now()}
+	a := &model.Absence{ID: uuid.NewString(), SubjectID: subjectID, Date: date, Justified: justified, Source: source, Type: typ, CreatedAt: time.Now()}
 	f.items[a.ID] = a
 	cp := *a
 	return &cp, nil
@@ -638,6 +638,32 @@ func (f *fakeAbsences) UpdateJustified(_ context.Context, id, userID string, jus
 		return &cp, nil
 	}
 	return nil, nil
+}
+
+func (f *fakeAbsences) Update(_ context.Context, id, userID string, p repository.AbsencePatch) (*model.Absence, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	a, ok := f.items[id]
+	if !ok || !f.ownedSubjectLocked(a.SubjectID, userID) {
+		return nil, nil
+	}
+	if p.Justified != nil {
+		a.Justified = *p.Justified
+	}
+	if p.ClearSource {
+		a.Source = nil
+	} else if p.Source != nil {
+		a.Source = p.Source
+	}
+	if p.ClearType {
+		a.Type = nil
+	} else if p.Type != nil {
+		a.Type = p.Type
+	}
+	cp := *a
+	return &cp, nil
 }
 
 func (f *fakeAbsences) Delete(_ context.Context, id, userID string) (bool, error) {

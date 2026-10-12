@@ -112,6 +112,8 @@ CREATE TABLE academic.absences (
     subject_id uuid NOT NULL REFERENCES academic.subjects(id) ON DELETE CASCADE,
     date date NOT NULL,
     justified boolean NOT NULL DEFAULT false,
+    source varchar(20),
+    type varchar(50),
     created_at timestamptz NOT NULL DEFAULT now()
 );
 `
@@ -424,11 +426,15 @@ func TestRepository_Absences_Counts(t *testing.T) {
 	mat := mustSubject(t, pool, repoUserA, curA, "S")
 
 	d1 := timeDate(2026, 3, 1)
-	a, err := r.Create(ctx, repoUserA, mat, d1, false)
+	src, tp := "self", "Teoría"
+	a, err := r.Create(ctx, repoUserA, mat, d1, false, &src, &tp)
 	if err != nil || a == nil || a.Justified {
 		t.Fatalf("create: %+v %v", a, err)
 	}
-	if a2, _ := r.Create(ctx, repoUserB, mat, d1, false); a2 != nil {
+	if a.Source == nil || *a.Source != "self" || a.Type == nil || *a.Type != "Teoría" {
+		t.Fatalf("create source/type: %+v", a)
+	}
+	if a2, _ := r.Create(ctx, repoUserB, mat, d1, false, nil, nil); a2 != nil {
 		t.Fatal("materia ajena nil")
 	}
 	exists, err := r.ExistsOnDate(ctx, repoUserA, mat, d1)
@@ -455,8 +461,30 @@ func TestRepository_Absences_Counts(t *testing.T) {
 	if upd, _ := r.UpdateJustified(ctx, a.ID, repoUserB, false); upd != nil {
 		t.Fatal("toggle ajeno nil")
 	}
+	newType := "Lab"
+	upd, err = r.Update(ctx, a.ID, repoUserA, AbsencePatch{Type: &newType, ClearSource: true})
+	if err != nil || upd == nil || upd.Type == nil || *upd.Type != "Lab" || upd.Source != nil {
+		t.Fatalf("patch set/limpia: %+v %v", upd, err)
+	}
+	justOff := false
+	newSrc := "teacher"
+	upd, err = r.Update(ctx, a.ID, repoUserA, AbsencePatch{Justified: &justOff, Source: &newSrc, ClearType: true})
+	if err != nil || upd == nil || upd.Justified || upd.Source == nil || *upd.Source != "teacher" || upd.Type != nil {
+		t.Fatalf("patch full: %+v %v", upd, err)
+	}
+	if _, err := r.Update(ctx, a.ID, repoUserA, AbsencePatch{}); err == nil {
+		t.Fatal("patch vacío debe fallar")
+	} else if err.Error() != "no fields to update" {
+		t.Fatalf("msg: %v", err)
+	}
+	if _, err := r.Update(ctx, "not-a-uuid", repoUserA, AbsencePatch{Type: &newType}); err == nil {
+		t.Fatal("uuid malo debe fallar")
+	}
+	if upd, _ := r.Update(ctx, a.ID, repoUserB, AbsencePatch{Type: &newType}); upd != nil {
+		t.Fatal("update ajeno nil")
+	}
 	un, just, owned, err := r.CountsBySubject(ctx, mat, repoUserA)
-	if err != nil || !owned || un != 0 || just != 1 {
+	if err != nil || !owned || un != 1 || just != 0 {
 		t.Fatalf("counts: %d %d %v %v", un, just, owned, err)
 	}
 	if _, _, owned, _ := r.CountsBySubject(ctx, mat, repoUserB); owned {
@@ -524,7 +552,7 @@ func TestRepository_Cascadas(t *testing.T) {
 	if _, err := qr.Create(ctx, repoUserA, mat, &g.ID, false, ">=", 4.0, "force_fail"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ar.Create(ctx, repoUserA, mat, timeDate(2026, 1, 1), false); err != nil {
+	if _, err := ar.Create(ctx, repoUserA, mat, timeDate(2026, 1, 1), false, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	// Borrar materia arrastra todo (schedules, grades, requirements, absences).

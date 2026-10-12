@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -24,11 +25,11 @@ func NewAbsenceRepository(pool *pgxpool.Pool) *AbsenceRepository {
 	return &AbsenceRepository{pool: pool}
 }
 
-const absenceColumns = `id, subject_id, date, justified, created_at`
+const absenceColumns = `id, subject_id, date, justified, source, type, created_at`
 
 func scanAbsence(row pgx.Row) (*model.Absence, error) {
 	var a model.Absence
-	if err := row.Scan(&a.ID, &a.SubjectID, &a.Date, &a.Justified, &a.CreatedAt); err != nil {
+	if err := row.Scan(&a.ID, &a.SubjectID, &a.Date, &a.Justified, &a.Source, &a.Type, &a.CreatedAt); err != nil {
 		return nil, err
 	}
 	return &a, nil
@@ -43,14 +44,21 @@ func absenceSubjectOwned() string {
 }
 
 // Create inserta una falta solo si la materia es propia;
-// nil si la materia no existe o es ajena.
-func (r *AbsenceRepository) Create(ctx context.Context, userID, subjectID string, date time.Time, justified bool) (*model.Absence, error) {
+// nil si la materia no existe o es ajena. source/type nil = NULL.
+func (r *AbsenceRepository) Create(ctx context.Context, userID, subjectID string, date time.Time, justified bool, source, typ *string) (*model.Absence, error) {
+	var src, tp any
+	if source != nil {
+		src = *source
+	}
+	if typ != nil {
+		tp = *typ
+	}
 	a, err := scanAbsence(r.pool.QueryRow(ctx, `
-		INSERT INTO academic.absences (subject_id, date, justified)
-		SELECT $1::uuid, $3::date, $4
+		INSERT INTO academic.absences (subject_id, date, justified, source, type)
+		SELECT $1::uuid, $3::date, $4, $5, $6
 		WHERE `+absenceSubjectOwned()+`
 		RETURNING `+absenceColumns+`
-	`, subjectID, userID, date.Format("2006-01-02"), justified))
+	`, subjectID, userID, date.Format("2006-01-02"), justified, src, tp))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -124,7 +132,7 @@ func (r *AbsenceRepository) ListBySubject(ctx context.Context, subjectID, userID
 	out := make([]model.Absence, 0)
 	for rows.Next() {
 		var a model.Absence
-		if err := rows.Scan(&a.ID, &a.SubjectID, &a.Date, &a.Justified, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.SubjectID, &a.Date, &a.Justified, &a.Source, &a.Type, &a.CreatedAt); err != nil {
 			return nil, true, fmt.Errorf("list absences: %w", err)
 		}
 		out = append(out, a)
@@ -147,6 +155,60 @@ func (r *AbsenceRepository) UpdateJustified(ctx context.Context, id, userID stri
 		)
 		RETURNING `+qualify(absenceColumns, "a")+`
 	`, id, userID, justified))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("update absence: %w", err)
+	}
+	return a, nil
+}
+
+// AbsencePatch agrupa edición parcial de source/type (nil = no tocar).
+// ClearSource/ClearType piden NULL explícito.
+type AbsencePatch struct {
+	Source      *string
+	Type        *string
+	ClearSource bool
+	ClearType   bool
+	Justified   *bool
+}
+
+// Update aplica PATCH parcial (justified y/o source/type) solo si la
+// materia es propia; nil si no existe o es ajena.
+func (r *AbsenceRepository) Update(ctx context.Context, id, userID string, p AbsencePatch) (*model.Absence, error) {
+	set := make([]string, 0, 3)
+	args := []any{id, userID}
+	add := func(expr string, v any) {
+		args = append(args, v)
+		set = append(set, fmt.Sprintf(expr, len(args)))
+	}
+	if p.Justified != nil {
+		add("justified = $%d", *p.Justified)
+	}
+	if p.ClearSource {
+		set = append(set, "source = NULL")
+	} else if p.Source != nil {
+		add("source = $%d", *p.Source)
+	}
+	if p.ClearType {
+		set = append(set, "type = NULL")
+	} else if p.Type != nil {
+		add("type = $%d", *p.Type)
+	}
+	if len(set) == 0 {
+		return nil, fmt.Errorf("no fields to update")
+	}
+	query := fmt.Sprintf(`
+		UPDATE academic.absences a
+		SET %s
+		WHERE a.id = $1 AND EXISTS (
+			SELECT 1 FROM academic.subjects s
+			JOIN academic.curricula c ON c.id = s.curriculum_id
+			WHERE s.id = a.subject_id AND c.user_id = $2
+		)
+		RETURNING `+qualify(absenceColumns, "a"), strings.Join(set, ", "))
+	a, err := scanAbsence(r.pool.QueryRow(ctx, query, args...))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
