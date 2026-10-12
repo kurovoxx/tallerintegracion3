@@ -177,3 +177,56 @@ double? gradeRawToUi(dynamic raw) {
   if (n == null) return null;
   return n / 10.0;
 }
+
+/// Nota máxima válida en la UI (escala 1-7).
+const double maxValidGrade = 7.0;
+
+/// Resultado sellado de [computeNeeded].
+enum NeededStatus {
+  /// La meta ya está alcanzada: nunca se muestra un needed <= 0 como nota.
+  reached,
+
+  /// Falta nota por obtener (1.0 <= needed <= 7.0).
+  needed,
+
+  /// Ni con 7.0 en todo lo pendiente se alcanza.
+  unreachable,
+}
+
+class NeededResult {
+  const NeededResult(this.status, [this.needed]);
+
+  final NeededStatus status;
+
+  /// Nota a obtener redondeada fuera (solo con status == needed).
+  final double? needed;
+}
+
+/// Nota necesaria para alcanzar la meta con pendientes por rendir.
+///
+/// [weightedKnown] = Σ(nota × peso fracción) conocido; [pendingWeight] =
+/// Σ de pesos fracción pendientes. Casos:
+/// - `needed = (target - weightedKnown) / pendingWeight <= 0` → reached
+///   (el promedio conocido ya cubre la meta; ej. conocidos 5.5, pendiente
+///   1%, meta 4.0 → -150, que jamás debe mostrarse como nota).
+/// - `needed == 0` → reached; `needed == 1.0` → needed (nota mínima válida,
+///   se muestra por el flujo normal).
+/// - `needed <= 7.0` → needed; `> 7.0` → unreachable.
+/// - Sin pendientes (`pendingWeight <= 0`): reached si el promedio conocido
+///   ya cubre la meta, si no unreachable (el llamador conserva su tarjeta
+///   de promedio calculado).
+NeededResult computeNeeded({
+  required double target,
+  required double weightedKnown,
+  required double pendingWeight,
+}) {
+  if (pendingWeight <= 0) {
+    return NeededResult(
+      weightedKnown >= target ? NeededStatus.reached : NeededStatus.unreachable,
+    );
+  }
+  final needed = (target - weightedKnown) / pendingWeight;
+  if (needed <= 0) return const NeededResult(NeededStatus.reached);
+  if (needed <= maxValidGrade) return NeededResult(NeededStatus.needed, needed);
+  return const NeededResult(NeededStatus.unreachable);
+}

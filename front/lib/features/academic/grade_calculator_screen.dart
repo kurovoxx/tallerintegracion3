@@ -10,7 +10,7 @@ import 'academic_api.dart';
 import 'academic_mappers.dart';
 import 'academic_models.dart';
 
-enum _ResultState { none, success, invalid }
+enum _ResultState { none, success, reached, invalid }
 
 const double _passingGrade = 4.0;
 
@@ -799,15 +799,31 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     setState(() {
       _average = roundHalfUp(weightedKnown, 1);
       _error = null;
-      _resultState = _ResultState.success;
 
       if (pendingWeight == 0) {
         _neededPendingGrade = null;
+        _resultState = _ResultState.success;
         _isReachable = weightedKnown >= target;
       } else {
-        final needed = (target - weightedKnown) / pendingWeight;
-        _neededPendingGrade = roundHalfUp(needed, 1);
-        _isReachable = needed <= 7;
+        final res = computeNeeded(
+          target: target,
+          weightedKnown: weightedKnown,
+          pendingWeight: pendingWeight,
+        );
+        switch (res.status) {
+          case NeededStatus.reached:
+            _neededPendingGrade = null;
+            _resultState = _ResultState.reached;
+            _isReachable = true;
+          case NeededStatus.needed:
+            _neededPendingGrade = roundHalfUp(res.needed!, 1);
+            _resultState = _ResultState.success;
+            _isReachable = true;
+          case NeededStatus.unreachable:
+            _neededPendingGrade = null;
+            _resultState = _ResultState.success;
+            _isReachable = false;
+        }
       }
     });
   }
@@ -1099,6 +1115,18 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         foreground: AppColors.error,
         title: 'ERROR',
         message: _error ?? 'Revisa los datos.',
+      );
+    }
+
+    if (_resultState == _ResultState.reached) {
+      final current = (_average ?? 0).toStringAsFixed(1);
+      return _ResultCard(
+        background: AppColors.accentYellow,
+        foreground: AppColors.text,
+        title: 'META YA ALCANZADA',
+        value: current,
+        message:
+            'Tu promedio actual ya cubre la meta. Las evaluaciones pendientes solo pueden mantenerlo.',
       );
     }
 
