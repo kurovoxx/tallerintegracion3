@@ -1,7 +1,39 @@
 # Documentación de tareas — Martín
+## 3_5_3 — Interceptores (auth interno, logging)
 
-Doc vivo: una sección por tarea del sprint 2 (3_5_N). Los endpoints van por
-separado en `endpointDoc/` (un archivo por endpoint).
+### Decisión
+
+Opción B: copia por servicio, sin dependencias entre microservicios.
+Implementado en `social` (`back/social/internal/interceptor/`); notes/auth
+copian el mismo archivo cuando lo necesiten. No se tocó código de otros equipos.
+
+### Archivos
+
+| Archivo | Contenido |
+|---|---|
+| `back/social/internal/interceptor/auth.go` | `NewInternalAuth(secret)`: exige `x-internal-key` en metadata (equivale a `X-Internal-Key` HTTP). Sin secreto configurado → `Internal` (fail closed); sin key o mala → `Unauthenticated`. Comparación en tiempo constante |
+| `back/social/internal/interceptor/logging.go` | `NewLogging(logger)`: registra método, duración y código por RPC (equivale a `logOp`/`fail` HTTP). Logger inyectable para tests |
+| `back/social/internal/interceptor/interceptor_test.go` | 5 tests con `bufconn` (gRPC en memoria, servicio falso con `emptypb`/`wrapperspb`, sin protos ni red) |
+| `back/social/go.mod` | `+ google.golang.org/grpc v1.83.2` (igual que notes) |
+
+### Uso (cuando haya servidor gRPC)
+
+```go
+s := grpc.NewServer(grpc.ChainUnaryInterceptor(
+    interceptor.NewLogging(log.Default()), // afuera: audita también rechazos
+    interceptor.NewInternalAuth(cfg.InternalKey),
+))
+```
+
+### Verificación
+
+- `TestInternalAuth_AcceptsCorrectKey` / `RejectsMissingOrWrongKey` /
+  `MisconfiguredFailsClosed` / `TestLogging_EmitsMethodAndCode` (OK + NotFound) /
+  `TestChain_LoggingAuditsAuthRejection`: 5/5 PASS.
+- `go build ./...` + `go test ./...` (social, con Postgres local): `ok` en
+  todos los paquetes, sin regresiones.
+- **No entra**: JWT de usuario (3_5_6), interceptores stream (sin uso hoy),
+  cableado en servidores (no hay servidores gRPC propios aún).
 
 ## 3_5_2 — Protos comunes (errores, paginación)
 
