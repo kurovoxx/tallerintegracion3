@@ -707,6 +707,28 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
   // CALCULATION
   // ---------------------------------------------------------------------
 
+  /// Notas crudas de todos los controladores (tops, hijas, examen/final)
+  /// para validar rango antes de aplanar/promediar.
+  List<double?> _rawScores() {
+    final out = <double?>[];
+    void collect(_GradeItem item) {
+      out.add(_parseNumber(item.scoreController.text));
+      for (final child in item.children) {
+        out.add(_parseNumber(child.scoreController.text));
+      }
+    }
+
+    if (_finalExamMode && _finalGrade != null && _exam != null) {
+      collect(_finalGrade!);
+      collect(_exam!);
+    } else {
+      for (final item in _normalGrades) {
+        collect(item);
+      }
+    }
+    return out;
+  }
+
   List<_CalcEntry> _buildEntries() {
     final entries = <_CalcEntry>[];
 
@@ -777,6 +799,14 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     final totalWeight = _totalWeight();
     if ((totalWeight - 1).abs() > 0.005) {
       _showError('La ponderación total debe sumar 100%.');
+      return;
+    }
+
+    // Toda nota conocida (tops, hijas, examen/final) en [1.0, 7.0].
+    // Se valida el input crudo: las hijas se promedian al aplanar y un 80
+    // podría esconderse en el promedio del padre.
+    if (!allScoresInRange(_rawScores())) {
+      _showError('Las notas deben estar entre 1.0 y 7.0.');
       return;
     }
 
