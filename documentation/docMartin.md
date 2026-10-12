@@ -136,6 +136,44 @@ s := grpc.NewServer(grpc.ChainUnaryInterceptor(
 - **No entra**: JWT de usuario (3_5_6), interceptores stream (sin uso hoy),
   cableado en servidores (no hay servidores gRPC propios aún).
 
+## 3_5_5 — Conexión Social→Notes: unshare-all en leave/kick/ban
+
+### Estado previo
+
+`leave` ya llamaba a `POST /notes/unshare-all` (best-effort, reenviando el JWT
+propio). `kick`/`ban` no llamaban: el expulsado no inicia la acción y no hay
+JWT suyo que reenviar.
+
+### Implementado (lado Social, sin tocar Notes)
+
+- `GroupService.KickMember`/`BanMember` aceptan `cleanup_shared_notes` + `token`
+  (misma firma que `LeaveGroup`): tras expulsar/banear con éxito disparan
+  `go s.unshareNotes(target, group, actorToken)` con el **expulsado** como
+  `user_id` y el **JWT del admin actor** (Notes lo autoriza vía `IsGroupAdmin`).
+- Handlers `kick`/`ban` aceptan body opcional `{cleanup_shared_notes}` (igual
+  que leave, default `false`) y extraen el token crudo del header.
+- Llamadas existentes actualizadas a la firma extendida (12 call sites en tests).
+
+### Archivos
+
+| Archivo | Contenido |
+|---|---|
+| `back/social/internal/service/group_service.go:377-404` | Hook cleanup en kick/ban |
+| `back/social/internal/handler/http/group_handler.go:200-226` | Flag + token en kick/ban |
+| `back/social/internal/service/group_service_test.go` | `TestKickBanCleanSharedNotes` (kick/ban llaman con expulsado + Bearer admin, sin flag no llaman, kick fallido no llama) |
+
+### Verificación
+
+- Subtests 4/4 PASS; `go test ./...` (social, con Postgres): `ok` todo.
+
+### Dependencia pendiente (activación e2e)
+
+El llamado con JWT de admin necesita que Notes verifique `IsGroupAdmin` →
+`GET /internal/groups/{id}/members` en Social, que **no existe aún (3_5_4)**;
+hoy Notes falla cerrado (`isAdmin, _ :=`, `note_service.go:2586-2589`) y el
+cleanup de kick/ban queda en log best-effort hasta que 3_5_4 aterrice. `leave`
+funciona e2e hoy (usa el JWT propio, sin check de admin).
+
 ## 3_5_6 — Conexión servicios→Identity: VerifyToken/GetUser en middlewares
 
 ### Alcance

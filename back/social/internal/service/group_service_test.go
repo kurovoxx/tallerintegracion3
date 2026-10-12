@@ -277,8 +277,8 @@ type adminAction struct {
 
 func adminActions() []adminAction {
 	return []adminAction{
-		{"kick", func(s *GroupService, g, a, t string) error { return s.KickMember(ctx, g, a, t) }},
-		{"ban", func(s *GroupService, g, a, t string) error { return s.BanMember(ctx, g, a, t) }},
+		{"kick", func(s *GroupService, g, a, t string) error { return s.KickMember(ctx, g, a, t, false, "") }},
+		{"ban", func(s *GroupService, g, a, t string) error { return s.BanMember(ctx, g, a, t, false, "") }},
 		{"role", func(s *GroupService, g, a, t string) error { return s.ChangeRole(ctx, g, a, t, model.RoleMember) }},
 		{"transfer", func(s *GroupService, g, a, t string) error { return s.TransferAdmin(ctx, g, a, t) }},
 	}
@@ -331,13 +331,13 @@ func TestKick(t *testing.T) {
 	}
 
 	t.Run("no se puede expulsar a otro admin", func(t *testing.T) {
-		wantErr(t, svc.KickMember(ctx, g.ID, uAdmin, uAdmin2), ErrTargetIsAdmin)
+		wantErr(t, svc.KickMember(ctx, g.ID, uAdmin, uAdmin2, false, ""), ErrTargetIsAdmin)
 		if roleOf(t, store, g.ID, uAdmin2) != model.RoleAdmin {
 			t.Fatal("el admin objetivo debe seguir en el grupo")
 		}
 	})
 	t.Run("admin expulsa a un miembro y no queda baneado", func(t *testing.T) {
-		if err := svc.KickMember(ctx, g.ID, uAdmin, uMember); err != nil {
+		if err := svc.KickMember(ctx, g.ID, uAdmin, uMember, false, ""); err != nil {
 			t.Fatal(err)
 		}
 		if roleOf(t, store, g.ID, uMember) != "" {
@@ -348,7 +348,7 @@ func TestKick(t *testing.T) {
 		}
 	})
 	t.Run("expulsar a quien ya no es miembro", func(t *testing.T) {
-		wantErr(t, svc.KickMember(ctx, g.ID, uAdmin, uMember), ErrTargetNotFound)
+		wantErr(t, svc.KickMember(ctx, g.ID, uAdmin, uMember, false, ""), ErrTargetNotFound)
 	})
 }
 
@@ -362,19 +362,19 @@ func TestBan(t *testing.T) {
 	}
 
 	t.Run("no se puede banear a otro admin ni queda registrado", func(t *testing.T) {
-		wantErr(t, svc.BanMember(ctx, g.ID, uAdmin, uAdmin2), ErrTargetIsAdmin)
+		wantErr(t, svc.BanMember(ctx, g.ID, uAdmin, uAdmin2, false, ""), ErrTargetIsAdmin)
 		if _, banned := store.BannedBy(g.ID, uAdmin2); banned {
 			t.Fatal("un admin no debe quedar baneado")
 		}
 	})
 	t.Run("banear a quien no es miembro", func(t *testing.T) {
-		wantErr(t, svc.BanMember(ctx, g.ID, uAdmin, uStrang), ErrTargetNotFound)
+		wantErr(t, svc.BanMember(ctx, g.ID, uAdmin, uStrang, false, ""), ErrTargetNotFound)
 		if _, banned := store.BannedBy(g.ID, uStrang); banned {
 			t.Fatal("no se banea a quien no es miembro")
 		}
 	})
 	t.Run("ban expulsa y registra quién baneó", func(t *testing.T) {
-		if err := svc.BanMember(ctx, g.ID, uAdmin2, uMember); err != nil {
+		if err := svc.BanMember(ctx, g.ID, uAdmin2, uMember, false, ""); err != nil {
 			t.Fatal(err)
 		}
 		if roleOf(t, store, g.ID, uMember) != "" {
@@ -714,7 +714,7 @@ func TestAccountDeletionAcrossSeveralGroups(t *testing.T) {
 	// baneo del usuario en un tercer grupo: debe limpiarse
 	banGroup := newGroup(t, svc, uAdmin2)
 	joinAs(t, svc, store, banGroup.ID, uAdmin)
-	if err := svc.BanMember(ctx, banGroup.ID, uAdmin2, uAdmin); err != nil {
+	if err := svc.BanMember(ctx, banGroup.ID, uAdmin2, uAdmin, false, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -809,4 +809,78 @@ func TestConcurrentAdminLeaveRetainsAdminAndOwner(t *testing.T) {
 	if updated.OwnerUserID != uMember {
 		t.Fatal("owner not transferred")
 	}
+}
+
+// cleanup_shared_notes=true en kick/ban debe llamar a Notes con el EXPULSADO
+// como user_id y el JWT del admin actor (Notes lo autoriza vía IsGroupAdmin).
+func TestKickBanCleanSharedNotes(t *testing.T) {
+	type call struct {
+		path, auth string
+		body       map[string]string
+	}
+	setup := func(t *testing.T) (*GroupService, *MemoryGroupStore, string, chan call) {
+		t.Helper()
+		got := make(chan call, 1)
+		notes := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			got <- call{r.URL.Path, r.Header.Get("Authorization"), body}
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		t.Cleanup(notes.Close)
+		svc, store := newTestSvc()
+		svc.SetNotesBaseURL(notes.URL)
+		g := newGroup(t, svc, uAdmin)
+		joinAs(t, svc, store, g.ID, uMember)
+		return svc, store, g.ID, got
+	}
+	expectCleanup := func(t *testing.T, got chan call, gid string) {
+		t.Helper()
+		select {
+		case c := <-got:
+			if c.path != "/notes/unshare-all" || c.auth != "Bearer jwt-del-admin" ||
+				c.body["user_id"] != uMember || c.body["group_id"] != gid {
+				t.Fatalf("llamada inesperada a Notes: %+v", c)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("no se llamó a notes/unshare-all")
+		}
+	}
+
+	t.Run("kick", func(t *testing.T) {
+		svc, _, gid, got := setup(t)
+		if err := svc.KickMember(ctx, gid, uAdmin, uMember, true, "jwt-del-admin"); err != nil {
+			t.Fatal(err)
+		}
+		expectCleanup(t, got, gid)
+	})
+	t.Run("ban", func(t *testing.T) {
+		svc, _, gid, got := setup(t)
+		if err := svc.BanMember(ctx, gid, uAdmin, uMember, true, "jwt-del-admin"); err != nil {
+			t.Fatal(err)
+		}
+		expectCleanup(t, got, gid)
+	})
+	t.Run("sin flag no llama", func(t *testing.T) {
+		svc, _, gid, got := setup(t)
+		if err := svc.KickMember(ctx, gid, uAdmin, uMember, false, "jwt"); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-got:
+			t.Fatal("no se debe llamar a Notes sin cleanup_shared_notes")
+		case <-time.After(150 * time.Millisecond):
+		}
+	})
+	t.Run("kick fallido no llama", func(t *testing.T) {
+		svc, _, gid, got := setup(t)
+		if err := svc.KickMember(ctx, gid, uAdmin, uStrang, true, "jwt"); err == nil {
+			t.Fatal("se esperaba error al expulsar no-miembro")
+		}
+		select {
+		case <-got:
+			t.Fatal("no se debe llamar a Notes si el kick falló")
+		case <-time.After(150 * time.Millisecond):
+		}
+	})
 }

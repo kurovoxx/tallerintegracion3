@@ -375,19 +375,34 @@ func checkAdminAction(groupID, adminID, targetUserID string) error {
 }
 
 // KickMember expulsa a un miembro. Solo admins; no se puede expulsar a otro admin.
-func (s *GroupService) KickMember(ctx context.Context, groupID, adminID, targetUserID string) error {
+// Con cleanupSharedNotes pide a Notes retirar los apuntes del expulsado
+// (best-effort, con el JWT del admin actor: Notes lo autoriza vía IsGroupAdmin).
+func (s *GroupService) KickMember(ctx context.Context, groupID, adminID, targetUserID string, cleanupSharedNotes bool, token string) error {
 	if err := checkAdminAction(groupID, adminID, targetUserID); err != nil {
 		return err
 	}
-	return mapStoreErr(s.groups.KickMember(ctx, groupID, adminID, targetUserID))
+	if err := mapStoreErr(s.groups.KickMember(ctx, groupID, adminID, targetUserID)); err != nil {
+		return err
+	}
+	if cleanupSharedNotes {
+		go s.unshareNotes(targetUserID, groupID, token)
+	}
+	return nil
 }
 
 // BanMember expulsa y bloquea el reingreso de un miembro. Solo admins.
-func (s *GroupService) BanMember(ctx context.Context, groupID, adminID, targetUserID string) error {
+// Limpieza en Notes igual que KickMember.
+func (s *GroupService) BanMember(ctx context.Context, groupID, adminID, targetUserID string, cleanupSharedNotes bool, token string) error {
 	if err := checkAdminAction(groupID, adminID, targetUserID); err != nil {
 		return err
 	}
-	return mapStoreErr(s.groups.BanMember(ctx, groupID, adminID, targetUserID))
+	if err := mapStoreErr(s.groups.BanMember(ctx, groupID, adminID, targetUserID)); err != nil {
+		return err
+	}
+	if cleanupSharedNotes {
+		go s.unshareNotes(targetUserID, groupID, token)
+	}
+	return nil
 }
 
 func (s *GroupService) ChangeRole(ctx context.Context, groupID, adminID, targetUserID, newRole string) error {

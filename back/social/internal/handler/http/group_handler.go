@@ -198,12 +198,18 @@ func (h *GroupHandler) ListMembers(c *gin.Context) {
 }
 
 // KickMember maneja POST /groups/{id}/members/{user_id}/kick
+// Body opcional: {cleanup_shared_notes} — con true se retiran en Notes los
+// apuntes que el expulsado compartió (tarea 3_5_5).
 func (h *GroupHandler) KickMember(c *gin.Context) {
 	adminID, ok := requireUser(c)
 	if !ok {
 		return
 	}
-	if err := h.svc.KickMember(c.Request.Context(), c.Param("id"), adminID, c.Param("user_id")); err != nil {
+	var req leaveGroupRequest
+	_ = c.ShouldBindJSON(&req)
+	token := strings.TrimSpace(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
+
+	if err := h.svc.KickMember(c.Request.Context(), c.Param("id"), adminID, c.Param("user_id"), req.CleanupSharedNotes, token); err != nil {
 		respondGroupError(c, err, "Acceso denegado: solo admins pueden expulsar")
 		return
 	}
@@ -212,12 +218,17 @@ func (h *GroupHandler) KickMember(c *gin.Context) {
 }
 
 // BanMember maneja POST /groups/{id}/members/{user_id}/ban
+// Body opcional: {cleanup_shared_notes} (tarea 3_5_5, igual que kick).
 func (h *GroupHandler) BanMember(c *gin.Context) {
 	adminID, ok := requireUser(c)
 	if !ok {
 		return
 	}
-	if err := h.svc.BanMember(c.Request.Context(), c.Param("id"), adminID, c.Param("user_id")); err != nil {
+	var req leaveGroupRequest
+	_ = c.ShouldBindJSON(&req)
+	token := strings.TrimSpace(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
+
+	if err := h.svc.BanMember(c.Request.Context(), c.Param("id"), adminID, c.Param("user_id"), req.CleanupSharedNotes, token); err != nil {
 		respondGroupError(c, err, "Acceso denegado: solo admins pueden banear")
 		return
 	}
