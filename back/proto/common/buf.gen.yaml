@@ -1,0 +1,11 @@
+# Generación de stubs Go del módulo common.
+# Se corre desde back/proto/common (ver Makefile raíz). Plugins locales en
+# ./bin del repo (van por PATH). Salida: back/proto/gen/go.
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: ../gen/go/common
+    opt: paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: ../gen/go/common
+    opt: paths=source_relative

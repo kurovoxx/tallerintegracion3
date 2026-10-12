@@ -26,7 +26,11 @@ $(BIN_DIR)/protoc-gen-go $(BIN_DIR)/protoc-gen-go-grpc: | $(BIN_DIR)
 		sh -c "GOBIN=/out go install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION) && GOBIN=/out go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$(PROTOC_GEN_GO_GRPC_VERSION)"
 
 generate: tools
-	cd back/proto && PATH="$(BIN_DIR):$$PATH" buf generate
+	# Un módulo a la vez, desde su directorio: correr buf en back/proto raíz
+	# es inestable por el descubrimiento cruzado de módulos anidados
+	# (ver documentation/docMartin.md §3_5_2). infacadem genera lo suyo
+	# con back/proto/infacadem/generate.sh.
+	cd back/proto/common && PATH="$(BIN_DIR):$$PATH" buf generate
 
 clean-tools:
 	rm -rf $(BIN_DIR)

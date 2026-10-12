@@ -1,0 +1,18 @@
+# Módulo buf de los contratos compartidos (tareas 3_5_1/3_5_2).
+# Módulo propio (como infacadem): `buf lint`/`buf generate` corren DESDE este
+# directorio. No usar el nivel back/proto: el descubrimiento cruzado de módulos
+# anidados es inestable en buf (ver docMartin.md §3_5_2).
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+  except:
+    # La raíz del módulo es common/, así que la regla pediría dir "common/v1"
+    # para package common.v1 pero el archivo está en "v1/". La convención
+    # package==ruta-desde-back/proto se mantiene por README + revisión.
+    - PACKAGE_DIRECTORY_MATCH
+breaking:
+  use:
+    - FILE
