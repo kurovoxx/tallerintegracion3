@@ -684,7 +684,7 @@ func TestCoverage_Absence_Errores(t *testing.T) {
 	} else {
 		mustCode(t, err, "unauthorized")
 	}
-	if _, err := svcOK.Create(ctx, "", subID, "2026-01-01", false); err == nil {
+	if _, err := svcOK.Create(ctx, "", subID, "2026-01-01", false, nil, nil); err == nil {
 		t.Fatal("user")
 	} else {
 		mustCode(t, err, "unauthorized")

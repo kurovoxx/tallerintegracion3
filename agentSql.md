@@ -150,6 +150,8 @@ CREATE TABLE academic.absences (
     subject_id uuid NOT NULL REFERENCES academic.subjects(id) ON DELETE CASCADE,
     date date NOT NULL,
     justified boolean NOT NULL DEFAULT false,
+    source varchar(20),
+    type varchar(50),
     created_at timestamptz NOT NULL DEFAULT now()
 );
 

@@ -5,7 +5,7 @@
 - Headers: `Authorization: Bearer <access_token>`. Sin body.
 
 ## Res
-- `200`: `{"items":[{"id":"...","subject_id":"...","date":"2026-10-05","justified":false,"created_at":"..."}]}` (orden `date ASC, id ASC`; `[]` nunca `null`).
+- `200`: `{"items":[{"id":"...","subject_id":"...","date":"2026-10-05","justified":false,"source":"self","type":"Teoría","created_at":"..."}]}` (orden `date ASC, id ASC`; `source/type` null si ausentes; `[]` nunca `null`).
 - `400/401/404`: `invalid_uuid` / auth / materia ajena.
 
 ## Flujo

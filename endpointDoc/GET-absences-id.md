@@ -5,7 +5,7 @@
 - Headers: `Authorization: Bearer <access_token>`. Sin body.
 
 ## Res
-- `200`: `{"id":"...","subject_id":"...","date":"...","justified":false,"created_at":"..."}`.
+- `200`: `{"id":"...","subject_id":"...","date":"...","justified":false,"source":null,"type":null,"created_at":"..."}`.
 - `400/401/404`: `invalid_uuid` / auth / ajena-inexistente.
 
 ## Flujo

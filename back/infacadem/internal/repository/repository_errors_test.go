@@ -136,7 +136,7 @@ func TestRepository_ClosedPool_Errores(t *testing.T) {
 
 	ar := NewAbsenceRepository(pool)
 	d := timeDate(2026, 1, 1)
-	if _, err := ar.Create(ctx, repoUserA, repoUserA, d, false); err == nil {
+	if _, err := ar.Create(ctx, repoUserA, repoUserA, d, false, nil, nil); err == nil {
 		t.Fatal("ar.Create")
 	}
 	if _, err := ar.ExistsOnDate(ctx, repoUserA, repoUserA, d); err == nil {
@@ -242,7 +242,7 @@ func TestRepository_UUIDInvalido_Errores(t *testing.T) {
 
 	ar := NewAbsenceRepository(pool)
 	d := timeDate(2026, 1, 1)
-	if _, err := ar.Create(ctx, repoUserA, bad, d, false); err == nil {
+	if _, err := ar.Create(ctx, repoUserA, bad, d, false, nil, nil); err == nil {
 		t.Fatal("ar.Create materia mala")
 	}
 	if _, err := ar.ExistsOnDate(ctx, repoUserA, bad, d); err == nil {

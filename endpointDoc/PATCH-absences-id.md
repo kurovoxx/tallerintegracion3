@@ -3,7 +3,7 @@
 ## Req
 - Método: `PATCH`, ruta: `/absences/:id` (protegida, `back/infacadem/cmd/server/main.go:151`).
 - Headers: `Authorization: Bearer <access_token>`, `Content-Type: application/json`.
-- Body: `{"justified":true}` (requerido; mueve el conteo justificada↔injustificada).
+- Body: `{"justified":true}` (requerido; mueve el conteo justificada↔injustificada) + opcionales `source`/`type` (`""` limpia a NULL).
 
 ## Res
 - `200`: recurso actualizado.

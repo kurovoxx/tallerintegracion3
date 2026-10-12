@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/kurovoxx/tallerintegracion3/back/infacadem/internal/model"
+	"github.com/kurovoxx/tallerintegracion3/back/infacadem/internal/repository"
 )
 
 // Fake de ausencias con propiedad por materia (subjectID -> userID).
@@ -28,13 +29,13 @@ func (f *fakeAbsences) owned(subjectID, userID string) bool {
 	return ok && u == userID
 }
 
-func (f *fakeAbsences) Create(_ context.Context, userID, subjectID string, date time.Time, justified bool) (*model.Absence, error) {
+func (f *fakeAbsences) Create(_ context.Context, userID, subjectID string, date time.Time, justified bool, source, typ *string) (*model.Absence, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if !f.owned(subjectID, userID) {
 		return nil, nil
 	}
-	a := &model.Absence{ID: uuid.NewString(), SubjectID: subjectID, Date: date, Justified: justified, CreatedAt: time.Now()}
+	a := &model.Absence{ID: uuid.NewString(), SubjectID: subjectID, Date: date, Justified: justified, Source: source, Type: typ, CreatedAt: time.Now()}
 	f.items[a.ID] = a
 	cp := *a
 	return &cp, nil
@@ -101,6 +102,30 @@ func (f *fakeAbsences) UpdateJustified(_ context.Context, id, userID string, jus
 	return nil, nil
 }
 
+func (f *fakeAbsences) Update(_ context.Context, id, userID string, p repository.AbsencePatch) (*model.Absence, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	a, ok := f.items[id]
+	if !ok || !f.owned(a.SubjectID, userID) {
+		return nil, nil
+	}
+	if p.Justified != nil {
+		a.Justified = *p.Justified
+	}
+	if p.ClearSource {
+		a.Source = nil
+	} else if p.Source != nil {
+		a.Source = p.Source
+	}
+	if p.ClearType {
+		a.Type = nil
+	} else if p.Type != nil {
+		a.Type = p.Type
+	}
+	cp := *a
+	return &cp, nil
+}
+
 func (f *fakeAbsences) Delete(_ context.Context, id, userID string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -155,32 +180,32 @@ func TestAbsence_CRUD_Duplicado(t *testing.T) {
 	svc, _, subID := attendanceFixture(t, intPtr(32), floatPtr(75))
 	ctx := context.Background()
 
-	a, err := svc.Create(ctx, userA, subID, "2026-03-10", false)
+	a, err := svc.Create(ctx, userA, subID, "2026-03-10", false, nil, nil)
 	if err != nil || a.ID == "" || a.Justified {
 		t.Fatalf("create: %v %+v", a, err)
 	}
-	if _, err := svc.Create(ctx, userA, subID, "2026-03-10", true); err == nil {
+	if _, err := svc.Create(ctx, userA, subID, "2026-03-10", true, nil, nil); err == nil {
 		t.Fatal("misma fecha debe ser 409")
 	} else {
 		mustCode(t, err, "conflict")
 	}
 	// Otra fecha sí pasa.
-	if _, err := svc.Create(ctx, userA, subID, "2026-03-11", true); err != nil {
+	if _, err := svc.Create(ctx, userA, subID, "2026-03-11", true, nil, nil); err != nil {
 		t.Fatalf("otra fecha: %v", err)
 	}
 	for _, bad := range []string{"2026-02-30", "ayer", "10/03/2026", ""} {
-		if _, err := svc.Create(ctx, userA, subID, bad, false); err == nil {
+		if _, err := svc.Create(ctx, userA, subID, bad, false, nil, nil); err == nil {
 			t.Fatalf("fecha %q debe ser 400", bad)
 		} else {
 			mustCode(t, err, "invalid_date")
 		}
 	}
-	if _, err := svc.Create(ctx, userB, subID, "2026-03-12", false); err == nil {
+	if _, err := svc.Create(ctx, userB, subID, "2026-03-12", false, nil, nil); err == nil {
 		t.Fatal("materia ajena 404")
 	} else {
 		mustCode(t, err, "not_found")
 	}
-	if _, err := svc.Create(ctx, userA, "no-uuid", "2026-03-12", false); err == nil {
+	if _, err := svc.Create(ctx, userA, "no-uuid", "2026-03-12", false, nil, nil); err == nil {
 		t.Fatal("uuid malo 400")
 	} else {
 		mustCode(t, err, "invalid_uuid")
@@ -230,12 +255,12 @@ func TestAttendance_FormulaFrente(t *testing.T) {
 	svc, att, subID := attendanceFixture(t, intPtr(32), floatPtr(75))
 	ctx := context.Background()
 	for i := 1; i <= 5; i++ {
-		if _, err := svc.Create(ctx, userA, subID, sprintfDate(2026, 3, i), false); err != nil {
+		if _, err := svc.Create(ctx, userA, subID, sprintfDate(2026, 3, i), false, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for i := 6; i <= 7; i++ {
-		if _, err := svc.Create(ctx, userA, subID, sprintfDate(2026, 3, i), true); err != nil {
+		if _, err := svc.Create(ctx, userA, subID, sprintfDate(2026, 3, i), true, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -294,7 +319,7 @@ func TestAttendance_Nulos(t *testing.T) {
 
 	// total null → percentage/meets/remaining null (conteos sí).
 	svc, att, subID := attendanceFixture(t, nil, floatPtr(75))
-	if _, err := svc.Create(ctx, userA, subID, "2026-04-01", false); err != nil {
+	if _, err := svc.Create(ctx, userA, subID, "2026-04-01", false, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	res, err := att.Summary(ctx, userA, subID)
@@ -310,7 +335,7 @@ func TestAttendance_Nulos(t *testing.T) {
 
 	// total 0 → igual que null.
 	svc0, att0, sub0 := attendanceFixture(t, intPtr(0), floatPtr(75))
-	if _, err := svc0.Create(ctx, userA, sub0, "2026-04-01", false); err != nil {
+	if _, err := svc0.Create(ctx, userA, sub0, "2026-04-01", false, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if res, _ := att0.Summary(ctx, userA, sub0); res.Percentage != nil || res.Remaining != nil {
@@ -325,7 +350,7 @@ func TestAttendance_Nulos(t *testing.T) {
 	abs := newFakeAbsences(map[string]string{mat.ID: userA})
 	svc2 := NewAbsenceService(abs)
 	att2 := NewAttendanceService(sub, abs)
-	if _, err := svc2.Create(ctx, userA, mat.ID, "2026-04-01", false); err != nil {
+	if _, err := svc2.Create(ctx, userA, mat.ID, "2026-04-01", false, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	res2, err := att2.Summary(ctx, userA, mat.ID)
@@ -346,10 +371,10 @@ func TestAttendance_Nulos(t *testing.T) {
 	matJ, _ := NewSubjectService(subJ).Create(ctx, userA, mallaJ.ID, SubjectInput{Name: strPtr("MJ"), TotalClasses: intPtr(10), MinAttendancePct: floatPtr(75)})
 	absJ := newFakeAbsences(map[string]string{matJ.ID: userA})
 	svcJ := NewAbsenceService(absJ)
-	if _, err := svcJ.Create(ctx, userA, matJ.ID, "2026-04-01", true); err != nil {
+	if _, err := svcJ.Create(ctx, userA, matJ.ID, "2026-04-01", true, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svcJ.Create(ctx, userA, matJ.ID, "2026-04-02", true); err != nil {
+	if _, err := svcJ.Create(ctx, userA, matJ.ID, "2026-04-02", true, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	resJ, _ := NewAttendanceService(subJ, absJ).Summary(ctx, userA, matJ.ID)

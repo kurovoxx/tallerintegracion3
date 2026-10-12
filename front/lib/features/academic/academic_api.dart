@@ -16,6 +16,48 @@ import '../../core/services/session_manager.dart';
 import 'academic_mappers.dart';
 import 'academic_models.dart';
 
+/// Borrador de 1 POST de nota (top o hija): score en escala backend
+/// (10-70, null = pendiente), peso como fracción 0-1.
+class GradeDraft {
+  GradeDraft({
+    required this.name,
+    this.score,
+    required this.weight,
+    this.status = 'pending',
+    this.isFinalExam = false,
+    this.children = const [],
+  });
+
+  final String name;
+  final int? score;
+  final double weight;
+  final String status;
+  final bool isFinalExam;
+  final List<GradeDraft> children;
+}
+
+/// Resultado del guardado de un árbol de notas: recrea todo (borra lo
+/// existente y crea tops + hijas en fan-out). Fallos visibles por nombre;
+/// reintentar es idempotente (primero borra lo logrado).
+class GradeTreeResult {
+  GradeTreeResult({
+    required this.createdTops,
+    required this.failedTops,
+    required this.failedChildren,
+    this.deleteError,
+  });
+
+  final List<String> createdTops;
+  final Map<String, String> failedTops;
+  final Map<String, String> failedChildren;
+  final String? deleteError;
+
+  bool get hasFailures =>
+      failedTops.isNotEmpty ||
+      failedChildren.isNotEmpty ||
+      deleteError != null;
+}
+
 const _pillanOrigin = 'https://ti3-brojas.dev.censei.cl';
 const _academicBase = String.fromEnvironment(
   'ACADEMIC_BASE_URL',
@@ -335,5 +377,301 @@ class AcademicApi {
       skippedDays: skipped,
       failed: failed,
     );
+  }
+
+  // GET /subjects/:id/grades -> [{grade, children}].
+  Future<List<AcademicGradeNode>> listGrades(String subjectId) async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .get(
+            Uri.parse('$_baseUrl/subjects/$subjectId/grades'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    return _items(res, 'No se pudieron cargar las notas.')
+        .map(AcademicGradeNode.fromJson)
+        .toList();
+  }
+
+  // POST /subjects/:id/grades {name, score?, weight, status?, ...} -> {id}.
+  Future<String> createGrade({
+    required String subjectId,
+    required String name,
+    int? score,
+    required double weight,
+    String? status,
+    bool isFinalExam = false,
+  }) async {
+    final payload = <String, dynamic>{
+      'name': name.trim(),
+      'weight': weight,
+      'status': status ?? (score != null ? 'graded' : 'pending'),
+      if (isFinalExam) 'is_final_exam': true,
+    };
+    final sc = score;
+    if (sc != null) payload['score'] = sc;
+    final res = await AuthedHttp.run(
+      () => _client
+          .post(
+            Uri.parse('$_baseUrl/subjects/$subjectId/grades'),
+            headers: _headers(json: true),
+            body: jsonEncode(payload),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    return _createdId(res, 'No se pudo crear la nota.');
+  }
+
+  // POST /grades/:id/children -> {id} (fan-out de subdivisión).
+  Future<String> createGradeChild({
+    required String parentGradeId,
+    required String name,
+    int? score,
+    required double weight,
+    String? status,
+  }) async {
+    final payload = <String, dynamic>{
+      'name': name.trim(),
+      'weight': weight,
+      'status': status ?? (score != null ? 'graded' : 'pending'),
+    };
+    final sc = score;
+    if (sc != null) payload['score'] = sc;
+    final res = await AuthedHttp.run(
+      () => _client
+          .post(
+            Uri.parse('$_baseUrl/grades/$parentGradeId/children'),
+            headers: _headers(json: true),
+            body: jsonEncode(payload),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    return _createdId(res, 'No se pudo crear la subnota.');
+  }
+
+  // PATCH /grades/:id (parcial).
+  Future<void> patchGrade(String gradeId, Map<String, dynamic> patch) async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .patch(
+            Uri.parse('$_baseUrl/grades/$gradeId'),
+            headers: _headers(json: true),
+            body: jsonEncode(patch),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) {
+      throw _toError(res, 'No se pudo actualizar la nota.');
+    }
+  }
+
+  // DELETE /grades/:id (las hijas caen por cascada).
+  Future<void> deleteGrade(String gradeId) async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .delete(
+            Uri.parse('$_baseUrl/grades/$gradeId'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 204) {
+      throw _toError(res, 'No se pudo eliminar la nota.');
+    }
+  }
+
+  /// Guardado completo del árbol: borra las notas actuales y recrea tops
+  /// + hijas en fan-out. Idempotente ante reintento (borra primero).
+  Future<GradeTreeResult> saveGradeTree({
+    required String subjectId,
+    required List<GradeDraft> tops,
+  }) async {
+    final created = <String>[];
+    final failedTops = <String, String>{};
+    final failedChildren = <String, String>{};
+
+    List<AcademicGradeNode> current = [];
+    try {
+      current = await listGrades(subjectId);
+    } catch (_) {
+      // Si el GET falla, se intenta crear igual (los POST dirán).
+    }
+    for (final node in current) {
+      try {
+        await deleteGrade(node.grade.id);
+      } on AcademicApiException catch (e) {
+        return GradeTreeResult(
+          createdTops: created,
+          failedTops: failedTops,
+          failedChildren: failedChildren,
+          deleteError: e.message,
+        );
+      }
+    }
+
+    for (final top in tops) {
+      String topId;
+      try {
+        topId = await createGrade(
+          subjectId: subjectId,
+          name: top.name,
+          score: top.score,
+          weight: top.weight,
+          status: top.status,
+          isFinalExam: top.isFinalExam,
+        );
+        created.add(topId);
+      } on AcademicApiException catch (e) {
+        failedTops[top.name] = e.message;
+        continue;
+      }
+      for (var i = 0; i < top.children.length; i++) {
+        final ch = top.children[i];
+        try {
+          await createGradeChild(
+            parentGradeId: topId,
+            name: ch.name,
+            score: ch.score,
+            weight: ch.weight,
+            status: ch.status,
+          );
+        } on AcademicApiException catch (e) {
+          failedChildren['${top.name} · hija ${i + 1}'] = e.message;
+        }
+      }
+    }
+    return GradeTreeResult(
+      createdTops: created,
+      failedTops: failedTops,
+      failedChildren: failedChildren,
+    );
+  }
+
+  // GET /subjects/:id/average -> {average, status}.
+  Future<AcademicAverage> getAverage(String subjectId) async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .get(
+            Uri.parse('$_baseUrl/subjects/$subjectId/average'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) {
+      throw _toError(res, 'No se pudo calcular el promedio.');
+    }
+    final body = jsonDecode(utf8.decode(res.bodyBytes));
+    if (body is! Map) {
+      throw AcademicApiException('Respuesta inesperada del servidor.');
+    }
+    return AcademicAverage.fromJson(Map<String, dynamic>.from(body));
+  }
+
+  // GET /subjects/:id/requirements (lectura).
+  Future<List<AcademicRequirement>> listRequirements(String subjectId) async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .get(
+            Uri.parse('$_baseUrl/subjects/$subjectId/requirements'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    return _items(res, 'No se pudieron cargar los requisitos.')
+        .map(AcademicRequirement.fromJson)
+        .toList();
+  }
+
+  // GET /subjects/:id/absences -> faltas ordenadas por fecha.
+  Future<List<AcademicAbsence>> listAbsences(String subjectId) async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .get(
+            Uri.parse('$_baseUrl/subjects/$subjectId/absences'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    return _items(res, 'No se pudieron cargar las inasistencias.')
+        .map(AcademicAbsence.fromJson)
+        .toList();
+  }
+
+  // POST /subjects/:id/absences {date, justified?, source?, type?} -> {id}.
+  Future<String> createAbsence({
+    required String subjectId,
+    required String date,
+    bool justified = false,
+    String? source,
+    String? type,
+  }) async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .post(
+            Uri.parse('$_baseUrl/subjects/$subjectId/absences'),
+            headers: _headers(json: true),
+            body: jsonEncode(<String, dynamic>{
+              'date': date,
+              'justified': justified,
+              if (source != null && source.trim().isNotEmpty)
+                'source': source.trim(),
+              if (type != null && type.trim().isNotEmpty) 'type': type.trim(),
+            }),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    return _createdId(res, 'No se pudo registrar la inasistencia.');
+  }
+
+  // PATCH /absences/:id (justified y/o source/type; "" limpia).
+  Future<void> patchAbsence(String absenceId, Map<String, dynamic> patch) async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .patch(
+            Uri.parse('$_baseUrl/absences/$absenceId'),
+            headers: _headers(json: true),
+            body: jsonEncode(patch),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) {
+      throw _toError(res, 'No se pudo actualizar la inasistencia.');
+    }
+  }
+
+  // DELETE /absences/:id.
+  Future<void> deleteAbsence(String absenceId) async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .delete(
+            Uri.parse('$_baseUrl/absences/$absenceId'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 204) {
+      throw _toError(res, 'No se pudo eliminar la inasistencia.');
+    }
+  }
+
+  // GET /subjects/:id/attendance -> resumen con la fórmula oficial.
+  Future<AcademicAttendance> getAttendance(String subjectId) async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .get(
+            Uri.parse('$_baseUrl/subjects/$subjectId/attendance'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) {
+      throw _toError(res, 'No se pudo cargar la asistencia.');
+    }
+    final body = jsonDecode(utf8.decode(res.bodyBytes));
+    if (body is! Map) {
+      throw AcademicApiException('Respuesta inesperada del servidor.');
+    }
+    return AcademicAttendance.fromJson(Map<String, dynamic>.from(body));
   }
 }

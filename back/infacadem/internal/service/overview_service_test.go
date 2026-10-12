@@ -184,7 +184,7 @@ func TestDetail_Completa_Decimales(t *testing.T) {
 	rq := newFakeRequirements(grd.subs)
 	abs := newFakeAbsences(map[string]string{mat.ID: userA})
 	asvc := NewAbsenceService(abs)
-	if _, err := asvc.Create(ctx, userA, mat.ID, "2026-03-01", false); err != nil {
+	if _, err := asvc.Create(ctx, userA, mat.ID, "2026-03-01", false, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
