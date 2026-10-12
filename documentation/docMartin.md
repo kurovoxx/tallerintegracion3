@@ -136,6 +136,42 @@ s := grpc.NewServer(grpc.ChainUnaryInterceptor(
 - **No entra**: JWT de usuario (3_5_6), interceptores stream (sin uso hoy),
   cableado en servidores (no hay servidores gRPC propios aún).
 
+## 3_5_4 — Conexión Notes→Social: share + checks is_admin/member
+
+### Alcance
+
+Lado Social (endpoints internos + middleware + métodos de servicio). Lado Notes
+sin cambios: su `SocialHTTPAdapter` ya esperaba estos contratos y ahora
+resuelven de verdad (antes 500 fail-closed contra Social real).
+
+### Endpoints (tras `RequireInternalKey`, sin JWT)
+
+| Ruta | Responde | Usa Notes para |
+|---|---|---|
+| `GET /internal/groups/:id/members` | `200 [{user_id, role}]` / `404` grupo | `IsMember`/`IsAdmin` al compartir (`note_service.go:1921,2312`) y `IsGroupAdmin` de `unshare-all` (desbloquea 3_5_5 kick/ban e2e) |
+| `GET /internal/groups/:id/member-emails` | `200 [emails]` / `404` / `500` Identity caído | `ListMemberEmails` de shares `restricted` (`note_service.go:1975`) |
+
+Fail-closed en emails: `500` si Identity falla (Notes aborta el share con
+`ErrInternalDatabase`, no calcula permisos incompletos).
+
+### Archivos
+
+| Archivo | Contenido |
+|---|---|
+| `back/social/internal/middleware/internal_middleware.go` | `RequireInternalKey` (copia de auth, opción B): 401 sin/mala key, 503 sin secreto |
+| `back/social/internal/handler/http/internal_handler.go` | `InternalHandler{Members, MemberEmails}` (arrays siempre, nunca null) |
+| `back/social/internal/service/group_service.go` | `+ ListMembersInternal` (sin exigir membresía) y `+ ListMemberEmailsInternal` (fail-closed sin directorio) |
+| `back/social/internal/service/user_directory.go` | `+ LookupEmailsStrict` en la interfaz + impl HTTP (normaliza minúsculas/dedupe/orden); `LookupUsers` best-effort intacto |
+| `back/social/cmd/server/main.go` | Grupo `/internal` + 2 rutas |
+| Tests | `internal_handler_test.go` (forma, 401/404/400/503, 500 fail-closed), `internal_members_test.go` (strict + internos), `internal_middleware_test.go` |
+
+### Verificación
+
+- `go test ./...` (social): `ok` todo, sin regresiones.
+- **No entra**: `GET /internal/users/:id/followers-count` (sin lógica de
+  follows en social; el share lo tolera best-effort con snapshot 0), cambios en
+  Notes, migrar a gRPC (futuro; el contrato HTTP ya es el que el adapter pide).
+
 ## 3_5_5 — Conexión Social→Notes: unshare-all en leave/kick/ban
 
 ### Estado previo
@@ -166,13 +202,11 @@ JWT suyo que reenviar.
 
 - Subtests 4/4 PASS; `go test ./...` (social, con Postgres): `ok` todo.
 
-### Dependencia pendiente (activación e2e)
+### Dependencia resuelta por 3_5_4
 
-El llamado con JWT de admin necesita que Notes verifique `IsGroupAdmin` →
-`GET /internal/groups/{id}/members` en Social, que **no existe aún (3_5_4)**;
-hoy Notes falla cerrado (`isAdmin, _ :=`, `note_service.go:2586-2589`) y el
-cleanup de kick/ban queda en log best-effort hasta que 3_5_4 aterrice. `leave`
-funciona e2e hoy (usa el JWT propio, sin check de admin).
+El llamado con JWT de admin necesitaba que Notes verifique `IsGroupAdmin` →
+`GET /internal/groups/{id}/members`, que ya existe (ver 3_5_4 arriba). Kick/ban
+e2e activos. `leave` funcionaba desde antes (JWT propio, sin check de admin).
 
 ## 3_5_6 — Conexión servicios→Identity: VerifyToken/GetUser en middlewares
 
