@@ -17,7 +17,7 @@ func setupBanned(t *testing.T) (*GroupService, *MemoryGroupStore, *model.Group, 
 	g := newGroup(t, svc, uAdmin)
 	oldToken := tokenOf(t, store, g.ID)
 	joinAs(t, svc, store, g.ID, uMember)
-	if err := svc.BanMember(ctx, g.ID, uAdmin, uMember); err != nil {
+	if err := svc.BanMember(ctx, g.ID, uAdmin, uMember, false, ""); err != nil {
 		t.Fatal(err)
 	}
 	return svc, store, g, oldToken
@@ -76,7 +76,7 @@ func TestKickedUserCanRejoinOnlyWithCurrentToken(t *testing.T) {
 	g := newGroup(t, svc, uAdmin)
 	oldToken := tokenOf(t, store, g.ID)
 	joinAs(t, svc, store, g.ID, uMember)
-	if err := svc.KickMember(ctx, g.ID, uAdmin, uMember); err != nil {
+	if err := svc.KickMember(ctx, g.ID, uAdmin, uMember, false, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -128,5 +128,5 @@ func TestDemotedAdminLosesAdminAccess(t *testing.T) {
 	}
 	_, err = svc.RegenerateInvite(ctx, g.ID, uAdmin)
 	wantErr(t, err, ErrForbidden)
-	wantErr(t, svc.BanMember(ctx, g.ID, uAdmin, uMember), ErrForbidden)
+	wantErr(t, svc.BanMember(ctx, g.ID, uAdmin, uMember, false, ""), ErrForbidden)
 }
