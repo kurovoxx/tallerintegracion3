@@ -1,0 +1,11 @@
+# Módulo buf del monorepo (tarea 3_5_1).
+# Raíz de todos los .proto en back/proto/<servicio>/v<N>/.
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+breaking:
+  use:
+    - FILE

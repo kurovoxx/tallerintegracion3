@@ -1,4 +1,5 @@
 .env
+/bin/
 
 # kubeconfig personal (manual vcluster: no se sube a Git)
 *.kubeconfig

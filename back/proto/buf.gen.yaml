@@ -1,0 +1,11 @@
+# Generación de stubs Go (tarea 3_5_1).
+# Plugins locales provistos por `make tools` en ./bin (van por PATH).
+# Salida única: back/proto/gen/go (import: .../back/proto/gen/go/<svc>/v<N>).
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: gen/go
+    opt: paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: gen/go
+    opt: paths=source_relative
