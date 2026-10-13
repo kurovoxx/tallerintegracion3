@@ -40,5 +40,6 @@ type Grade struct {
 	Topics                *string    `json:"topics" db:"topics"`
 	NotifyDiscord         bool       `json:"notify_discord" db:"notify_discord"`
 	GoogleCalendarEventID *string    `json:"google_calendar_event_id" db:"google_calendar_event_id"`
+	Pinned                bool       `json:"pinned" db:"pinned"`
 	CreatedAt             time.Time  `json:"created_at" db:"created_at"`
 }

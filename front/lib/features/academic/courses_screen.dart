@@ -8,6 +8,8 @@ import 'academic_api.dart';
 import 'academic_mappers.dart';
 import 'academic_models.dart';
 import 'attendance_screen.dart';
+import 'course_detail_tabs.dart';
+import '../notes/all_notes_screen.dart';
 
 const String kSubjectApproved = 'approved';
 const String kSubjectInProgress = 'in_progress';
@@ -648,7 +650,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
             _CourseTabButton(icon: Icons.menu_book_rounded, label: 'Unidades y Contenidos', active: _detailTab == _CourseDetailTab.unidades, onTap: () => setState(() => _detailTab = _CourseDetailTab.unidades)),
             _CourseTabButton(icon: Icons.description_rounded, label: 'Materiales y Apuntes', active: _detailTab == _CourseDetailTab.materiales, onTap: () => setState(() => _detailTab = _CourseDetailTab.materiales)),
             _CourseTabButton(icon: Icons.bar_chart_rounded, label: 'Evaluaciones y Notas', active: _detailTab == _CourseDetailTab.evaluaciones, onTap: () => setState(() => _detailTab = _CourseDetailTab.evaluaciones)),
-            _CourseTabButton(icon: Icons.article_rounded, label: 'Apuntes', active: false, onTap: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Módulo de apuntes próximamente'), backgroundColor: AppColors.border))),
+            _CourseTabButton(icon: Icons.article_rounded, label: 'Apuntes', active: false, onTap: () => _openNotes(course, autoCreate: false)),
             _CourseTabButton(
               icon: Icons.fact_check_rounded,
               label: 'Ver Asistencia',
@@ -669,7 +671,33 @@ class _CoursesScreenState extends State<CoursesScreen> {
     );
   }
 
+  /// Navega a apuntes filtrados por materia (UX-05, convención "[CODE] ").
+  /// Con [autoCreate] abre además el diálogo de crear con el prefijo.
+  void _openNotes(Map<String, dynamic> course, {required bool autoCreate}) {
+    final code = (course['code'] as String?)?.trim() ?? '';
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => AllNotesScreen(
+          initialSubjectCode: code.isEmpty ? null : code,
+          autoOpenCreate: autoCreate,
+        ),
+      ),
+    );
+  }
+
+  /// Subject backend del curso en modo backend (ids locales en mock).
+  String? _backendSubjectId(Map<String, dynamic> course) {
+    if (!_backendMode) return null;
+    final id = course['id'] as String?;
+    if (id == null || id.isEmpty) return null;
+    return id;
+  }
+
   Widget _buildUnidadesTab(Map<String, dynamic> course) {
+    final subjectId = _backendSubjectId(course);
+    if (subjectId != null) {
+      return ContentsTab(subjectId: subjectId);
+    }
     final units = course['units'] as List;
     return Column(
       children: units.map<Widget>((u) {
@@ -743,10 +771,32 @@ class _CoursesScreenState extends State<CoursesScreen> {
       final cols = c.maxWidth > 600 ? 3 : 1;
       final gap = 12.0 * (cols - 1);
       final w = cols == 1 ? c.maxWidth : (c.maxWidth - gap) / cols;
-      return Wrap(
-        spacing: 12,
-        runSpacing: 12,
-        children: materials.map<Widget>((m) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              NeobrutalistButton(
+                label: 'Ver apuntes',
+                icon: Icons.article_rounded,
+                variant: NeobrutalistButtonVariant.secondary,
+                onPressed: () => _openNotes(course, autoCreate: false),
+              ),
+              NeobrutalistButton(
+                label: 'Crear apunte',
+                icon: Icons.add_rounded,
+                variant: NeobrutalistButtonVariant.accent,
+                onPressed: () => _openNotes(course, autoCreate: true),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: materials.map<Widget>((m) {
           return SizedBox(
             width: w,
             child: Container(
@@ -766,11 +816,17 @@ class _CoursesScreenState extends State<CoursesScreen> {
             ),
           );
         }).toList(),
+          ),
+        ],
       );
     });
   }
 
   Widget _buildEvaluacionesTab(Map<String, dynamic> course) {
+    final subjectId = _backendSubjectId(course);
+    if (subjectId != null) {
+      return EvaluationsTab(subjectId: subjectId);
+    }
     final grades = course['grades'] as List;
     return Column(
       children: grades.map<Widget>((g) {

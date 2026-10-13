@@ -166,6 +166,7 @@ class AcademicGrade {
     required this.weight,
     this.scheduledDate,
     this.topics,
+    this.pinned = false,
   });
 
   final String id;
@@ -178,6 +179,7 @@ class AcademicGrade {
   final double weight;
   final String? scheduledDate;
   final String? topics;
+  final bool pinned;
 
   static int? _asScore(dynamic v) {
     if (v == null) return null;
@@ -203,6 +205,7 @@ class AcademicGrade {
       weight: _asWeight(j['weight']),
       scheduledDate: j['scheduled_date'] as String?,
       topics: j['topics'] as String?,
+      pinned: (j['pinned'] as bool?) ?? false,
     );
   }
 }
@@ -392,6 +395,43 @@ class AcademicAttendance {
       minAttendancePct: _asDouble(j['min_attendance_pct']),
       meetsMinimum: j['meets_minimum'] as bool?,
       remaining: _asInt(j['remaining']),
+    );
+  }
+}
+
+/// Contenido (unidad) de una materia: título + cuerpo opcional + posición
+/// de orden (duplicados permitidos).
+class AcademicContent {
+  AcademicContent({
+    required this.id,
+    required this.subjectId,
+    required this.title,
+    this.body,
+    required this.position,
+  });
+
+  final String id;
+  final String subjectId;
+  final String title;
+  final String? body;
+  final int position;
+
+  factory AcademicContent.fromJson(Map<String, dynamic> j) {
+    int pos = 0;
+    final raw = j['position'];
+    if (raw is int) {
+      pos = raw;
+    } else {
+      pos = int.tryParse(raw?.toString() ?? '') ?? 0;
+    }
+    String? body = j['body'] as String?;
+    if (body != null && body.trim().isEmpty) body = null;
+    return AcademicContent(
+      id: (j['id'] as String?) ?? '',
+      subjectId: (j['subject_id'] as String?) ?? '',
+      title: (j['title'] as String?) ?? '',
+      body: body,
+      position: pos,
     );
   }
 }

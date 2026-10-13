@@ -76,8 +76,20 @@ Future<T> _withNotesClient<T>(
 const double _noteEditorMaxWidth = 920;
 
 class AllNotesScreen extends StatefulWidget {
-  const AllNotesScreen({super.key, this.database});
+  const AllNotesScreen({
+    super.key,
+    this.database,
+    this.initialSubjectCode,
+    this.autoOpenCreate = false,
+  });
   final AppDatabase? database;
+
+  /// Filtro de materia academic (código, ej. "INF-301"): lista solo notas
+  /// cuyo título empieza con "[CODE] ". Null = sin filtro.
+  final String? initialSubjectCode;
+
+  /// Abre el diálogo de crear al iniciar (con el prefijo de materia).
+  final bool autoOpenCreate;
 
   @override
   State<AllNotesScreen> createState() => AllNotesScreenState();
@@ -106,6 +118,9 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   bool _showingLocalExample = false;
   int _hiddenDemoCount = 0;
   String _currentQuery = '';
+
+  /// Filtro de materia desde academic (UX-05): prefijo "[CODE] " en título.
+  String? _subjectFilter;
 
   // Identificación verificable de ejemplos sembrados (sin borrar nada).
   // Demo solo existe con id '1'..'7' Y título exacto de _demoNotes().
@@ -221,7 +236,22 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   @override
   void initState() {
     super.initState();
+    _subjectFilter = widget.initialSubjectCode?.trim().isNotEmpty == true
+        ? widget.initialSubjectCode!.trim()
+        : null;
     _notesFuture = _initAndLoad();
+    if (widget.autoOpenCreate) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) openCreateDialog(initialTitle: _subjectTitlePrefix());
+      });
+    }
+  }
+
+  /// Prefijo "[CODE] " para crear/listar por materia (UX-05, lado cliente).
+  String _subjectTitlePrefix() {
+    final code = _subjectFilter;
+    if (code == null || code.isEmpty) return '';
+    return '[${code.toUpperCase()}] ';
   }
 
   @override
@@ -1337,6 +1367,15 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     String filter,
   ) {
     var res = notes.where((n) => !_deletedNoteIds.contains(n.id)).toList();
+    // Filtro de materia academic (UX-05, lado cliente): título con prefijo
+    // "[CODE] " (insensible a caso). No toca FTS: evita sintaxis MATCH.
+    final subject = _subjectFilter;
+    if (subject != null && subject.isNotEmpty) {
+      final prefix = '[${subject.toUpperCase()}]';
+      res = res
+          .where((n) => n.title.trim().toUpperCase().startsWith(prefix))
+          .toList();
+    }
     // Con sesión y fallo de backend, se ocultan (sin borrar) solo los
     // ejemplos verificables id+título. Nunca se presentan como reales.
     final token = SessionManager.token;
@@ -1778,12 +1817,15 @@ class AllNotesScreenState extends State<AllNotesScreen> {
 
   /// Punto de entrada público para que el shell (sidebar, rail, FAB o atajo
   /// Ctrl+N) abra el diálogo de creación de nota.
-  void openCreateDialog() => _showCreateDialog();
+  /// [initialTitle] pre-rellena el título (UX-05: prefijo "[CODE] " academic).
+  void openCreateDialog({String? initialTitle}) =>
+      _showCreateDialog(initialTitle: initialTitle);
 
-  void _showCreateDialog() {
+  void _showCreateDialog({String? initialTitle}) {
     showNeobrutalistDialog<void>(
       context: context,
       dialog: _CreateNoteDialog(
+        initialTitle: initialTitle ?? '',
         onCreate: (title, content, visibility, attachments) async {
           final revision = SessionManager.revision.value;
           final note = LocalNote(
@@ -4113,7 +4155,10 @@ class _CreateNoteDialog extends StatefulWidget {
   )
   onCreate;
 
-  const _CreateNoteDialog({required this.onCreate});
+  /// Título inicial (UX-05: prefijo "[CODE] " desde academic).
+  final String initialTitle;
+
+  const _CreateNoteDialog({required this.onCreate, this.initialTitle = ''});
 
   @override
   State<_CreateNoteDialog> createState() => _CreateNoteDialogState();
@@ -4135,7 +4180,7 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
   @override
   void initState() {
     super.initState();
-    _titleCtrl = TextEditingController();
+    _titleCtrl = TextEditingController(text: widget.initialTitle);
     _contentCtrl = TextEditingController();
     _titleFocus = FocusNode();
     _titleCtrl.addListener(_onTitleChanged);
