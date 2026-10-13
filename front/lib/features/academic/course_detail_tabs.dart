@@ -7,8 +7,8 @@ import 'academic_api.dart';
 import 'academic_models.dart';
 import 'grade_calculator_screen.dart';
 
-/// Tab Unidades (UX-05): CRUD de contenidos backend ordenados por posición,
-/// con reorden simple (subir/bajar intercambia posiciones por PATCH).
+/// Tab Unidades (UX-05b): checklist simple con check persistente (done),
+/// crear/editar/borrar. Sin reorden: el orden lo da position al crear.
 class ContentsTab extends StatefulWidget {
   const ContentsTab({super.key, required this.subjectId});
 
@@ -55,6 +55,12 @@ class _ContentsTabState extends State<ContentsTab> {
       setState(() {
         _isLoading = false;
         _error = e.message;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = 'Error inesperado. Reintenta.';
       });
     }
   }
@@ -148,6 +154,11 @@ class _ContentsTabState extends State<ContentsTab> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('No se pudo guardar: ${e.message}'), backgroundColor: AppColors.border),
       );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo guardar: error inesperado'), backgroundColor: AppColors.border),
+      );
     }
   }
 
@@ -160,23 +171,28 @@ class _ContentsTabState extends State<ContentsTab> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('No se pudo eliminar: ${e.message}'), backgroundColor: AppColors.border),
       );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo eliminar: error inesperado'), backgroundColor: AppColors.border),
+      );
     }
   }
 
-  /// Reorden simple: intercambia posiciones con el vecino por PATCH.
-  Future<void> _move(int index, int delta) async {
-    final other = index + delta;
-    if (other < 0 || other >= _items.length) return;
-    final a = _items[index];
-    final b = _items[other];
+  /// Toggle del check persistente (PATCH done). Sin sesión: error visible.
+  Future<void> _toggleDone(AcademicContent c, bool value) async {
     try {
-      await _api.patchContent(a.id, {'position': b.position});
-      await _api.patchContent(b.id, {'position': a.position});
+      await _api.patchContent(c.id, {'done': value});
       await _load();
     } on AcademicApiException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo reordenar: ${e.message}'), backgroundColor: AppColors.border),
+        SnackBar(content: Text('No se pudo actualizar: ${e.message}'), backgroundColor: AppColors.border),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo actualizar: error inesperado'), backgroundColor: AppColors.border),
       );
     }
   }
@@ -229,50 +245,62 @@ class _ContentsTabState extends State<ContentsTab> {
               style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: AppColors.muted),
             ),
           ),
-        for (var i = 0; i < _items.length; i++) _contentCard(_items[i], i),
+        for (final c in _items) _checkRow(c),
       ],
     );
   }
 
-  Widget _contentCard(AcademicContent c, int index) {
+  /// Fila checklist: check persistente + título/cuerpo + editar + borrar.
+  Widget _checkRow(AcademicContent c) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(3, 3), blurRadius: 0)]),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0)]),
+      child: Row(
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(c.title.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12.5, color: AppColors.text)),
-              ),
-              IconButton(
-                tooltip: 'Subir',
-                icon: const Icon(Icons.arrow_upward_rounded, size: 18),
-                onPressed: index == 0 ? null : () => _move(index, -1),
-              ),
-              IconButton(
-                tooltip: 'Bajar',
-                icon: const Icon(Icons.arrow_downward_rounded, size: 18),
-                onPressed: index == _items.length - 1 ? null : () => _move(index, 1),
-              ),
-              IconButton(
-                tooltip: 'Editar',
-                icon: const Icon(Icons.edit_rounded, size: 18),
-                onPressed: () => _showEditDialog(current: c),
-              ),
-              IconButton(
-                tooltip: 'Eliminar',
-                icon: const Icon(Icons.delete_rounded, size: 18),
-                onPressed: () => _delete(c.id),
-              ),
-            ],
+          Checkbox(
+            value: c.done,
+            activeColor: AppColors.accentYellow,
+            checkColor: AppColors.text,
+            side: const BorderSide(color: AppColors.border, width: 2),
+            onChanged: (v) => _toggleDone(c, v ?? false),
           ),
-          if (c.body != null && c.body!.isNotEmpty) ...[
-            const Divider(color: AppColors.border, thickness: 2, height: 18),
-            Text(c.body!, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5, color: AppColors.text)),
-          ],
+          const SizedBox(width: 6),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  c.title,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                    color: c.done ? AppColors.muted : AppColors.text,
+                    decoration: c.done ? TextDecoration.lineThrough : null,
+                  ),
+                ),
+                if (c.body != null && c.body!.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    c.body!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppColors.muted),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: 'Editar',
+            icon: const Icon(Icons.edit_rounded, size: 20),
+            onPressed: () => _showEditDialog(current: c),
+          ),
+          IconButton(
+            tooltip: 'Eliminar',
+            icon: const Icon(Icons.delete_rounded, size: 20),
+            onPressed: () => _delete(c.id),
+          ),
         ],
       ),
     );
@@ -338,6 +366,12 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
         _isLoading = false;
         _error = e.message;
       });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = 'Error inesperado. Reintenta.';
+      });
     }
   }
 
@@ -356,6 +390,11 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('No se pudo fijar: ${e.message}'), backgroundColor: AppColors.border),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo fijar: error inesperado'), backgroundColor: AppColors.border),
       );
     }
   }
@@ -402,6 +441,11 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('No se pudo renombrar: ${e.message}'), backgroundColor: AppColors.border),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo renombrar: error inesperado'), backgroundColor: AppColors.border),
       );
     }
   }

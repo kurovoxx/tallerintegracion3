@@ -95,6 +95,9 @@ func (f *fakeContents) Update(_ context.Context, id, userID string, p repository
 	if p.Position != nil {
 		c.Position = *p.Position
 	}
+	if p.Done != nil {
+		c.Done = *p.Done
+	}
 	cp := *c
 	return &cp, nil
 }
@@ -152,6 +155,11 @@ func TestContent_CRUD_Validaciones(t *testing.T) {
 	upd, err := svc.Update(ctx, userA, created.ID, ContentInput{Title: strPtr("U1b"), Body: strPtr("")})
 	if err != nil || upd.Title != "U1b" || upd.Body != nil {
 		t.Fatalf("patch set/limpia: %+v %v", upd, err)
+	}
+	done := true
+	upd, err = svc.Update(ctx, userA, created.ID, ContentInput{Done: &done})
+	if err != nil || !upd.Done {
+		t.Fatalf("toggle done: %+v %v", upd, err)
 	}
 	if _, err := svc.Update(ctx, userA, created.ID, ContentInput{}); err == nil {
 		t.Fatal("vacío 400")

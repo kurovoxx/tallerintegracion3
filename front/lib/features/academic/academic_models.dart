@@ -408,6 +408,7 @@ class AcademicContent {
     required this.title,
     this.body,
     required this.position,
+    this.done = false,
   });
 
   final String id;
@@ -415,6 +416,7 @@ class AcademicContent {
   final String title;
   final String? body;
   final int position;
+  final bool done;
 
   factory AcademicContent.fromJson(Map<String, dynamic> j) {
     int pos = 0;
@@ -432,6 +434,7 @@ class AcademicContent {
       title: (j['title'] as String?) ?? '',
       body: body,
       position: pos,
+      done: (j['done'] as bool?) ?? false,
     );
   }
 }

@@ -99,6 +99,16 @@ func TestContents_FlujoCRUD(t *testing.T) {
 		t.Fatalf("patch: %d %s", w.Code, w.Body.String())
 	}
 
+	// Toggle done persiste tras releer.
+	w = f.do(t, "PATCH", "/contents/"+created["id"], `{"done":true}`, tok)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"done":true`) {
+		t.Fatalf("done: %d %s", w.Code, w.Body.String())
+	}
+	w = f.do(t, "GET", "/contents/"+created["id"], "", tok)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"done":true`) {
+		t.Fatalf("done persiste: %d %s", w.Code, w.Body.String())
+	}
+
 	w = f.do(t, "GET", "/subjects/"+f.mat+"/contents", "", tok)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), created["id"]) {
 		t.Fatalf("list: %d %s", w.Code, w.Body.String())

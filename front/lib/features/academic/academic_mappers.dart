@@ -272,3 +272,16 @@ NeededResult computeNeeded({
   if (needed <= maxValidGrade) return NeededResult(NeededStatus.needed, needed);
   return const NeededResult(NeededStatus.unreachable);
 }
+
+/// UX-05b: un apunte pertenece a la materia si su título empieza con
+/// "[CODE] " (insensible a caso). Convención de lado cliente: el modelo
+/// de notas no tiene campo materia y los corchetes romperían la sintaxis
+/// FTS si se filtrara por búsqueda.
+bool noteMatchesSubjectCode(String title, String code) {
+  final c = code.trim();
+  if (c.isEmpty) return false;
+  return title.trim().toUpperCase().startsWith('[${c.toUpperCase()}]');
+}
+
+/// Prefijo "[CODE] " para crear apunte con materia preseleccionada.
+String subjectNotePrefix(String code) => '[${code.trim().toUpperCase()}] ';

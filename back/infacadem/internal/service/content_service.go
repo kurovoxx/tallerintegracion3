@@ -24,6 +24,7 @@ type ContentInput struct {
 	Title    *string
 	Body     *string
 	Position *int
+	Done     *bool
 }
 
 // ContentService contiene las reglas de contents (propiedad vía la materia).
@@ -139,7 +140,10 @@ func (s *ContentService) Update(ctx context.Context, userID, id string, in Conte
 	if in.Position != nil {
 		p.Position = in.Position
 	}
-	if p.Title == nil && p.Body == nil && p.Position == nil && !p.ClearBody {
+	if in.Done != nil {
+		p.Done = in.Done
+	}
+	if p.Title == nil && p.Body == nil && p.Position == nil && p.Done == nil && !p.ClearBody {
 		return nil, NewServiceError(utils.ErrBadRequest)
 	}
 	out, err := s.repo.Update(ctx, id, strings.TrimSpace(userID), p)
