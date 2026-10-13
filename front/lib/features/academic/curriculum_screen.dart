@@ -6,6 +6,7 @@ import '../../core/services/courses_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 import 'academic_api.dart';
+import 'academic_mappers.dart';
 import 'academic_models.dart';
 
 const String kSubjectApproved = 'approved';
@@ -49,6 +50,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   final AcademicApi _academicApi = AcademicApi();
   bool _backendMode = false;
   String? _curriculumId;
+
+  /// Materias backend para el combobox del diálogo (vacío en modo local).
+  List<AcademicSubject> _backendSubjects = const [];
 
   @override
   void initState() {
@@ -251,6 +255,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         _semesters = map;
         _curriculumId = malla.id;
         _backendMode = true;
+        _backendSubjects = subjects;
       });
       return true;
     } on AcademicApiException {
@@ -258,6 +263,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         setState(() {
           _backendMode = false;
           _curriculumId = null;
+          _backendSubjects = const [];
         });
       }
       return false;
@@ -441,10 +447,18 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   Future<void> _showAddSubjectDialog(int semester) async {
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (_) => _AddSubjectDialog(semester: semester),
+      builder: (_) => _AddSubjectDialog(
+        semester: semester,
+        existing: _backendMode ? _backendSubjects : const [],
+      ),
     );
 
     if (result != null) {
+      final existingId = result['existingId'] as String?;
+      if (existingId != null) {
+        await _assignExistingSubject(semester, result, existingId);
+        return;
+      }
       String subjectId = 'ramo-${DateTime.now().microsecondsSinceEpoch}';
       if (_backendMode && _curriculumId != null) {
         try {
@@ -490,6 +504,74 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         ),
       );
     }
+  }
+
+  /// Asigna una materia backend existente al semestre (PATCH semester).
+  /// En modo local solo la refleja en la malla visible.
+  Future<void> _assignExistingSubject(
+    int semester,
+    Map<String, dynamic> result,
+    String existingId,
+  ) async {
+    if (_backendMode) {
+      try {
+        await _academicApi.patchSubject(existingId, {'semester': semester});
+      } on AcademicApiException catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No se pudo asignar el ramo: ${e.message}'),
+            backgroundColor: AppColors.border,
+          ),
+        );
+        return;
+      }
+      // Refresca el cache del combobox con el semestre nuevo.
+      final idx = _backendSubjects.indexWhere((s) => s.id == existingId);
+      if (idx != -1) {
+        final s = _backendSubjects[idx];
+        _backendSubjects = List<AcademicSubject>.of(_backendSubjects)
+          ..[idx] = AcademicSubject(
+            id: s.id,
+            curriculumId: s.curriculumId,
+            name: s.name,
+            code: s.code,
+            professor: s.professor,
+            room: s.room,
+            semester: semester,
+            credits: s.credits,
+            status: s.status,
+            totalClasses: s.totalClasses,
+            minAttendancePct: s.minAttendancePct,
+          );
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      // Evita duplicados si ya estaba en otro semestre visible.
+      for (final entry in _semesters.entries) {
+        entry.value.removeWhere((r) => r['id'] == existingId);
+      }
+      final list = _semesters[semester] ?? [];
+      list.add({
+        'id': existingId,
+        'code': result['code'] ?? '',
+        'name': result['name'] ?? 'Ramo',
+        'credits': result['credits'] ?? 5,
+        'status': result['status'] ?? kSubjectPending,
+        'requisite': null,
+      });
+      _semesters[semester] = list;
+    });
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Ramo "${result['name']}" asignado a Semestre $semester',
+        ),
+        backgroundColor: AppColors.border,
+      ),
+    );
   }
 
   void _removeSubject(int semester, String id) {
@@ -1096,7 +1178,8 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
 
 class _AddSubjectDialog extends StatefulWidget {
   final int semester;
-  const _AddSubjectDialog({required this.semester});
+  final List<AcademicSubject> existing;
+  const _AddSubjectDialog({required this.semester, this.existing = const []});
 
   @override
   State<_AddSubjectDialog> createState() => _AddSubjectDialogState();
@@ -1109,12 +1192,18 @@ class _AddSubjectDialogState extends State<_AddSubjectDialog> {
   late final TextEditingController _creditsCtrl;
   String _status = kSubjectPending;
 
+  /// true = elegir existente; false = crear nueva. Sin existentes, crear.
+  late bool _pickExisting;
+  String? _pickedId;
+
   @override
   void initState() {
     super.initState();
     _nameCtrl = TextEditingController();
     _codeCtrl = TextEditingController();
     _creditsCtrl = TextEditingController(text: '5');
+    _pickExisting = widget.existing.isNotEmpty;
+    if (_pickExisting) _pickedId = widget.existing.first.id;
   }
 
   @override
@@ -1126,6 +1215,20 @@ class _AddSubjectDialogState extends State<_AddSubjectDialog> {
   }
 
   void _submit() {
+    if (_pickExisting && widget.existing.isNotEmpty) {
+      final found = widget.existing.firstWhere(
+        (s) => s.id == _pickedId,
+        orElse: () => widget.existing.first,
+      );
+      Navigator.of(context).pop({
+        'existingId': found.id,
+        'name': found.name,
+        'code': found.code ?? '',
+        'credits': found.credits ?? 5,
+        'status': found.status,
+      });
+      return;
+    }
     if (!_formKey.currentState!.validate()) return;
     Navigator.of(context).pop({
       'name': _nameCtrl.text.trim(),
@@ -1158,6 +1261,69 @@ class _AddSubjectDialogState extends State<_AddSubjectDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              if (widget.existing.isNotEmpty) ...[
+                Row(
+                  children: [
+                    Expanded(
+                      child: NeobrutalistButton(
+                        label: 'Existente',
+                        variant: _pickExisting
+                            ? NeobrutalistButtonVariant.accent
+                            : NeobrutalistButtonVariant.secondary,
+                        onPressed: () => setState(() => _pickExisting = true),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: NeobrutalistButton(
+                        label: 'Crear nueva',
+                        variant: !_pickExisting
+                            ? NeobrutalistButtonVariant.accent
+                            : NeobrutalistButtonVariant.secondary,
+                        onPressed: () => setState(() => _pickExisting = false),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+              ],
+              if (_pickExisting && widget.existing.isNotEmpty) ...[
+                const AppFieldLabel('MATERIA CREADA'),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  decoration: BoxDecoration(
+                    color: AppColors.bg,
+                    border: Border.all(color: AppColors.border, width: 2),
+                    borderRadius: BorderRadius.circular(AppDimens.radius),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: _pickedId,
+                      isExpanded: true,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 13,
+                        color: AppColors.text,
+                      ),
+                      items: [
+                        for (final s in widget.existing)
+                          DropdownMenuItem(
+                            value: s.id,
+                            child: Text(
+                              subjectOptionLabel(s.code, s.name),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      ],
+                      onChanged: (v) {
+                        if (v != null) setState(() => _pickedId = v);
+                      },
+                    ),
+                  ),
+                ),
+              ],
+              if (!_pickExisting || widget.existing.isEmpty) ...[
               const AppFieldLabel('NOMBRE DE LA ASIGNATURA'),
               const SizedBox(height: 6),
               TextFormField(
@@ -1279,6 +1445,7 @@ class _AddSubjectDialogState extends State<_AddSubjectDialog> {
                   ),
                 ),
               ),
+              ],
             ],
           ),
         ),
@@ -1290,7 +1457,9 @@ class _AddSubjectDialogState extends State<_AddSubjectDialog> {
           onPressed: () => Navigator.of(context).pop(),
         ),
         NeobrutalistButton(
-          label: 'Añadir',
+          label: _pickExisting && widget.existing.isNotEmpty
+              ? 'Asignar'
+              : 'Añadir',
           icon: Icons.add_rounded,
           variant: NeobrutalistButtonVariant.accent,
           onPressed: _submit,

@@ -1160,8 +1160,7 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                         decoration: appInputDecoration('INFO-301'),
                         inputFormatters: [LengthLimitingTextInputFormatter(20)],
                         validator: (v) {
-                          if (v == null || v.trim().isEmpty) return 'Requerido';
-                          if (!RegExp(r'^[A-Z]{2,5}[- ]?\d{3,4}$').hasMatch(v.trim().toUpperCase())) return 'Ej. INF-301';
+                          if (!isValidSubjectCode(v)) return 'Requerido';
                           return null;
                         },
                       ),
@@ -1348,19 +1347,68 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
   late final List<String> _added;
   final Set<String> _selectedDays = <String>{};
   String? _selectedBlock;
+  late final TextEditingController _manualStartCtrl;
+  late final TextEditingController _manualEndCtrl;
 
   @override
   void initState() {
     super.initState();
     _added = List<String>.of(widget.initialEntries);
+    _manualStartCtrl = TextEditingController();
+    _manualEndCtrl = TextEditingController();
   }
 
+  @override
+  void dispose() {
+    _manualStartCtrl.dispose();
+    _manualEndCtrl.dispose();
+    super.dispose();
+  }
+
+  /// Bloque manual "HH:MM–HH:MM" normalizado, o null si está incompleto
+  /// o es inválido (ver [_manualErrorText]).
+  List<String>? _manualParts() {
+    final s = _manualStartCtrl.text.trim();
+    final e = _manualEndCtrl.text.trim();
+    if (s.isEmpty && e.isEmpty) return null;
+    return splitTimeBlock('$s–$e');
+  }
+
+  /// Error visible del bloque manual, o null si está incompleto o válido.
+  String? _manualErrorText() {
+    final s = _manualStartCtrl.text.trim();
+    final e = _manualEndCtrl.text.trim();
+    if (s.isEmpty && e.isEmpty) return null;
+    if (_manualParts() != null) return null;
+    final badTime = hhMmToMinutes(s) == null || hhMmToMinutes(e) == null;
+    return badTime
+        ? 'Hora inválida: usa HH:MM (ej. 10:20).'
+        : 'El fin debe ser mayor al inicio.';
+  }
+
+  bool get _hasManualInput =>
+      _manualStartCtrl.text.trim().isNotEmpty ||
+      _manualEndCtrl.text.trim().isNotEmpty;
+
   /// Vista previa de la entrada en construcción, p.ej. 'Lun / Mié · 10:00–11:30'.
+  /// Lo manual manda sobre el bloque estático seleccionado.
   String get _preview {
     final days = _selectedDays.toList()
       ..sort((a, b) => _kWeekDays.indexOf(a).compareTo(_kWeekDays.indexOf(b)));
-    if (days.isEmpty || _selectedBlock == null) return '';
+    if (days.isEmpty) return '';
+    final manual = _manualParts();
+    if (manual != null) return '${days.join(' / ')} · ${manual[0]}–${manual[1]}';
+    if (_hasManualInput) return '';
+    if (_selectedBlock == null) return '';
     return '${days.join(' / ')} · $_selectedBlock';
+  }
+
+  void _pickBlock(List<String> block) {
+    setState(() {
+      _selectedBlock = _blockLabel(block);
+      _manualStartCtrl.text = block[0];
+      _manualEndCtrl.text = block[1];
+    });
   }
 
   void _addBlock() {
@@ -1370,6 +1418,8 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
       _added.add(preview);
       _selectedDays.clear();
       _selectedBlock = null;
+      _manualStartCtrl.clear();
+      _manualEndCtrl.clear();
     });
   }
 
@@ -1429,10 +1479,43 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                     _ScheduleDayChip(
                       label: _blockLabel(block),
                       selected: _selectedBlock == _blockLabel(block),
-                      onTap: () => setState(() => _selectedBlock = _blockLabel(block)),
+                      onTap: () => _pickBlock(block),
                     ),
                 ],
               ),
+              const SizedBox(height: 10),
+              const Text('MANUAL (HH:MM)', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10, color: AppColors.muted, letterSpacing: 0.5)),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _manualStartCtrl,
+                      keyboardType: TextInputType.datetime,
+                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text),
+                      decoration: appInputDecoration('10:20'),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 8),
+                    child: Text('–', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: AppColors.text)),
+                  ),
+                  Expanded(
+                    child: TextField(
+                      controller: _manualEndCtrl,
+                      keyboardType: TextInputType.datetime,
+                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text),
+                      decoration: appInputDecoration('11:50'),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                ],
+              ),
+              if (_manualErrorText() != null) ...[
+                const SizedBox(height: 6),
+                Text(_manualErrorText()!, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 11, color: AppColors.error)),
+              ],
               const SizedBox(height: 14),
               if (_preview.isNotEmpty) ...[
                 Container(

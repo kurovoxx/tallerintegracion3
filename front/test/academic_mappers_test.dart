@@ -166,4 +166,45 @@ void main() {
     expect(allScoresInRange([5.0, 4.0, 80.0]), isFalse);
     expect(allScoresInRange([]), isTrue);
   });
+
+  test('UX-01: código acepta cualquier texto no vacío', () {
+    expect(isValidSubjectCode('INF-301'), isTrue);
+    expect(isValidSubjectCode('inf 101'), isTrue);
+    expect(isValidSubjectCode('MAT101'), isTrue);
+    expect(isValidSubjectCode('un código muy largo con espacios'), isTrue);
+    expect(isValidSubjectCode('  '), isFalse);
+    expect(isValidSubjectCode(''), isFalse);
+    expect(isValidSubjectCode(null), isFalse);
+  });
+
+  test('UX-02: bloque manual válido/inválido', () {
+    // 10:20/11:50 válido crea el bloque.
+    expect(splitTimeBlock('10:20–11:50'), ['10:20', '11:50']);
+    expect(splitTimeBlock('10:20-11:50'), ['10:20', '11:50']);
+    // Hora mal formada o fuera de rango.
+    expect(hhMmToMinutes('9:5'), isNull);
+    expect(hhMmToMinutes('24:00'), isNull);
+    expect(splitTimeBlock('25:00–26:00'), isNull);
+    // Fin <= inicio.
+    expect(splitTimeBlock('11:50–11:50'), isNull);
+    expect(splitTimeBlock('12:00–11:50'), isNull);
+  });
+
+  test('UX-03: etiqueta de opción CODE · Nombre', () {
+    expect(subjectOptionLabel('INF-301', 'Redes'), 'INF-301 · Redes');
+    expect(subjectOptionLabel(null, 'Redes'), '— · Redes');
+    expect(subjectOptionLabel('  ', 'Redes'), '— · Redes');
+  });
+
+  test('UX-04: payload PATCH de config omite nulos', () {
+    expect(
+      attendanceConfigPatch(totalClasses: 32, minAttendancePct: 75.0),
+      {'total_classes': 32, 'min_attendance_pct': 75.0},
+    );
+    expect(attendanceConfigPatch(), isEmpty);
+    expect(
+      attendanceConfigPatch(minAttendancePct: 70.5),
+      {'min_attendance_pct': 70.5},
+    );
+  });
 }
