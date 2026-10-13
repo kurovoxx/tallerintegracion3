@@ -138,6 +138,7 @@ class _MaterialsWindowState extends State<MaterialsWindow> {
         builder: (_) => AllNotesScreen(
           initialSubjectCode: widget.subjectCode,
           autoOpenCreate: true,
+          showBackButton: true,
         ),
       ),
     );
@@ -147,8 +148,10 @@ class _MaterialsWindowState extends State<MaterialsWindow> {
   void _openNote() {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) =>
-            AllNotesScreen(initialSubjectCode: widget.subjectCode),
+        builder: (_) => AllNotesScreen(
+          initialSubjectCode: widget.subjectCode,
+          showBackButton: true,
+        ),
       ),
     );
   }
