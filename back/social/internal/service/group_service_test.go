@@ -611,7 +611,7 @@ func TestAccountDeletionPromotesOldestMember(t *testing.T) {
 	joinAs(t, svc, store, g.ID, uOther)
 	joinAs(t, svc, store, g.ID, uThird)
 
-	res, err := svc.HandleAccountDeletion(ctx, uAdmin)
+	res, err := svc.HandleAccountDeletion(ctx, uAdmin, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -639,7 +639,7 @@ func TestAccountDeletionWithCoAdminDoesNotPromote(t *testing.T) {
 	joinAs(t, svc, store, g.ID, uAdmin2)
 	_ = svc.ChangeRole(ctx, g.ID, uAdmin, uAdmin2, model.RoleAdmin)
 
-	res, err := svc.HandleAccountDeletion(ctx, uAdmin)
+	res, err := svc.HandleAccountDeletion(ctx, uAdmin, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -658,7 +658,7 @@ func TestAccountDeletionWithCoAdminDoesNotPromote(t *testing.T) {
 func TestAccountDeletionLastMemberDeletesGroup(t *testing.T) {
 	svc, store := newTestSvc()
 	g := newGroup(t, svc, uAdmin)
-	res, err := svc.HandleAccountDeletion(ctx, uAdmin)
+	res, err := svc.HandleAccountDeletion(ctx, uAdmin, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -674,7 +674,7 @@ func TestAccountDeletionOfRegularMember(t *testing.T) {
 	svc, store := newTestSvc()
 	g := newGroup(t, svc, uAdmin)
 	joinAs(t, svc, store, g.ID, uMember)
-	res, err := svc.HandleAccountDeletion(ctx, uMember)
+	res, err := svc.HandleAccountDeletion(ctx, uMember, "")
 	if err != nil || len(res) != 1 || res[0].PromotedUserID != nil || res[0].GroupDeleted {
 		t.Fatalf("resultado inesperado: %+v err=%v", res, err)
 	}
@@ -685,17 +685,17 @@ func TestAccountDeletionOfRegularMember(t *testing.T) {
 
 func TestAccountDeletionWithoutGroupsIsNoOpAndIdempotent(t *testing.T) {
 	svc, store := newTestSvc()
-	res, err := svc.HandleAccountDeletion(ctx, uStrang)
+	res, err := svc.HandleAccountDeletion(ctx, uStrang, "")
 	if err != nil || res == nil || len(res) != 0 {
 		t.Fatalf("sin grupos debe devolver slice vacío: %v %v", res, err)
 	}
 
 	g := newGroup(t, svc, uAdmin)
 	joinAs(t, svc, store, g.ID, uMember)
-	if _, err := svc.HandleAccountDeletion(ctx, uAdmin); err != nil {
+	if _, err := svc.HandleAccountDeletion(ctx, uAdmin, ""); err != nil {
 		t.Fatal(err)
 	}
-	res, err = svc.HandleAccountDeletion(ctx, uAdmin)
+	res, err = svc.HandleAccountDeletion(ctx, uAdmin, "")
 	if err != nil || len(res) != 0 {
 		t.Fatalf("segunda llamada debe ser no-op: %v %v", res, err)
 	}
@@ -718,7 +718,7 @@ func TestAccountDeletionAcrossSeveralGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := svc.HandleAccountDeletion(ctx, uAdmin)
+	res, err := svc.HandleAccountDeletion(ctx, uAdmin, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -741,8 +741,73 @@ func TestAccountDeletionAcrossSeveralGroups(t *testing.T) {
 
 func TestAccountDeletionRequiresUser(t *testing.T) {
 	svc, _ := newTestSvc()
-	_, err := svc.HandleAccountDeletion(ctx, "")
+	_, err := svc.HandleAccountDeletion(ctx, "", "")
 	wantErr(t, err, ErrUnauthorized)
+}
+
+// Borrado de cuenta e2e (tarea 3_5_7): sucesión en cada grupo + unshare-all
+// en TODOS los grupos afectados (promovido o eliminado), con el JWT del
+// usuario reenviado por Identity. Sin token solo hay sucesión.
+func TestAccountDeletionCleansNotesInAllGroups(t *testing.T) {
+	type call struct {
+		body map[string]string
+		auth string
+	}
+	setup := func(t *testing.T) (*GroupService, string, string, chan call) {
+		t.Helper()
+		got := make(chan call, 4)
+		notes := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			got <- call{body, r.Header.Get("Authorization")}
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		t.Cleanup(notes.Close)
+		svc, store := newTestSvc()
+		svc.SetNotesBaseURL(notes.URL)
+		// g1: admin + miembro (promueve al miembro); g2: solo admin (se elimina).
+		g1 := newGroup(t, svc, uAdmin)
+		joinAs(t, svc, store, g1.ID, uMember)
+		g2 := newGroup(t, svc, uAdmin)
+		return svc, g1.ID, g2.ID, got
+	}
+
+	t.Run("con token limpia ambos grupos", func(t *testing.T) {
+		svc, g1, g2, got := setup(t)
+		res, err := svc.HandleAccountDeletion(ctx, uAdmin, "jwt-del-usuario")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res) != 2 {
+			t.Fatalf("se esperaban 2 grupos afectados, got %d", len(res))
+		}
+		seen := map[string]bool{}
+		for i := 0; i < 2; i++ {
+			select {
+			case c := <-got:
+				if c.auth != "Bearer jwt-del-usuario" || c.body["user_id"] != uAdmin {
+					t.Fatalf("llamada inesperada a Notes: %+v", c)
+				}
+				seen[c.body["group_id"]] = true
+			case <-time.After(2 * time.Second):
+				t.Fatal("faltan llamadas a notes/unshare-all")
+			}
+		}
+		if !seen[g1] || !seen[g2] {
+			t.Fatalf("unshare debe cubrir grupo promovido y eliminado, got %v", seen)
+		}
+	})
+	t.Run("sin token solo sucesión", func(t *testing.T) {
+		svc, _, _, got := setup(t)
+		if _, err := svc.HandleAccountDeletion(ctx, uAdmin, ""); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-got:
+			t.Fatal("sin token no se debe llamar a Notes")
+		case <-time.After(150 * time.Millisecond):
+		}
+	})
 }
 
 func TestLeaveSuccessionOrderAndOwner(t *testing.T) {
