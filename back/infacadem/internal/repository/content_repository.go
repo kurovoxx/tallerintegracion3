@@ -21,11 +21,11 @@ func NewContentRepository(pool *pgxpool.Pool) *ContentRepository {
 	return &ContentRepository{pool: pool}
 }
 
-const contentColumns = `id, subject_id, title, body, position`
+const contentColumns = `id, subject_id, title, body, position, done`
 
 func scanContent(row pgx.Row) (*model.Content, error) {
 	var c model.Content
-	if err := row.Scan(&c.ID, &c.SubjectID, &c.Title, &c.Body, &c.Position); err != nil {
+	if err := row.Scan(&c.ID, &c.SubjectID, &c.Title, &c.Body, &c.Position, &c.Done); err != nil {
 		return nil, err
 	}
 	return &c, nil
@@ -104,7 +104,7 @@ func (r *ContentRepository) ListBySubject(ctx context.Context, subjectID, userID
 	out := make([]model.Content, 0)
 	for rows.Next() {
 		var c model.Content
-		if err := rows.Scan(&c.ID, &c.SubjectID, &c.Title, &c.Body, &c.Position); err != nil {
+		if err := rows.Scan(&c.ID, &c.SubjectID, &c.Title, &c.Body, &c.Position, &c.Done); err != nil {
 			return nil, true, fmt.Errorf("list contents: %w", err)
 		}
 		out = append(out, c)
@@ -120,6 +120,7 @@ type ContentPatch struct {
 	Title     *string
 	Body      *string
 	Position  *int
+	Done      *bool
 	ClearBody bool
 }
 
@@ -142,6 +143,9 @@ func (r *ContentRepository) Update(ctx context.Context, id, userID string, p Con
 	}
 	if p.Position != nil {
 		add("position = $%d", *p.Position)
+	}
+	if p.Done != nil {
+		add("done = $%d", *p.Done)
 	}
 	if len(set) == 0 {
 		return nil, fmt.Errorf("no fields to update")

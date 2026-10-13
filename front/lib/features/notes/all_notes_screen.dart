@@ -19,6 +19,7 @@ import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/common_widgets.dart';
 import '../../core/widgets/neobrutalism.dart';
+import '../academic/academic_mappers.dart';
 import 'attachment_resources.dart';
 import 'note_file_picker.dart';
 import 'authenticated_attachment_image.dart';
@@ -251,7 +252,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   String _subjectTitlePrefix() {
     final code = _subjectFilter;
     if (code == null || code.isEmpty) return '';
-    return '[${code.toUpperCase()}] ';
+    return subjectNotePrefix(code);
   }
 
   @override
@@ -1371,10 +1372,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     // "[CODE] " (insensible a caso). No toca FTS: evita sintaxis MATCH.
     final subject = _subjectFilter;
     if (subject != null && subject.isNotEmpty) {
-      final prefix = '[${subject.toUpperCase()}]';
-      res = res
-          .where((n) => n.title.trim().toUpperCase().startsWith(prefix))
-          .toList();
+      res = res.where((n) => noteMatchesSubjectCode(n.title, subject)).toList();
     }
     // Con sesión y fallo de backend, se ocultan (sin borrar) solo los
     // ejemplos verificables id+título. Nunca se presentan como reales.

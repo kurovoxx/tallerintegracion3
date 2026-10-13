@@ -795,6 +795,9 @@ func (f *fakeContents) Update(_ context.Context, id, userID string, p repository
 	if p.Position != nil {
 		c.Position = *p.Position
 	}
+	if p.Done != nil {
+		c.Done = *p.Done
+	}
 	cp := *c
 	return &cp, nil
 }

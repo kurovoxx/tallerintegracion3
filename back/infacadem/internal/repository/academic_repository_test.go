@@ -86,7 +86,8 @@ CREATE TABLE academic.contents (
     subject_id uuid NOT NULL REFERENCES academic.subjects(id) ON DELETE CASCADE,
     title varchar(200) NOT NULL,
     body text,
-    position int NOT NULL DEFAULT 0
+    position int NOT NULL DEFAULT 0,
+    done boolean NOT NULL DEFAULT false
 );
 CREATE TABLE academic.grades (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -603,6 +604,9 @@ func TestRepository_Contents(t *testing.T) {
 	if err != nil || c == nil || c.Title != "Unidad 1" || c.Position != 2 {
 		t.Fatalf("create: %+v %v", c, err)
 	}
+	if c.Done {
+		t.Fatalf("done default false: %+v", c)
+	}
 	if c.Body == nil || *c.Body != "Cuerpo" {
 		t.Fatalf("create body: %+v", c)
 	}
@@ -629,6 +633,17 @@ func TestRepository_Contents(t *testing.T) {
 	upd, err := r.Update(ctx, c.ID, repoUserA, ContentPatch{Title: &newTitle, ClearBody: true})
 	if err != nil || upd == nil || upd.Title != "Unidad 1b" || upd.Body != nil {
 		t.Fatalf("patch set/limpia: %+v %v", upd, err)
+	}
+	done := true
+	upd, err = r.Update(ctx, c.ID, repoUserA, ContentPatch{Done: &done})
+	if err != nil || upd == nil || !upd.Done {
+		t.Fatalf("toggle done: %+v %v", upd, err)
+	}
+	if got, _ := r.GetByID(ctx, c.ID, repoUserA); got == nil || !got.Done {
+		t.Fatalf("done persiste: %+v", got)
+	}
+	if upd, _ := r.Update(ctx, c.ID, repoUserB, ContentPatch{Done: &done}); upd != nil {
+		t.Fatal("toggle ajeno nil")
 	}
 	if _, err := r.Update(ctx, c.ID, repoUserA, ContentPatch{}); err == nil {
 		t.Fatal("patch vacío debe fallar")

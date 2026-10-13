@@ -9,6 +9,7 @@ import 'academic_mappers.dart';
 import 'academic_models.dart';
 import 'attendance_screen.dart';
 import 'course_detail_tabs.dart';
+import 'course_windows.dart';
 import '../notes/all_notes_screen.dart';
 
 const String kSubjectApproved = 'approved';
@@ -642,6 +643,11 @@ class _CoursesScreenState extends State<CoursesScreen> {
           ),
         ),
         const SizedBox(height: 16),
+        // UX-05b: en backend las secciones son ventanas separadas con back;
+        // en mock se conservan los tabs inline.
+        if (_backendSubjectId(course) != null)
+          _buildWindowButtons(course, _backendSubjectId(course)!)
+        else ...[
         // Tabs
         Wrap(
           spacing: 8,
@@ -650,7 +656,6 @@ class _CoursesScreenState extends State<CoursesScreen> {
             _CourseTabButton(icon: Icons.menu_book_rounded, label: 'Unidades y Contenidos', active: _detailTab == _CourseDetailTab.unidades, onTap: () => setState(() => _detailTab = _CourseDetailTab.unidades)),
             _CourseTabButton(icon: Icons.description_rounded, label: 'Materiales y Apuntes', active: _detailTab == _CourseDetailTab.materiales, onTap: () => setState(() => _detailTab = _CourseDetailTab.materiales)),
             _CourseTabButton(icon: Icons.bar_chart_rounded, label: 'Evaluaciones y Notas', active: _detailTab == _CourseDetailTab.evaluaciones, onTap: () => setState(() => _detailTab = _CourseDetailTab.evaluaciones)),
-            _CourseTabButton(icon: Icons.article_rounded, label: 'Apuntes', active: false, onTap: () => _openNotes(course, autoCreate: false)),
             _CourseTabButton(
               icon: Icons.fact_check_rounded,
               label: 'Ver Asistencia',
@@ -667,6 +672,51 @@ class _CoursesScreenState extends State<CoursesScreen> {
         if (_detailTab == _CourseDetailTab.unidades) _buildUnidadesTab(course),
         if (_detailTab == _CourseDetailTab.materiales) _buildMaterialesTab(course),
         if (_detailTab == _CourseDetailTab.evaluaciones) _buildEvaluacionesTab(course),
+        ],
+      ],
+    );
+  }
+
+  /// Botones a las 3 ventanas del curso (UX-05b, modo backend).
+  Widget _buildWindowButtons(Map<String, dynamic> course, String subjectId) {
+    final name = (course['name'] as String?) ?? '';
+    final code = (course['code'] as String?) ?? '';
+    void open(Widget window) {
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) => window));
+    }
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        _CourseTabButton(
+          icon: Icons.menu_book_rounded,
+          label: 'Ver Unidades',
+          active: false,
+          onTap: () => open(UnitsWindow(subjectId: subjectId, subjectName: name)),
+        ),
+        _CourseTabButton(
+          icon: Icons.description_rounded,
+          label: 'Ver Materiales',
+          active: false,
+          onTap: () => open(MaterialsWindow(subjectCode: code, subjectName: name)),
+        ),
+        _CourseTabButton(
+          icon: Icons.bar_chart_rounded,
+          label: 'Ver Evaluaciones',
+          active: false,
+          onTap: () => open(EvaluationsWindow(subjectId: subjectId, subjectName: name)),
+        ),
+        _CourseTabButton(
+          icon: Icons.fact_check_rounded,
+          label: 'Ver Asistencia',
+          active: false,
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => AttendanceScreen(initialSubjectId: course['id'] as String),
+            ),
+          ),
+        ),
       ],
     );
   }

@@ -22,11 +22,12 @@ type contentRequest struct {
 	Title    *string `json:"title"`
 	Body     *string `json:"body"`
 	Position *int    `json:"position"`
+	Done     *bool   `json:"done"`
 }
 
 func toContentInput(req contentRequest) service.ContentInput {
 	return service.ContentInput{
-		Title: req.Title, Body: req.Body, Position: req.Position,
+		Title: req.Title, Body: req.Body, Position: req.Position, Done: req.Done,
 	}
 }
 

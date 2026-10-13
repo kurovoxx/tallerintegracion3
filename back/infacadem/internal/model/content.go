@@ -9,4 +9,5 @@ type Content struct {
 	Title     string  `json:"title" db:"title"`
 	Body      *string `json:"body" db:"body"`
 	Position  int     `json:"position" db:"position"`
+	Done      bool    `json:"done" db:"done"`
 }

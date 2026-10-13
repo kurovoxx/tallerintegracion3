@@ -113,7 +113,8 @@ CREATE TABLE academic.contents (
     subject_id uuid NOT NULL REFERENCES academic.subjects(id) ON DELETE CASCADE,
     title varchar(200) NOT NULL,
     body text,
-    position int NOT NULL DEFAULT 0
+    position int NOT NULL DEFAULT 0,
+    done boolean NOT NULL DEFAULT false
 );
 
 CREATE INDEX idx_contents_subject_id ON academic.contents(subject_id);
