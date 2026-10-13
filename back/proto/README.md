@@ -14,7 +14,8 @@ Cada equipo es dueño de su módulo (`buf.yaml` + `buf.gen.yaml` propios) y su
 generación:
 
 - `back/proto/common/` → stubs en `back/proto/gen/go/common/` (vía `make generate`).
-- `back/proto/social/` → stubs en `back/social/internal/gen/socialv1/` (vía `make generate`).
+- `back/proto/social/` → stubs en `back/social/internal/gen/socialv1/` (server) y
+  `back/notes/internal/gen/socialv1/` (cliente, `buf.gen.notes.yaml`), vía `make generate`.
 - `back/proto/infacadem/` → stubs en `back/infacadem/internal/gen/` (vía su `generate.sh`).
 
 ## Regla

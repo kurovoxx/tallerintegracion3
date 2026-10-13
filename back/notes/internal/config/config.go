@@ -28,6 +28,9 @@ type Config struct {
 	// SocialServiceURL es la base HTTP del servicio Social (membership, admin,
 	// seguidores y correos de miembros). Por defecto http://social:8083.
 	SocialServiceURL string
+	// SocialGRPCAddr (host:puerto de social.v1.SocialService). Si está, Notes
+	// usa gRPC para membresía/admin/correos; vacío = HTTP vía SocialServiceURL.
+	SocialGRPCAddr string
 	// SocialTimeout acota cada llamada HTTP a Social para no bloquear el request
 	// ante un cuelgue del upstream (degradación controlada).
 	SocialTimeout time.Duration
@@ -67,6 +70,7 @@ func Load() *Config {
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
 		ReconcileInterval:  30 * time.Second,
 		SocialServiceURL:   strings.TrimSpace(os.Getenv("SOCIAL_SERVICE_URL")),
+		SocialGRPCAddr:     strings.TrimSpace(os.Getenv("SOCIAL_GRPC_ADDR")),
 		SocialTimeout:      5 * time.Second,
 		InternalAPIKey:     strings.TrimSpace(os.Getenv("INTERNAL_API_KEY")),
 	}

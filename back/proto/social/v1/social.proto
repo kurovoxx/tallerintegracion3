@@ -35,6 +35,11 @@ service SocialService {
   // completa (permisos de Drive por correo).
   rpc GetMembers(GetMembersRequest) returns (GetMembersResponse);
 
+  // Correos de los miembros para permisos `restricted` de Drive. A diferencia
+  // de GetMembers es fail-closed (RN-SHARE-10): si Identity no responde,
+  // Unavailable en vez de una lista incompleta.
+  rpc GetMemberEmails(GetMemberEmailsRequest) returns (GetMemberEmailsResponse);
+
   // Saca al usuario de todos sus grupos con sucesión automática de admin
   // (miembro más antiguo) y borra sus baneos. Si era el último miembro, el
   // grupo se elimina. Idempotente: reintentar tras un fallo a medias es seguro
@@ -75,6 +80,14 @@ message GetMembersRequest {
 
 message GetMembersResponse {
   repeated Member members = 1;
+}
+
+message GetMemberEmailsRequest {
+  string group_id = 1;
+}
+
+message GetMemberEmailsResponse {
+  repeated string emails = 1;
 }
 
 message Member {

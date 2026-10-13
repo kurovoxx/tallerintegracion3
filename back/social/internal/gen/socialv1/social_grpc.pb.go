@@ -22,6 +22,7 @@ const (
 	SocialService_IsMember_FullMethodName               = "/social.v1.SocialService/IsMember"
 	SocialService_IsAdmin_FullMethodName                = "/social.v1.SocialService/IsAdmin"
 	SocialService_GetMembers_FullMethodName             = "/social.v1.SocialService/GetMembers"
+	SocialService_GetMemberEmails_FullMethodName        = "/social.v1.SocialService/GetMemberEmails"
 	SocialService_AccountDeletionCleanup_FullMethodName = "/social.v1.SocialService/AccountDeletionCleanup"
 )
 
@@ -51,6 +52,10 @@ type SocialServiceClient interface {
 	// Sin paginación: un grupo es chico y los consumidores necesitan la lista
 	// completa (permisos de Drive por correo).
 	GetMembers(ctx context.Context, in *GetMembersRequest, opts ...grpc.CallOption) (*GetMembersResponse, error)
+	// Correos de los miembros para permisos `restricted` de Drive. A diferencia
+	// de GetMembers es fail-closed (RN-SHARE-10): si Identity no responde,
+	// Unavailable en vez de una lista incompleta.
+	GetMemberEmails(ctx context.Context, in *GetMemberEmailsRequest, opts ...grpc.CallOption) (*GetMemberEmailsResponse, error)
 	// Saca al usuario de todos sus grupos con sucesión automática de admin
 	// (miembro más antiguo) y borra sus baneos. Si era el último miembro, el
 	// grupo se elimina. Idempotente: reintentar tras un fallo a medias es seguro
@@ -96,6 +101,16 @@ func (c *socialServiceClient) GetMembers(ctx context.Context, in *GetMembersRequ
 	return out, nil
 }
 
+func (c *socialServiceClient) GetMemberEmails(ctx context.Context, in *GetMemberEmailsRequest, opts ...grpc.CallOption) (*GetMemberEmailsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetMemberEmailsResponse)
+	err := c.cc.Invoke(ctx, SocialService_GetMemberEmails_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *socialServiceClient) AccountDeletionCleanup(ctx context.Context, in *AccountDeletionCleanupRequest, opts ...grpc.CallOption) (*AccountDeletionCleanupResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AccountDeletionCleanupResponse)
@@ -132,6 +147,10 @@ type SocialServiceServer interface {
 	// Sin paginación: un grupo es chico y los consumidores necesitan la lista
 	// completa (permisos de Drive por correo).
 	GetMembers(context.Context, *GetMembersRequest) (*GetMembersResponse, error)
+	// Correos de los miembros para permisos `restricted` de Drive. A diferencia
+	// de GetMembers es fail-closed (RN-SHARE-10): si Identity no responde,
+	// Unavailable en vez de una lista incompleta.
+	GetMemberEmails(context.Context, *GetMemberEmailsRequest) (*GetMemberEmailsResponse, error)
 	// Saca al usuario de todos sus grupos con sucesión automática de admin
 	// (miembro más antiguo) y borra sus baneos. Si era el último miembro, el
 	// grupo se elimina. Idempotente: reintentar tras un fallo a medias es seguro
@@ -155,6 +174,9 @@ func (UnimplementedSocialServiceServer) IsAdmin(context.Context, *IsAdminRequest
 }
 func (UnimplementedSocialServiceServer) GetMembers(context.Context, *GetMembersRequest) (*GetMembersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetMembers not implemented")
+}
+func (UnimplementedSocialServiceServer) GetMemberEmails(context.Context, *GetMemberEmailsRequest) (*GetMemberEmailsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetMemberEmails not implemented")
 }
 func (UnimplementedSocialServiceServer) AccountDeletionCleanup(context.Context, *AccountDeletionCleanupRequest) (*AccountDeletionCleanupResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AccountDeletionCleanup not implemented")
@@ -234,6 +256,24 @@ func _SocialService_GetMembers_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SocialService_GetMemberEmails_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMemberEmailsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SocialServiceServer).GetMemberEmails(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SocialService_GetMemberEmails_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SocialServiceServer).GetMemberEmails(ctx, req.(*GetMemberEmailsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SocialService_AccountDeletionCleanup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AccountDeletionCleanupRequest)
 	if err := dec(in); err != nil {
@@ -270,6 +310,10 @@ var SocialService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetMembers",
 			Handler:    _SocialService_GetMembers_Handler,
+		},
+		{
+			MethodName: "GetMemberEmails",
+			Handler:    _SocialService_GetMemberEmails_Handler,
 		},
 		{
 			MethodName: "AccountDeletionCleanup",

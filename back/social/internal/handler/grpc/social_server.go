@@ -63,6 +63,25 @@ func (s *SocialServer) GetMembers(ctx context.Context, req *socialv1.GetMembersR
 	return &socialv1.GetMembersResponse{Members: members}, nil
 }
 
+func (s *SocialServer) GetMemberEmails(ctx context.Context, req *socialv1.GetMemberEmailsRequest) (*socialv1.GetMemberEmailsResponse, error) {
+	if !utils.ValidateUUID(req.GetGroupId()) {
+		return nil, status.Error(codes.InvalidArgument, "group_id inválido (UUID esperado)")
+	}
+	emails, err := s.groups.ListMemberEmailsInternal(ctx, req.GetGroupId())
+	if err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			return nil, toStatus(err)
+		}
+		// Fail-closed: Identity caído o sin directorio, nunca lista parcial.
+		log.Printf("social grpc: member emails: %v", err)
+		return nil, status.Error(codes.Unavailable, "identity_unavailable")
+	}
+	if emails == nil {
+		emails = []string{}
+	}
+	return &socialv1.GetMemberEmailsResponse{Emails: emails}, nil
+}
+
 func (s *SocialServer) AccountDeletionCleanup(ctx context.Context, req *socialv1.AccountDeletionCleanupRequest) (*socialv1.AccountDeletionCleanupResponse, error) {
 	if !utils.ValidateUUID(req.GetUserId()) {
 		return nil, status.Error(codes.InvalidArgument, "user_id inválido (UUID esperado)")

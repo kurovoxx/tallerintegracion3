@@ -137,9 +137,15 @@ func (s *StreamTokenService) ensureChannelMember(ctx context.Context, channelID,
 // status de Stream. Jamás tokens, secrets ni Authorization.
 func logChannelSync(op, channelID string, err error) {
 	code := 0
+	msg := ""
 	var se *stream.StreamError
 	if errors.As(err, &se) {
 		code = se.Code
+		// El body de error de Stream no lleva credenciales; se acota por si acaso.
+		msg = se.Message
+		if len(msg) > 300 {
+			msg = msg[:300]
+		}
 	}
-	log.Printf("stream sync: %s canal %s falló (stream status %d)", op, channelID, code)
+	log.Printf("stream sync: %s canal %s falló (stream status %d): %s", op, channelID, code, msg)
 }

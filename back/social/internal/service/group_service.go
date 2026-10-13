@@ -363,12 +363,9 @@ func (s *GroupService) ListMembersEnriched(ctx context.Context, groupID string, 
 // GroupMembers lista los miembros enriquecidos sin exigir que quien consulta
 // sea miembro: solo para llamadas servicio-a-servicio (gRPC con clave interna).
 func (s *GroupService) GroupMembers(ctx context.Context, groupID string) ([]model.MemberView, error) {
-	if !utils.ValidateUUID(groupID) {
-		return nil, ErrNotFound
-	}
-	members, err := s.groups.ListMembers(ctx, groupID)
+	members, err := s.ListMembersInternal(ctx, groupID)
 	if err != nil {
-		return nil, mapStoreErr(err)
+		return nil, err
 	}
 	return s.enrichMembers(ctx, members), nil
 }

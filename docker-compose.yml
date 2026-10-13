@@ -67,6 +67,8 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
       SOCIAL_SERVICE_URL: ${SOCIAL_SERVICE_URL:-http://social:8083}
+      # Membresía/admin/correos por gRPC; vacío = vuelve al HTTP interno.
+      SOCIAL_GRPC_ADDR: ${SOCIAL_GRPC_ADDR-social:9083}
       SOCIAL_TIMEOUT: 5s
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
     depends_on:
@@ -83,6 +85,7 @@ services:
     container_name: ti3-social
     ports:
       - "8083:8083"
+      - "9083:9083" # gRPC SocialService (servicio-a-servicio)
     environment:
       DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable}
       DIRECT_URL: ${DOCKER_DATABASE_URL:-postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable}
@@ -90,6 +93,7 @@ services:
       JWT: ${JWT}
       PORT: 8083
       SOCIAL_PORT: 8083
+      SOCIAL_GRPC_PORT: 9083
       AUTH_BASE_URL: http://auth:8080
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
       CALENDAR_MODE: ${CALENDAR_MODE:-mock}

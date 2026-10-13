@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 
@@ -20,6 +21,24 @@ import (
 
 const testKey = "test-internal-key"
 
+// fakeDirectory resuelve correos fijos; down simula Identity caído.
+type fakeDirectory struct{ down bool }
+
+func (f *fakeDirectory) LookupUsers(context.Context, []string) (map[string]service.UserPublic, error) {
+	return nil, nil
+}
+
+func (f *fakeDirectory) LookupEmailsStrict(_ context.Context, ids []string) ([]string, error) {
+	if f.down {
+		return nil, errors.New("identity down")
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, id+"@x.com")
+	}
+	return out, nil
+}
+
 // TestSocialServer recorre los 4 RPC sobre bufconn con la misma cadena de
 // interceptores que main, usando el store en memoria.
 func TestSocialServer(t *testing.T) {
@@ -33,7 +52,10 @@ func TestSocialServer(t *testing.T) {
 		interceptor.NewLogging(nil),
 		interceptor.NewInternalAuth(testKey),
 	))
-	socialv1.RegisterSocialServiceServer(s, NewSocialServer(service.NewGroupService(store, nil)))
+	dir := &fakeDirectory{}
+	svc := service.NewGroupService(store, nil)
+	svc.SetUserDirectory(dir)
+	socialv1.RegisterSocialServiceServer(s, NewSocialServer(svc))
 	go func() { _ = s.Serve(lis) }()
 	t.Cleanup(s.Stop)
 	conn, err := grpc.NewClient("passthrough:///bufnet",
@@ -99,6 +121,19 @@ func TestSocialServer(t *testing.T) {
 		if resp.Members[0].UserId != admin || resp.Members[0].Role != socialv1.Role_ROLE_ADMIN || resp.Members[1].UserId != member {
 			t.Fatalf("orden/rol inesperado: %v", resp.Members)
 		}
+	})
+
+	t.Run("GetMemberEmails fail-closed", func(t *testing.T) {
+		resp, err := c.GetMemberEmails(ctx, &socialv1.GetMemberEmailsRequest{GroupId: g.ID})
+		if err != nil || len(resp.Emails) != 2 || resp.Emails[0] != admin+"@x.com" {
+			t.Fatalf("GetMemberEmails = %v, %v", resp, err)
+		}
+		_, err = c.GetMemberEmails(ctx, &socialv1.GetMemberEmailsRequest{GroupId: uuid.NewString()})
+		wantCode(t, err, codes.NotFound)
+		dir.down = true
+		_, err = c.GetMemberEmails(ctx, &socialv1.GetMemberEmailsRequest{GroupId: g.ID})
+		wantCode(t, err, codes.Unavailable)
+		dir.down = false
 	})
 
 	t.Run("AccountDeletionCleanup promueve y es idempotente", func(t *testing.T) {

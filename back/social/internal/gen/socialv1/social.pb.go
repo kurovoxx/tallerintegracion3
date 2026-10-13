@@ -361,6 +361,94 @@ func (x *GetMembersResponse) GetMembers() []*Member {
 	return nil
 }
 
+type GetMemberEmailsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	GroupId       string                 `protobuf:"bytes,1,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetMemberEmailsRequest) Reset() {
+	*x = GetMemberEmailsRequest{}
+	mi := &file_v1_social_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetMemberEmailsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetMemberEmailsRequest) ProtoMessage() {}
+
+func (x *GetMemberEmailsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_social_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetMemberEmailsRequest.ProtoReflect.Descriptor instead.
+func (*GetMemberEmailsRequest) Descriptor() ([]byte, []int) {
+	return file_v1_social_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *GetMemberEmailsRequest) GetGroupId() string {
+	if x != nil {
+		return x.GroupId
+	}
+	return ""
+}
+
+type GetMemberEmailsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Emails        []string               `protobuf:"bytes,1,rep,name=emails,proto3" json:"emails,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetMemberEmailsResponse) Reset() {
+	*x = GetMemberEmailsResponse{}
+	mi := &file_v1_social_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetMemberEmailsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetMemberEmailsResponse) ProtoMessage() {}
+
+func (x *GetMemberEmailsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_social_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetMemberEmailsResponse.ProtoReflect.Descriptor instead.
+func (*GetMemberEmailsResponse) Descriptor() ([]byte, []int) {
+	return file_v1_social_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *GetMemberEmailsResponse) GetEmails() []string {
+	if x != nil {
+		return x.Emails
+	}
+	return nil
+}
+
 type Member struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	UserId   string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
@@ -376,7 +464,7 @@ type Member struct {
 
 func (x *Member) Reset() {
 	*x = Member{}
-	mi := &file_v1_social_proto_msgTypes[6]
+	mi := &file_v1_social_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -388,7 +476,7 @@ func (x *Member) String() string {
 func (*Member) ProtoMessage() {}
 
 func (x *Member) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_social_proto_msgTypes[6]
+	mi := &file_v1_social_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -401,7 +489,7 @@ func (x *Member) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Member.ProtoReflect.Descriptor instead.
 func (*Member) Descriptor() ([]byte, []int) {
-	return file_v1_social_proto_rawDescGZIP(), []int{6}
+	return file_v1_social_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Member) GetUserId() string {
@@ -448,7 +536,7 @@ type AccountDeletionCleanupRequest struct {
 
 func (x *AccountDeletionCleanupRequest) Reset() {
 	*x = AccountDeletionCleanupRequest{}
-	mi := &file_v1_social_proto_msgTypes[7]
+	mi := &file_v1_social_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -460,7 +548,7 @@ func (x *AccountDeletionCleanupRequest) String() string {
 func (*AccountDeletionCleanupRequest) ProtoMessage() {}
 
 func (x *AccountDeletionCleanupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_social_proto_msgTypes[7]
+	mi := &file_v1_social_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -473,7 +561,7 @@ func (x *AccountDeletionCleanupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AccountDeletionCleanupRequest.ProtoReflect.Descriptor instead.
 func (*AccountDeletionCleanupRequest) Descriptor() ([]byte, []int) {
-	return file_v1_social_proto_rawDescGZIP(), []int{7}
+	return file_v1_social_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *AccountDeletionCleanupRequest) GetUserId() string {
@@ -493,7 +581,7 @@ type AccountDeletionCleanupResponse struct {
 
 func (x *AccountDeletionCleanupResponse) Reset() {
 	*x = AccountDeletionCleanupResponse{}
-	mi := &file_v1_social_proto_msgTypes[8]
+	mi := &file_v1_social_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -505,7 +593,7 @@ func (x *AccountDeletionCleanupResponse) String() string {
 func (*AccountDeletionCleanupResponse) ProtoMessage() {}
 
 func (x *AccountDeletionCleanupResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_social_proto_msgTypes[8]
+	mi := &file_v1_social_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -518,7 +606,7 @@ func (x *AccountDeletionCleanupResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AccountDeletionCleanupResponse.ProtoReflect.Descriptor instead.
 func (*AccountDeletionCleanupResponse) Descriptor() ([]byte, []int) {
-	return file_v1_social_proto_rawDescGZIP(), []int{8}
+	return file_v1_social_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *AccountDeletionCleanupResponse) GetGroups() []*GroupSuccession {
@@ -542,7 +630,7 @@ type GroupSuccession struct {
 
 func (x *GroupSuccession) Reset() {
 	*x = GroupSuccession{}
-	mi := &file_v1_social_proto_msgTypes[9]
+	mi := &file_v1_social_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -554,7 +642,7 @@ func (x *GroupSuccession) String() string {
 func (*GroupSuccession) ProtoMessage() {}
 
 func (x *GroupSuccession) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_social_proto_msgTypes[9]
+	mi := &file_v1_social_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -567,7 +655,7 @@ func (x *GroupSuccession) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GroupSuccession.ProtoReflect.Descriptor instead.
 func (*GroupSuccession) Descriptor() ([]byte, []int) {
-	return file_v1_social_proto_rawDescGZIP(), []int{9}
+	return file_v1_social_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *GroupSuccession) GetGroupId() string {
@@ -610,7 +698,11 @@ const file_v1_social_proto_rawDesc = "" +
 	"\x11GetMembersRequest\x12\x19\n" +
 	"\bgroup_id\x18\x01 \x01(\tR\agroupId\"A\n" +
 	"\x12GetMembersResponse\x12+\n" +
-	"\amembers\x18\x01 \x03(\v2\x11.social.v1.MemberR\amembers\"\xdd\x01\n" +
+	"\amembers\x18\x01 \x03(\v2\x11.social.v1.MemberR\amembers\"3\n" +
+	"\x16GetMemberEmailsRequest\x12\x19\n" +
+	"\bgroup_id\x18\x01 \x01(\tR\agroupId\"1\n" +
+	"\x17GetMemberEmailsResponse\x12\x16\n" +
+	"\x06emails\x18\x01 \x03(\tR\x06emails\"\xdd\x01\n" +
 	"\x06Member\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12#\n" +
 	"\x04role\x18\x02 \x01(\x0e2\x0f.social.v1.RoleR\x04role\x127\n" +
@@ -632,12 +724,13 @@ const file_v1_social_proto_rawDesc = "" +
 	"\x10ROLE_UNSPECIFIED\x10\x00\x12\x0e\n" +
 	"\n" +
 	"ROLE_ADMIN\x10\x01\x12\x0f\n" +
-	"\vROLE_MEMBER\x10\x022\xd0\x02\n" +
+	"\vROLE_MEMBER\x10\x022\xaa\x03\n" +
 	"\rSocialService\x12C\n" +
 	"\bIsMember\x12\x1a.social.v1.IsMemberRequest\x1a\x1b.social.v1.IsMemberResponse\x12@\n" +
 	"\aIsAdmin\x12\x19.social.v1.IsAdminRequest\x1a\x1a.social.v1.IsAdminResponse\x12I\n" +
 	"\n" +
-	"GetMembers\x12\x1c.social.v1.GetMembersRequest\x1a\x1d.social.v1.GetMembersResponse\x12m\n" +
+	"GetMembers\x12\x1c.social.v1.GetMembersRequest\x1a\x1d.social.v1.GetMembersResponse\x12X\n" +
+	"\x0fGetMemberEmails\x12!.social.v1.GetMemberEmailsRequest\x1a\".social.v1.GetMemberEmailsResponse\x12m\n" +
 	"\x16AccountDeletionCleanup\x12(.social.v1.AccountDeletionCleanupRequest\x1a).social.v1.AccountDeletionCleanupResponseBSZQgithub.com/kurovoxx/tallerintegracion3/back/social/internal/gen/socialv1;socialv1b\x06proto3"
 
 var (
@@ -653,7 +746,7 @@ func file_v1_social_proto_rawDescGZIP() []byte {
 }
 
 var file_v1_social_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_v1_social_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_v1_social_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_v1_social_proto_goTypes = []any{
 	(Role)(0),                              // 0: social.v1.Role
 	(*IsMemberRequest)(nil),                // 1: social.v1.IsMemberRequest
@@ -662,28 +755,32 @@ var file_v1_social_proto_goTypes = []any{
 	(*IsAdminResponse)(nil),                // 4: social.v1.IsAdminResponse
 	(*GetMembersRequest)(nil),              // 5: social.v1.GetMembersRequest
 	(*GetMembersResponse)(nil),             // 6: social.v1.GetMembersResponse
-	(*Member)(nil),                         // 7: social.v1.Member
-	(*AccountDeletionCleanupRequest)(nil),  // 8: social.v1.AccountDeletionCleanupRequest
-	(*AccountDeletionCleanupResponse)(nil), // 9: social.v1.AccountDeletionCleanupResponse
-	(*GroupSuccession)(nil),                // 10: social.v1.GroupSuccession
-	(*timestamppb.Timestamp)(nil),          // 11: google.protobuf.Timestamp
+	(*GetMemberEmailsRequest)(nil),         // 7: social.v1.GetMemberEmailsRequest
+	(*GetMemberEmailsResponse)(nil),        // 8: social.v1.GetMemberEmailsResponse
+	(*Member)(nil),                         // 9: social.v1.Member
+	(*AccountDeletionCleanupRequest)(nil),  // 10: social.v1.AccountDeletionCleanupRequest
+	(*AccountDeletionCleanupResponse)(nil), // 11: social.v1.AccountDeletionCleanupResponse
+	(*GroupSuccession)(nil),                // 12: social.v1.GroupSuccession
+	(*timestamppb.Timestamp)(nil),          // 13: google.protobuf.Timestamp
 }
 var file_v1_social_proto_depIdxs = []int32{
 	0,  // 0: social.v1.IsMemberResponse.role:type_name -> social.v1.Role
-	7,  // 1: social.v1.GetMembersResponse.members:type_name -> social.v1.Member
+	9,  // 1: social.v1.GetMembersResponse.members:type_name -> social.v1.Member
 	0,  // 2: social.v1.Member.role:type_name -> social.v1.Role
-	11, // 3: social.v1.Member.joined_at:type_name -> google.protobuf.Timestamp
-	10, // 4: social.v1.AccountDeletionCleanupResponse.groups:type_name -> social.v1.GroupSuccession
+	13, // 3: social.v1.Member.joined_at:type_name -> google.protobuf.Timestamp
+	12, // 4: social.v1.AccountDeletionCleanupResponse.groups:type_name -> social.v1.GroupSuccession
 	1,  // 5: social.v1.SocialService.IsMember:input_type -> social.v1.IsMemberRequest
 	3,  // 6: social.v1.SocialService.IsAdmin:input_type -> social.v1.IsAdminRequest
 	5,  // 7: social.v1.SocialService.GetMembers:input_type -> social.v1.GetMembersRequest
-	8,  // 8: social.v1.SocialService.AccountDeletionCleanup:input_type -> social.v1.AccountDeletionCleanupRequest
-	2,  // 9: social.v1.SocialService.IsMember:output_type -> social.v1.IsMemberResponse
-	4,  // 10: social.v1.SocialService.IsAdmin:output_type -> social.v1.IsAdminResponse
-	6,  // 11: social.v1.SocialService.GetMembers:output_type -> social.v1.GetMembersResponse
-	9,  // 12: social.v1.SocialService.AccountDeletionCleanup:output_type -> social.v1.AccountDeletionCleanupResponse
-	9,  // [9:13] is the sub-list for method output_type
-	5,  // [5:9] is the sub-list for method input_type
+	7,  // 8: social.v1.SocialService.GetMemberEmails:input_type -> social.v1.GetMemberEmailsRequest
+	10, // 9: social.v1.SocialService.AccountDeletionCleanup:input_type -> social.v1.AccountDeletionCleanupRequest
+	2,  // 10: social.v1.SocialService.IsMember:output_type -> social.v1.IsMemberResponse
+	4,  // 11: social.v1.SocialService.IsAdmin:output_type -> social.v1.IsAdminResponse
+	6,  // 12: social.v1.SocialService.GetMembers:output_type -> social.v1.GetMembersResponse
+	8,  // 13: social.v1.SocialService.GetMemberEmails:output_type -> social.v1.GetMemberEmailsResponse
+	11, // 14: social.v1.SocialService.AccountDeletionCleanup:output_type -> social.v1.AccountDeletionCleanupResponse
+	10, // [10:15] is the sub-list for method output_type
+	5,  // [5:10] is the sub-list for method input_type
 	5,  // [5:5] is the sub-list for extension type_name
 	5,  // [5:5] is the sub-list for extension extendee
 	0,  // [0:5] is the sub-list for field type_name
@@ -694,15 +791,15 @@ func file_v1_social_proto_init() {
 	if File_v1_social_proto != nil {
 		return
 	}
-	file_v1_social_proto_msgTypes[6].OneofWrappers = []any{}
-	file_v1_social_proto_msgTypes[9].OneofWrappers = []any{}
+	file_v1_social_proto_msgTypes[8].OneofWrappers = []any{}
+	file_v1_social_proto_msgTypes[11].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_v1_social_proto_rawDesc), len(file_v1_social_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   10,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
