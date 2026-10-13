@@ -82,6 +82,7 @@ class AllNotesScreen extends StatefulWidget {
     this.database,
     this.initialSubjectCode,
     this.autoOpenCreate = false,
+    this.showBackButton = false,
   });
   final AppDatabase? database;
 
@@ -91,6 +92,10 @@ class AllNotesScreen extends StatefulWidget {
 
   /// Abre el diálogo de crear al iniciar (con el prefijo de materia).
   final bool autoOpenCreate;
+
+  /// Muestra back en el header (UX consolidar: volver a Materiales al
+  /// navegar desde academic; en el shell va false).
+  final bool showBackButton;
 
   @override
   State<AllNotesScreen> createState() => AllNotesScreenState();
@@ -2030,6 +2035,14 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   Widget _buildHeader(bool isDesktop) {
     return Row(
       children: <Widget>[
+        if (widget.showBackButton) ...<Widget>[
+          IconButton(
+            tooltip: 'Volver',
+            icon: const Icon(Icons.arrow_back_rounded),
+            onPressed: () => Navigator.of(context).maybePop(),
+          ),
+          const SizedBox(width: 4),
+        ],
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
