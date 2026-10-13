@@ -120,6 +120,7 @@ func main() {
 		gradeSvc := service.NewGradeService(gradeRepo)
 		reqSvc := service.NewRequirementService(reqRepo)
 		absenceSvc := service.NewAbsenceService(absenceRepo)
+		contentSvc := service.NewContentService(repository.NewContentRepository(pool))
 		avgSvc := service.NewAverageService(subjectRepo, gradeRepo, reqRepo)
 		attSvc := service.NewAttendanceService(subjectRepo, absenceRepo)
 		curH := httpHandler.NewCurriculaHandler(curSvc)
@@ -129,6 +130,7 @@ func main() {
 		reqH := httpHandler.NewRequirementsHandler(reqSvc)
 		absH := httpHandler.NewAbsencesHandler(absenceSvc)
 		attH := httpHandler.NewAttendanceHandler(attSvc)
+		cntH := httpHandler.NewContentsHandler(contentSvc)
 		ovH := httpHandler.NewOverviewHandler(
 			service.NewOverviewService(curSvc, subjectRepo),
 			service.NewDetailService(subjectSvc, scheduleSvc, gradeSvc, avgSvc, attSvc),
@@ -169,11 +171,17 @@ func main() {
 		protected.DELETE("/absences/:id", absH.Delete)
 		protected.GET("/subjects/:id/attendance", attH.Get)
 
+		protected.POST("/subjects/:id/contents", cntH.Create)
+		protected.GET("/subjects/:id/contents", cntH.ListBySubject)
+		protected.GET("/contents/:id", cntH.Get)
+		protected.PATCH("/contents/:id", cntH.Update)
+		protected.DELETE("/contents/:id", cntH.Delete)
+
 		protected.GET("/academic/overview", ovH.Overview)
 		protected.GET("/subjects/:id/detail", ovH.SubjectDetail)
 	} else {
 		for _, method := range []string{"GET", "POST", "PATCH", "DELETE"} {
-			for _, path := range []string{"/curricula", "/curricula/:id", "/curricula/:id/subjects", "/subjects/:id", "/subjects/:id/schedules", "/schedules/:id", "/subjects/:id/grades", "/grades/:id", "/grades/:id/children", "/subjects/:id/average", "/subjects/:id/requirements", "/requirements/:id", "/subjects/:id/absences", "/absences/:id", "/subjects/:id/attendance", "/academic/overview", "/subjects/:id/detail"} {
+			for _, path := range []string{"/curricula", "/curricula/:id", "/curricula/:id/subjects", "/subjects/:id", "/subjects/:id/schedules", "/schedules/:id", "/subjects/:id/grades", "/grades/:id", "/grades/:id/children", "/subjects/:id/average", "/subjects/:id/requirements", "/requirements/:id", "/subjects/:id/absences", "/absences/:id", "/subjects/:id/attendance", "/subjects/:id/contents", "/contents/:id", "/academic/overview", "/subjects/:id/detail"} {
 				protected.Handle(method, path, serviceUnavailable)
 			}
 		}

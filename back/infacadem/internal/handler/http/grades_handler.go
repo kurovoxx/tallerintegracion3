@@ -31,6 +31,7 @@ type gradeRequest struct {
 	NotifyDiscord         *bool    `json:"notify_discord"`
 	GoogleCalendarEventID *string  `json:"google_calendar_event_id"`
 	IsFinalExam           *bool    `json:"is_final_exam"`
+	Pinned                *bool    `json:"pinned"`
 }
 
 // parseGradeInput decodifica el body; en update, un null JSON explícito en
@@ -48,7 +49,7 @@ func parseGradeInput(c *gin.Context, forUpdate bool) (service.GradeInput, bool) 
 		Name: req.Name, Score: req.Score, Weight: req.Weight, Status: req.Status,
 		ScheduledDate: req.ScheduledDate, Topics: req.Topics,
 		NotifyDiscord: req.NotifyDiscord, GoogleCalendarEventID: req.GoogleCalendarEventID,
-		IsFinalExam: req.IsFinalExam,
+		IsFinalExam: req.IsFinalExam, Pinned: req.Pinned,
 	}
 	if forUpdate {
 		var raw map[string]json.RawMessage

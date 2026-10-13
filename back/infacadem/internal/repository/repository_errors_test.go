@@ -134,6 +134,23 @@ func TestRepository_ClosedPool_Errores(t *testing.T) {
 		t.Fatal("qr.GradeSubjectOf")
 	}
 
+	cr := NewContentRepository(pool)
+	if _, err := cr.Create(ctx, repoUserA, repoUserA, "X", nil, 0); err == nil {
+		t.Fatal("cr.Create")
+	}
+	if _, err := cr.GetByID(ctx, repoUserA, repoUserA); err == nil {
+		t.Fatal("cr.GetByID")
+	}
+	if _, _, err := cr.ListBySubject(ctx, repoUserA, repoUserA); err == nil {
+		t.Fatal("cr.ListBySubject")
+	}
+	if _, err := cr.Update(ctx, repoUserA, repoUserA, ContentPatch{Title: repoStrPtr("X")}); err == nil {
+		t.Fatal("cr.Update")
+	}
+	if _, err := cr.Delete(ctx, repoUserA, repoUserA); err == nil {
+		t.Fatal("cr.Delete")
+	}
+
 	ar := NewAbsenceRepository(pool)
 	d := timeDate(2026, 1, 1)
 	if _, err := ar.Create(ctx, repoUserA, repoUserA, d, false, nil, nil); err == nil {
@@ -238,6 +255,23 @@ func TestRepository_UUIDInvalido_Errores(t *testing.T) {
 	}
 	if _, err := qr.GradeSubjectOf(ctx, bad, bad, repoUserA); err == nil {
 		t.Fatal("qr.GradeSubjectOf")
+	}
+
+	cr := NewContentRepository(pool)
+	if _, err := cr.Create(ctx, repoUserA, bad, "X", nil, 0); err == nil {
+		t.Fatal("cr.Create materia mala")
+	}
+	if _, err := cr.GetByID(ctx, bad, repoUserA); err == nil {
+		t.Fatal("cr.GetByID")
+	}
+	if _, _, err := cr.ListBySubject(ctx, bad, repoUserA); err == nil {
+		t.Fatal("cr.ListBySubject")
+	}
+	if _, err := cr.Update(ctx, bad, repoUserA, ContentPatch{Title: repoStrPtr("X")}); err == nil {
+		t.Fatal("cr.Update")
+	}
+	if _, err := cr.Delete(ctx, bad, repoUserA); err == nil {
+		t.Fatal("cr.Delete")
 	}
 
 	ar := NewAbsenceRepository(pool)
