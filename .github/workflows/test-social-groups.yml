@@ -1,0 +1,78 @@
+name: test-social-groups
+
+# E2E funcional de grupos: 11 endpoints HTTP + borrado por gRPC
+# (TestGroupsPostgresE2E_MembershipLifecycle) con PostgreSQL temporal.
+# Falla si el test falla o si se omite (SKIP no es PASS).
+on:
+  pull_request:
+    paths: ["back/social/**", ".github/workflows/test-social-groups.yml"]
+  push:
+    paths: ["back/social/**", ".github/workflows/test-social-groups.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  groups-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: back/social
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: social_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d social_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # BD dedicada de prueba, nunca la de desarrollo.
+      SOCIAL_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/social_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: back/social/go.sum
+      - name: gofmt check (test de grupos)
+        run: test -z "$(gofmt -l internal/handler/http/groups_postgres_e2e_test.go)"
+      - name: go vet
+        run: go vet ./internal/handler/http/
+      - name: init schema (docker/postgres/init.sql)
+        run: psql "$SOCIAL_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f ../../docker/postgres/init.sql
+      # 11 rutas HTTP (crear, listar, ver, join, regenerate, members,
+      # kick, ban, role, transfer, leave) + AccountDeletionCleanup por
+      # bufconn contra el mismo PostgreSQL, con aserciones SQL.
+      - name: e2e grupos (PASS real, SKIP = fallo)
+        run: |
+          set -euo pipefail
+          go test ./internal/handler/http/ -run '^TestGroupsPostgresE2E_MembershipLifecycle$' -count=1 -v -json > /tmp/groups-e2e.json
+          python3 - <<'EOF'
+          import json
+          passed = skipped = failed = False
+          with open('/tmp/groups-e2e.json') as f:
+              for line in f:
+                  try:
+                      ev = json.loads(line)
+                  except ValueError:
+                      continue
+                  if ev.get('Test') != 'TestGroupsPostgresE2E_MembershipLifecycle':
+                      continue
+                  if ev.get('Action') == 'pass':
+                      passed = True
+                  elif ev.get('Action') == 'skip':
+                      skipped = True
+                  elif ev.get('Action') == 'fail':
+                      failed = True
+          print(f"PASS={passed} SKIP={skipped} FAIL={failed}")
+          if failed or not passed or skipped:
+              raise SystemExit('el test de grupos debe producir un PASS real (sin FAIL ni SKIP)')
+          print('groups E2E: PASS real')
+          EOF
