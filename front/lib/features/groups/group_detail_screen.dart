@@ -10,6 +10,7 @@ import '../chat/group_chat_screen.dart';
 import '../workspace/kanban_screen.dart';
 import '../workspace/schedule_meeting_screen.dart';
 import '../workspace/sprint_sheet_screen.dart';
+import 'group_notes_tab.dart';
 
 class GroupDetailScreen extends StatefulWidget {
   final Map<String, dynamic> group;
@@ -37,6 +38,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
     'HOJA SPRINT',
     'KANBAN',
     'AGENDAR',
+    'NOTAS',
   ];
 
   late final SocialService _service;
@@ -59,7 +61,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 5, vsync: this);
+    _tabController = TabController(length: 6, vsync: this);
     _tabController.addListener(() {
       if (_tabController.indexIsChanging) {
         setState(() => _currentIndex = _tabController.index);
@@ -329,6 +331,9 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                     case 4:
                       icon = Icons.event_rounded;
                       break;
+                    case 5:
+                      icon = Icons.description_rounded;
+                      break;
                     default:
                       icon = Icons.circle;
                   }
@@ -401,6 +406,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                 SprintSheetScreen(groupId: groupId, service: _service),
                 KanbanScreen(groupId: groupId, service: _service),
                 ScheduleMeetingScreen(groupId: groupId, service: _service),
+                GroupNotesTab(groupId: groupId),
               ],
             ),
           ),
