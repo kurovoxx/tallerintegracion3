@@ -3,15 +3,20 @@ package main
 import (
 	"context"
 	"log"
+	"net"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/config"
+	identityv1 "github.com/kurovoxx/tallerintegracion3/back/auth/internal/gen/identityv1"
+	grpchandler "github.com/kurovoxx/tallerintegracion3/back/auth/internal/handler/grpc"
 	httpHandler "github.com/kurovoxx/tallerintegracion3/back/auth/internal/handler/http"
+	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/interceptor"
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/middleware"
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/repository"
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/service"
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -81,8 +86,12 @@ func main() {
 	calendarSvc := service.NewCalendarOAuthService(oauthRepo, calendarProvider)
 	calendarH := httpHandler.NewCalendarHandler(calendarSvc)
 	internalOAuthH := httpHandler.NewInternalOAuthHandler(calendarSvc)
-	internalUsersH := httpHandler.NewInternalUsersHandler(service.NewUsersService(userRepo))
+	usersSvc := service.NewUsersService(userRepo)
+	internalUsersH := httpHandler.NewInternalUsersHandler(usersSvc)
 	internalAuthH := httpHandler.NewInternalAuthHandler(jwtSvc)
+
+	// gRPC Identity en goroutine; HTTP bloquea abajo (igual que social).
+	startGRPC(usersSvc, jwtSvc, driveSvc, calendarSvc, oauthRepo, cfg)
 
 	r := gin.Default()
 
@@ -167,4 +176,27 @@ func main() {
 	if err := r.Run(addr); err != nil {
 		log.Fatalf("Error al iniciar el servidor: %v", err)
 	}
+}
+
+// startGRPC sirve IdentityService (usuarios, verify y OAuth) para Social y
+// Notes. Logging va afuera para auditar también los rechazos de clave.
+func startGRPC(usersSvc *service.UsersService, jwtSvc *service.JWTService, driveSvc *service.DriveOAuthService, calendarSvc *service.CalendarOAuthService, oauthRepo *repository.OAuthRepository, cfg *config.Config) {
+	if cfg.InternalAPIKey == "" {
+		log.Printf("gRPC identity: INTERNAL_API_KEY vacía, todas las llamadas fallarán (fail-closed)")
+	}
+	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
+	if err != nil {
+		log.Fatalf("Error gRPC (puerto %s ocupado?): %v", cfg.GRPCPort, err)
+	}
+	s := grpc.NewServer(grpc.ChainUnaryInterceptor(
+		interceptor.NewLogging(log.Default()),
+		interceptor.NewInternalAuth(cfg.InternalAPIKey),
+	))
+	identityv1.RegisterIdentityServiceServer(s, grpchandler.NewIdentityServer(usersSvc, jwtSvc, driveSvc, calendarSvc, oauthRepo))
+	go func() {
+		log.Printf("Servidor gRPC de Identity en :%s", cfg.GRPCPort)
+		if err := s.Serve(lis); err != nil {
+			log.Printf("gRPC detenido: %v", err)
+		}
+	}()
 }
