@@ -1,12 +1,9 @@
 import 'package:flutter/material.dart';
 
-import '../../core/database/app_database.dart';
-import '../../core/database/local_notes_repository.dart';
-import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 import '../notes/all_notes_screen.dart';
-import 'academic_mappers.dart';
+import '../notes/notes_api.dart';
 import 'course_detail_tabs.dart';
 
 /// Ventanas separadas del curso (UX-05b): AppBar + back, mismo patrón que
@@ -49,33 +46,18 @@ class UnitsWindow extends StatelessWidget {
     );
   }
 }
-
-/// Entrada de apunte filtrado por materia (convención "[CODE] ").
-class _SubjectNote {
-  _SubjectNote({
-    required this.id,
-    required this.title,
-    required this.content,
-    required this.visibility,
-    required this.updatedAt,
-  });
-
-  final String id;
-  final String title;
-  final String content;
-  final String visibility;
-  final DateTime updatedAt;
-}
-
-/// Ventana Materiales: crear apunte (preset materia) + lista filtrada con
-/// formato de tarjeta de nota (solo lectura + tap abrir).
+/// Ventana Materiales: crear apunte (preset materia) + lista desde el
+/// backend filtrada por `subject_id === materia` (sin depender del
+/// prefijo ni de la BD local). Al volver de crear se refresca.
 class MaterialsWindow extends StatefulWidget {
   const MaterialsWindow({
     super.key,
+    required this.subjectId,
     required this.subjectCode,
     required this.subjectName,
   });
 
+  final String subjectId;
   final String subjectCode;
   final String subjectName;
 
@@ -84,13 +66,21 @@ class MaterialsWindow extends StatefulWidget {
 }
 
 class _MaterialsWindowState extends State<MaterialsWindow> {
+  final NotesApi _api = NotesApi();
   bool _isLoading = true;
   String? _error;
-  List<_SubjectNote> _notes = const [];
+  List<RemoteNote> _notes = const [];
 
   @override
-  void initState() {    super.initState();
+  void initState() {
+    super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _api.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -101,33 +91,23 @@ class _MaterialsWindowState extends State<MaterialsWindow> {
       });
     }
     try {
-      final db = AppDatabase();
-      final repo = LocalNotesRepository(db);
-      final owner = SessionManager.currentUserId;
-      final all = await repo.getAllNotes(ownerId: owner);
-      final filtered = all
-          .where((n) => noteMatchesSubjectCode(n.title, widget.subjectCode))
-          .map(
-            (n) => _SubjectNote(
-              id: n.id,
-              title: n.title,
-              content: n.content,
-              visibility: n.visibility,
-              updatedAt: n.updatedAt,
-            ),
-          )
-          .toList()
-        ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      final notes = await _api.listBySubject(widget.subjectId);
       if (!mounted) return;
       setState(() {
-        _notes = filtered;
+        _notes = notes;
         _isLoading = false;
       });
-    } catch (e) {
+    } on NotesApiException catch (e) {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _error = 'No se pudieron cargar los apuntes: $e';
+        _error = e.message;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = 'Error inesperado. Reintenta.';
       });
     }
   }
@@ -137,6 +117,7 @@ class _MaterialsWindowState extends State<MaterialsWindow> {
       MaterialPageRoute(
         builder: (_) => AllNotesScreen(
           initialSubjectCode: widget.subjectCode,
+          initialSubjectId: widget.subjectId,
           autoOpenCreate: true,
           showBackButton: true,
         ),
@@ -217,7 +198,7 @@ class _MaterialsWindowState extends State<MaterialsWindow> {
 
   /// Tarjeta con el formato visual de nota (lista): badges + título +
   /// extracto. Solo lectura; tap abre la materia filtrada.
-  Widget _noteCard(_SubjectNote n) {
+  Widget _noteCard(RemoteNote n) {
     final snippet = n.content.trim().replaceAll(RegExp(r'\s+'), ' ');
     return InkWell(
       borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -293,7 +274,7 @@ class EvaluationsWindow extends StatelessWidget {
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(16),
-          child: EvaluationsTab(subjectId: subjectId),
+          child: EvaluationsTab(subjectId: subjectId, subjectName: subjectName),
         ),
       ),
     );
