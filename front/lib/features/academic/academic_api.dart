@@ -745,12 +745,6 @@ class AcademicApi {
     }
   }
 
-  /// Fija pinned en una nota (el backend despinnea la anterior de la
-  /// materia en la misma sentencia: un solo pin por materia).
-  Future<void> pinGrade(String gradeId, bool pinned) {
-    return patchGrade(gradeId, {'pinned': pinned});
-  }
-
   /// Renombra una nota (PATCH existente).
   Future<void> renameGrade(String gradeId, String name) {
     return patchGrade(gradeId, {'name': name.trim()});

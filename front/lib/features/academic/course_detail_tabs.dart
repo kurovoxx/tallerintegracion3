@@ -307,8 +307,8 @@ class _ContentsTabState extends State<ContentsTab> {
   }
 }
 
-/// Tab Evaluaciones (UX-05): notas backend con pin (una por materia),
-/// renombrar por PATCH y entrada a la calculadora (simulación local).
+/// Tab Evaluaciones (UX-05): notas backend con renombrar por PATCH y
+/// calculadora embebida (simulación local).
 class EvaluationsTab extends StatefulWidget {
   const EvaluationsTab({super.key, required this.subjectId, this.subjectName = ''});
 
@@ -339,8 +339,10 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
     super.dispose();
   }
 
-  Future<void> _load() async {
-    if (mounted) {
+  /// Recarga notas + promedio. En [silent] no toca el spinner para no
+  /// resetear la calculadora embebida (caso onSaved tras guardar).
+  Future<void> _load({bool silent = false}) async {
+    if (mounted && !silent) {
       setState(() {
         _isLoading = true;
         _error = null;
@@ -373,30 +375,6 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
         _isLoading = false;
         _error = 'Error inesperado. Reintenta.';
       });
-    }
-  }
-
-  Future<void> _togglePin(AcademicGrade grade) async {
-    try {
-      await _api.pinGrade(grade.id, !grade.pinned);
-      await _load();
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(grade.pinned ? 'Nota despinneada' : 'Nota fijada (despinnea la anterior)'),
-          backgroundColor: AppColors.border,
-        ),
-      );
-    } on AcademicApiException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo fijar: ${e.message}'), backgroundColor: AppColors.border),
-      );
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo fijar: error inesperado'), backgroundColor: AppColors.border),
-      );
     }
   }
 
@@ -475,7 +453,6 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
         ),
       );
     }
-    final pinned = _nodes.where((n) => n.grade.pinned).toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -489,25 +466,7 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
               style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppColors.text),
             ),
           ),
-        if (pinned.isNotEmpty)
-          Container(
-            margin: const EdgeInsets.only(bottom: 12),
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(3, 3), blurRadius: 0)]),
-            child: Row(
-              children: [
-                const Icon(Icons.push_pin_rounded, size: 18, color: AppColors.text),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'FIJA: ${pinned.first.grade.name.toUpperCase()}',
-                    style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12.5, color: AppColors.text),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        for (final node in _nodes) _gradeRow(node.grade),
+        for (final node in _nodes) _gradeNode(node),
         const SizedBox(height: 20),
         const Text(
           'SIMULAR EN CALCULADORA',
@@ -517,12 +476,28 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
         GradeCalculatorScreen(
           embedded: true,
           initialCourse: widget.subjectName.isEmpty ? null : widget.subjectName,
+          onSaved: () => _load(silent: true),
         ),
       ],
     );
   }
 
-  Widget _gradeRow(AcademicGrade grade) {
+  /// Top + hijas con sangría, cada una con su rename (hijas incluidas).
+  Widget _gradeNode(AcademicGradeNode node) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _gradeRow(node.grade),
+        for (final child in node.children)
+          Padding(
+            padding: const EdgeInsets.only(left: 24),
+            child: _gradeRow(child, prefix: '↳ '),
+          ),
+      ],
+    );
+  }
+
+  Widget _gradeRow(AcademicGrade grade, {String prefix = ''}) {
     final score = grade.score != null ? (grade.score! / 10.0).toStringAsFixed(1) : '–';
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -534,29 +509,13 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    if (grade.pinned)
-                      const Padding(
-                        padding: EdgeInsets.only(right: 6),
-                        child: Icon(Icons.push_pin_rounded, size: 14, color: AppColors.text),
-                      ),
-                    Expanded(
-                      child: Text(grade.name, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppColors.text)),
-                    ),
-                  ],
-                ),
+                Text('$prefix${grade.name}', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppColors.text)),
                 const SizedBox(height: 2),
                 Text('Ponderación ${(grade.weight * 100).toStringAsFixed(0)}%', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppColors.muted)),
               ],
             ),
           ),
           Text(score, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 24, color: AppColors.text)),
-          IconButton(
-            tooltip: grade.pinned ? 'Quitar fija' : 'Mantener nota (fijar)',
-            icon: Icon(grade.pinned ? Icons.push_pin_rounded : Icons.push_pin_outlined, size: 20),
-            onPressed: () => _togglePin(grade),
-          ),
           IconButton(
             tooltip: 'Renombrar',
             icon: const Icon(Icons.edit_rounded, size: 20),
@@ -566,4 +525,25 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
       ),
     );
   }
+}
+
+/// Opción de renombrado aplanada: tops + hijas con nombre compuesto.
+class RenameOption {
+  const RenameOption({required this.id, required this.label});
+
+  final String id;
+  final String label;
+}
+
+/// Tops + hijas (sangría ›) para el menú de rename. Incluye todo lo
+/// renombrable; renombrar hija persiste igual que tops.
+List<RenameOption> flattenRenameOptions(List<AcademicGradeNode> nodes) {
+  final out = <RenameOption>[];
+  for (final n in nodes) {
+    out.add(RenameOption(id: n.grade.id, label: n.grade.name));
+    for (final c in n.children) {
+      out.add(RenameOption(id: c.id, label: '${n.grade.name} › ${c.name}'));
+    }
+  }
+  return out;
 }

@@ -118,6 +118,7 @@ class _MaterialsWindowState extends State<MaterialsWindow> {
         builder: (_) => AllNotesScreen(
           initialSubjectCode: widget.subjectCode,
           initialSubjectId: widget.subjectId,
+          initialSubjectName: widget.subjectName,
           autoOpenCreate: true,
           showBackButton: true,
         ),
@@ -131,6 +132,7 @@ class _MaterialsWindowState extends State<MaterialsWindow> {
       MaterialPageRoute(
         builder: (_) => AllNotesScreen(
           initialSubjectCode: widget.subjectCode,
+          initialSubjectName: widget.subjectName,
           showBackButton: true,
         ),
       ),
@@ -254,8 +256,8 @@ class _MaterialsWindowState extends State<MaterialsWindow> {
   }
 }
 
-/// Ventana Evaluaciones: promedio + nota fija + notas (pin/renombrar
-/// reutilizados) + entrada a la calculadora (simulación local).
+/// Ventana Evaluaciones: promedio + notas (renombrar reutilizado) +
+/// calculadora embebida (simulación local).
 class EvaluationsWindow extends StatelessWidget {
   const EvaluationsWindow({
     super.key,

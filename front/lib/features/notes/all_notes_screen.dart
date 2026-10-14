@@ -82,6 +82,7 @@ class AllNotesScreen extends StatefulWidget {
     this.database,
     this.initialSubjectCode,
     this.initialSubjectId,
+    this.initialSubjectName,
     this.autoOpenCreate = false,
     this.showBackButton = false,
   });
@@ -93,6 +94,9 @@ class AllNotesScreen extends StatefulWidget {
 
   /// UUID de materia academic para el POST (subject_id del backend).
   final String? initialSubjectId;
+
+  /// Nombre de materia para el título (p. ej. "NOTAS REDES").
+  final String? initialSubjectName;
 
   /// Abre el diálogo de crear al iniciar (con el prefijo de materia).
   final bool autoOpenCreate;
@@ -2063,7 +2067,9 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               Text(
-                'TODAS LAS NOTAS',
+                widget.initialSubjectName?.trim().isNotEmpty == true
+                    ? 'NOTAS ${widget.initialSubjectName!.trim().toUpperCase()}'
+                    : 'TODAS LAS NOTAS',
                 style: TextStyle(
                   fontSize: isDesktop ? 26 : 22,
                   fontWeight: FontWeight.w900,
