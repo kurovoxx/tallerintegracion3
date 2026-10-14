@@ -19,9 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	IdentityService_GetUser_FullMethodName       = "/identity.v1.IdentityService/GetUser"
-	IdentityService_VerifyToken_FullMethodName   = "/identity.v1.IdentityService/VerifyToken"
-	IdentityService_GetOAuthToken_FullMethodName = "/identity.v1.IdentityService/GetOAuthToken"
+	IdentityService_GetUser_FullMethodName               = "/identity.v1.IdentityService/GetUser"
+	IdentityService_LookupUsers_FullMethodName           = "/identity.v1.IdentityService/LookupUsers"
+	IdentityService_VerifyToken_FullMethodName           = "/identity.v1.IdentityService/VerifyToken"
+	IdentityService_GetOAuthToken_FullMethodName         = "/identity.v1.IdentityService/GetOAuthToken"
+	IdentityService_ReportCalendarRevoked_FullMethodName = "/identity.v1.IdentityService/ReportCalendarRevoked"
 )
 
 // IdentityServiceClient is the client API for IdentityService service.
@@ -31,16 +33,22 @@ const (
 // Contrato servicio-a-servicio de Identity (usuarios, verificación de JWT y
 // tokens OAuth de Google).
 //
-// Reemplaza los /internal/... HTTP que hoy consumen Social y Notes:
+// Reemplaza los /internal/... HTTP que hoy consume Social
+// (back/social/internal/identity/client.go, service/user_directory.go y
+// service/calendar_gateway.go) y prepara los que Notes usará en 3_4_6
+// (hoy Notes lee identity.oauth_connections directo desde su pool).
 //
 //	GET /internal/users/:id         → GetUser
-//	GET /internal/users/lookup      → (lote futuro; hoy GetUser por id)
+//	GET /internal/users/lookup      → LookupUsers (lote)
 //	POST /internal/auth/verify      → VerifyToken
 //	GET /internal/oauth/calendar-token → GetOAuthToken (drive y calendar)
+//	POST /internal/oauth/calendar-revoked → ReportCalendarRevoked
 //
 // Auth: metadata `x-internal-key` = INTERNAL_API_KEY (interceptor con la
 // misma convención que social/internal/interceptor). Los ids son UUID en
-// texto. Nunca se exponen refresh tokens, hashes ni secretos.
+// texto. Nunca se exponen refresh tokens, hashes ni secretos. GetOAuthToken
+// devuelve un access token sensible: solo servicios internos autorizados, y
+// ni JWT completos ni access tokens se registran en logs.
 //
 // Errores: código gRPC nativo (InvalidArgument si un id/token/provider es
 // inválido o vacío, NotFound si el usuario no existe o no tiene vinculación,
@@ -50,6 +58,10 @@ type IdentityServiceClient interface {
 	// Datos públicos de un usuario (nunca hashes ni tokens).
 	// Usuario inexistente = NotFound.
 	GetUser(ctx context.Context, in *GetUserRequest, opts ...grpc.CallOption) (*GetUserResponse, error)
+	// Lote de usuarios para no hacer N llamadas GetUser (p. ej. miembros de
+	// un grupo). Sin ids → lista vacía (no es error); inexistentes se omiten;
+	// tope 200 ids (igual que UsersService.Lookup). Sin orden garantizado.
+	LookupUsers(ctx context.Context, in *LookupUsersRequest, opts ...grpc.CallOption) (*LookupUsersResponse, error)
 	// ¿El JWT es válido? Devuelve la identidad autenticada.
 	// Token inválido o expirado = Unauthenticated (no es error de conexión).
 	VerifyToken(ctx context.Context, in *VerifyTokenRequest, opts ...grpc.CallOption) (*VerifyTokenResponse, error)
@@ -59,6 +71,9 @@ type IdentityServiceClient interface {
 	// Sin vinculación = NotFound; revocada o inválida = Unauthenticated;
 	// Google caído = Unavailable. Nunca devuelve refresh tokens.
 	GetOAuthToken(ctx context.Context, in *GetOAuthTokenRequest, opts ...grpc.CallOption) (*GetOAuthTokenResponse, error)
+	// Avisa que Google rechazó el token de Calendar (401/403) para marcar
+	// revoked_at. Idempotente y sin fuga de existencia: sin fila también es OK.
+	ReportCalendarRevoked(ctx context.Context, in *ReportCalendarRevokedRequest, opts ...grpc.CallOption) (*ReportCalendarRevokedResponse, error)
 }
 
 type identityServiceClient struct {
@@ -73,6 +88,16 @@ func (c *identityServiceClient) GetUser(ctx context.Context, in *GetUserRequest,
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetUserResponse)
 	err := c.cc.Invoke(ctx, IdentityService_GetUser_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *identityServiceClient) LookupUsers(ctx context.Context, in *LookupUsersRequest, opts ...grpc.CallOption) (*LookupUsersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LookupUsersResponse)
+	err := c.cc.Invoke(ctx, IdentityService_LookupUsers_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -99,6 +124,16 @@ func (c *identityServiceClient) GetOAuthToken(ctx context.Context, in *GetOAuthT
 	return out, nil
 }
 
+func (c *identityServiceClient) ReportCalendarRevoked(ctx context.Context, in *ReportCalendarRevokedRequest, opts ...grpc.CallOption) (*ReportCalendarRevokedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportCalendarRevokedResponse)
+	err := c.cc.Invoke(ctx, IdentityService_ReportCalendarRevoked_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // IdentityServiceServer is the server API for IdentityService service.
 // All implementations must embed UnimplementedIdentityServiceServer
 // for forward compatibility.
@@ -106,16 +141,22 @@ func (c *identityServiceClient) GetOAuthToken(ctx context.Context, in *GetOAuthT
 // Contrato servicio-a-servicio de Identity (usuarios, verificación de JWT y
 // tokens OAuth de Google).
 //
-// Reemplaza los /internal/... HTTP que hoy consumen Social y Notes:
+// Reemplaza los /internal/... HTTP que hoy consume Social
+// (back/social/internal/identity/client.go, service/user_directory.go y
+// service/calendar_gateway.go) y prepara los que Notes usará en 3_4_6
+// (hoy Notes lee identity.oauth_connections directo desde su pool).
 //
 //	GET /internal/users/:id         → GetUser
-//	GET /internal/users/lookup      → (lote futuro; hoy GetUser por id)
+//	GET /internal/users/lookup      → LookupUsers (lote)
 //	POST /internal/auth/verify      → VerifyToken
 //	GET /internal/oauth/calendar-token → GetOAuthToken (drive y calendar)
+//	POST /internal/oauth/calendar-revoked → ReportCalendarRevoked
 //
 // Auth: metadata `x-internal-key` = INTERNAL_API_KEY (interceptor con la
 // misma convención que social/internal/interceptor). Los ids son UUID en
-// texto. Nunca se exponen refresh tokens, hashes ni secretos.
+// texto. Nunca se exponen refresh tokens, hashes ni secretos. GetOAuthToken
+// devuelve un access token sensible: solo servicios internos autorizados, y
+// ni JWT completos ni access tokens se registran en logs.
 //
 // Errores: código gRPC nativo (InvalidArgument si un id/token/provider es
 // inválido o vacío, NotFound si el usuario no existe o no tiene vinculación,
@@ -125,6 +166,10 @@ type IdentityServiceServer interface {
 	// Datos públicos de un usuario (nunca hashes ni tokens).
 	// Usuario inexistente = NotFound.
 	GetUser(context.Context, *GetUserRequest) (*GetUserResponse, error)
+	// Lote de usuarios para no hacer N llamadas GetUser (p. ej. miembros de
+	// un grupo). Sin ids → lista vacía (no es error); inexistentes se omiten;
+	// tope 200 ids (igual que UsersService.Lookup). Sin orden garantizado.
+	LookupUsers(context.Context, *LookupUsersRequest) (*LookupUsersResponse, error)
 	// ¿El JWT es válido? Devuelve la identidad autenticada.
 	// Token inválido o expirado = Unauthenticated (no es error de conexión).
 	VerifyToken(context.Context, *VerifyTokenRequest) (*VerifyTokenResponse, error)
@@ -134,6 +179,9 @@ type IdentityServiceServer interface {
 	// Sin vinculación = NotFound; revocada o inválida = Unauthenticated;
 	// Google caído = Unavailable. Nunca devuelve refresh tokens.
 	GetOAuthToken(context.Context, *GetOAuthTokenRequest) (*GetOAuthTokenResponse, error)
+	// Avisa que Google rechazó el token de Calendar (401/403) para marcar
+	// revoked_at. Idempotente y sin fuga de existencia: sin fila también es OK.
+	ReportCalendarRevoked(context.Context, *ReportCalendarRevokedRequest) (*ReportCalendarRevokedResponse, error)
 	mustEmbedUnimplementedIdentityServiceServer()
 }
 
@@ -147,11 +195,17 @@ type UnimplementedIdentityServiceServer struct{}
 func (UnimplementedIdentityServiceServer) GetUser(context.Context, *GetUserRequest) (*GetUserResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetUser not implemented")
 }
+func (UnimplementedIdentityServiceServer) LookupUsers(context.Context, *LookupUsersRequest) (*LookupUsersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method LookupUsers not implemented")
+}
 func (UnimplementedIdentityServiceServer) VerifyToken(context.Context, *VerifyTokenRequest) (*VerifyTokenResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method VerifyToken not implemented")
 }
 func (UnimplementedIdentityServiceServer) GetOAuthToken(context.Context, *GetOAuthTokenRequest) (*GetOAuthTokenResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetOAuthToken not implemented")
+}
+func (UnimplementedIdentityServiceServer) ReportCalendarRevoked(context.Context, *ReportCalendarRevokedRequest) (*ReportCalendarRevokedResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportCalendarRevoked not implemented")
 }
 func (UnimplementedIdentityServiceServer) mustEmbedUnimplementedIdentityServiceServer() {}
 func (UnimplementedIdentityServiceServer) testEmbeddedByValue()                         {}
@@ -192,6 +246,24 @@ func _IdentityService_GetUser_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _IdentityService_LookupUsers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LookupUsersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IdentityServiceServer).LookupUsers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IdentityService_LookupUsers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IdentityServiceServer).LookupUsers(ctx, req.(*LookupUsersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _IdentityService_VerifyToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(VerifyTokenRequest)
 	if err := dec(in); err != nil {
@@ -228,6 +300,24 @@ func _IdentityService_GetOAuthToken_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _IdentityService_ReportCalendarRevoked_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportCalendarRevokedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IdentityServiceServer).ReportCalendarRevoked(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IdentityService_ReportCalendarRevoked_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IdentityServiceServer).ReportCalendarRevoked(ctx, req.(*ReportCalendarRevokedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // IdentityService_ServiceDesc is the grpc.ServiceDesc for IdentityService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -240,12 +330,20 @@ var IdentityService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _IdentityService_GetUser_Handler,
 		},
 		{
+			MethodName: "LookupUsers",
+			Handler:    _IdentityService_LookupUsers_Handler,
+		},
+		{
 			MethodName: "VerifyToken",
 			Handler:    _IdentityService_VerifyToken_Handler,
 		},
 		{
 			MethodName: "GetOAuthToken",
 			Handler:    _IdentityService_GetOAuthToken_Handler,
+		},
+		{
+			MethodName: "ReportCalendarRevoked",
+			Handler:    _IdentityService_ReportCalendarRevoked_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

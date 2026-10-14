@@ -177,6 +177,156 @@ func (x *GetUserResponse) GetDisplayName() string {
 	return ""
 }
 
+// Usuario público (model.PublicUser): solo user_id/email/display_name.
+type User struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Email         string                 `protobuf:"bytes,2,opt,name=email,proto3" json:"email,omitempty"`
+	DisplayName   *string                `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3,oneof" json:"display_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *User) Reset() {
+	*x = User{}
+	mi := &file_v1_identity_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *User) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*User) ProtoMessage() {}
+
+func (x *User) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_identity_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use User.ProtoReflect.Descriptor instead.
+func (*User) Descriptor() ([]byte, []int) {
+	return file_v1_identity_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *User) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *User) GetEmail() string {
+	if x != nil {
+		return x.Email
+	}
+	return ""
+}
+
+func (x *User) GetDisplayName() string {
+	if x != nil && x.DisplayName != nil {
+		return *x.DisplayName
+	}
+	return ""
+}
+
+type LookupUsersRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserIds       []string               `protobuf:"bytes,1,rep,name=user_ids,json=userIds,proto3" json:"user_ids,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LookupUsersRequest) Reset() {
+	*x = LookupUsersRequest{}
+	mi := &file_v1_identity_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LookupUsersRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LookupUsersRequest) ProtoMessage() {}
+
+func (x *LookupUsersRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_identity_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LookupUsersRequest.ProtoReflect.Descriptor instead.
+func (*LookupUsersRequest) Descriptor() ([]byte, []int) {
+	return file_v1_identity_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *LookupUsersRequest) GetUserIds() []string {
+	if x != nil {
+		return x.UserIds
+	}
+	return nil
+}
+
+type LookupUsersResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Siempre array (vacío si no hay ids o ninguno existe); nunca null.
+	Users         []*User `protobuf:"bytes,1,rep,name=users,proto3" json:"users,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LookupUsersResponse) Reset() {
+	*x = LookupUsersResponse{}
+	mi := &file_v1_identity_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LookupUsersResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LookupUsersResponse) ProtoMessage() {}
+
+func (x *LookupUsersResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_identity_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LookupUsersResponse.ProtoReflect.Descriptor instead.
+func (*LookupUsersResponse) Descriptor() ([]byte, []int) {
+	return file_v1_identity_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *LookupUsersResponse) GetUsers() []*User {
+	if x != nil {
+		return x.Users
+	}
+	return nil
+}
+
 type VerifyTokenRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Access token JWT emitido por Auth (tal cual va en Authorization).
@@ -187,7 +337,7 @@ type VerifyTokenRequest struct {
 
 func (x *VerifyTokenRequest) Reset() {
 	*x = VerifyTokenRequest{}
-	mi := &file_v1_identity_proto_msgTypes[2]
+	mi := &file_v1_identity_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -199,7 +349,7 @@ func (x *VerifyTokenRequest) String() string {
 func (*VerifyTokenRequest) ProtoMessage() {}
 
 func (x *VerifyTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_identity_proto_msgTypes[2]
+	mi := &file_v1_identity_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -212,7 +362,7 @@ func (x *VerifyTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyTokenRequest.ProtoReflect.Descriptor instead.
 func (*VerifyTokenRequest) Descriptor() ([]byte, []int) {
-	return file_v1_identity_proto_rawDescGZIP(), []int{2}
+	return file_v1_identity_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *VerifyTokenRequest) GetToken() string {
@@ -224,7 +374,9 @@ func (x *VerifyTokenRequest) GetToken() string {
 
 type VerifyTokenResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Siempre true en una respuesta OK (los errores viajan como status gRPC).
+	// Siempre true en una respuesta OK: la validación ya ocurrió y los fallos
+	// viajan como status gRPC (el cliente no revisa valid=false, captura el
+	// error). Se mantiene por paridad con POST /internal/auth/verify.
 	Valid         bool   `protobuf:"varint,1,opt,name=valid,proto3" json:"valid,omitempty"`
 	UserId        string `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -233,7 +385,7 @@ type VerifyTokenResponse struct {
 
 func (x *VerifyTokenResponse) Reset() {
 	*x = VerifyTokenResponse{}
-	mi := &file_v1_identity_proto_msgTypes[3]
+	mi := &file_v1_identity_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -245,7 +397,7 @@ func (x *VerifyTokenResponse) String() string {
 func (*VerifyTokenResponse) ProtoMessage() {}
 
 func (x *VerifyTokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_identity_proto_msgTypes[3]
+	mi := &file_v1_identity_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -258,7 +410,7 @@ func (x *VerifyTokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyTokenResponse.ProtoReflect.Descriptor instead.
 func (*VerifyTokenResponse) Descriptor() ([]byte, []int) {
-	return file_v1_identity_proto_rawDescGZIP(), []int{3}
+	return file_v1_identity_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *VerifyTokenResponse) GetValid() bool {
@@ -285,7 +437,7 @@ type GetOAuthTokenRequest struct {
 
 func (x *GetOAuthTokenRequest) Reset() {
 	*x = GetOAuthTokenRequest{}
-	mi := &file_v1_identity_proto_msgTypes[4]
+	mi := &file_v1_identity_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -297,7 +449,7 @@ func (x *GetOAuthTokenRequest) String() string {
 func (*GetOAuthTokenRequest) ProtoMessage() {}
 
 func (x *GetOAuthTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_identity_proto_msgTypes[4]
+	mi := &file_v1_identity_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -310,7 +462,7 @@ func (x *GetOAuthTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOAuthTokenRequest.ProtoReflect.Descriptor instead.
 func (*GetOAuthTokenRequest) Descriptor() ([]byte, []int) {
-	return file_v1_identity_proto_rawDescGZIP(), []int{4}
+	return file_v1_identity_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *GetOAuthTokenRequest) GetUserId() string {
@@ -330,9 +482,11 @@ func (x *GetOAuthTokenRequest) GetProvider() Provider {
 type GetOAuthTokenResponse struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	AccessToken string                 `protobuf:"bytes,1,opt,name=access_token,json=accessToken,proto3" json:"access_token,omitempty"`
-	// Vencimiento conocido del token (ausente si el proveedor no lo informó).
+	// Vencimiento guardado en identity.oauth_connections (ausente si el
+	// proveedor no lo informó al vincular/refrescar).
 	ExpiresAt *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=expires_at,json=expiresAt,proto3,oneof" json:"expires_at,omitempty"`
-	// Cuenta de Google vinculada (para mostrar "conectado como ...").
+	// Cuenta de Google vinculada (para mostrar "conectado como ..."; ausente
+	// si no se registró email externo).
 	ExternalEmail *string `protobuf:"bytes,3,opt,name=external_email,json=externalEmail,proto3,oneof" json:"external_email,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -340,7 +494,7 @@ type GetOAuthTokenResponse struct {
 
 func (x *GetOAuthTokenResponse) Reset() {
 	*x = GetOAuthTokenResponse{}
-	mi := &file_v1_identity_proto_msgTypes[5]
+	mi := &file_v1_identity_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -352,7 +506,7 @@ func (x *GetOAuthTokenResponse) String() string {
 func (*GetOAuthTokenResponse) ProtoMessage() {}
 
 func (x *GetOAuthTokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_identity_proto_msgTypes[5]
+	mi := &file_v1_identity_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -365,7 +519,7 @@ func (x *GetOAuthTokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOAuthTokenResponse.ProtoReflect.Descriptor instead.
 func (*GetOAuthTokenResponse) Descriptor() ([]byte, []int) {
-	return file_v1_identity_proto_rawDescGZIP(), []int{5}
+	return file_v1_identity_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *GetOAuthTokenResponse) GetAccessToken() string {
@@ -389,6 +543,87 @@ func (x *GetOAuthTokenResponse) GetExternalEmail() string {
 	return ""
 }
 
+type ReportCalendarRevokedRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportCalendarRevokedRequest) Reset() {
+	*x = ReportCalendarRevokedRequest{}
+	mi := &file_v1_identity_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportCalendarRevokedRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportCalendarRevokedRequest) ProtoMessage() {}
+
+func (x *ReportCalendarRevokedRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_identity_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportCalendarRevokedRequest.ProtoReflect.Descriptor instead.
+func (*ReportCalendarRevokedRequest) Descriptor() ([]byte, []int) {
+	return file_v1_identity_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ReportCalendarRevokedRequest) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+// Vacía a propósito: la operación es idempotente y no filtra existencia.
+type ReportCalendarRevokedResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportCalendarRevokedResponse) Reset() {
+	*x = ReportCalendarRevokedResponse{}
+	mi := &file_v1_identity_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportCalendarRevokedResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportCalendarRevokedResponse) ProtoMessage() {}
+
+func (x *ReportCalendarRevokedResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_identity_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportCalendarRevokedResponse.ProtoReflect.Descriptor instead.
+func (*ReportCalendarRevokedResponse) Descriptor() ([]byte, []int) {
+	return file_v1_identity_proto_rawDescGZIP(), []int{10}
+}
+
 var File_v1_identity_proto protoreflect.FileDescriptor
 
 const file_v1_identity_proto_rawDesc = "" +
@@ -400,7 +635,16 @@ const file_v1_identity_proto_rawDesc = "" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\x12&\n" +
 	"\fdisplay_name\x18\x03 \x01(\tH\x00R\vdisplayName\x88\x01\x01B\x0f\n" +
-	"\r_display_name\"*\n" +
+	"\r_display_name\"n\n" +
+	"\x04User\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x14\n" +
+	"\x05email\x18\x02 \x01(\tR\x05email\x12&\n" +
+	"\fdisplay_name\x18\x03 \x01(\tH\x00R\vdisplayName\x88\x01\x01B\x0f\n" +
+	"\r_display_name\"/\n" +
+	"\x12LookupUsersRequest\x12\x19\n" +
+	"\buser_ids\x18\x01 \x03(\tR\auserIds\">\n" +
+	"\x13LookupUsersResponse\x12'\n" +
+	"\x05users\x18\x01 \x03(\v2\x11.identity.v1.UserR\x05users\"*\n" +
 	"\x12VerifyTokenRequest\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\"D\n" +
 	"\x13VerifyTokenResponse\x12\x14\n" +
@@ -415,15 +659,20 @@ const file_v1_identity_proto_rawDesc = "" +
 	"expires_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampH\x00R\texpiresAt\x88\x01\x01\x12*\n" +
 	"\x0eexternal_email\x18\x03 \x01(\tH\x01R\rexternalEmail\x88\x01\x01B\r\n" +
 	"\v_expires_atB\x11\n" +
-	"\x0f_external_email*]\n" +
+	"\x0f_external_email\"7\n" +
+	"\x1cReportCalendarRevokedRequest\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\"\x1f\n" +
+	"\x1dReportCalendarRevokedResponse*]\n" +
 	"\bProvider\x12\x18\n" +
 	"\x14PROVIDER_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15PROVIDER_GOOGLE_DRIVE\x10\x01\x12\x1c\n" +
-	"\x18PROVIDER_GOOGLE_CALENDAR\x10\x022\x81\x02\n" +
+	"\x18PROVIDER_GOOGLE_CALENDAR\x10\x022\xc3\x03\n" +
 	"\x0fIdentityService\x12D\n" +
 	"\aGetUser\x12\x1b.identity.v1.GetUserRequest\x1a\x1c.identity.v1.GetUserResponse\x12P\n" +
+	"\vLookupUsers\x12\x1f.identity.v1.LookupUsersRequest\x1a .identity.v1.LookupUsersResponse\x12P\n" +
 	"\vVerifyToken\x12\x1f.identity.v1.VerifyTokenRequest\x1a .identity.v1.VerifyTokenResponse\x12V\n" +
-	"\rGetOAuthToken\x12!.identity.v1.GetOAuthTokenRequest\x1a\".identity.v1.GetOAuthTokenResponseBUZSgithub.com/kurovoxx/tallerintegracion3/back/auth/internal/gen/identityv1;identityv1b\x06proto3"
+	"\rGetOAuthToken\x12!.identity.v1.GetOAuthTokenRequest\x1a\".identity.v1.GetOAuthTokenResponse\x12n\n" +
+	"\x15ReportCalendarRevoked\x12).identity.v1.ReportCalendarRevokedRequest\x1a*.identity.v1.ReportCalendarRevokedResponseBUZSgithub.com/kurovoxx/tallerintegracion3/back/auth/internal/gen/identityv1;identityv1b\x06proto3"
 
 var (
 	file_v1_identity_proto_rawDescOnce sync.Once
@@ -438,31 +687,41 @@ func file_v1_identity_proto_rawDescGZIP() []byte {
 }
 
 var file_v1_identity_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_v1_identity_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_v1_identity_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_v1_identity_proto_goTypes = []any{
-	(Provider)(0),                 // 0: identity.v1.Provider
-	(*GetUserRequest)(nil),        // 1: identity.v1.GetUserRequest
-	(*GetUserResponse)(nil),       // 2: identity.v1.GetUserResponse
-	(*VerifyTokenRequest)(nil),    // 3: identity.v1.VerifyTokenRequest
-	(*VerifyTokenResponse)(nil),   // 4: identity.v1.VerifyTokenResponse
-	(*GetOAuthTokenRequest)(nil),  // 5: identity.v1.GetOAuthTokenRequest
-	(*GetOAuthTokenResponse)(nil), // 6: identity.v1.GetOAuthTokenResponse
-	(*timestamppb.Timestamp)(nil), // 7: google.protobuf.Timestamp
+	(Provider)(0),                         // 0: identity.v1.Provider
+	(*GetUserRequest)(nil),                // 1: identity.v1.GetUserRequest
+	(*GetUserResponse)(nil),               // 2: identity.v1.GetUserResponse
+	(*User)(nil),                          // 3: identity.v1.User
+	(*LookupUsersRequest)(nil),            // 4: identity.v1.LookupUsersRequest
+	(*LookupUsersResponse)(nil),           // 5: identity.v1.LookupUsersResponse
+	(*VerifyTokenRequest)(nil),            // 6: identity.v1.VerifyTokenRequest
+	(*VerifyTokenResponse)(nil),           // 7: identity.v1.VerifyTokenResponse
+	(*GetOAuthTokenRequest)(nil),          // 8: identity.v1.GetOAuthTokenRequest
+	(*GetOAuthTokenResponse)(nil),         // 9: identity.v1.GetOAuthTokenResponse
+	(*ReportCalendarRevokedRequest)(nil),  // 10: identity.v1.ReportCalendarRevokedRequest
+	(*ReportCalendarRevokedResponse)(nil), // 11: identity.v1.ReportCalendarRevokedResponse
+	(*timestamppb.Timestamp)(nil),         // 12: google.protobuf.Timestamp
 }
 var file_v1_identity_proto_depIdxs = []int32{
-	0, // 0: identity.v1.GetOAuthTokenRequest.provider:type_name -> identity.v1.Provider
-	7, // 1: identity.v1.GetOAuthTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
-	1, // 2: identity.v1.IdentityService.GetUser:input_type -> identity.v1.GetUserRequest
-	3, // 3: identity.v1.IdentityService.VerifyToken:input_type -> identity.v1.VerifyTokenRequest
-	5, // 4: identity.v1.IdentityService.GetOAuthToken:input_type -> identity.v1.GetOAuthTokenRequest
-	2, // 5: identity.v1.IdentityService.GetUser:output_type -> identity.v1.GetUserResponse
-	4, // 6: identity.v1.IdentityService.VerifyToken:output_type -> identity.v1.VerifyTokenResponse
-	6, // 7: identity.v1.IdentityService.GetOAuthToken:output_type -> identity.v1.GetOAuthTokenResponse
-	5, // [5:8] is the sub-list for method output_type
-	2, // [2:5] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	3,  // 0: identity.v1.LookupUsersResponse.users:type_name -> identity.v1.User
+	0,  // 1: identity.v1.GetOAuthTokenRequest.provider:type_name -> identity.v1.Provider
+	12, // 2: identity.v1.GetOAuthTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
+	1,  // 3: identity.v1.IdentityService.GetUser:input_type -> identity.v1.GetUserRequest
+	4,  // 4: identity.v1.IdentityService.LookupUsers:input_type -> identity.v1.LookupUsersRequest
+	6,  // 5: identity.v1.IdentityService.VerifyToken:input_type -> identity.v1.VerifyTokenRequest
+	8,  // 6: identity.v1.IdentityService.GetOAuthToken:input_type -> identity.v1.GetOAuthTokenRequest
+	10, // 7: identity.v1.IdentityService.ReportCalendarRevoked:input_type -> identity.v1.ReportCalendarRevokedRequest
+	2,  // 8: identity.v1.IdentityService.GetUser:output_type -> identity.v1.GetUserResponse
+	5,  // 9: identity.v1.IdentityService.LookupUsers:output_type -> identity.v1.LookupUsersResponse
+	7,  // 10: identity.v1.IdentityService.VerifyToken:output_type -> identity.v1.VerifyTokenResponse
+	9,  // 11: identity.v1.IdentityService.GetOAuthToken:output_type -> identity.v1.GetOAuthTokenResponse
+	11, // 12: identity.v1.IdentityService.ReportCalendarRevoked:output_type -> identity.v1.ReportCalendarRevokedResponse
+	8,  // [8:13] is the sub-list for method output_type
+	3,  // [3:8] is the sub-list for method input_type
+	3,  // [3:3] is the sub-list for extension type_name
+	3,  // [3:3] is the sub-list for extension extendee
+	0,  // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_v1_identity_proto_init() }
@@ -471,14 +730,15 @@ func file_v1_identity_proto_init() {
 		return
 	}
 	file_v1_identity_proto_msgTypes[1].OneofWrappers = []any{}
-	file_v1_identity_proto_msgTypes[5].OneofWrappers = []any{}
+	file_v1_identity_proto_msgTypes[2].OneofWrappers = []any{}
+	file_v1_identity_proto_msgTypes[8].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_v1_identity_proto_rawDesc), len(file_v1_identity_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   6,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
