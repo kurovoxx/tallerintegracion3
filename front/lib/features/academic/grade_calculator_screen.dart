@@ -93,19 +93,33 @@ class _CalcEntry {
 }
 
 class GradeCalculatorScreen extends StatefulWidget {
-  const GradeCalculatorScreen({super.key});
+  const GradeCalculatorScreen({super.key, this.initialCourse, this.embedded = false, this.onSaved});
+
+  /// Curso preseleccionado (UX materiales: materia de la ventana).
+  /// Si no está en la lista, se antepone.
+  final String? initialCourse;
+
+  /// Embebida en otra ventana (sin Scaffold/scroll/header propios:
+  /// los provee el padre).
+  final bool embedded;
+
+  /// Se invoca tras un guardado backend exitoso (sin fallos parciales)
+  /// para que el padre recargue IDs vivos (rename sobre IDs nuevos).
+  final VoidCallback? onSaved;
 
   @override
   State<GradeCalculatorScreen> createState() => _GradeCalculatorScreenState();
 }
 
 class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
-  final List<String> _courses = const [
+  static const List<String> _baseCourses = [
     'Cálculo III',
     'Estructuras de Datos',
     'Física General II',
     'Ingeniería de Software',
   ];
+
+  late final List<String> _courses;
 
   late String _selectedCourse;
   final TextEditingController _targetController =
@@ -140,7 +154,13 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
   @override
   void initState() {
     super.initState();
-    _selectedCourse = _courses.first;
+    final initial = widget.initialCourse?.trim();
+    if (initial != null && initial.isNotEmpty && !_baseCourses.contains(initial)) {
+      _courses = [initial, ..._baseCourses];
+    } else {
+      _courses = List<String>.of(_baseCourses);
+    }
+    _selectedCourse = (initial != null && initial.isNotEmpty) ? initial : _courses.first;
     _initializeNormalGrades();
     _loadFromBackend();
   }
@@ -384,6 +404,8 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         ...res.failedChildren.entries.map((e) => '${e.key}: ${e.value}'),
         if (res.deleteError != null) 'borrado: ${res.deleteError}',
       ];
+      final cb = widget.onSaved;
+      if (problems.isEmpty && cb != null) cb();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -876,6 +898,37 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     final isDesktop =
         MediaQuery.of(context).size.width > AppDimens.breakpointDesktop;
 
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (!widget.embedded) _buildHeader(),
+        if (!widget.embedded) const SizedBox(height: 20),
+        if (widget.embedded)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text(
+              _selectedCourse.toUpperCase(),
+              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: AppColors.muted),
+            ),
+          ),
+        _buildConfiguration(isDesktop),
+        const SizedBox(height: 18),
+        _buildBackendStatus(),
+        _finalExamMode
+            ? _buildFinalExamMode()
+            : _buildNormalMode(isDesktop),
+        const SizedBox(height: 18),
+        _buildWeightSummary(),
+        const SizedBox(height: 20),
+        _buildActions(),
+        const SizedBox(height: 22),
+        if (_resultState != _ResultState.none) _buildResult(),
+      ],
+    );
+
+    // Embebida: el padre provee Scaffold + scroll; se conserva el ancho.
+    if (widget.embedded) return content;
+
     return Scaffold(
       backgroundColor: AppColors.bg,
       body: SafeArea(
@@ -887,25 +940,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
           child: Center(
             child: ConstrainedBox(
               constraints: BoxConstraints(maxWidth: isDesktop ? 1040 : 640),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _buildHeader(),
-                  const SizedBox(height: 20),
-                  _buildConfiguration(isDesktop),
-                  const SizedBox(height: 18),
-                  _buildBackendStatus(),
-                  _finalExamMode
-                      ? _buildFinalExamMode()
-                      : _buildNormalMode(isDesktop),
-                  const SizedBox(height: 18),
-                  _buildWeightSummary(),
-                  const SizedBox(height: 20),
-                  _buildActions(),
-                  const SizedBox(height: 22),
-                  if (_resultState != _ResultState.none) _buildResult(),
-                ],
-              ),
+              child: content,
             ),
           ),
         ),
@@ -1068,7 +1103,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
                   child: _NormalGradeCard(
                     key: ValueKey(item.id),
                     item: item,
-                    label: 'NOTA ${index + 1}',
+                    label: gradeRowLabel(item.backendName, 'NOTA ${index + 1}'),
                     onScoreChanged: () => setState(_resetResult),
                     onWeightChanged: () => _changeNormalWeight(item),
                     onSubdivide: () => _subdivideNormalGrade(item),
@@ -1549,7 +1584,7 @@ class _NormalGradeCard extends StatelessWidget {
               if (index != 0) const SizedBox(height: 6),
               _ChildGradeRow(
                 key: ValueKey(item.children[index].id),
-                label: 'SUBNOTA ${index + 1}',
+                label: gradeRowLabel(item.children[index].backendName, 'SUBNOTA ${index + 1}'),
                 item: item.children[index],
                 onScoreChanged: onChildScoreChanged,
                 onWeightChanged: () {

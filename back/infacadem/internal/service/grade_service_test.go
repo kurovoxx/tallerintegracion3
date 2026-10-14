@@ -111,6 +111,16 @@ func (f *fakeGrades) Update(_ context.Context, id, userID string, p repository.G
 	if p.IsFinalExam != nil {
 		g.IsFinalExam = *p.IsFinalExam
 	}
+	if p.Pinned != nil {
+		g.Pinned = *p.Pinned
+		if *p.Pinned {
+			for _, o := range f.items {
+				if o.ID != g.ID && o.SubjectID == g.SubjectID {
+					o.Pinned = false
+				}
+			}
+		}
+	}
 	cp := *g
 	return &cp, nil
 }

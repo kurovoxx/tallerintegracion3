@@ -411,6 +411,16 @@ func (f *fakeGrades) Update(_ context.Context, id, userID string, p repository.G
 	if p.IsFinalExam != nil {
 		g.IsFinalExam = *p.IsFinalExam
 	}
+	if p.Pinned != nil {
+		g.Pinned = *p.Pinned
+		if *p.Pinned {
+			for _, o := range f.items {
+				if o.ID != g.ID && o.SubjectID == g.SubjectID {
+					o.Pinned = false
+				}
+			}
+		}
+	}
 	cp := *g
 	return &cp, nil
 }
@@ -698,4 +708,108 @@ func (f *fakeAbsences) CountsBySubject(_ context.Context, subjectID, userID stri
 		}
 	}
 	return un, just, true, nil
+}
+
+type fakeContents struct {
+	mu    sync.Mutex
+	items map[string]*model.Content
+	sub   *fakeSubjects
+}
+
+func newFakeContents(sub *fakeSubjects) *fakeContents {
+	return &fakeContents{items: map[string]*model.Content{}, sub: sub}
+}
+
+func (f *fakeContents) ownedSubjectLocked(subjectID, userID string) bool {
+	f.sub.cur.mu.Lock()
+	defer f.sub.cur.mu.Unlock()
+	for _, s := range f.sub.items {
+		if s.ID == subjectID {
+			c, ok := f.sub.cur.items[s.CurriculumID]
+			return ok && c.UserID == userID
+		}
+	}
+	return false
+}
+
+func (f *fakeContents) Create(_ context.Context, userID, subjectID, title string, body *string, position int) (*model.Content, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	if !f.ownedSubjectLocked(subjectID, userID) {
+		return nil, nil
+	}
+	c := &model.Content{ID: uuid.NewString(), SubjectID: subjectID, Title: title, Body: body, Position: position}
+	f.items[c.ID] = c
+	cp := *c
+	return &cp, nil
+}
+
+func (f *fakeContents) GetByID(_ context.Context, id, userID string) (*model.Content, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	if c, ok := f.items[id]; ok && f.ownedSubjectLocked(c.SubjectID, userID) {
+		cp := *c
+		return &cp, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeContents) ListBySubject(_ context.Context, subjectID, userID string) ([]model.Content, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	if !f.ownedSubjectLocked(subjectID, userID) {
+		return nil, false, nil
+	}
+	out := []model.Content{}
+	for _, c := range f.items {
+		if c.SubjectID == subjectID {
+			out = append(out, *c)
+		}
+	}
+	return out, true, nil
+}
+
+func (f *fakeContents) Update(_ context.Context, id, userID string, p repository.ContentPatch) (*model.Content, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	c, ok := f.items[id]
+	if !ok || !f.ownedSubjectLocked(c.SubjectID, userID) {
+		return nil, nil
+	}
+	if p.Title != nil {
+		c.Title = *p.Title
+	}
+	if p.ClearBody {
+		c.Body = nil
+	} else if p.Body != nil {
+		c.Body = p.Body
+	}
+	if p.Position != nil {
+		c.Position = *p.Position
+	}
+	if p.Done != nil {
+		c.Done = *p.Done
+	}
+	cp := *c
+	return &cp, nil
+}
+
+func (f *fakeContents) Delete(_ context.Context, id, userID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sub.mu.Lock()
+	defer f.sub.mu.Unlock()
+	if c, ok := f.items[id]; ok && f.ownedSubjectLocked(c.SubjectID, userID) {
+		delete(f.items, id)
+		return true, nil
+	}
+	return false, nil
 }

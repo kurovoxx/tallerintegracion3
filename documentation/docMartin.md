@@ -236,3 +236,30 @@ reusa; VerifyToken no existía (los servicios solo validaban firma local).
 - **No entra**: cablear Verify en middlewares productivos (latencia por request;
   se usa donde importe: 3_5_4/3_5_5), interceptores gRPC sobre esto (3_5_3 ya
   cubre internal-key), cambios en Notes.
+
+## 3_5_8 — Discovery: env/puertos gRPC, compose + manifests k8s
+
+### Mapa fijado (ver `back/proto/README.md`)
+
+HTTP `808x` ↔ gRPC `908x`: auth 9080 (reservado), infacadem 9081 (escuchando),
+notes 9082 (reservado), social 9083 (escuchando). DNS internos = nombre del
+Service. Server: env `GRPC_PORT` (social acepta `SOCIAL_GRPC_PORT`); cliente:
+`<SVC>_GRPC_ADDR` (ej: `SOCIAL_GRPC_ADDR=social:9083`). Rango 9080-9089.
+
+### Cambios
+
+| Archivo | Contenido |
+|---|---|
+| `docker-compose.yml` | `GRPC_PORT` en auth/notes/social/infacadem + publish `908x:908x` host (infacadem ya tenía el env; social ya escuchaba) |
+| `k8s/manifests.yaml` | `GRPC_PORT` en deployments auth/notes (reservado); infacadem `containerPort: 9081` + puerto `grpc` en Service `academic` (social ya lo tenía) |
+| `back/proto/README.md` | Tabla del mapa + convención de envs |
+
+Sin Services/containers gRPC para auth/notes hasta que existan sus servidores
+(tareas de sus dueños); el mapa les reserva los puertos.
+
+### Verificación
+
+- `docker compose config`: válido, publica 9080-9083.
+- k8s parsea (10 docs YAML).
+- **No entra**: servidores gRPC de auth/notes, Ingress gRPC (solo HTTP hoy),
+  Telepresence/vcluster.

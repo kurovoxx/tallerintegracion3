@@ -142,6 +142,32 @@ double? percentToFraction(dynamic raw) {
 /// Fracción backend -> % front (para render).
 double fractionToPercent(double fraction) => fraction * 100.0;
 
+/// UX-01: el código de materia acepta cualquier texto no vacío (trim).
+/// El backend lo guarda libre (sin formato ni unique).
+bool isValidSubjectCode(String? raw) {
+  return raw != null && raw.trim().isNotEmpty;
+}
+
+/// UX-03: etiqueta del combobox "CODE · Nombre" (CODE → '—' si vacío).
+String subjectOptionLabel(String? code, String name) {
+  final c = (code ?? '').trim();
+  return '${c.isEmpty ? '—' : c} · $name';
+}
+
+/// UX-04: payload PATCH de config de asistencia. Omite nulos (el backend
+/// no limpia total_classes/min_attendance_pct por PATCH, solo los setea).
+Map<String, dynamic> attendanceConfigPatch({
+  int? totalClasses,
+  double? minAttendancePct,
+}) {
+  final out = <String, dynamic>{};
+  final total = totalClasses;
+  if (total != null) out['total_classes'] = total;
+  final minPct = minAttendancePct;
+  if (minPct != null) out['min_attendance_pct'] = minPct;
+  return out;
+}
+
 double _roundHalfUp(double value, int decimals) {
   var factor = 1.0;
   for (var i = 0; i < decimals; i++) {
@@ -245,4 +271,25 @@ NeededResult computeNeeded({
   if (needed <= 0) return const NeededResult(NeededStatus.reached);
   if (needed <= maxValidGrade) return NeededResult(NeededStatus.needed, needed);
   return const NeededResult(NeededStatus.unreachable);
+}
+
+/// UX-05b: un apunte pertenece a la materia si su título empieza con
+/// "[CODE] " (insensible a caso). Convención de lado cliente: el modelo
+/// de notas no tiene campo materia y los corchetes romperían la sintaxis
+/// FTS si se filtrara por búsqueda.
+bool noteMatchesSubjectCode(String title, String code) {
+  final c = code.trim();
+  if (c.isEmpty) return false;
+  return title.trim().toUpperCase().startsWith('[${c.toUpperCase()}]');
+}
+
+/// Prefijo "[CODE] " para crear apunte con materia preseleccionada.
+String subjectNotePrefix(String code) => '[${code.trim().toUpperCase()}] ';
+
+/// Label de fila de calculadora: nombre real del backend si existe,
+/// fallback "Nota N"/"Subnota N" para filas nuevas sin guardar.
+String gradeRowLabel(String? backendName, String fallback) {
+  final name = backendName?.trim();
+  if (name == null || name.isEmpty) return fallback;
+  return name;
 }
