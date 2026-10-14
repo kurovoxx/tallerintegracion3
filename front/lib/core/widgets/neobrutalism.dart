@@ -675,3 +675,102 @@ Future<T?> showNeobrutalistDialog<T>({
     ),
   );
 }
+
+/// Tarjeta rígida neobrutalista: borde de tinta de 2 px, radio 0, sombra dura
+/// `Offset(4,4)` sin desenfoque, con header/footer opcionales separados por
+/// `Divider` de tinta. Interactiva (onTap) añade cursor y semántica.
+class NeobrutalistCard extends StatelessWidget {
+  const NeobrutalistCard({
+    super.key,
+    required this.child,
+    this.title,
+    this.trailing,
+    this.footer,
+    this.backgroundColor = AppColors.surface,
+    this.padding = const EdgeInsets.all(AppDimens.spaceLg),
+    this.shadow = AppShadows.hard4,
+    this.borderWidth = AppDimens.borderWidth,
+    this.onTap,
+    this.semanticLabel,
+  });
+
+  final Widget child;
+  final String? title;
+  final Widget? trailing;
+  final Widget? footer;
+  final Color backgroundColor;
+  final EdgeInsetsGeometry padding;
+  final BoxShadow shadow;
+  final double borderWidth;
+  final VoidCallback? onTap;
+  final String? semanticLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final card = Container(
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        border: Border.all(color: AppColors.border, width: borderWidth),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+        boxShadow: <BoxShadow>[shadow],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          if (title != null) ...<Widget>[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+              child: Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Text(
+                      title!.toUpperCase(),
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.6,
+                        color: AppColors.text,
+                      ),
+                    ),
+                  ),
+                  ?trailing,
+                ],
+              ),
+            ),
+            const Divider(
+              color: AppColors.border,
+              thickness: AppDimens.borderWidth,
+              height: 1,
+            ),
+          ],
+          Padding(padding: padding, child: child),
+          if (footer != null) ...<Widget>[
+            const Divider(
+              color: AppColors.border,
+              thickness: AppDimens.borderWidth,
+              height: 1,
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+              child: footer!,
+            ),
+          ],
+        ],
+      ),
+    );
+
+    if (onTap == null) return card;
+    return Semantics(
+      button: true,
+      label: semanticLabel,
+      child: ClickCursor(
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onTap,
+          child: card,
+        ),
+      ),
+    );
+  }
+}

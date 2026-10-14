@@ -70,12 +70,24 @@ class MyNoteSummary {
   }
 }
 
-/// Resultado de abrir una nota compartida (contenido descargado de Drive).
+/// Resultado de abrir una nota compartida (contenido descargado de Drive),
+/// con sus adjuntos reales para renderizar `attachment:<id>` y la sección de
+/// RECURSOS ADJUNTOS.
 class SharedNoteContent {
-  const SharedNoteContent({required this.title, required this.content});
+  const SharedNoteContent({
+    required this.noteId,
+    required this.title,
+    required this.content,
+    this.attachments = const [],
+  });
 
+  final String noteId;
   final String title;
   final String content;
+
+  /// Filas de `notes.note_attachments` ({id, note_id, external_file_id,
+  /// file_url, file_type, file_name, is_inline, ...}).
+  final List<Map<String, dynamic>> attachments;
 }
 
 /// Cliente de la API pública de Notes (HTTP) para notas compartidas en grupos.
@@ -282,9 +294,16 @@ class NotesSharingService {
     if (res.statusCode != 200) throw _toError(res);
     final body = jsonDecode(utf8.decode(res.bodyBytes));
     final map = body is Map ? Map<String, dynamic>.from(body) : const {};
+    final rawAttachments = (map['attachments'] as List?) ?? const [];
+    final attachments = rawAttachments
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
     return SharedNoteContent(
+      noteId: (map['id'] ?? nid).toString(),
       title: (map['title'] ?? 'Nota').toString(),
       content: (map['content'] ?? '').toString(),
+      attachments: attachments,
     );
   }
 

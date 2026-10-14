@@ -207,6 +207,79 @@ class SocialService {
         .toList();
   }
 
+  // POST /groups/:id/members/:userId/kick -> 204. Solo admin.
+  // 400 si el objetivo es otro admin o tú mismo; 404 si no es miembro.
+  // Ver back/social/internal/handler/http/group_handler.go:201 KickMember.
+  Future<void> kickMember({
+    required String groupId,
+    required String userId,
+  }) async {
+    final gid = groupId.trim();
+    final uid = userId.trim();
+    if (gid.isEmpty || uid.isEmpty) {
+      throw SocialApiException('groupId/userId vacíos.', code: 'invalid_args');
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .post(
+            Uri.parse('$baseUrl/groups/$gid/members/$uid/kick'),
+            headers: _headers(json: true),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 204 && res.statusCode != 200) throw _toError(res);
+  }
+
+  // POST /groups/:id/members/:userId/ban -> 204. Igual que kick + fila en
+  // banned_users (bloquea reingreso con cualquier token).
+  Future<void> banMember({
+    required String groupId,
+    required String userId,
+  }) async {
+    final gid = groupId.trim();
+    final uid = userId.trim();
+    if (gid.isEmpty || uid.isEmpty) {
+      throw SocialApiException('groupId/userId vacíos.', code: 'invalid_args');
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .post(
+            Uri.parse('$baseUrl/groups/$gid/members/$uid/ban'),
+            headers: _headers(json: true),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 204 && res.statusCode != 200) throw _toError(res);
+  }
+
+  // PATCH /groups/:id/members/:userId/role {role: admin|member} -> 200.
+  // Solo admin. Ver group_handler.go:233 ChangeRole.
+  Future<void> changeMemberRole({
+    required String groupId,
+    required String userId,
+    required String role,
+  }) async {
+    final gid = groupId.trim();
+    final uid = userId.trim();
+    final r = role.trim();
+    if (gid.isEmpty || uid.isEmpty || (r != 'admin' && r != 'member')) {
+      throw SocialApiException(
+        'Datos de rol inválidos.',
+        code: 'invalid_args',
+      );
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .patch(
+            Uri.parse('$baseUrl/groups/$gid/members/$uid/role'),
+            headers: _headers(json: true),
+            body: jsonEncode(<String, dynamic>{'role': r}),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) throw _toError(res);
+  }
+
   // GET /groups/:id/stream-token -> 200 {token, channel_id}.
   // Ver back/social/internal/handler/http/stream_handler.go:26 Token.
   // 401 sesión inválida, 403 no miembro, 404 grupo inexistente,
