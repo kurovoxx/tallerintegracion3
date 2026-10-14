@@ -89,7 +89,6 @@ services:
     container_name: ti3-social
     ports:
       - "8083:8083"
-      - "9083:9083" # gRPC SocialService
       - "9083:9083" # gRPC SocialService (servicio-a-servicio)
     environment:
       DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable}

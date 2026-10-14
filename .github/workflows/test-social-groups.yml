@@ -1,13 +1,13 @@
 name: test-social-groups
 
-# E2E funcional de grupos: 11 endpoints HTTP + borrado por gRPC
-# (TestGroupsPostgresE2E_MembershipLifecycle) con PostgreSQL temporal.
-# Falla si el test falla o si se omite (SKIP no es PASS).
+# Suite completa de Social: unitarios, gRPC, integración y E2E con PostgreSQL temporal.
+# Conserva el nombre del workflow/job para los checks existentes.
+# Falla si se omite cualquier test o falta el E2E de grupos (SKIP no es PASS).
 on:
   pull_request:
-    paths: ["back/social/**", ".github/workflows/test-social-groups.yml"]
+    paths: ["back/social/**", "back/proto/social/**", "back/proto/auth/**", "back/proto/common/**", "docker/postgres/init.sql", "docker-compose.yml", "k8s/manifests.yaml", ".github/workflows/test-social-groups.yml"]
   push:
-    paths: ["back/social/**", ".github/workflows/test-social-groups.yml"]
+    paths: ["back/social/**", "back/proto/social/**", "back/proto/auth/**", "back/proto/common/**", "docker/postgres/init.sql", "docker-compose.yml", "k8s/manifests.yaml", ".github/workflows/test-social-groups.yml"]
   workflow_dispatch:
 
 permissions:
@@ -16,7 +16,7 @@ permissions:
 jobs:
   groups-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: back/social
@@ -39,40 +39,40 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version-file: back/social/go.mod
           cache-dependency-path: back/social/go.sum
       - name: gofmt check (test de grupos)
         run: test -z "$(gofmt -l internal/handler/http/groups_postgres_e2e_test.go)"
       - name: go vet
-        run: go vet ./internal/handler/http/
+        run: go vet ./...
+      - name: go build
+        run: go build ./...
       - name: init schema (docker/postgres/init.sql)
         run: psql "$SOCIAL_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f ../../docker/postgres/init.sql
       # 11 rutas HTTP (crear, listar, ver, join, regenerate, members,
       # kick, ban, role, transfer, leave) + AccountDeletionCleanup por
       # bufconn contra el mismo PostgreSQL, con aserciones SQL.
-      - name: e2e grupos (PASS real, SKIP = fallo)
+      - name: tests Social con detector de carreras (SKIP = fallo)
         run: |
           set -euo pipefail
-          go test ./internal/handler/http/ -run '^TestGroupsPostgresE2E_MembershipLifecycle$' -count=1 -v -json > /tmp/groups-e2e.json
+          go test ./... -race -p 1 -count=1 -timeout=5m -json | tee /tmp/social-tests.json
           python3 - <<'EOF'
           import json
           passed = skipped = failed = False
-          with open('/tmp/groups-e2e.json') as f:
+          with open('/tmp/social-tests.json') as f:
               for line in f:
                   try:
                       ev = json.loads(line)
                   except ValueError:
                       continue
-                  if ev.get('Test') != 'TestGroupsPostgresE2E_MembershipLifecycle':
-                      continue
-                  if ev.get('Action') == 'pass':
+                  if ev.get('Action') == 'pass' and ev.get('Test') == 'TestGroupsPostgresE2E_MembershipLifecycle':
                       passed = True
-                  elif ev.get('Action') == 'skip':
+                  elif ev.get('Action') == 'skip' and ev.get('Test'):
                       skipped = True
                   elif ev.get('Action') == 'fail':
                       failed = True
           print(f"PASS={passed} SKIP={skipped} FAIL={failed}")
           if failed or not passed or skipped:
-              raise SystemExit('el test de grupos debe producir un PASS real (sin FAIL ni SKIP)')
-          print('groups E2E: PASS real')
+              raise SystemExit('Social debe pasar sin FAIL ni SKIP e incluir el E2E de grupos')
+          print('Social: suite completa y E2E de grupos PASS real')
           EOF
