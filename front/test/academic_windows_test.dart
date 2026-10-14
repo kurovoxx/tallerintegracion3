@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:taller_integracion_front/features/academic/academic_models.dart';
+import 'package:taller_integracion_front/features/academic/course_detail_tabs.dart';
 import 'package:taller_integracion_front/features/academic/course_windows.dart';
 import 'package:taller_integracion_front/features/academic/courses_screen.dart';
 import 'package:taller_integracion_front/features/academic/grade_calculator_screen.dart';
@@ -102,7 +104,7 @@ void main() {
     for (var i = 0; i < 6; i++) {
       await tester.pump(const Duration(milliseconds: 300));
     }
-    expect(find.text('TODAS LAS NOTAS'), findsOneWidget);
+    expect(find.text('NOTAS REDES'), findsOneWidget);
     // Cierra el diálogo de crear y vuelve con el back del header.
     await tester.tap(find.text('CANCELAR'));
     await tester.pump(const Duration(milliseconds: 300));
@@ -154,5 +156,43 @@ void main() {
     expect(find.text('REDES DE COMPUTADORES'), findsOneWidget);
     expect(find.text('CALCULADORA DE NOTAS'), findsNothing);
     expect(find.text('CALCULAR PROMEDIO'), findsOneWidget);
+  });
+
+  testWidgets('Apuntes titula NOTAS <materia>; por defecto TODAS', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(home: AllNotesScreen(initialSubjectName: 'Redes')),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('NOTAS REDES'), findsOneWidget);
+    expect(find.text('TODAS LAS NOTAS'), findsNothing);
+
+    await tester.pumpWidget(const MaterialApp(home: AllNotesScreen()));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('TODAS LAS NOTAS'), findsOneWidget);
+  });
+
+  test('flattenRenameOptions aplana tops + hijas con compuesto', () {
+    AcademicGrade grade(String id, String name) => AcademicGrade(
+      id: id,
+      subjectId: 's1',
+      name: name,
+      weight: 0.5,
+    );
+    final nodes = [
+      AcademicGradeNode(
+        grade: grade('g1', 'Parcial'),
+        children: [grade('h1', 'A'), grade('h2', 'B')],
+      ),
+      AcademicGradeNode(grade: grade('g2', 'Examen'), children: []),
+    ];
+    final opts = flattenRenameOptions(nodes);
+    expect(opts.map((o) => o.label), [
+      'Parcial',
+      'Parcial › A',
+      'Parcial › B',
+      'Examen',
+    ]);
+    expect(opts.map((o) => o.id), ['g1', 'h1', 'h2', 'g2']);
+    expect(flattenRenameOptions([]), isEmpty);
   });
 }

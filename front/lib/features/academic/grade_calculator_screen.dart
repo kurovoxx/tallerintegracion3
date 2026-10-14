@@ -93,7 +93,7 @@ class _CalcEntry {
 }
 
 class GradeCalculatorScreen extends StatefulWidget {
-  const GradeCalculatorScreen({super.key, this.initialCourse, this.embedded = false});
+  const GradeCalculatorScreen({super.key, this.initialCourse, this.embedded = false, this.onSaved});
 
   /// Curso preseleccionado (UX materiales: materia de la ventana).
   /// Si no está en la lista, se antepone.
@@ -102,6 +102,10 @@ class GradeCalculatorScreen extends StatefulWidget {
   /// Embebida en otra ventana (sin Scaffold/scroll/header propios:
   /// los provee el padre).
   final bool embedded;
+
+  /// Se invoca tras un guardado backend exitoso (sin fallos parciales)
+  /// para que el padre recargue IDs vivos (rename sobre IDs nuevos).
+  final VoidCallback? onSaved;
 
   @override
   State<GradeCalculatorScreen> createState() => _GradeCalculatorScreenState();
@@ -400,6 +404,8 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         ...res.failedChildren.entries.map((e) => '${e.key}: ${e.value}'),
         if (res.deleteError != null) 'borrado: ${res.deleteError}',
       ];
+      final cb = widget.onSaved;
+      if (problems.isEmpty && cb != null) cb();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
