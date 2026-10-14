@@ -1,0 +1,12 @@
+# Generación de stubs Go del módulo auth.
+# Se corre desde back/proto/auth (ver Makefile raíz). Plugins locales en
+# ./bin del repo (van por PATH). Salida: back/auth/internal/gen/identityv1
+# (opt module= recorta el prefijo del go_package).
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: ../../auth
+    opt: module=github.com/kurovoxx/tallerintegracion3/back/auth
+  - local: protoc-gen-go-grpc
+    out: ../../auth
+    opt: module=github.com/kurovoxx/tallerintegracion3/back/auth

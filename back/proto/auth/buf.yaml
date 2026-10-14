@@ -1,0 +1,17 @@
+# Módulo buf de Identity (usuarios, verificación de JWT y tokens OAuth).
+# Mismo esquema que social: `buf lint`/`buf generate` corren DESDE este
+# directorio, nunca desde back/proto (ver README).
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+  except:
+    # La raíz del módulo es auth/, así que la regla pediría dir "auth/v1"
+    # para package identity.v1 pero el archivo está en "v1/". La convención
+    # package==ruta-desde-back/proto se mantiene por README + revisión.
+    - PACKAGE_DIRECTORY_MATCH
+breaking:
+  use:
+    - FILE

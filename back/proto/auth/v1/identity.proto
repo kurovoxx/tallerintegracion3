@@ -1,0 +1,88 @@
+syntax = "proto3";
+
+package identity.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Stubs dentro de back/auth (como social): el Dockerfile de cada servicio
+// solo ve su propio directorio, así que un paquete compartido en
+// back/proto/gen/go no compila en la imagen. Un consumidor (Social, Notes)
+// genera su propia copia desde este mismo contrato (ver buf.gen.<svc>.yaml
+// cuando se necesite, igual que buf.gen.notes.yaml de social).
+option go_package = "github.com/kurovoxx/tallerintegracion3/back/auth/internal/gen/identityv1;identityv1";
+
+// Contrato servicio-a-servicio de Identity (usuarios, verificación de JWT y
+// tokens OAuth de Google).
+//
+// Reemplaza los /internal/... HTTP que hoy consumen Social y Notes:
+//   GET /internal/users/:id         → GetUser
+//   GET /internal/users/lookup      → (lote futuro; hoy GetUser por id)
+//   POST /internal/auth/verify      → VerifyToken
+//   GET /internal/oauth/calendar-token → GetOAuthToken (drive y calendar)
+//
+// Auth: metadata `x-internal-key` = INTERNAL_API_KEY (interceptor con la
+// misma convención que social/internal/interceptor). Los ids son UUID en
+// texto. Nunca se exponen refresh tokens, hashes ni secretos.
+//
+// Errores: código gRPC nativo (InvalidArgument si un id/token/provider es
+// inválido o vacío, NotFound si el usuario no existe o no tiene vinculación,
+// Unauthenticated si el JWT es inválido/expirado o la conexión OAuth está
+// revocada, Unavailable si Google no responde, Internal ante fallas de BD).
+service IdentityService {
+  // Datos públicos de un usuario (nunca hashes ni tokens).
+  // Usuario inexistente = NotFound.
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+
+  // ¿El JWT es válido? Devuelve la identidad autenticada.
+  // Token inválido o expirado = Unauthenticated (no es error de conexión).
+  rpc VerifyToken(VerifyTokenRequest) returns (VerifyTokenResponse);
+
+  // Access token de Google vigente para el usuario y proveedor dados.
+  // El servidor refresca el token si está vencido (igual que
+  // DriveOAuthService/CalendarOAuthService.GetValidAccessToken).
+  // Sin vinculación = NotFound; revocada o inválida = Unauthenticated;
+  // Google caído = Unavailable. Nunca devuelve refresh tokens.
+  rpc GetOAuthToken(GetOAuthTokenRequest) returns (GetOAuthTokenResponse);
+}
+
+// Proveedor OAuth (identity.oauth_connections.provider).
+enum Provider {
+  PROVIDER_UNSPECIFIED = 0;
+  PROVIDER_GOOGLE_DRIVE = 1;
+  PROVIDER_GOOGLE_CALENDAR = 2;
+}
+
+message GetUserRequest {
+  string user_id = 1;
+}
+
+message GetUserResponse {
+  string user_id = 1;
+  string email = 2;
+  // Ausente si el usuario no tiene nombre público (model.PublicUser).
+  optional string display_name = 3;
+}
+
+message VerifyTokenRequest {
+  // Access token JWT emitido por Auth (tal cual va en Authorization).
+  string token = 1;
+}
+
+message VerifyTokenResponse {
+  // Siempre true en una respuesta OK (los errores viajan como status gRPC).
+  bool valid = 1;
+  string user_id = 2;
+}
+
+message GetOAuthTokenRequest {
+  string user_id = 1;
+  Provider provider = 2;
+}
+
+message GetOAuthTokenResponse {
+  string access_token = 1;
+  // Vencimiento conocido del token (ausente si el proveedor no lo informó).
+  optional google.protobuf.Timestamp expires_at = 2;
+  // Cuenta de Google vinculada (para mostrar "conectado como ...").
+  optional string external_email = 3;
+}
