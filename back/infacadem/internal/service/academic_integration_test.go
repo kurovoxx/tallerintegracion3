@@ -60,6 +60,14 @@ CREATE TABLE academic.schedules (
     modality varchar(50),
     CHECK (end_time > start_time)
 );
+CREATE TABLE academic.contents (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    subject_id uuid NOT NULL REFERENCES academic.subjects(id) ON DELETE CASCADE,
+    title varchar(200) NOT NULL,
+    body text,
+    position int NOT NULL DEFAULT 0,
+    done boolean NOT NULL DEFAULT false
+);
 CREATE TABLE academic.grades (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     subject_id uuid NOT NULL REFERENCES academic.subjects(id) ON DELETE CASCADE,
@@ -73,6 +81,7 @@ CREATE TABLE academic.grades (
     topics text,
     notify_discord boolean NOT NULL DEFAULT false,
     google_calendar_event_id varchar(255),
+    pinned boolean NOT NULL DEFAULT false,
     created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE academic.grade_requirements (

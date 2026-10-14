@@ -1,0 +1,119 @@
+syntax = "proto3";
+
+package social.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Stubs dentro de back/social (como infacadem): el Dockerfile de cada servicio
+// solo ve su propio directorio, así que un paquete compartido en
+// back/proto/gen/go no compila en la imagen. Un consumidor (Notes) genera su
+// propia copia desde este mismo contrato.
+option go_package = "github.com/kurovoxx/tallerintegracion3/back/social/internal/gen/socialv1;socialv1";
+
+// Contrato servicio-a-servicio de Social (membresía, admin y limpieza).
+//
+// Reemplaza los /internal/groups/... HTTP que hoy consume Notes
+// (back/notes/internal/service/social_adapter.go) y da a Identity el hook de
+// limpieza al borrar una cuenta.
+//
+// Auth: metadata `x-internal-key` = INTERNAL_API_KEY (interceptor de
+// social/internal/interceptor). Los ids son UUID en texto.
+//
+// Errores: código gRPC nativo (InvalidArgument si un id no es UUID, NotFound
+// si el grupo no existe, Unauthenticated sin clave interna, Internal ante
+// fallas de BD).
+service SocialService {
+  // ¿El usuario pertenece al grupo? Grupo inexistente = NotFound;
+  // usuario no miembro = is_member false (no es error).
+  rpc IsMember(IsMemberRequest) returns (IsMemberResponse);
+
+  // ¿El usuario es admin del grupo? No miembro = is_admin false.
+  rpc IsAdmin(IsAdminRequest) returns (IsAdminResponse);
+
+  // Miembros del grupo con su rol, ordenados por antigüedad (joined_at).
+  // Sin paginación: un grupo es chico y los consumidores necesitan la lista
+  // completa (permisos de Drive por correo).
+  rpc GetMembers(GetMembersRequest) returns (GetMembersResponse);
+
+  // Correos de los miembros para permisos `restricted` de Drive. A diferencia
+  // de GetMembers es fail-closed (RN-SHARE-10): si Identity no responde,
+  // Unavailable en vez de una lista incompleta.
+  rpc GetMemberEmails(GetMemberEmailsRequest) returns (GetMemberEmailsResponse);
+
+  // Saca al usuario de todos sus grupos con sucesión automática de admin
+  // (miembro más antiguo) y borra sus baneos. Si era el último miembro, el
+  // grupo se elimina. Idempotente: reintentar tras un fallo a medias es seguro
+  // y una segunda llamada devuelve groups vacío.
+  rpc AccountDeletionCleanup(AccountDeletionCleanupRequest) returns (AccountDeletionCleanupResponse);
+}
+
+// Rol de un usuario dentro de un grupo (social.group_memberships.role).
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_ADMIN = 1;
+  ROLE_MEMBER = 2;
+}
+
+message IsMemberRequest {
+  string group_id = 1;
+  string user_id = 2;
+}
+
+message IsMemberResponse {
+  bool is_member = 1;
+  // ROLE_UNSPECIFIED cuando is_member es false.
+  Role role = 2;
+}
+
+message IsAdminRequest {
+  string group_id = 1;
+  string user_id = 2;
+}
+
+message IsAdminResponse {
+  bool is_admin = 1;
+}
+
+message GetMembersRequest {
+  string group_id = 1;
+}
+
+message GetMembersResponse {
+  repeated Member members = 1;
+}
+
+message GetMemberEmailsRequest {
+  string group_id = 1;
+}
+
+message GetMemberEmailsResponse {
+  repeated string emails = 1;
+}
+
+message Member {
+  string user_id = 1;
+  Role role = 2;
+  google.protobuf.Timestamp joined_at = 3;
+  // Datos públicos resueltos contra Identity; ausentes si no se pudieron
+  // resolver (best-effort, nunca hacen fallar la llamada).
+  optional string email = 4;
+  optional string display_name = 5;
+}
+
+message AccountDeletionCleanupRequest {
+  string user_id = 1;
+}
+
+message AccountDeletionCleanupResponse {
+  // Un resultado por grupo del que se sacó al usuario.
+  repeated GroupSuccession groups = 1;
+}
+
+// Qué pasó con un grupo al sacar al usuario (model.SuccessionResult).
+message GroupSuccession {
+  string group_id = 1;
+  // Miembro más antiguo promovido a admin, si el usuario era el único admin.
+  optional string promoted_user_id = 2;
+  // true si el usuario era el último miembro y el grupo se eliminó.
+  bool group_deleted = 3;
+}

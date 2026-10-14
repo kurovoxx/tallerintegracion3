@@ -8,16 +8,12 @@ import 'academic_api.dart';
 import 'academic_mappers.dart';
 import 'academic_models.dart';
 import 'attendance_screen.dart';
+import 'course_windows.dart';
 
 const String kSubjectApproved = 'approved';
 const String kSubjectInProgress = 'in_progress';
 const String kSubjectFailed = 'failed';
 const String kSubjectPending = 'pending';
-
-String _formatGrade(num raw) {
-  final v = raw >= 10 ? raw / 10 : raw.toDouble();
-  return v.toStringAsFixed(1);
-}
 
 const List<String> _kWeekDays = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 
@@ -31,8 +27,6 @@ const List<List<String>> _kScheduleBlocks = [
 ];
 
 String _blockLabel(List<String> block) => '${block[0]}–${block[1]}';
-
-enum _CourseDetailTab { unidades, materiales, evaluaciones }
 
 class CoursesScreen extends StatefulWidget {
   const CoursesScreen({super.key});
@@ -48,7 +42,6 @@ class _CoursesScreenState extends State<CoursesScreen> {
   String _searchQuery = '';
   String _statusFilter = 'Todos los estados'; // Todos | Cursando | Pendiente | Finalizado
   String? _selectedCourseId;
-  _CourseDetailTab _detailTab = _CourseDetailTab.unidades;
 
   // Backend Academic: con sesión se listan/crean materias por API
   // (fan-out de horarios multi-día); sin sesión rige el mock local.
@@ -162,21 +155,6 @@ class _CoursesScreenState extends State<CoursesScreen> {
           : (status == kSubjectPending ? 0 : 15),
       'semester': 'Semestre ${s.semester ?? 6}',
       'icon': Icons.book_rounded,
-      'units': [
-        {
-          'title': 'Unidad 1: Introducción',
-          'badge': 'próximo',
-          'items': [
-            {'title': 'Contenido inicial por definir', 'checked': false, 'tag': 'Clase 1 – 2'},
-          ]
-        },
-      ],
-      'materials': [
-        {'name': 'Sin materiales aún', 'meta': 'Añade PDFs desde el detalle', 'icon': Icons.description_rounded},
-      ],
-      'grades': [
-        {'name': 'Evaluación 1 (100%)', 'weight': 1.0, 'score': null, 'status': 'pending'},
-      ],
     };
   }
 
@@ -232,7 +210,6 @@ class _CoursesScreenState extends State<CoursesScreen> {
   void _openDetail(String id) {
     setState(() {
       _selectedCourseId = id;
-      _detailTab = _CourseDetailTab.unidades;
     });
   }
 
@@ -267,21 +244,6 @@ class _CoursesScreenState extends State<CoursesScreen> {
       'progress': result['status'] == kSubjectPending ? 0 : 15,
       'semester': 'Semestre 6',
       'icon': Icons.book_rounded,
-      'units': [
-        {
-          'title': 'Unidad 1: Introducción',
-          'badge': 'próximo',
-          'items': [
-            {'title': 'Contenido inicial por definir', 'checked': false, 'tag': 'Clase 1 – 2'},
-          ]
-        },
-      ],
-      'materials': [
-        {'name': 'Sin materiales aún', 'meta': 'Añade PDFs desde el detalle', 'icon': Icons.description_rounded},
-      ],
-      'grades': [
-        {'name': 'Evaluación 1 (100%)', 'weight': 1.0, 'score': null, 'status': 'pending'},
-      ],
     });
 
     ScaffoldMessenger.of(context).showSnackBar(
@@ -360,21 +322,6 @@ class _CoursesScreenState extends State<CoursesScreen> {
       'progress': result['status'] == kSubjectPending ? 0 : 15,
       'semester': 'Semestre 6',
       'icon': Icons.book_rounded,
-      'units': [
-        {
-          'title': 'Unidad 1: Introducción',
-          'badge': 'próximo',
-          'items': [
-            {'title': 'Contenido inicial por definir', 'checked': false, 'tag': 'Clase 1 – 2'},
-          ]
-        },
-      ],
-      'materials': [
-        {'name': 'Sin materiales aún', 'meta': 'Añade PDFs desde el detalle', 'icon': Icons.description_rounded},
-      ],
-      'grades': [
-        {'name': 'Evaluación 1 (100%)', 'weight': 1.0, 'score': null, 'status': 'pending'},
-      ],
     });
 
     messenger.showSnackBar(
@@ -640,193 +587,54 @@ class _CoursesScreenState extends State<CoursesScreen> {
           ),
         ),
         const SizedBox(height: 16),
-        // Tabs
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            _CourseTabButton(icon: Icons.menu_book_rounded, label: 'Unidades y Contenidos', active: _detailTab == _CourseDetailTab.unidades, onTap: () => setState(() => _detailTab = _CourseDetailTab.unidades)),
-            _CourseTabButton(icon: Icons.description_rounded, label: 'Materiales y Apuntes', active: _detailTab == _CourseDetailTab.materiales, onTap: () => setState(() => _detailTab = _CourseDetailTab.materiales)),
-            _CourseTabButton(icon: Icons.bar_chart_rounded, label: 'Evaluaciones y Notas', active: _detailTab == _CourseDetailTab.evaluaciones, onTap: () => setState(() => _detailTab = _CourseDetailTab.evaluaciones)),
-            _CourseTabButton(icon: Icons.article_rounded, label: 'Apuntes', active: false, onTap: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Módulo de apuntes próximamente'), backgroundColor: AppColors.border))),
-            _CourseTabButton(
-              icon: Icons.fact_check_rounded,
-              label: 'Ver Asistencia',
-              active: false,
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => AttendanceScreen(initialSubjectId: course['id'] as String),
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        if (_detailTab == _CourseDetailTab.unidades) _buildUnidadesTab(course),
-        if (_detailTab == _CourseDetailTab.materiales) _buildMaterialesTab(course),
-        if (_detailTab == _CourseDetailTab.evaluaciones) _buildEvaluacionesTab(course),
+        // Secciones como ventanas separadas con back (sin tabs inline).
+        _buildWindowButtons(course),
       ],
     );
   }
 
-  Widget _buildUnidadesTab(Map<String, dynamic> course) {
-    final units = course['units'] as List;
-    return Column(
-      children: units.map<Widget>((u) {
-        final badge = u['badge'] as String;
-        final items = u['items'] as List;
-        Color badgeColor;
-        Color badgeText;
-        switch (badge) {
-          case 'completado':
-            badgeColor = const Color(0xFFDCFCE7);
-            badgeText = const Color(0xFF166534);
-            break;
-          case 'en curso':
-            badgeColor = const Color(0xFFD6E3FF);
-            badgeText = AppColors.accentBlue;
-            break;
-          case 'próximo':
-          default:
-            badgeColor = AppColors.accentBlue;
-            badgeText = Colors.white;
-        }
-        return Container(
-          margin: const EdgeInsets.only(bottom: 12),
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(3, 3), blurRadius: 0)]),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(children: [
-                Expanded(child: Text((u['title'] as String).toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12.5, color: AppColors.text))),
-                const SizedBox(width: 10),
-                Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: badgeColor, border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(4)), child: Text(badge, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10, color: badgeText))),
-              ]),
-              const Divider(color: AppColors.border, thickness: 2, height: 18),
-              ...items.asMap().entries.map((entry) {
-                final idx = entry.key;
-                final it = entry.value as Map;
-                final checked = it['checked'] as bool;
-                return Container(
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  decoration: BoxDecoration(border: idx != items.length - 1 ? const Border(bottom: BorderSide(color: AppColors.border, width: 1, style: BorderStyle.solid)) : null),
-                  child: Row(
-                    children: [
-                      Checkbox(
-                        value: checked,
-                        activeColor: AppColors.accentYellow,
-                        checkColor: AppColors.text,
-                        side: const BorderSide(color: AppColors.border, width: 2),
-                        onChanged: (v) {
-                          setState(() => it['checked'] = v ?? false);
-                        },
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(child: Text(it['title'] as String, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12.5, color: checked ? AppColors.text : AppColors.muted))),
-                      const SizedBox(width: 8),
-                      Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3), decoration: BoxDecoration(color: AppColors.accentYellow, border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(4)), child: Text(it['tag'] as String, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 9, color: AppColors.text))),
-                    ],
-                  ),
-                );
-              }),
-            ],
+  /// Botones a las 3 ventanas del curso (+ asistencia).
+  Widget _buildWindowButtons(Map<String, dynamic> course) {
+    final name = (course['name'] as String?) ?? '';
+    final code = (course['code'] as String?) ?? '';
+    final subjectId = (course['id'] as String?) ?? '';
+    void open(Widget window) {
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) => window));
+    }
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        _CourseTabButton(
+          icon: Icons.menu_book_rounded,
+          label: 'Ver Unidades',
+          active: false,
+          onTap: () => open(UnitsWindow(subjectId: subjectId, subjectName: name)),
+        ),
+        _CourseTabButton(
+          icon: Icons.description_rounded,
+          label: 'Ver Materiales',
+          active: false,
+          onTap: () => open(MaterialsWindow(subjectId: subjectId, subjectCode: code, subjectName: name)),
+        ),
+        _CourseTabButton(
+          icon: Icons.bar_chart_rounded,
+          label: 'Ver Evaluaciones',
+          active: false,
+          onTap: () => open(EvaluationsWindow(subjectId: subjectId, subjectName: name)),
+        ),
+        _CourseTabButton(
+          icon: Icons.fact_check_rounded,
+          label: 'Ver Asistencia',
+          active: false,
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => AttendanceScreen(initialSubjectId: course['id'] as String),
+            ),
           ),
-        );
-      }).toList(),
-    );
-  }
-
-  Widget _buildMaterialesTab(Map<String, dynamic> course) {
-    final materials = course['materials'] as List;
-    return LayoutBuilder(builder: (context, c) {
-      final cols = c.maxWidth > 600 ? 3 : 1;
-      final gap = 12.0 * (cols - 1);
-      final w = cols == 1 ? c.maxWidth : (c.maxWidth - gap) / cols;
-      return Wrap(
-        spacing: 12,
-        runSpacing: 12,
-        children: materials.map<Widget>((m) {
-          return SizedBox(
-            width: w,
-            child: Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0)]),
-              child: Row(children: [
-                Container(width: 40, height: 40, alignment: Alignment.center, decoration: BoxDecoration(color: AppColors.bg, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius)), child: Icon(m['icon'] as IconData, size: 20, color: AppColors.text)),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(m['name'] as String, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12.5, color: AppColors.text)),
-                    const SizedBox(height: 2),
-                    Text(m['meta'] as String, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppColors.muted)),
-                  ]),
-                ),
-              ]),
-            ),
-          );
-        }).toList(),
-      );
-    });
-  }
-
-  Widget _buildEvaluacionesTab(Map<String, dynamic> course) {
-    final grades = course['grades'] as List;
-    return Column(
-      children: grades.map<Widget>((g) {
-        final status = g['status'] as String;
-        final score = g['score'] as int?;
-        final weight = g['weight'] as double;
-        final isGraded = status == 'graded';
-        final isPending = status == 'pending';
-        final isExcused = status == 'excused';
-
-        String badgeLabel;
-        Color badgeColor;
-        Color badgeText;
-        if (isGraded) {
-          badgeLabel = 'evaluado';
-          badgeColor = const Color(0xFFDCFCE7);
-          badgeText = const Color(0xFF166534);
-        } else if (isPending) {
-          if (g['date'] != null) {
-            badgeLabel = 'próximo · ${g['date']}';
-            badgeColor = AppColors.accentBlue;
-            badgeText = Colors.white;
-          } else {
-            badgeLabel = 'pendiente';
-            badgeColor = AppColors.accentYellow;
-            badgeText = AppColors.text;
-          }
-        } else if (isExcused) {
-          badgeLabel = 'eximido';
-          badgeColor = AppColors.accentBlue;
-          badgeText = Colors.white;
-        } else {
-          badgeLabel = 'sin registro';
-          badgeColor = AppColors.muted;
-          badgeText = Colors.white;
-        }
-
-        return Container(
-          margin: const EdgeInsets.only(bottom: 10),
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0)]),
-          child: Row(children: [
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: badgeColor, border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(4)), child: Text(badgeLabel, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10, color: badgeText))),
-                const SizedBox(height: 8),
-                Text(g['name'] as String, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppColors.text)),
-                const SizedBox(height: 2),
-                Text('Ponderación ${(weight * 100).toStringAsFixed(0)}%', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppColors.muted)),
-              ]),
-            ),
-            const SizedBox(width: 12),
-            Text(score != null ? _formatGrade(score) : '–', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 24, color: score != null ? AppColors.text : AppColors.muted)),
-          ]),
-        );
-      }).toList(),
+        ),
+      ],
     );
   }
 
@@ -1160,8 +968,7 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                         decoration: appInputDecoration('INFO-301'),
                         inputFormatters: [LengthLimitingTextInputFormatter(20)],
                         validator: (v) {
-                          if (v == null || v.trim().isEmpty) return 'Requerido';
-                          if (!RegExp(r'^[A-Z]{2,5}[- ]?\d{3,4}$').hasMatch(v.trim().toUpperCase())) return 'Ej. INF-301';
+                          if (!isValidSubjectCode(v)) return 'Requerido';
                           return null;
                         },
                       ),
@@ -1348,19 +1155,68 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
   late final List<String> _added;
   final Set<String> _selectedDays = <String>{};
   String? _selectedBlock;
+  late final TextEditingController _manualStartCtrl;
+  late final TextEditingController _manualEndCtrl;
 
   @override
   void initState() {
     super.initState();
     _added = List<String>.of(widget.initialEntries);
+    _manualStartCtrl = TextEditingController();
+    _manualEndCtrl = TextEditingController();
   }
 
+  @override
+  void dispose() {
+    _manualStartCtrl.dispose();
+    _manualEndCtrl.dispose();
+    super.dispose();
+  }
+
+  /// Bloque manual "HH:MM–HH:MM" normalizado, o null si está incompleto
+  /// o es inválido (ver [_manualErrorText]).
+  List<String>? _manualParts() {
+    final s = _manualStartCtrl.text.trim();
+    final e = _manualEndCtrl.text.trim();
+    if (s.isEmpty && e.isEmpty) return null;
+    return splitTimeBlock('$s–$e');
+  }
+
+  /// Error visible del bloque manual, o null si está incompleto o válido.
+  String? _manualErrorText() {
+    final s = _manualStartCtrl.text.trim();
+    final e = _manualEndCtrl.text.trim();
+    if (s.isEmpty && e.isEmpty) return null;
+    if (_manualParts() != null) return null;
+    final badTime = hhMmToMinutes(s) == null || hhMmToMinutes(e) == null;
+    return badTime
+        ? 'Hora inválida: usa HH:MM (ej. 10:20).'
+        : 'El fin debe ser mayor al inicio.';
+  }
+
+  bool get _hasManualInput =>
+      _manualStartCtrl.text.trim().isNotEmpty ||
+      _manualEndCtrl.text.trim().isNotEmpty;
+
   /// Vista previa de la entrada en construcción, p.ej. 'Lun / Mié · 10:00–11:30'.
+  /// Lo manual manda sobre el bloque estático seleccionado.
   String get _preview {
     final days = _selectedDays.toList()
       ..sort((a, b) => _kWeekDays.indexOf(a).compareTo(_kWeekDays.indexOf(b)));
-    if (days.isEmpty || _selectedBlock == null) return '';
+    if (days.isEmpty) return '';
+    final manual = _manualParts();
+    if (manual != null) return '${days.join(' / ')} · ${manual[0]}–${manual[1]}';
+    if (_hasManualInput) return '';
+    if (_selectedBlock == null) return '';
     return '${days.join(' / ')} · $_selectedBlock';
+  }
+
+  void _pickBlock(List<String> block) {
+    setState(() {
+      _selectedBlock = _blockLabel(block);
+      _manualStartCtrl.text = block[0];
+      _manualEndCtrl.text = block[1];
+    });
   }
 
   void _addBlock() {
@@ -1370,6 +1226,8 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
       _added.add(preview);
       _selectedDays.clear();
       _selectedBlock = null;
+      _manualStartCtrl.clear();
+      _manualEndCtrl.clear();
     });
   }
 
@@ -1429,10 +1287,43 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                     _ScheduleDayChip(
                       label: _blockLabel(block),
                       selected: _selectedBlock == _blockLabel(block),
-                      onTap: () => setState(() => _selectedBlock = _blockLabel(block)),
+                      onTap: () => _pickBlock(block),
                     ),
                 ],
               ),
+              const SizedBox(height: 10),
+              const Text('MANUAL (HH:MM)', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10, color: AppColors.muted, letterSpacing: 0.5)),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _manualStartCtrl,
+                      keyboardType: TextInputType.datetime,
+                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text),
+                      decoration: appInputDecoration('10:20'),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 8),
+                    child: Text('–', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: AppColors.text)),
+                  ),
+                  Expanded(
+                    child: TextField(
+                      controller: _manualEndCtrl,
+                      keyboardType: TextInputType.datetime,
+                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text),
+                      decoration: appInputDecoration('11:50'),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                ],
+              ),
+              if (_manualErrorText() != null) ...[
+                const SizedBox(height: 6),
+                Text(_manualErrorText()!, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 11, color: AppColors.error)),
+              ],
               const SizedBox(height: 14),
               if (_preview.isNotEmpty) ...[
                 Container(

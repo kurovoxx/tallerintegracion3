@@ -15,6 +15,7 @@ type Config struct {
 	SupabaseKey  string
 	JWTSecret    string
 	Port         string
+	GRPCPort     string // servidor gRPC servicio-a-servicio (SocialService)
 	AuthBaseURL  string // base del servicio Auth para el gateway interno de Calendar
 	InternalKey  string // secreto X-Internal-Key compartido con Auth
 	CalendarMode string // "mock" (default, sin Google) o "real"
@@ -64,6 +65,13 @@ func Load() *Config {
 	}
 	if cfg.Port == "" {
 		cfg.Port = "8083"
+	}
+	cfg.GRPCPort = os.Getenv("SOCIAL_GRPC_PORT")
+	if cfg.GRPCPort == "" {
+		cfg.GRPCPort = os.Getenv("GRPC_PORT")
+	}
+	if cfg.GRPCPort == "" {
+		cfg.GRPCPort = "9083"
 	}
 	if cfg.JWTSecret == "" {
 		cfg.JWTSecret = os.Getenv("JWT")

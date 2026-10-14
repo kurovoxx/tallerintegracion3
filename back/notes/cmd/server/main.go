@@ -105,6 +105,14 @@ func runServerMemory(driveClient drive.Client, cfg *config.Config) {
 // adaptadores mock fijos en producción; los resolvers en memoria solo viven en
 // los tests (service/store_memory.go).
 func newSocialAdapters(cfg *config.Config) (service.SocialResolver, service.GroupMemberDirectory) {
+	if cfg.SocialGRPCAddr != "" {
+		adapter, err := service.NewSocialGRPCAdapter(cfg.SocialGRPCAddr, cfg.SocialTimeout, cfg.InternalAPIKey)
+		if err != nil {
+			log.Fatalf("notes: SOCIAL_GRPC_ADDR inválida: %v", err)
+		}
+		log.Printf("notes: adaptadores Social gRPC activados (addr=%s timeout=%s)", cfg.SocialGRPCAddr, cfg.SocialTimeout)
+		return adapter, adapter
+	}
 	adapter := service.NewSocialHTTPAdapter(cfg.SocialServiceURL, cfg.SocialTimeout, cfg.InternalAPIKey)
 	log.Printf("notes: adaptadores Social HTTP activados (base=%s timeout=%s)", cfg.SocialServiceURL, cfg.SocialTimeout)
 	return adapter, adapter

@@ -259,7 +259,27 @@ func (c *RESTClient) EnsureMember(ctx context.Context, channelType, channelID, u
 		return errors.New("user vacío")
 	}
 	path := "/channels/" + url.PathEscape(channelType) + "/" + url.PathEscape(channelID)
+	err := c.postJSON(ctx, path, "", updateChannelRequest{AddMembers: []string{userID}})
+	var se *StreamError
+	if !errors.As(err, &se) || se.Code != http.StatusBadRequest {
+		return err
+	}
+	// 400 = el usuario aún no existe en Stream: el front lo crea recién en
+	// connectUser, que necesita el token que esta llamada desbloquea. Se crea
+	// server-side (solo id; connectUser luego le pone el nombre) y se reintenta.
+	if uerr := c.postJSON(ctx, "/users", "", upsertUsersRequest{Users: map[string]streamUser{userID: {ID: userID}}}); uerr != nil {
+		return errors.Join(err, uerr)
+	}
 	return c.postJSON(ctx, path, "", updateChannelRequest{AddMembers: []string{userID}})
+}
+
+type streamUser struct {
+	ID string `json:"id"`
+}
+
+// upsertUsersRequest es POST /users (crea o reemplaza usuarios).
+type upsertUsersRequest struct {
+	Users map[string]streamUser `json:"users"`
 }
 
 type sendMessageRequest struct {

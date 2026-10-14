@@ -4,7 +4,7 @@
 
 - `make tools` — instala `buf` + `protoc-gen-go` + `protoc-gen-go-grpc` en `./bin/`
   (los plugins se compilan en docker, no se exige Go local).
-- `make generate` — genera los stubs Go de cada módulo (`back/proto/common`;
+- `make generate` — genera los stubs Go de cada módulo (`back/proto/common`, `back/proto/social`;
   infacadem genera lo suyo con `back/proto/infacadem/generate.sh`).
 - `make clean-tools` — borra `./bin/`.
 
@@ -13,8 +13,27 @@
 Cada equipo es dueño de su módulo (`buf.yaml` + `buf.gen.yaml` propios) y su
 generación:
 
-- `back/proto/common/` → stubs en `back/proto/gen/go/` (vía `make generate`).
+- `back/proto/common/` → stubs en `back/proto/gen/go/common/` (vía `make generate`).
+- `back/proto/social/` → stubs en `back/social/internal/gen/socialv1/` (server) y
+  `back/notes/internal/gen/socialv1/` (cliente, `buf.gen.notes.yaml`), vía `make generate`.
 - `back/proto/infacadem/` → stubs en `back/infacadem/internal/gen/` (vía su `generate.sh`).
+
+## Mapa de puertos gRPC (tarea 3_5_8)
+
+HTTP `808x` ↔ gRPC `908x`, mismo último dígito. Nombres DNS internos = nombre
+del Service (`auth`, `notes`, `social`, `academic`).
+
+| Servicio | HTTP | gRPC | Estado server |
+|---|---|---|---|
+| auth | 8080 | 9080 | reservado (tarea dueño Identity) |
+| infacadem | 8081 | 9081 | escuchando (`GRPC_PORT`) |
+| notes | 8082 | 9082 | reservado (tarea dueño Notes) |
+| social | 8083 | 9083 | escuchando (`SOCIAL_GRPC_PORT`/`GRPC_PORT`) |
+
+- Server: env `GRPC_PORT` (social acepta también `SOCIAL_GRPC_PORT`).
+- Cliente: env `<SVC>_GRPC_ADDR` con `host:puerto` in-cluster
+  (ej: `SOCIAL_GRPC_ADDR=social:9083`, ya usado por notes).
+- Rango reservado `9080-9089`. Front no expone gRPC.
 
 ## Regla
 

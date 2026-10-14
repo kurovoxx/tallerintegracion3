@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../core/common_widgets.dart';
 import '../../core/theme/app_theme.dart';
 import 'academic_api.dart';
+import 'academic_mappers.dart';
 import 'academic_models.dart';
 
 /// RF-13, RF-14 / Regla 2.5
@@ -376,8 +377,30 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     });
   }
 
-  void _saveCourseConfig(String subjectId, int daysPerWeek, int weeks, double minPct) {
+  /// Guarda config local y, en modo backend, la persiste por PATCH en la
+  /// materia (total_classes/min_attendance_pct) para que sobreviva al
+  /// reentrar. Sin sesión/red: error visible y se relee del backend.
+  void _saveCourseConfig(String subjectId, int daysPerWeek, int weeks, double minPct) async {
     final totalClasses = daysPerWeek * weeks;
+    if (_backendMode) {
+      try {
+        await _academicApi.patchSubject(
+          subjectId,
+          attendanceConfigPatch(
+            totalClasses: totalClasses,
+            minAttendancePct: minPct,
+          ),
+        );
+      } on AcademicApiException catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No se pudo guardar: ${e.message}'), backgroundColor: AppColors.border),
+        );
+        await _loadData();
+        return;
+      }
+    }
+    if (!mounted) return;
     setState(() {
       final idx = _subjects.indexWhere((s) => s['id'] == subjectId);
       if (idx != -1) {

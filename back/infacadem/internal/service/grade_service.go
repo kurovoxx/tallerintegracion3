@@ -32,6 +32,7 @@ type GradeInput struct {
 	NotifyDiscord         *bool
 	GoogleCalendarEventID *string
 	IsFinalExam           *bool
+	Pinned                *bool
 	ClearScore            bool
 	ClearScheduledDate    bool
 	ClearTopics           bool
@@ -345,9 +346,13 @@ func (s *GradeService) Update(ctx context.Context, userID, id string, in GradeIn
 	if in.IsFinalExam != nil {
 		p.IsFinalExam = in.IsFinalExam
 	}
+	if in.Pinned != nil {
+		p.Pinned = in.Pinned
+	}
 	if p.Name == nil && p.Score == nil && !p.ClearScore && p.Weight == nil && p.Status == nil &&
 		p.ScheduledDate == nil && !p.ClearScheduledAt && p.Topics == nil && !p.ClearTopics &&
-		p.NotifyDiscord == nil && p.GoogleCalendarEventID == nil && !p.ClearCalendarEvt && p.IsFinalExam == nil {
+		p.NotifyDiscord == nil && p.GoogleCalendarEventID == nil && !p.ClearCalendarEvt && p.IsFinalExam == nil &&
+		p.Pinned == nil {
 		return nil, NewServiceError(utils.ErrBadRequest)
 	}
 	// Para validar el final único se necesita la materia: leer primero (404 si ajena).

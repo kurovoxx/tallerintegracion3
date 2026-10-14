@@ -19,6 +19,7 @@ import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/common_widgets.dart';
 import '../../core/widgets/neobrutalism.dart';
+import '../academic/academic_mappers.dart';
 import 'attachment_resources.dart';
 import 'note_file_picker.dart';
 import 'authenticated_attachment_image.dart';
@@ -76,8 +77,33 @@ Future<T> _withNotesClient<T>(
 const double _noteEditorMaxWidth = 920;
 
 class AllNotesScreen extends StatefulWidget {
-  const AllNotesScreen({super.key, this.database});
+  const AllNotesScreen({
+    super.key,
+    this.database,
+    this.initialSubjectCode,
+    this.initialSubjectId,
+    this.initialSubjectName,
+    this.autoOpenCreate = false,
+    this.showBackButton = false,
+  });
   final AppDatabase? database;
+
+  /// Filtro de materia academic (código, ej. "INF-301"): lista solo notas
+  /// cuyo título empieza con "[CODE] ". Null = sin filtro.
+  final String? initialSubjectCode;
+
+  /// UUID de materia academic para el POST (subject_id del backend).
+  final String? initialSubjectId;
+
+  /// Nombre de materia para el título (p. ej. "NOTAS REDES").
+  final String? initialSubjectName;
+
+  /// Abre el diálogo de crear al iniciar (con el prefijo de materia).
+  final bool autoOpenCreate;
+
+  /// Muestra back en el header (UX consolidar: volver a Materiales al
+  /// navegar desde academic; en el shell va false).
+  final bool showBackButton;
 
   @override
   State<AllNotesScreen> createState() => AllNotesScreenState();
@@ -106,6 +132,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   bool _showingLocalExample = false;
   int _hiddenDemoCount = 0;
   String _currentQuery = '';
+
+  /// Filtro de materia desde academic (UX-05): prefijo "[CODE] " en título.
+  String? _subjectFilter;
+
+  /// UUID de materia para el POST de crear (UX nombres: evita huérfanas).
+  String? _subjectIdForCreate;
 
   // Identificación verificable de ejemplos sembrados (sin borrar nada).
   // Demo solo existe con id '1'..'7' Y título exacto de _demoNotes().
@@ -221,7 +253,30 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   @override
   void initState() {
     super.initState();
+    _subjectFilter = widget.initialSubjectCode?.trim().isNotEmpty == true
+        ? widget.initialSubjectCode!.trim()
+        : null;
+    _subjectIdForCreate = widget.initialSubjectId?.trim().isNotEmpty == true
+        ? widget.initialSubjectId!.trim()
+        : null;
     _notesFuture = _initAndLoad();
+    if (widget.autoOpenCreate) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          openCreateDialog(
+            initialTitle: _subjectTitlePrefix(),
+            subjectId: widget.initialSubjectId,
+          );
+        }
+      });
+    }
+  }
+
+  /// Prefijo "[CODE] " para crear/listar por materia (UX-05, lado cliente).
+  String _subjectTitlePrefix() {
+    final code = _subjectFilter;
+    if (code == null || code.isEmpty) return '';
+    return subjectNotePrefix(code);
   }
 
   @override
@@ -733,12 +788,15 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     required String title,
     required String content,
     required String visibility,
+    String? subjectId,
   }) async {
     final url = '$notesBaseUrl/notes';
     final body = <String, String>{
       'title': title,
       'content': content,
       'visibility': visibility,
+      if (subjectId != null && subjectId.trim().isNotEmpty)
+        'subject_id': subjectId.trim(),
     };
     debugPrint(
       '[Notes] POST titleChars=${title.length} contentChars=${content.length}',
@@ -1337,6 +1395,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     String filter,
   ) {
     var res = notes.where((n) => !_deletedNoteIds.contains(n.id)).toList();
+    // Filtro de materia academic (UX-05, lado cliente): título con prefijo
+    // "[CODE] " (insensible a caso). No toca FTS: evita sintaxis MATCH.
+    final subject = _subjectFilter;
+    if (subject != null && subject.isNotEmpty) {
+      res = res.where((n) => noteMatchesSubjectCode(n.title, subject)).toList();
+    }
     // Con sesión y fallo de backend, se ocultan (sin borrar) solo los
     // ejemplos verificables id+título. Nunca se presentan como reales.
     final token = SessionManager.token;
@@ -1686,9 +1750,9 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     return CallbackShortcuts(
       bindings: <ShortcutActivator, VoidCallback>{
         const SingleActivator(LogicalKeyboardKey.keyN, control: true):
-            _showCreateDialog,
+            _showCreateForSubject,
         const SingleActivator(LogicalKeyboardKey.keyN, meta: true):
-            _showCreateDialog,
+            _showCreateForSubject,
       },
       child: Focus(
         autofocus: true,
@@ -1776,14 +1840,31 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     );
   }
 
+  /// Crear con preset de materia cuando hay filtro (UX nombres): título
+  /// "[CODE] " + subject_id para el POST. Sin filtro, diálogo normal.
+  void _showCreateForSubject() {
+    final code = _subjectFilter;
+    if (code == null || code.isEmpty) {
+      _showCreateDialog();
+      return;
+    }
+    _showCreateDialog(
+      initialTitle: subjectNotePrefix(code),
+      subjectId: _subjectIdForCreate,
+    );
+  }
+
   /// Punto de entrada público para que el shell (sidebar, rail, FAB o atajo
   /// Ctrl+N) abra el diálogo de creación de nota.
-  void openCreateDialog() => _showCreateDialog();
+  /// [initialTitle] pre-rellena el título (UX-05: prefijo "[CODE] " academic).
+  void openCreateDialog({String? initialTitle, String? subjectId}) =>
+      _showCreateDialog(initialTitle: initialTitle, subjectId: subjectId);
 
-  void _showCreateDialog() {
+  void _showCreateDialog({String? initialTitle, String? subjectId}) {
     showNeobrutalistDialog<void>(
       context: context,
       dialog: _CreateNoteDialog(
+        initialTitle: initialTitle ?? '',
         onCreate: (title, content, visibility, attachments) async {
           final revision = SessionManager.revision.value;
           final note = LocalNote(
@@ -1833,6 +1914,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             note: note,
             attachments: attachments,
             revision: revision,
+            subjectId: subjectId,
           );
           _pendingNoteSyncs[tempId] = syncFuture;
           unawaited(syncFuture);
@@ -1850,6 +1932,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     required LocalNote note,
     required List<_DriveUploadResult> attachments,
     required int revision,
+    String? subjectId,
   }) async {
     String? resolvedId;
     try {
@@ -1857,6 +1940,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         title: note.title,
         content: _withoutPendingAttachments(note.content),
         visibility: note.visibility,
+        subjectId: subjectId,
       );
       if (realId != null &&
           realId.isNotEmpty &&
@@ -1990,12 +2074,22 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   Widget _buildHeader(bool isDesktop) {
     return Row(
       children: <Widget>[
+        if (widget.showBackButton) ...<Widget>[
+          IconButton(
+            tooltip: 'Volver',
+            icon: const Icon(Icons.arrow_back_rounded),
+            onPressed: () => Navigator.of(context).maybePop(),
+          ),
+          const SizedBox(width: 4),
+        ],
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               Text(
-                'TODAS LAS NOTAS',
+                widget.initialSubjectName?.trim().isNotEmpty == true
+                    ? 'NOTAS ${widget.initialSubjectName!.trim().toUpperCase()}'
+                    : 'TODAS LAS NOTAS',
                 style: TextStyle(
                   fontSize: isDesktop ? 26 : 22,
                   fontWeight: FontWeight.w900,
@@ -2080,7 +2174,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             trailing: NeobrutalistBadge(label: _shortcutLabel, compact: true),
             variant: NeobrutalistButtonVariant.accent,
             borderWidth: AppDimens.borderWidthAction,
-            onPressed: _showCreateDialog,
+            onPressed: _showCreateForSubject,
           ),
           const SizedBox(width: AppDimens.spaceMd),
         ],
@@ -2379,7 +2473,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                           vertical: 12,
                         ),
                       ),
-                      onPressed: _showCreateDialog,
+                      onPressed: _showCreateForSubject,
                       icon: const Icon(Icons.add_rounded, size: 18),
                       label: const Text(
                         'CREAR PRIMERA NOTA',
@@ -4113,7 +4207,10 @@ class _CreateNoteDialog extends StatefulWidget {
   )
   onCreate;
 
-  const _CreateNoteDialog({required this.onCreate});
+  /// Título inicial (UX-05: prefijo "[CODE] " desde academic).
+  final String initialTitle;
+
+  const _CreateNoteDialog({required this.onCreate, this.initialTitle = ''});
 
   @override
   State<_CreateNoteDialog> createState() => _CreateNoteDialogState();
@@ -4135,7 +4232,7 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
   @override
   void initState() {
     super.initState();
-    _titleCtrl = TextEditingController();
+    _titleCtrl = TextEditingController(text: widget.initialTitle);
     _contentCtrl = TextEditingController();
     _titleFocus = FocusNode();
     _titleCtrl.addListener(_onTitleChanged);

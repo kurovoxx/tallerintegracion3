@@ -4,3 +4,4 @@
 # kubeconfig personal (manual vcluster: no se sube a Git)
 *.kubeconfig
 kubeconfig*
+CLAUDE.md

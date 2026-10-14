@@ -24,6 +24,19 @@ func (f *fakeUserDirectory) LookupUsers(ctx context.Context, ids []string) (map[
 	return out, nil
 }
 
+func (f *fakeUserDirectory) LookupEmailsStrict(ctx context.Context, ids []string) ([]string, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	emails := []string{}
+	for _, id := range ids {
+		if p, ok := f.data[id]; ok && p.Email != "" {
+			emails = append(emails, p.Email)
+		}
+	}
+	return emails, nil
+}
+
 func TestListMembersEnriched_ConNombres(t *testing.T) {
 	svc, store := newTestSvc()
 	g := newGroup(t, svc, uAdmin)

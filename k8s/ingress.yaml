@@ -1,5 +1,5 @@
 # Publica el front en https://ti3-brojas.dev.censei.cl (manual vcluster UCT, sección 11).
-# El front (nginx) ya reenvía /api-auth, /api-notes y /api-social a los servicios del cluster.
+# El front (nginx) ya reenvía /api-auth, /api-notes, /api-social y /api-academic a los servicios del cluster.
 # La anotación external-dns la exige la plataforma y no debe modificarse.
 apiVersion: networking.k8s.io/v1
 kind: Ingress

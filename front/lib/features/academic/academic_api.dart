@@ -656,8 +656,7 @@ class AcademicApi {
   }
 
   // GET /subjects/:id/attendance -> resumen con la fórmula oficial.
-  Future<AcademicAttendance> getAttendance(String subjectId) async {
-    final res = await AuthedHttp.run(
+  Future<AcademicAttendance> getAttendance(String subjectId) async {    final res = await AuthedHttp.run(
       () => _client
           .get(
             Uri.parse('$_baseUrl/subjects/$subjectId/attendance'),
@@ -673,5 +672,81 @@ class AcademicApi {
       throw AcademicApiException('Respuesta inesperada del servidor.');
     }
     return AcademicAttendance.fromJson(Map<String, dynamic>.from(body));
+  }
+
+  // GET /subjects/:id/contents -> unidades ordenadas por posición.
+  Future<List<AcademicContent>> listContents(String subjectId) async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .get(
+            Uri.parse('$_baseUrl/subjects/$subjectId/contents'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    return _items(res, 'No se pudieron cargar los contenidos.')
+        .map(AcademicContent.fromJson)
+        .toList();
+  }
+
+  // POST /subjects/:id/contents {title, body?, position?} -> {id}.
+  Future<String> createContent({
+    required String subjectId,
+    required String title,
+    String? body,
+    int position = 0,
+  }) async {
+    final payload = <String, dynamic>{
+      'title': title.trim(),
+      'position': position,
+    };
+    final b = body;
+    if (b != null && b.trim().isNotEmpty) payload['body'] = b.trim();
+    final res = await AuthedHttp.run(
+      () => _client
+          .post(
+            Uri.parse('$_baseUrl/subjects/$subjectId/contents'),
+            headers: _headers(json: true),
+            body: jsonEncode(payload),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    return _createdId(res, 'No se pudo crear el contenido.');
+  }
+
+  // PATCH /contents/:id (title/body/position; body "" limpia).
+  Future<void> patchContent(String contentId, Map<String, dynamic> patch) async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .patch(
+            Uri.parse('$_baseUrl/contents/$contentId'),
+            headers: _headers(json: true),
+            body: jsonEncode(patch),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) {
+      throw _toError(res, 'No se pudo actualizar el contenido.');
+    }
+  }
+
+  // DELETE /contents/:id.
+  Future<void> deleteContent(String contentId) async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .delete(
+            Uri.parse('$_baseUrl/contents/$contentId'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 204) {
+      throw _toError(res, 'No se pudo eliminar el contenido.');
+    }
+  }
+
+  /// Renombra una nota (PATCH existente).
+  Future<void> renameGrade(String gradeId, String name) {
+    return patchGrade(gradeId, {'name': name.trim()});
   }
 }

@@ -1,0 +1,17 @@
+# Módulo buf de Social (membresía, admin y limpieza por borrado de cuenta).
+# Mismo esquema que common: `buf lint`/`buf generate` corren DESDE este
+# directorio, nunca desde back/proto (ver README).
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+  except:
+    # La raíz del módulo es social/, así que la regla pediría dir "social/v1"
+    # para package social.v1 pero el archivo está en "v1/". La convención
+    # package==ruta-desde-back/proto se mantiene por README + revisión.
+    - PACKAGE_DIRECTORY_MATCH
+breaking:
+  use:
+    - FILE

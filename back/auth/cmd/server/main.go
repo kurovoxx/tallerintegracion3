@@ -82,6 +82,7 @@ func main() {
 	calendarH := httpHandler.NewCalendarHandler(calendarSvc)
 	internalOAuthH := httpHandler.NewInternalOAuthHandler(calendarSvc)
 	internalUsersH := httpHandler.NewInternalUsersHandler(service.NewUsersService(userRepo))
+	internalAuthH := httpHandler.NewInternalAuthHandler(jwtSvc)
 
 	r := gin.Default()
 
@@ -105,6 +106,8 @@ func main() {
 		internal.GET("/oauth/calendar-token", internalOAuthH.GetCalendarToken)
 		internal.POST("/oauth/calendar-revoked", internalOAuthH.ReportCalendarRevoked)
 		internal.GET("/users/lookup", internalUsersH.Lookup)
+		internal.GET("/users/:id", internalUsersH.GetByID)
+		internal.POST("/auth/verify", internalAuthH.Verify)
 	}
 
 	// Protegido: middleware valida firma+expiración, inyecta solo user_id (sin role global)

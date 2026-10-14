@@ -24,6 +24,7 @@ type gradeResponse struct {
 	Topics                *string `json:"topics"`
 	NotifyDiscord         bool    `json:"notify_discord"`
 	GoogleCalendarEventID *string `json:"google_calendar_event_id"`
+	Pinned                bool    `json:"pinned"`
 	CreatedAt             string  `json:"created_at"`
 }
 
@@ -65,8 +66,8 @@ func toGradeResponse(g model.Grade) gradeResponse {
 		IsFinalExam: g.IsFinalExam, Status: g.Status, Name: g.Name,
 		Score: g.Score, Weight: g.Weight, ScheduledDate: formatDate(g.ScheduledDate),
 		Topics: g.Topics, NotifyDiscord: g.NotifyDiscord,
-		GoogleCalendarEventID: g.GoogleCalendarEventID,
-		CreatedAt:             g.CreatedAt.UTC().Format(time.RFC3339),
+		GoogleCalendarEventID: g.GoogleCalendarEventID, Pinned: g.Pinned,
+		CreatedAt: g.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }
 

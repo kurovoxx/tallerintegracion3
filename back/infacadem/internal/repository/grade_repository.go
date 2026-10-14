@@ -47,6 +47,7 @@ type GradePatch struct {
 	NotifyDiscord         *bool
 	GoogleCalendarEventID *string
 	IsFinalExam           *bool
+	Pinned                *bool
 	// Clear* piden NULL explícito.
 	ClearScore       bool
 	ClearScheduledAt bool
@@ -54,13 +55,13 @@ type GradePatch struct {
 	ClearCalendarEvt bool
 }
 
-const gradeColumns = `id, subject_id, parent_grade_id, is_final_exam, status, name, score, weight, scheduled_date, topics, notify_discord, google_calendar_event_id, created_at`
+const gradeColumns = `id, subject_id, parent_grade_id, is_final_exam, status, name, score, weight, scheduled_date, topics, notify_discord, google_calendar_event_id, pinned, created_at`
 
 func scanGrade(row pgx.Row) (*model.Grade, error) {
 	var g model.Grade
 	if err := row.Scan(&g.ID, &g.SubjectID, &g.ParentGradeID, &g.IsFinalExam, &g.Status,
 		&g.Name, &g.Score, &g.Weight, &g.ScheduledDate, &g.Topics, &g.NotifyDiscord,
-		&g.GoogleCalendarEventID, &g.CreatedAt); err != nil {
+		&g.GoogleCalendarEventID, &g.Pinned, &g.CreatedAt); err != nil {
 		return nil, err
 	}
 	return &g, nil
@@ -158,7 +159,7 @@ func (r *GradeRepository) ListBySubject(ctx context.Context, subjectID, userID s
 		var g model.Grade
 		if err := rows.Scan(&g.ID, &g.SubjectID, &g.ParentGradeID, &g.IsFinalExam, &g.Status,
 			&g.Name, &g.Score, &g.Weight, &g.ScheduledDate, &g.Topics, &g.NotifyDiscord,
-			&g.GoogleCalendarEventID, &g.CreatedAt); err != nil {
+			&g.GoogleCalendarEventID, &g.Pinned, &g.CreatedAt); err != nil {
 			return nil, true, fmt.Errorf("list grades: %w", err)
 		}
 		out = append(out, g)
@@ -212,10 +213,29 @@ func (r *GradeRepository) Update(ctx context.Context, id, userID string, p Grade
 	if p.IsFinalExam != nil {
 		add("is_final_exam = $%d", *p.IsFinalExam)
 	}
+	if p.Pinned != nil {
+		add("pinned = $%d", *p.Pinned)
+	}
 	if len(set) == 0 {
 		return nil, fmt.Errorf("no fields to update")
 	}
-	query := fmt.Sprintf(`
+	// Pin nuevo despinnea al resto de la materia en la misma sentencia
+	// (un solo pin por materia, atómico): solo cuando se fija pinned=true.
+	unpin := ""
+	if p.Pinned != nil && *p.Pinned {
+		unpin = `WITH sib AS (
+			UPDATE academic.grades g
+			SET pinned = false
+			WHERE g.pinned = true AND g.id <> $1
+			  AND g.subject_id = (SELECT subject_id FROM academic.grades WHERE id = $1)
+			  AND EXISTS (
+				SELECT 1 FROM academic.subjects s
+				JOIN academic.curricula c ON c.id = s.curriculum_id
+				WHERE s.id = g.subject_id AND c.user_id = $2
+			)
+		) `
+	}
+	query := fmt.Sprintf(unpin+`
 		UPDATE academic.grades g
 		SET %s
 		WHERE g.id = $1 AND EXISTS (

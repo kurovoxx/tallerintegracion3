@@ -81,6 +81,14 @@ CREATE TABLE academic.schedules (
     modality varchar(50),
     CHECK (end_time > start_time)
 );
+CREATE TABLE academic.contents (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    subject_id uuid NOT NULL REFERENCES academic.subjects(id) ON DELETE CASCADE,
+    title varchar(200) NOT NULL,
+    body text,
+    position int NOT NULL DEFAULT 0,
+    done boolean NOT NULL DEFAULT false
+);
 CREATE TABLE academic.grades (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     subject_id uuid NOT NULL REFERENCES academic.subjects(id) ON DELETE CASCADE,
@@ -94,6 +102,7 @@ CREATE TABLE academic.grades (
     topics text,
     notify_discord boolean NOT NULL DEFAULT false,
     google_calendar_event_id varchar(255),
+    pinned boolean NOT NULL DEFAULT false,
     created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE academic.grade_requirements (
@@ -580,5 +589,120 @@ func TestRepository_Cascadas(t *testing.T) {
 	}
 	if nSub != 0 {
 		t.Fatalf("subjects huérfanos: %d", nSub)
+	}
+}
+
+func TestRepository_Contents(t *testing.T) {
+	pool := repoTestPool(t)
+	ctx := context.Background()
+	r := NewContentRepository(pool)
+	curA := mustCurriculum(t, pool, repoUserA, "A")
+	mat := mustSubject(t, pool, repoUserA, curA, "S")
+
+	body := "Cuerpo"
+	c, err := r.Create(ctx, repoUserA, mat, "Unidad 1", &body, 2)
+	if err != nil || c == nil || c.Title != "Unidad 1" || c.Position != 2 {
+		t.Fatalf("create: %+v %v", c, err)
+	}
+	if c.Done {
+		t.Fatalf("done default false: %+v", c)
+	}
+	if c.Body == nil || *c.Body != "Cuerpo" {
+		t.Fatalf("create body: %+v", c)
+	}
+	if c2, _ := r.Create(ctx, repoUserB, mat, "X", nil, 0); c2 != nil {
+		t.Fatal("materia ajena nil")
+	}
+	if _, err := r.Create(ctx, repoUserA, mat, "U2", nil, 1); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.GetByID(ctx, c.ID, repoUserB); got != nil {
+		t.Fatal("get ajeno nil")
+	}
+	list, owned, err := r.ListBySubject(ctx, mat, repoUserA)
+	if err != nil || !owned || len(list) != 2 {
+		t.Fatalf("list: %v %v %d", list, owned, err)
+	}
+	if list[0].Position != 1 || list[1].Position != 2 {
+		t.Fatalf("orden por position: %+v", list)
+	}
+	if _, owned, _ := r.ListBySubject(ctx, mat, repoUserB); owned {
+		t.Fatal("ajena owned=false")
+	}
+	newTitle := "Unidad 1b"
+	upd, err := r.Update(ctx, c.ID, repoUserA, ContentPatch{Title: &newTitle, ClearBody: true})
+	if err != nil || upd == nil || upd.Title != "Unidad 1b" || upd.Body != nil {
+		t.Fatalf("patch set/limpia: %+v %v", upd, err)
+	}
+	done := true
+	upd, err = r.Update(ctx, c.ID, repoUserA, ContentPatch{Done: &done})
+	if err != nil || upd == nil || !upd.Done {
+		t.Fatalf("toggle done: %+v %v", upd, err)
+	}
+	if got, _ := r.GetByID(ctx, c.ID, repoUserA); got == nil || !got.Done {
+		t.Fatalf("done persiste: %+v", got)
+	}
+	if upd, _ := r.Update(ctx, c.ID, repoUserB, ContentPatch{Done: &done}); upd != nil {
+		t.Fatal("toggle ajeno nil")
+	}
+	if _, err := r.Update(ctx, c.ID, repoUserA, ContentPatch{}); err == nil {
+		t.Fatal("patch vacío debe fallar")
+	} else if err.Error() != "no fields to update" {
+		t.Fatalf("msg: %v", err)
+	}
+	if _, err := r.Update(ctx, "not-a-uuid", repoUserA, ContentPatch{Title: &newTitle}); err == nil {
+		t.Fatal("uuid malo debe fallar")
+	}
+	if upd, _ := r.Update(ctx, c.ID, repoUserB, ContentPatch{Title: &newTitle}); upd != nil {
+		t.Fatal("update ajeno nil")
+	}
+	deleted, err := r.Delete(ctx, c.ID, repoUserB)
+	if err != nil || deleted {
+		t.Fatalf("delete ajeno: %v", err)
+	}
+	deleted, err = r.Delete(ctx, c.ID, repoUserA)
+	if err != nil || !deleted {
+		t.Fatalf("delete: %v", err)
+	}
+}
+
+func TestRepository_GradePinned(t *testing.T) {
+	pool := repoTestPool(t)
+	ctx := context.Background()
+	gr := NewGradeRepository(pool)
+	curA := mustCurriculum(t, pool, repoUserA, "A")
+	mat := mustSubject(t, pool, repoUserA, curA, "S")
+
+	mk := func(name string) string {
+		g, err := gr.Create(ctx, repoUserA, mat, GradeCreate{Name: name, Weight: 0.5, Status: "pending"})
+		if err != nil || g == nil || g.Pinned {
+			t.Fatalf("seed pinned=false: %+v %v", g, err)
+		}
+		return g.ID
+	}
+	idA, idB := mk("A"), mk("B")
+
+	pin := true
+	a, err := gr.Update(ctx, idA, repoUserA, GradePatch{Pinned: &pin})
+	if err != nil || a == nil || !a.Pinned {
+		t.Fatalf("pin A: %+v %v", a, err)
+	}
+	b, err := gr.Update(ctx, idB, repoUserA, GradePatch{Pinned: &pin})
+	if err != nil || b == nil || !b.Pinned {
+		t.Fatalf("pin B: %+v %v", b, err)
+	}
+	// Pin nuevo despinnea al anterior (un solo pin por materia).
+	if got, _ := gr.GetByID(ctx, idA, repoUserA); got == nil || got.Pinned {
+		t.Fatalf("A despinneada: %+v", got)
+	}
+	unpin := false
+	if _, err := gr.Update(ctx, idB, repoUserA, GradePatch{Pinned: &unpin}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := gr.GetByID(ctx, idB, repoUserA); got == nil || got.Pinned {
+		t.Fatalf("B despinneada explícita: %+v", got)
+	}
+	if upd, _ := gr.Update(ctx, idA, repoUserB, GradePatch{Pinned: &pin}); upd != nil {
+		t.Fatal("pin ajeno nil")
 	}
 }

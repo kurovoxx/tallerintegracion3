@@ -109,6 +109,40 @@ func TestRESTClient_EnsureMember(t *testing.T) {
 	}
 }
 
+// Usuario nuevo: Stream responde 400 al add_members porque el usuario aún no
+// existe; el cliente lo crea vía POST /users y reintenta.
+func TestRESTClient_EnsureMember_CreaUsuarioInexistente(t *testing.T) {
+	var calls []string
+	exists := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		calls = append(calls, r.URL.Path)
+		switch {
+		case r.URL.Path == "/users":
+			if !strings.Contains(string(raw), `"u-nuevo":{"id":"u-nuevo"}`) {
+				t.Errorf("upsert body inesperado: %s", raw)
+			}
+			exists = true
+			w.WriteHeader(201)
+		case !exists:
+			w.WriteHeader(400)
+			w.Write([]byte(`{"message":"users don't exist: [u-nuevo]"}`))
+		default:
+			w.WriteHeader(201)
+		}
+	}))
+	defer srv.Close()
+
+	c := &RESTClient{httpClient: srv.Client(), baseURL: srv.URL, apiKey: "key123", apiSecret: "secret123"}
+	if err := c.EnsureMember(t.Context(), "messaging", "group-abc", "u-nuevo"); err != nil {
+		t.Fatalf("esperado éxito tras crear el usuario, got %v", err)
+	}
+	want := []string{"/channels/messaging/group-abc", "/users", "/channels/messaging/group-abc"}
+	if strings.Join(calls, ",") != strings.Join(want, ",") {
+		t.Fatalf("llamadas = %v, want %v", calls, want)
+	}
+}
+
 func TestRESTClient_ErrorStream(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(400)

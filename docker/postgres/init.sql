@@ -115,6 +115,18 @@ CREATE TABLE academic.schedules (
 
 CREATE INDEX idx_schedules_subject_id ON academic.schedules(subject_id);
 
+-- Contenidos (unidades) de una materia para el front (UX-05).
+CREATE TABLE academic.contents (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    subject_id uuid NOT NULL REFERENCES academic.subjects(id) ON DELETE CASCADE,
+    title varchar(200) NOT NULL,
+    body text,
+    position int NOT NULL DEFAULT 0,
+    done boolean NOT NULL DEFAULT false
+);
+
+CREATE INDEX idx_contents_subject_id ON academic.contents(subject_id);
+
 -- Una "grade" sin score todavía = evaluación programada a futuro.
 -- parent_grade_id: subnotas (una evaluación compuesta por sub-partes cuyo
 -- peso se reparte entre ellas, no contra el total de la materia).
@@ -132,6 +144,7 @@ CREATE TABLE academic.grades (
     topics text,
     notify_discord boolean NOT NULL DEFAULT false,
     google_calendar_event_id varchar(255),
+    pinned boolean NOT NULL DEFAULT false,
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
