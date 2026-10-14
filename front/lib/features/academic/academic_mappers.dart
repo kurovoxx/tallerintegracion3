@@ -285,3 +285,11 @@ bool noteMatchesSubjectCode(String title, String code) {
 
 /// Prefijo "[CODE] " para crear apunte con materia preseleccionada.
 String subjectNotePrefix(String code) => '[${code.trim().toUpperCase()}] ';
+
+/// Label de fila de calculadora: nombre real del backend si existe,
+/// fallback "Nota N"/"Subnota N" para filas nuevas sin guardar.
+String gradeRowLabel(String? backendName, String fallback) {
+  final name = backendName?.trim();
+  if (name == null || name.isEmpty) return fallback;
+  return name;
+}

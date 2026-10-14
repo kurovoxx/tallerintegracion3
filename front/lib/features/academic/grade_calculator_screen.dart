@@ -1103,7 +1103,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
                   child: _NormalGradeCard(
                     key: ValueKey(item.id),
                     item: item,
-                    label: 'NOTA ${index + 1}',
+                    label: gradeRowLabel(item.backendName, 'NOTA ${index + 1}'),
                     onScoreChanged: () => setState(_resetResult),
                     onWeightChanged: () => _changeNormalWeight(item),
                     onSubdivide: () => _subdivideNormalGrade(item),
@@ -1584,7 +1584,7 @@ class _NormalGradeCard extends StatelessWidget {
               if (index != 0) const SizedBox(height: 6),
               _ChildGradeRow(
                 key: ValueKey(item.children[index].id),
-                label: 'SUBNOTA ${index + 1}',
+                label: gradeRowLabel(item.children[index].backendName, 'SUBNOTA ${index + 1}'),
                 item: item.children[index],
                 onScoreChanged: onChildScoreChanged,
                 onWeightChanged: () {

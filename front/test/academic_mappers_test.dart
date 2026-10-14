@@ -207,4 +207,22 @@ void main() {
       {'min_attendance_pct': 70.5},
     );
   });
+
+  test('UX-05b: matcher de apunte por materia + prefijo + done', () {
+    expect(noteMatchesSubjectCode('[INF-301] Repaso', 'INF-301'), isTrue);
+    expect(noteMatchesSubjectCode('[inf-301] repaso', 'INF-301'), isTrue);
+    expect(noteMatchesSubjectCode('Repaso general', 'INF-301'), isFalse);
+    expect(noteMatchesSubjectCode('[INF-302] Otro', 'INF-301'), isFalse);
+    expect(noteMatchesSubjectCode('[INF-301] X', ''), isFalse);
+    expect(subjectNotePrefix('inf-301'), '[INF-301] ');
+    expect(subjectNotePrefix('  INF-301  '), '[INF-301] ');
+  });
+
+  test('labels de calculadora: nombre backend o fallback Nota N', () {
+    expect(gradeRowLabel('Parcial', 'NOTA 1'), 'Parcial');
+    expect(gradeRowLabel('  Certamen 2  ', 'NOTA 2'), 'Certamen 2');
+    expect(gradeRowLabel(null, 'NOTA 1'), 'NOTA 1');
+    expect(gradeRowLabel('', 'SUBNOTA 1'), 'SUBNOTA 1');
+    expect(gradeRowLabel('   ', 'SUBNOTA 2'), 'SUBNOTA 2');
+  });
 }
