@@ -11,7 +11,7 @@ import (
 
 // TestGRPCDirectory_LookupUsers verifica mapeo, vacíos y tolerancia a fallos.
 func TestGRPCDirectory_LookupUsers(t *testing.T) {
-	c := servefakeIdentityGRPC(t, &fakeIdentityGRPC{key: "k", users: testUsers()})
+	c := serveFakeIdentityGRPC(t, &fakeIdentityGRPC{key: "k", users: testUsers()})
 	d := NewGRPCUserDirectory(c)
 	ctx := context.Background()
 
@@ -30,10 +30,22 @@ func TestGRPCDirectory_LookupUsers(t *testing.T) {
 	var _ service.UserDirectory = d
 }
 
+// TestGRPCDirectory_StrictSinCliente verifica fail-closed sin gRPC.
+func TestGRPCDirectory_StrictSinCliente(t *testing.T) {
+	d := NewGRPCUserDirectory(nil)
+	if _, err := d.LookupEmailsStrict(context.Background(), []string{"u-ada"}); err == nil {
+		t.Fatal("strict sin cliente debe fallar, no devolver lista vacía")
+	}
+	// Best-effort sí tolera la ausencia: mapa vacío sin error.
+	if got, err := d.LookupUsers(context.Background(), []string{"u-ada"}); err != nil || len(got) != 0 {
+		t.Fatalf("tolerante sin cliente: mapa vacío sin error, fue %v, %v", got, err)
+	}
+}
+
 // TestGRPCDirectory_EmailsStrict verifica correos, duplicados, minúsculas,
 // vacíos y fail-closed ante fallos.
 func TestGRPCDirectory_EmailsStrict(t *testing.T) {
-	c := servefakeIdentityGRPC(t, &fakeIdentityGRPC{key: "k", users: map[string]*identityv1.User{
+	c := serveFakeIdentityGRPC(t, &fakeIdentityGRPC{key: "k", users: map[string]*identityv1.User{
 		"a": {UserId: "a", Email: "A@test.invalid"},
 		"b": {UserId: "b", Email: "DUPLI@test.invalid"},
 		"c": {UserId: "c", Email: "dupli@test.invalid"},

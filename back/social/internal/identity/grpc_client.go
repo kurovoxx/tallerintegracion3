@@ -34,13 +34,21 @@ type GRPCClient struct {
 	timeout time.Duration
 }
 
-// DialIdentityGRPC conecta con Identity (ej. "auth:9080"). Timeout <=0 usa 5s.
-func DialIdentityGRPC(addr, internalKey string, timeout time.Duration) (*GRPCClient, error) {
+// DialConn abre la conexión gRPC compartida hacia Identity (ej. "auth:9080").
+// Perezosa: no falla si Auth aún no levantó (solo una dirección malformada
+// es error). Vive lo que el proceso; cerrarla es idempotente.
+func DialConn(addr string) (*grpc.ClientConn, error) {
 	// ponytail: sin TLS, tráfico solo dentro de la red de compose/cluster.
 	conn, err := grpc.NewClient(strings.TrimSpace(addr), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, fmt.Errorf("identity grpc: %w", err)
 	}
+	return conn, nil
+}
+
+// NewGRPCClientWithConn envuelve una conexión compartida (ver DialConn).
+// Timeout <=0 usa 5s.
+func NewGRPCClientWithConn(conn *grpc.ClientConn, internalKey string, timeout time.Duration) *GRPCClient {
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
@@ -49,7 +57,17 @@ func DialIdentityGRPC(addr, internalKey string, timeout time.Duration) (*GRPCCli
 		conn:    conn,
 		key:     strings.TrimSpace(internalKey),
 		timeout: timeout,
-	}, nil
+	}
+}
+
+// DialIdentityGRPC conecta con Identity (ej. "auth:9080") con conexión propia.
+// Timeout <=0 usa 5s.
+func DialIdentityGRPC(addr, internalKey string, timeout time.Duration) (*GRPCClient, error) {
+	conn, err := DialConn(addr)
+	if err != nil {
+		return nil, err
+	}
+	return NewGRPCClientWithConn(conn, internalKey, timeout), nil
 }
 
 // Close libera la conexión compartida.
@@ -65,21 +83,30 @@ func (c *GRPCClient) ctx(ctx context.Context) (context.Context, context.CancelFu
 	return metadata.AppendToOutgoingContext(ctx, MetadataInternalKey, c.key), cancel
 }
 
-// Validate comprueba clave y disponibilidad con una llamada que debe dar
-// InvalidArgument (token vacío pero clave aceptada). Sirve para fallar rápido
-// en el arranque en vez de confundir una clave mala con datos inválidos.
-func (c *GRPCClient) Validate(ctx context.Context) error {
-	ctx, cancel := c.ctx(ctx)
-	defer cancel()
-	_, err := c.client.VerifyToken(ctx, &identityv1.VerifyTokenRequest{})
-	if status.Code(err) != codes.InvalidArgument {
-		return fmt.Errorf("identity grpc: validación inicial: %v", err)
+// Mensajes de dominio emitidos por el servidor Auth que distinguen un token
+// de usuario inválido de un fallo de autenticación interna. Dependen del
+// texto exacto del servidor (ver back/auth/internal/handler/grpc/
+// identity_server.go y su interceptor); si Auth los cambia, estos casos caen
+// al error de infraestructura, nunca a un falso inválido (fail-closed).
+const (
+	msgTokenInvalido = "token inválido"
+	msgTokenExpirado = "token expirado"
+)
+
+// isTokenRejected dice si un Unauthenticated corresponde al JWT del usuario
+// (y no a la clave interna): solo los dos mensajes de dominio del servidor.
+func isTokenRejected(err error) bool {
+	if status.Code(err) != codes.Unauthenticated {
+		return false
 	}
-	return nil
+	msg, _ := status.FromError(err)
+	return msg.Message() == msgTokenInvalido || msg.Message() == msgTokenExpirado
 }
 
 // VerifyToken valida un JWT de usuario contra Identity.
-// Devuelve el user_id si es válido; ErrInvalidToken si Identity lo rechaza.
+// Devuelve el user_id si es válido; ErrInvalidToken solo si Identity rechazó
+// el token del usuario. Un fallo de clave interna o de red es error de
+// infraestructura, nunca un falso inválido.
 func (c *GRPCClient) VerifyToken(ctx context.Context, token string) (string, error) {
 	if strings.TrimSpace(token) == "" {
 		return "", ErrInvalidToken
@@ -88,7 +115,7 @@ func (c *GRPCClient) VerifyToken(ctx context.Context, token string) (string, err
 	defer cancel()
 	resp, err := c.client.VerifyToken(ctx, &identityv1.VerifyTokenRequest{Token: token})
 	if err != nil {
-		if status.Code(err) == codes.Unauthenticated {
+		if isTokenRejected(err) {
 			return "", ErrInvalidToken
 		}
 		return "", fmt.Errorf("identity grpc: verify: %w", err)

@@ -7,9 +7,7 @@ import (
 	"time"
 
 	identityv1 "github.com/kurovoxx/tallerintegracion3/back/social/internal/gen/identityv1"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
@@ -18,10 +16,12 @@ import (
 // IdentityService.GetOAuthToken (tarea 3_4_3). Misma interfaz y errores de
 // dominio que AuthCalendarGateway, para intercambiarlos sin tocar llamantes.
 //
-// Traducción segura de Unauthenticated: la clave interna se valida al arrancar
-// (ver Validate), así en operación un Unauthenticated significa conexión
-// OAuth revocada, no clave mala. Sin esa validación previa no se puede
-// distinguir: documentado, no adivinado.
+// Traducción segura de Unauthenticated: solo el mensaje de dominio
+// "calendar_connection_invalid" significa OAuth revocado; cualquier otro
+// Unauthenticated (clave mala/ausente, "missing metadata", etc.) es error de
+// infraestructura, nunca falsa revocación. Los mensajes dependen del texto
+// del servidor Auth (ver back/auth/internal/handler/grpc/identity_server.go
+// y su interceptor); si cambian, esos casos caen a Unavailable (fail-closed).
 type GRPCalendarGateway struct {
 	Client  identityv1.IdentityServiceClient
 	Key     string
@@ -42,20 +42,6 @@ func (g *GRPCalendarGateway) ctx(ctx context.Context) (context.Context, context.
 	return metadata.AppendToOutgoingContext(ctx, "x-internal-key", strings.TrimSpace(g.Key)), cancel
 }
 
-// Validate comprueba clave y disponibilidad: VerifyToken con token vacío debe
-// dar InvalidArgument (clave aceptada, servidor validando). Llamar una vez al
-// arrancar en modo real; ante error, fallar rápido en main en vez de operar
-// con una clave que falsearía todos los diagnósticos OAuth.
-func (g *GRPCalendarGateway) Validate(ctx context.Context) error {
-	ctx, cancel := g.ctx(ctx)
-	defer cancel()
-	_, err := g.Client.VerifyToken(ctx, &identityv1.VerifyTokenRequest{})
-	if status.Code(err) != codes.InvalidArgument {
-		return fmt.Errorf("identity grpc: validación inicial: %w", err)
-	}
-	return nil
-}
-
 func (g *GRPCalendarGateway) GetToken(ctx context.Context, userID string) (string, error) {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
@@ -72,8 +58,10 @@ func (g *GRPCalendarGateway) GetToken(ctx context.Context, userID string) (strin
 		case codes.NotFound:
 			return "", ErrCalendarNotConnected
 		case codes.Unauthenticated:
-			// Clave validada al arrancar: es conexión revocada/inválida.
-			return "", ErrCalendarConnectionInvalid
+			if oauthRevoked(err) {
+				return "", ErrCalendarConnectionInvalid
+			}
+			return "", fmt.Errorf("%w: %v", ErrCalendarGatewayUnavailable, err)
 		default:
 			return "", fmt.Errorf("%w: %v", ErrCalendarGatewayUnavailable, err)
 		}
@@ -100,12 +88,12 @@ func (g *GRPCalendarGateway) ReportRevoked(ctx context.Context, userID string) e
 	return nil
 }
 
-// DialIdentityClient abre la conexión gRPC compartida hacia Identity
-// (ej. "auth:9080"). Sin TLS: solo red interna de compose/cluster.
-func DialIdentityClient(addr string) (identityv1.IdentityServiceClient, *grpc.ClientConn, error) {
-	conn, err := grpc.NewClient(strings.TrimSpace(addr), grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		return nil, nil, fmt.Errorf("identity grpc: %w", err)
+// oauthRevoked dice si un Unauthenticated corresponde a OAuth revocado (y no
+// a la clave interna): solo el mensaje de dominio del servidor Auth.
+func oauthRevoked(err error) bool {
+	if status.Code(err) != codes.Unauthenticated {
+		return false
 	}
-	return identityv1.NewIdentityServiceClient(conn), conn, nil
+	msg, _ := status.FromError(err)
+	return msg.Message() == "calendar_connection_invalid"
 }

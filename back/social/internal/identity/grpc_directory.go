@@ -2,6 +2,7 @@ package identity
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
 
@@ -37,6 +38,11 @@ func (d *GRPCUserDirectory) LookupUsers(ctx context.Context, userIDs []string) (
 }
 
 func (d *GRPCUserDirectory) LookupEmailsStrict(ctx context.Context, userIDs []string) ([]string, error) {
+	// Sin cliente configurado es error de programación: fail-closed en vez
+	// de devolver una lista vacía que validaría permisos contra nada.
+	if d == nil || d.client == nil {
+		return nil, errors.New("identity grpc: cliente no configurado")
+	}
 	got, err := d.lookup(ctx, userIDs)
 	if err != nil {
 		return nil, err

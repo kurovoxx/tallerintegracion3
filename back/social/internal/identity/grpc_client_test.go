@@ -105,7 +105,7 @@ func (f *fakeIdentityGRPC) VerifyToken(ctx context.Context, req *identityv1.Veri
 	return &identityv1.VerifyTokenResponse{Valid: true, UserId: uid}, nil
 }
 
-func servefakeIdentityGRPC(t *testing.T, fake *fakeIdentityGRPC) *GRPCClient {
+func serveFakeIdentityGRPC(t *testing.T, fake *fakeIdentityGRPC) *GRPCClient {
 	t.Helper()
 	lis := bufconn.Listen(1 << 20)
 	s := grpc.NewServer()
@@ -134,7 +134,7 @@ func testUsers() map[string]*identityv1.User {
 // caída y timeout, sin confundir infraestructura con token inválido.
 func TestGRPCClient_VerifyToken(t *testing.T) {
 	fake := &fakeIdentityGRPC{key: "k", users: testUsers(), tokens: map[string]string{"bueno": "u-ada"}}
-	c := servefakeIdentityGRPC(t, fake)
+	c := serveFakeIdentityGRPC(t, fake)
 	ctx := context.Background()
 
 	uid, err := c.VerifyToken(ctx, "bueno")
@@ -148,12 +148,13 @@ func TestGRPCClient_VerifyToken(t *testing.T) {
 		t.Fatalf("vacío debe ser ErrInvalidToken, fue %v", err)
 	}
 
-	// Clave mala a nivel transporte: el fake rechaza antes del servicio.
+	// Clave mala: el fake rechaza con "invalid internal key" antes del
+	// servicio, así que NO debe verse como token inválido aunque el JWT
+	// sea bueno (distingue fallo de infraestructura de JWT rechazado).
 	noKey := &GRPCClient{client: c.client, key: "", timeout: 2 * time.Second}
-	if _, err := noKey.VerifyToken(ctx, "bueno"); err != ErrInvalidToken {
-		t.Fatalf("sin clave debe ser ErrInvalidToken, fue %v", err)
+	if _, err := noKey.VerifyToken(ctx, "bueno"); err == nil || err == ErrInvalidToken {
+		t.Fatalf("sin clave debe ser error de infraestructura, no éxito ni ErrInvalidToken: %v", err)
 	}
-
 	// Servidor caído: error de infraestructura, nunca éxito ni token inválido.
 	closedLis := bufconn.Listen(1 << 20)
 	closedLis.Close()
@@ -169,7 +170,7 @@ func TestGRPCClient_VerifyToken(t *testing.T) {
 		t.Fatalf("caída debe ser error de infraestructura, no éxito ni ErrInvalidToken: %v", err)
 	}
 
-	lento := servefakeIdentityGRPC(t, &fakeIdentityGRPC{key: "k", delay: 5 * time.Second})
+	lento := serveFakeIdentityGRPC(t, &fakeIdentityGRPC{key: "k", delay: 5 * time.Second})
 	lento.timeout = 50 * time.Millisecond
 	if _, err := lento.VerifyToken(ctx, "bueno"); err == nil {
 		t.Fatal("timeout debe fallar")
@@ -180,7 +181,7 @@ func TestGRPCClient_VerifyToken(t *testing.T) {
 
 // TestGRPCClient_GetUser cubre válido, inexistente y vacío.
 func TestGRPCClient_GetUser(t *testing.T) {
-	c := servefakeIdentityGRPC(t, &fakeIdentityGRPC{key: "k", users: testUsers()})
+	c := serveFakeIdentityGRPC(t, &fakeIdentityGRPC{key: "k", users: testUsers()})
 	ctx := context.Background()
 	u, err := c.GetUser(ctx, "u-ada")
 	if err != nil || u.UserID != "u-ada" || u.Email != "ada@test.invalid" || u.DisplayName == nil || *u.DisplayName != "Ada" {
@@ -191,17 +192,5 @@ func TestGRPCClient_GetUser(t *testing.T) {
 	}
 	if _, err := c.GetUser(ctx, ""); err != ErrUserNotFound {
 		t.Fatalf("vacío debe ser ErrUserNotFound, fue %v", err)
-	}
-}
-
-// TestGRPCClient_Validate comprueba clave y disponibilidad sin validar tokens.
-func TestGRPCClient_Validate(t *testing.T) {
-	c := servefakeIdentityGRPC(t, &fakeIdentityGRPC{key: "k"})
-	if err := c.Validate(context.Background()); err != nil {
-		t.Fatalf("Validate con clave buena: %v", err)
-	}
-	mala := &GRPCClient{client: c.client, key: "otra", timeout: 2 * time.Second}
-	if err := mala.Validate(context.Background()); err == nil {
-		t.Fatal("Validate con clave mala debe fallar")
 	}
 }
