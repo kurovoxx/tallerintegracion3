@@ -49,4 +49,18 @@ E2E entre procesos Social↔Notes↔Identity de la tarea 3_3_5.
 - `go test ./... -count=1`, `go vet ./...` y `go build ./...`: correctos.
 - Las pruebas con PostgreSQL se omitieron porque no hay una base de pruebas
   configurada. Docker y kubectl no están disponibles en este entorno;
-  queda pendiente ejecutar Actions y comprobar el despliegue real.
+  la validación con PostgreSQL y detector de carreras se realizó en Actions.
+
+### 3_3_11 — Validación en GitHub Actions
+
+La suite completa pasó sobre el commit `c1c1124` en `Development`:
+[ejecución de test-social-groups](https://github.com/kurovoxx/tallerintegracion3/actions/runs/38656300385).
+
+La primera ejecución detectó carreras en las pruebas de notificaciones de
+Calendar, invitados, Discord y Stream. Se corrigieron los tests para esperar
+el fin del notifier mediante un canal antes de leer los mocks, manteniendo
+la ejecución real en segundo plano y el detector de carreras habilitado.
+
+La ejecución valida compilación, análisis estático, pruebas gRPC, integración
+y E2E existentes con PostgreSQL 16. La tarea 3_3_11 queda validada; el E2E
+entre servicios desplegados sigue correspondiendo a 3_3_5.
