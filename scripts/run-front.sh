@@ -8,6 +8,7 @@ echo "=== TI3 Frontend Runner ==="
 echo "Detectando SO: $(uname -s)"
 echo ""
 echo "¿Quieres correr Flutter para Linux o Windows?"
+echo "  0) local         - nativo Linux contra backend local (localhost:8085/8082/8083)"
 echo "  1) linux         - nativo Linux contra Pillán"
 echo "  2) windows       - nativo Windows contra Pillán (Windows + Visual Studio)"
 echo "  3) web           - flutter run -d chrome contra Pillán"
@@ -15,7 +16,7 @@ echo "  4) docker        - docker compose up front (web via nginx http://localho
 echo "  5) linux-deploy  - nativo Linux contra dominio del Ingress (front/.env.prod.example, sin auth local)"
 echo "  6) windows-deploy - nativo Windows contra dominio del Ingress (solo Windows + Visual Studio, sin auth local)"
 echo ""
-read -p "Elige [1-6] (default 1): " CHOICE
+read -p "Elige [0-6] (default 1): " CHOICE
 CHOICE=${CHOICE:-1}
 
 # Fedora deps check para linux
@@ -31,6 +32,14 @@ check_fedora_deps() {
 }
 
 case "$CHOICE" in
+  0|local|Local)
+    echo ">> Linux nativo contra backend local"
+    check_fedora_deps
+    if ! command -v flutter >/dev/null 2>&1; then echo "Flutter no encontrado"; exit 1; fi
+    cd "$FRONT_DIR"
+    flutter pub get
+    flutter run -d linux --dart-define=API_BASE_URL=http://localhost:8085 --dart-define=NOTES_BASE_URL=http://localhost:8082 --dart-define=SOCIAL_BASE_URL=http://localhost:8083
+    ;;
   1|linux|Linux)
     echo ">> Linux nativo"
     check_fedora_deps

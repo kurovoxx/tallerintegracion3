@@ -263,3 +263,48 @@ Sin Services/containers gRPC para auth/notes hasta que existan sus servidores
 - k8s parsea (10 docs YAML).
 - **No entra**: servidores gRPC de auth/notes, Ingress gRPC (solo HTTP hoy),
   Telepresence/vcluster.
+
+## 3_5_14 — Notificación de reunión en app
+
+### Alcance (jefe: front hace la cajita + ventana "próximas reuniones")
+
+Backend: exponer lo que faltaba para esas dos vistas. El "enviar" ya existía
+(fan-out a `meeting_notifications` + anuncio Stream); faltaba **leer**.
+
+### Endpoints (JWT, sin cambios en contratos existentes)
+
+| Ruta | Responde | Usa el front para |
+|---|---|---|
+| `GET /notifications/me` | `200 {data: [{id, meeting_id, group_id, title, scheduled_at, read, read_at, created_at}]}` (no leídas primero) | cajita de notificaciones |
+| `POST /notifications/:id/read` | `200` / `404` ajena-inexistente-ya-leída | marcar leída |
+| `GET /groups/:id/meetings` | `200 {data}` (`scheduled_at >= now`, cronológico, solo miembros) | ventana próximas reuniones |
+
+### Archivos
+
+| Archivo | Contenido |
+|---|---|
+| `back/social/internal/model/views.go` | `+ MeetingNotificationItem` |
+| `back/social/internal/repository/meeting_repository.go` | `+ ListNotificationsByUser` (JOIN + no-leídas primero, SQL directo) y `+ MarkNotificationRead` (solo propia y no-leída) |
+| `back/social/internal/service/notification_service.go` | `NotificationService` (interfaz angosta, sin romper `MeetingRepo`) |
+| `back/social/internal/handler/http/notification_handler.go` | `ListMine` + `MarkRead` |
+| `back/social/internal/handler/http/meeting_handler.go` | `+ ListMeetings` (reusa `ListUpcomingMeetings` existente) |
+| `back/social/cmd/server/main.go` | Wire + 3 rutas |
+
+### Verificación
+
+- Unit (fakes): lista/forma/orden, read idempotente→404, solo-futura, 401/403/404.
+- Integración PG: miembro ve 1, creador 0, `read_at` persiste, releída/ajena → 404.
+- `go test ./...` (social): `ok` todo. Sin migración (tabla ya tenía `read_at`).
+- Regla vigente (4.8): el fan-out excluye al creador; la cajita muestra las reuniones de los *demás*.
+
+### Front (pedido del jefe: cajita + ventana, también hecho)
+
+| Archivo | Contenido |
+|---|---|
+| `front/lib/core/models/social_models.dart` | `+ MeetingNotification` (fromJson tolerante) |
+| `front/lib/core/services/social_service.dart` | `+ listMeetings`, `+ myNotifications`, `+ markNotificationRead` (mismo patrón `AuthedHttp`) |
+| `front/lib/features/groups/group_detail_screen.dart` | (revertido: la pestaña `PRÓXIMAS` dedicada se eliminó; con el popup basta. Las próximas se ven en AGENDAR vía workspace) |
+| `front/lib/features/groups/notifications_bell.dart` | `NotificationsBell` (badge no-leídas en header de grupos) + `NotificationsDialog` (lista, tap marca leída y recarga) |
+| `front/lib/features/groups/groups_screen.dart` | Campana en header compacto y ancho |
+
+- `flutter analyze` en los archivos tocados: sin issues nuevos (los restantes son preexistentes).

@@ -83,6 +83,18 @@ type WorkspaceMeetings struct {
 	Upcoming []MeetingItem `json:"upcoming"`
 }
 
+// MeetingNotificationItem es una notificación in-app de reunión (tarea 3_5_14):
+// fan-out creado al agendar, leída cuando ReadAt != nil.
+type MeetingNotificationItem struct {
+	ID          string
+	MeetingID   string
+	GroupID     string
+	Title       string
+	ScheduledAt time.Time
+	ReadAt      *time.Time
+	CreatedAt   time.Time
+}
+
 // WorkspaceChat apunta al endpoint del contrato que emite el token de Stream.
 type WorkspaceChat struct {
 	Provider      string `json:"provider"`
