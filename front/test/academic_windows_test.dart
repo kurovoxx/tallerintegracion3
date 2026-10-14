@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:taller_integracion_front/core/widgets/neobrutalism.dart';
 import 'package:taller_integracion_front/features/academic/academic_models.dart';
 import 'package:taller_integracion_front/features/academic/course_detail_tabs.dart';
 import 'package:taller_integracion_front/features/academic/course_windows.dart';
@@ -69,8 +70,7 @@ void main() {
       const MaterialsWindow(subjectId: 's1', subjectCode: 'INF-301', subjectName: 'Redes'),
     );
     expect(find.text('MATERIALES · REDES'), findsOneWidget);
-    expect(find.text('Crear apunte'), findsNothing);
-    expect(find.text('CREAR APUNTE'), findsOneWidget);
+    expect(find.text('ABRIR APUNTES'), findsOneWidget);
     expect(find.text('REINTENTAR'), findsOneWidget);
   });
 
@@ -95,19 +95,19 @@ void main() {
     expect(find.byTooltip('Volver'), findsNothing);
   });
 
-  testWidgets('Crear apunte vuelve a Materiales (no al home)', (tester) async {
+  testWidgets('Abrir apuntes entra directo a la lista; back vuelve', (tester) async {
     await pumpSettled(
       tester,
       const MaterialsWindow(subjectId: 's1', subjectCode: 'INF-301', subjectName: 'Redes'),
     );
-    await tester.tap(find.text('CREAR APUNTE'));
+    await tester.tap(find.text('ABRIR APUNTES'));
     for (var i = 0; i < 6; i++) {
       await tester.pump(const Duration(milliseconds: 300));
     }
+    // Vista que lista (sin auto-formulario encima).
     expect(find.text('NOTAS REDES'), findsOneWidget);
-    // Cierra el diálogo de crear y vuelve con el back del header.
-    await tester.tap(find.text('CANCELAR'));
-    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('NUEVA NOTA'), findsNothing);
+    // Back del header vuelve a Materiales (no al home).
     await tester.tap(find.byTooltip('Volver'));
     for (var i = 0; i < 6; i++) {
       await tester.pump(const Duration(milliseconds: 300));
@@ -158,8 +158,7 @@ void main() {
     expect(find.text('CALCULAR PROMEDIO'), findsOneWidget);
   });
 
-  testWidgets('Apuntes titula NOTAS <materia>; por defecto TODAS', (tester) async {
-    await tester.pumpWidget(
+  testWidgets('Apuntes titula NOTAS <materia>; por defecto TODAS', (tester) async {    await tester.pumpWidget(
       const MaterialApp(home: AllNotesScreen(initialSubjectName: 'Redes')),
     );
     await tester.pump(const Duration(milliseconds: 300));
@@ -194,5 +193,33 @@ void main() {
     ]);
     expect(opts.map((o) => o.id), ['g1', 'h1', 'h2', 'g2']);
     expect(flattenRenameOptions([]), isEmpty);
+  });
+
+  testWidgets('Crear manual con filtro hereda preset y aparece', (tester) async {
+    tester.view.physicalSize = const Size(1440, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: AllNotesScreen(
+          initialSubjectCode: 'INF-999',
+          initialSubjectId: 's9',
+        ),
+      ),
+    );
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 300));
+    }
+    // El formulario abre con el preset de materia, no vacío.
+    await tester.tap(find.text('NUEVA NOTA'));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('NUEVA NOTA'), findsWidgets);
+    // Guardar tal cual (título con prefijo) y aparece listado y filtrado.
+    await tester.tap(find.widgetWithText(NeobrutalistButton, 'GUARDAR'));
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 300));
+    }
+    expect(find.textContaining('[INF-999]'), findsWidgets);
   });
 }

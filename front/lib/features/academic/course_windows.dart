@@ -112,6 +112,8 @@ class _MaterialsWindowState extends State<MaterialsWindow> {
     }
   }
 
+  /// Abre la vista de notas de la materia (sin auto-disparar el
+  /// formulario: el botón crear existente lo activa) y refresca al volver.
   Future<void> _openCreate() async {
     await Navigator.of(context).push(
       MaterialPageRoute(
@@ -119,7 +121,6 @@ class _MaterialsWindowState extends State<MaterialsWindow> {
           initialSubjectCode: widget.subjectCode,
           initialSubjectId: widget.subjectId,
           initialSubjectName: widget.subjectName,
-          autoOpenCreate: true,
           showBackButton: true,
         ),
       ),
@@ -151,7 +152,7 @@ class _MaterialsWindowState extends State<MaterialsWindow> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               NeobrutalistButton(
-                label: 'Crear apunte',
+                label: 'Abrir apuntes',
                 icon: Icons.add_rounded,
                 variant: NeobrutalistButtonVariant.accent,
                 expand: true,

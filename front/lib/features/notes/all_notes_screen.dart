@@ -136,6 +136,9 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   /// Filtro de materia desde academic (UX-05): prefijo "[CODE] " en título.
   String? _subjectFilter;
 
+  /// UUID de materia para el POST de crear (UX nombres: evita huérfanas).
+  String? _subjectIdForCreate;
+
   // Identificación verificable de ejemplos sembrados (sin borrar nada).
   // Demo solo existe con id '1'..'7' Y título exacto de _demoNotes().
   // Las notas reales usan UUID (36 con guiones) y las locales del usuario
@@ -252,6 +255,9 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     super.initState();
     _subjectFilter = widget.initialSubjectCode?.trim().isNotEmpty == true
         ? widget.initialSubjectCode!.trim()
+        : null;
+    _subjectIdForCreate = widget.initialSubjectId?.trim().isNotEmpty == true
+        ? widget.initialSubjectId!.trim()
         : null;
     _notesFuture = _initAndLoad();
     if (widget.autoOpenCreate) {
@@ -1744,9 +1750,9 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     return CallbackShortcuts(
       bindings: <ShortcutActivator, VoidCallback>{
         const SingleActivator(LogicalKeyboardKey.keyN, control: true):
-            _showCreateDialog,
+            _showCreateForSubject,
         const SingleActivator(LogicalKeyboardKey.keyN, meta: true):
-            _showCreateDialog,
+            _showCreateForSubject,
       },
       child: Focus(
         autofocus: true,
@@ -1831,6 +1837,20 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  /// Crear con preset de materia cuando hay filtro (UX nombres): título
+  /// "[CODE] " + subject_id para el POST. Sin filtro, diálogo normal.
+  void _showCreateForSubject() {
+    final code = _subjectFilter;
+    if (code == null || code.isEmpty) {
+      _showCreateDialog();
+      return;
+    }
+    _showCreateDialog(
+      initialTitle: subjectNotePrefix(code),
+      subjectId: _subjectIdForCreate,
     );
   }
 
@@ -2154,7 +2174,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             trailing: NeobrutalistBadge(label: _shortcutLabel, compact: true),
             variant: NeobrutalistButtonVariant.accent,
             borderWidth: AppDimens.borderWidthAction,
-            onPressed: _showCreateDialog,
+            onPressed: _showCreateForSubject,
           ),
           const SizedBox(width: AppDimens.spaceMd),
         ],
@@ -2453,7 +2473,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                           vertical: 12,
                         ),
                       ),
-                      onPressed: _showCreateDialog,
+                      onPressed: _showCreateForSubject,
                       icon: const Icon(Icons.add_rounded, size: 18),
                       label: const Text(
                         'CREAR PRIMERA NOTA',
