@@ -37,6 +37,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 
 func TestMeetingCalendarFlow_Conectado_PersisteEventID(t *testing.T) {
 	svc, store, cli, gid, admin, _ := calendarFlowSetup("tok-cal")
+	waitNotification := observeMeetingNotification(t, svc)
 
 	m, err := svc.CreateMeeting(context.Background(), gid, admin, "Reunión flujo cal", nil, "2026-09-25T15:00:00Z", nil, nil)
 	if err != nil {
@@ -44,7 +45,10 @@ func TestMeetingCalendarFlow_Conectado_PersisteEventID(t *testing.T) {
 	}
 	mid, _ := uuid.FromBytes(m.ID.Bytes[:])
 
-	waitFor(t, "evento calendar", func() bool { return cli.Count == 1 })
+	waitNotification()
+	if cli.Count != 1 {
+		t.Fatalf("se esperaba un envío, got %d", cli.Count)
+	}
 	if cli.LastEvent == nil || cli.LastEvent.Summary != "Reunión flujo cal" {
 		t.Fatalf("evento inesperado: %+v", cli.LastEvent)
 	}
@@ -64,14 +68,15 @@ func TestMeetingCalendarFlow_SinConexion_CreadaIgual(t *testing.T) {
 	cli := calendar.NewMockClient()
 	notifier := NewCalendarMeetingNotifier(&noConnGateway{}, cli, store)
 	svc := NewMeetingService(store, notifier)
+	waitNotification := observeMeetingNotification(t, svc)
 
 	m, err := svc.CreateMeeting(context.Background(), gid, admin, "Sin calendar", nil, "2026-09-25T15:00:00Z", nil, nil)
 	if err != nil {
 		t.Fatalf("sin conexión igual debe crear (201): %v", err)
 	}
 	mid, _ := uuid.FromBytes(m.ID.Bytes[:])
-	// Dar margen al background y verificar que NO persistió nada.
-	time.Sleep(200 * time.Millisecond)
+	// Esperar el notifier antes de comprobar que no persistió nada.
+	waitNotification()
 	if cli.Count != 0 {
 		t.Fatalf("sin conexión no debe crear eventos, got %d", cli.Count)
 	}
@@ -82,6 +87,7 @@ func TestMeetingCalendarFlow_SinConexion_CreadaIgual(t *testing.T) {
 
 func TestMeetingCalendarFlow_ErrorGoogle_CreadaIgual(t *testing.T) {
 	svc, store, cli, gid, admin, _ := calendarFlowSetup("tok-cal")
+	waitNotification := observeMeetingNotification(t, svc)
 	cli.CreateErr = &calendar.CalendarError{Code: 500, Message: "boom"}
 
 	m, err := svc.CreateMeeting(context.Background(), gid, admin, "Google caído", nil, "2026-09-25T15:00:00Z", nil, nil)
@@ -89,7 +95,7 @@ func TestMeetingCalendarFlow_ErrorGoogle_CreadaIgual(t *testing.T) {
 		t.Fatalf("con Google caído igual debe crear (201): %v", err)
 	}
 	mid, _ := uuid.FromBytes(m.ID.Bytes[:])
-	time.Sleep(200 * time.Millisecond)
+	waitNotification()
 	if got := store.CalendarEventFor(mid.String()); got != "" {
 		t.Fatalf("con error no debe persistir event id, got %q", got)
 	}
