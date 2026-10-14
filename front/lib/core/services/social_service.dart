@@ -613,7 +613,7 @@ class SocialService {
 
   // POST /groups/:id/meetings
   // {title required, description?, scheduled_at RFC3339 required, notify_discord?}
-  // -> 201 {meeting_id}. No existe GET /groups/:id/meetings en el backend.
+  // -> 201 {meeting_id}. Ver back/social/internal/handler/http/meeting_handler.go.
   Future<String> createMeeting({
     required String groupId,
     required String title,
@@ -650,6 +650,65 @@ class SocialService {
       );
     }
     return id;
+  }
+
+  // GET /groups/:id/meetings -> 200 {data: [...]}. Solo miembros, futuras.
+  // Ventana "próximas reuniones" (tarea 3_5_14).
+  Future<List<MeetingItem>> listMeetings(String groupId) async {
+    final id = groupId.trim();
+    if (id.isEmpty) {
+      throw SocialApiException('groupId vacío.', code: 'invalid_group_id');
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .get(
+            Uri.parse('$baseUrl/groups/$id/meetings'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) throw _toError(res);
+    final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    final raw = body['data'];
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map<String, dynamic>>()
+        .map(MeetingItem.fromJson)
+        .toList();
+  }
+
+  // GET /notifications/me -> 200 {data: [...]}. Cajita de notificaciones (3_5_14).
+  Future<List<MeetingNotification>> myNotifications() async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .get(Uri.parse('$baseUrl/notifications/me'), headers: _headers())
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) throw _toError(res);
+    final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    final raw = body['data'];
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map<String, dynamic>>()
+        .map(MeetingNotification.fromJson)
+        .toList();
+  }
+
+  // POST /notifications/:id/read -> 200. Marca como leída (3_5_14).
+  Future<void> markNotificationRead(String id) async {
+    final nid = id.trim();
+    if (nid.isEmpty) {
+      throw SocialApiException('notification id vacío.', code: 'invalid_id');
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .post(
+            Uri.parse('$baseUrl/notifications/$nid/read'),
+            headers: _headers(json: true),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) throw _toError(res);
   }
 
   // POST /groups/:id/leave -> 204. Solo miembros.

@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository/sqlc"
 )
 
@@ -63,7 +64,7 @@ func (r *MeetingRepository) CreateMeetingWithNotifications(ctx context.Context, 
 			continue
 		}
 		if memberID.Bytes == arg.CreatedByUserID.Bytes {
-			continue // no notificar al creador
+			continue // no notificar al creador (regla 4.8)
 		}
 		if _, err := qtx.CreateMeetingNotification(ctx, sqlc.CreateMeetingNotificationParams{
 			MeetingID: meeting.ID,
@@ -116,4 +117,43 @@ func (r *MeetingRepository) SetCalendarEventID(ctx context.Context, meetingID pg
 		ID:                    meetingID,
 		GoogleCalendarEventID: event,
 	})
+}
+
+// ListNotificationsByUser devuelve las notificaciones in-app del usuario con
+// datos de la reunión (tarea 3_5_14). No leídas primero, luego por fecha.
+// SQL directo (precedente: GroupRepository); siempre slice, nunca nil.
+func (r *MeetingRepository) ListNotificationsByUser(ctx context.Context, userID string) ([]model.MeetingNotificationItem, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT n.id::text, n.meeting_id::text, m.group_id::text, m.title,
+		       m.scheduled_at, n.read_at, n.created_at
+		FROM social.meeting_notifications n
+		JOIN social.meetings m ON m.id = n.meeting_id
+		WHERE n.user_id = $1
+		ORDER BY (n.read_at IS NOT NULL), n.created_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.MeetingNotificationItem{}
+	for rows.Next() {
+		var it model.MeetingNotificationItem
+		if err := rows.Scan(&it.ID, &it.MeetingID, &it.GroupID, &it.Title,
+			&it.ScheduledAt, &it.ReadAt, &it.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+// MarkNotificationRead marca como leída una notificación del usuario.
+// Devuelve false si no existe o no es suya (el handler responde 404).
+func (r *MeetingRepository) MarkNotificationRead(ctx context.Context, id, userID string) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE social.meeting_notifications SET read_at = now()
+		WHERE id = $1 AND user_id = $2 AND read_at IS NULL`, id, userID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
