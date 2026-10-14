@@ -12,6 +12,7 @@ import (
 	identityv1 "github.com/kurovoxx/tallerintegracion3/back/auth/internal/gen/identityv1"
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/service"
+	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/utils"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -51,8 +52,11 @@ func NewIdentityServer(users *service.UsersService, jwtSvc *service.JWTService, 
 
 func (s *IdentityServer) GetUser(ctx context.Context, req *identityv1.GetUserRequest) (*identityv1.GetUserResponse, error) {
 	id := strings.TrimSpace(req.GetUserId())
-	if id == "" {
-		return nil, status.Error(codes.InvalidArgument, "user_id requerido")
+	// El repositorio castea a uuid[] en PG: un id malformado rompería la
+	// query en vez de dar NotFound, así que se valida en el borde gRPC
+	// (el HTTP y el repository quedan intactos).
+	if !utils.ValidateUUID(id) {
+		return nil, status.Error(codes.InvalidArgument, "user_id inválido (UUID esperado)")
 	}
 	out, err := s.users.Lookup(ctx, []string{id})
 	if err != nil {
@@ -70,7 +74,21 @@ func (s *IdentityServer) GetUser(ctx context.Context, req *identityv1.GetUserReq
 }
 
 func (s *IdentityServer) LookupUsers(ctx context.Context, req *identityv1.LookupUsersRequest) (*identityv1.LookupUsersResponse, error) {
-	out, err := s.users.Lookup(ctx, req.GetUserIds())
+	// Paridad con el HTTP: vacíos se descartan en silencio, pero un id no
+	// vacío malformado envenenaría el cast uuid[] de PG, así que el lote se
+	// rechaza (InvalidArgument) en vez de fallar como Internal.
+	ids := make([]string, 0, len(req.GetUserIds()))
+	for _, id := range req.GetUserIds() {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if !utils.ValidateUUID(id) {
+			return nil, status.Error(codes.InvalidArgument, "user_id inválido (UUID esperado)")
+		}
+		ids = append(ids, id)
+	}
+	out, err := s.users.Lookup(ctx, ids)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "internal")
 	}
@@ -99,8 +117,9 @@ func (s *IdentityServer) VerifyToken(ctx context.Context, req *identityv1.Verify
 
 func (s *IdentityServer) GetOAuthToken(ctx context.Context, req *identityv1.GetOAuthTokenRequest) (*identityv1.GetOAuthTokenResponse, error) {
 	userID := strings.TrimSpace(req.GetUserId())
-	if userID == "" {
-		return nil, status.Error(codes.InvalidArgument, "user_id requerido")
+	// Las filas oauth comparan user_id uuid en PG: validar en el borde.
+	if !utils.ValidateUUID(userID) {
+		return nil, status.Error(codes.InvalidArgument, "user_id inválido (UUID esperado)")
 	}
 	var svc oauthTokenService
 	var provider string
@@ -133,8 +152,8 @@ func (s *IdentityServer) GetOAuthToken(ctx context.Context, req *identityv1.GetO
 
 func (s *IdentityServer) ReportCalendarRevoked(ctx context.Context, req *identityv1.ReportCalendarRevokedRequest) (*identityv1.ReportCalendarRevokedResponse, error) {
 	userID := strings.TrimSpace(req.GetUserId())
-	if userID == "" {
-		return nil, status.Error(codes.InvalidArgument, "user_id requerido")
+	if !utils.ValidateUUID(userID) {
+		return nil, status.Error(codes.InvalidArgument, "user_id inválido (UUID esperado)")
 	}
 	// Idempotente y sin fuga de existencia (igual que el HTTP): el error se
 	// ignora a propósito y siempre es OK.

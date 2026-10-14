@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -90,8 +91,11 @@ func main() {
 	internalUsersH := httpHandler.NewInternalUsersHandler(usersSvc)
 	internalAuthH := httpHandler.NewInternalAuthHandler(jwtSvc)
 
+	// Estado del gRPC para /health/db: si Serve muere, HTTP no debe verse
+	// saludable sin señal (ver serveGRPC).
+	grpcStatus := &grpcHealth{}
 	// gRPC Identity en goroutine; HTTP bloquea abajo (igual que social).
-	startGRPC(usersSvc, jwtSvc, driveSvc, calendarSvc, oauthRepo, cfg)
+	startGRPC(usersSvc, jwtSvc, driveSvc, calendarSvc, oauthRepo, cfg, grpcStatus)
 
 	r := gin.Default()
 
@@ -160,6 +164,7 @@ func main() {
 		var now time.Time
 		var db, user string
 		_ = pool.QueryRow(ctx, "select now(), current_database(), current_user").Scan(&now, &db, &user)
+		grpcServing, grpcErr := grpcStatus.snapshot()
 		c.JSON(http.StatusOK, gin.H{
 			"status":   "UP",
 			"database": db,
@@ -167,6 +172,7 @@ func main() {
 			"now":      now.UTC().Format(time.RFC3339),
 			"checks": gin.H{
 				"identity_users": cnt,
+				"grpc":           gin.H{"serving": grpcServing, "error": grpcErr},
 			},
 		})
 	})
@@ -178,9 +184,44 @@ func main() {
 	}
 }
 
+// grpcHealth conserva si el gRPC sigue sirviendo para exponerlo en
+// /health/db (campo aditivo "grpc", sin cambiar los status HTTP). Así un
+// fallo del Serve no deja a HTTP informando salud sin señal.
+type grpcHealth struct {
+	mu      sync.Mutex
+	serving bool
+	errMsg  string
+}
+
+func (h *grpcHealth) setServing() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.serving = true
+	h.errMsg = ""
+}
+
+func (h *grpcHealth) setFailed(err error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.serving = false
+	h.errMsg = err.Error()
+}
+
+func (h *grpcHealth) setStopped() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.serving = false
+}
+
+func (h *grpcHealth) snapshot() (bool, string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.serving, h.errMsg
+}
+
 // startGRPC sirve IdentityService (usuarios, verify y OAuth) para Social y
 // Notes. Logging va afuera para auditar también los rechazos de clave.
-func startGRPC(usersSvc *service.UsersService, jwtSvc *service.JWTService, driveSvc *service.DriveOAuthService, calendarSvc *service.CalendarOAuthService, oauthRepo *repository.OAuthRepository, cfg *config.Config) {
+func startGRPC(usersSvc *service.UsersService, jwtSvc *service.JWTService, driveSvc *service.DriveOAuthService, calendarSvc *service.CalendarOAuthService, oauthRepo *repository.OAuthRepository, cfg *config.Config, health *grpcHealth) {
 	if cfg.InternalAPIKey == "" {
 		log.Printf("gRPC identity: INTERNAL_API_KEY vacía, todas las llamadas fallarán (fail-closed)")
 	}
@@ -195,8 +236,21 @@ func startGRPC(usersSvc *service.UsersService, jwtSvc *service.JWTService, drive
 	identityv1.RegisterIdentityServiceServer(s, grpchandler.NewIdentityServer(usersSvc, jwtSvc, driveSvc, calendarSvc, oauthRepo))
 	go func() {
 		log.Printf("Servidor gRPC de Identity en :%s", cfg.GRPCPort)
-		if err := s.Serve(lis); err != nil {
-			log.Printf("gRPC detenido: %v", err)
-		}
+		serveGRPC(s, lis, cfg.GRPCPort, health)
 	}()
+}
+
+// serveGRPC bloquea sirviendo y deja constancia del resultado en health para
+// /health/db. Un Serve que termina (p. ej. Stop) queda registrado con su
+// error en vez de morir en silencio; HTTP no se detiene por esto.
+func serveGRPC(s *grpc.Server, lis net.Listener, port string, health *grpcHealth) {
+	health.setServing()
+	if err := s.Serve(lis); err != nil {
+		health.setFailed(err)
+		log.Printf("gRPC detenido en :%s: %v", port, err)
+		return
+	}
+	// No debería pasar (Serve solo vuelve con error), pero nunca mentir.
+	health.setStopped()
+	log.Printf("gRPC detenido en :%s", port)
 }

@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"github.com/google/uuid"
 )
 
 var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
@@ -45,4 +47,15 @@ func ValidatePassword(pwd string) bool {
 		}
 	}
 	return hasLetter && hasDigit
+}
+
+// ValidateUUID verifica forma UUID (los ids de identity.* son uuid en PG:
+// un valor malformado rompería el cast $1::uuid[] en vez de dar NotFound).
+// Vacío o solo espacios también es inválido.
+func ValidateUUID(s string) bool {
+	if strings.TrimSpace(s) == "" {
+		return false
+	}
+	_, err := uuid.Parse(s)
+	return err == nil
 }
