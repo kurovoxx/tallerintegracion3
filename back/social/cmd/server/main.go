@@ -17,6 +17,7 @@ import (
 	socialv1 "github.com/kurovoxx/tallerintegracion3/back/social/internal/gen/socialv1"
 	grpcHandler "github.com/kurovoxx/tallerintegracion3/back/social/internal/handler/grpc"
 	httpHandler "github.com/kurovoxx/tallerintegracion3/back/social/internal/handler/http"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/identity"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/interceptor"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/middleware"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository"
@@ -70,9 +71,13 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	groupRepo := repository.NewGroupRepository(pool)
 	streamRepo := repository.NewStreamRepository(pool)
 	groupSvc := service.NewGroupService(groupRepo, streamNotifierFor(cfg, streamRepo))
-	// Directorio Identity para nombres en GET /groups/{id}/members
+	// Directorio Identity por gRPC para nombres en GET /groups/{id}/members
 	// (best-effort: sin Auth responde solo IDs, sin romper).
-	groupSvc.SetUserDirectory(service.NewHTTPUserDirectory(cfg.AuthBaseURL, cfg.InternalKey))
+	identityGRPC, err := identity.DialIdentityGRPC(cfg.IdentityGRPCAddr, cfg.InternalKey, 5*time.Second)
+	if err != nil {
+		log.Fatalf("identity grpc: dirección inválida %q: %v", cfg.IdentityGRPCAddr, err)
+	}
+	groupSvc.SetUserDirectory(identity.NewGRPCUserDirectory(identityGRPC))
 
 	todoRepo := repository.NewTodoRepository(pool)
 	todoSvc := service.NewTodoService(todoRepo)
@@ -146,10 +151,23 @@ func calendarNotifierFor(cfg *config.Config, meetingRepo *repository.MeetingRepo
 			meetingRepo,
 		)
 	}
-	// CALENDAR_MODE=real: token vía Auth interno + API REST de Google.
-	log.Printf("calendar sync: modo real contra Auth %s", cfg.AuthBaseURL)
+	// CALENDAR_MODE=real: token vía Auth gRPC + API REST de Google.
+	// La clave se valida al arrancar: una clave mala falsearía todos los
+	// diagnósticos OAuth, así que se falla rápido en vez de operar a ciegas.
+	log.Printf("calendar sync: modo real contra Identity gRPC %s", cfg.IdentityGRPCAddr)
+	calendarClient, calendarConn, err := service.DialIdentityClient(cfg.IdentityGRPCAddr)
+	if err != nil {
+		log.Fatalf("identity grpc: dirección inválida %q: %v", cfg.IdentityGRPCAddr, err)
+	}
+	gateway := &service.GRPCalendarGateway{Client: calendarClient, Key: cfg.InternalKey}
+	validateCtx, validateCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer validateCancel()
+	if err := gateway.Validate(validateCtx); err != nil {
+		calendarConn.Close()
+		log.Fatalf("identity grpc: Auth no disponible o clave inválida: %v", err)
+	}
 	return service.NewCalendarMeetingNotifier(
-		&service.AuthCalendarGateway{BaseURL: cfg.AuthBaseURL, InternalKey: cfg.InternalKey},
+		gateway,
 		calendar.NewRESTClient(),
 		meetingRepo,
 	)

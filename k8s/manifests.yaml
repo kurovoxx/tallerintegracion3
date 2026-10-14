@@ -108,6 +108,7 @@ spec:
             - {name: SOCIAL_PORT, value: "8083"}
             - {name: SOCIAL_GRPC_PORT, value: "9083"}
             - {name: AUTH_BASE_URL, value: "http://auth:8080"}
+            - {name: IDENTITY_GRPC_ADDR, value: "auth:9080"}
             - {name: CALENDAR_MODE, value: mock}
             - {name: STREAM_MODE, value: real}
 ---
