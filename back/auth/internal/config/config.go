@@ -25,6 +25,7 @@ type Config struct {
 	GoogleClientSecret string
 	GoogleRedirectURI  string
 	InternalAPIKey     string // secreto compartido para endpoints servicio-a-servicio (X-Internal-Key)
+	GRPCPort           string // servidor gRPC Identity (IdentityService)
 }
 
 func Load() *Config {
@@ -60,6 +61,13 @@ func Load() *Config {
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
 		GoogleRedirectURI:  os.Getenv("GOOGLE_REDIRECT_URI"),
 		InternalAPIKey:     os.Getenv("INTERNAL_API_KEY"),
+		GRPCPort:           os.Getenv("AUTH_GRPC_PORT"),
+	}
+	if cfg.GRPCPort == "" {
+		cfg.GRPCPort = os.Getenv("GRPC_PORT")
+	}
+	if cfg.GRPCPort == "" {
+		cfg.GRPCPort = "9080"
 	}
 	if cfg.SMTPHost == "" {
 		cfg.SMTPHost = "smtp.gmail.com"

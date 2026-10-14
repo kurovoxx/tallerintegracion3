@@ -31,6 +31,7 @@ generate: tools
 	# (ver documentation/docMartin.md §3_5_2). infacadem genera lo suyo
 	# con back/proto/infacadem/generate.sh.
 	cd back/proto/common && PATH="$(BIN_DIR):$$PATH" buf generate
+	cd back/proto/auth && PATH="$(BIN_DIR):$$PATH" buf lint && PATH="$(BIN_DIR):$$PATH" buf generate
 	cd back/proto/social && PATH="$(BIN_DIR):$$PATH" buf lint && PATH="$(BIN_DIR):$$PATH" buf generate
 	cd back/proto/social && PATH="$(BIN_DIR):$$PATH" buf generate --template buf.gen.notes.yaml
 
