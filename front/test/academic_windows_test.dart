@@ -3,8 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taller_integracion_front/features/academic/course_windows.dart';
 import 'package:taller_integracion_front/features/academic/courses_screen.dart';
+import 'package:taller_integracion_front/features/academic/grade_calculator_screen.dart';
 import 'package:taller_integracion_front/features/notes/all_notes_screen.dart';
-
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
@@ -61,14 +61,15 @@ void main() {
     expect(find.text('UNIDADES · REDES'), findsNothing);
   });
 
-  testWidgets('MaterialsWindow sin apuntes: estado vacío, no crash', (tester) async {
+  testWidgets('MaterialsWindow sin sesión: error visible con reintentar', (tester) async {
     await pumpSettled(
       tester,
-      const MaterialsWindow(subjectCode: 'INF-301', subjectName: 'Redes'),
+      const MaterialsWindow(subjectId: 's1', subjectCode: 'INF-301', subjectName: 'Redes'),
     );
     expect(find.text('MATERIALES · REDES'), findsOneWidget);
+    expect(find.text('Crear apunte'), findsNothing);
     expect(find.text('CREAR APUNTE'), findsOneWidget);
-    expect(find.textContaining('SIN APUNTES'), findsOneWidget);
+    expect(find.text('REINTENTAR'), findsOneWidget);
   });
 
   testWidgets('EvaluationsWindow sin sesión: error visible con reintentar', (tester) async {
@@ -95,7 +96,7 @@ void main() {
   testWidgets('Crear apunte vuelve a Materiales (no al home)', (tester) async {
     await pumpSettled(
       tester,
-      const MaterialsWindow(subjectCode: 'INF-301', subjectName: 'Redes'),
+      const MaterialsWindow(subjectId: 's1', subjectCode: 'INF-301', subjectName: 'Redes'),
     );
     await tester.tap(find.text('CREAR APUNTE'));
     for (var i = 0; i < 6; i++) {
@@ -112,8 +113,7 @@ void main() {
     expect(find.text('MATERIALES · REDES'), findsOneWidget);
   });
 
-  testWidgets('Detalle muestra solo ventanas, sin tabs viejos', (tester) async {
-    await tester.pumpWidget(const MaterialApp(home: CoursesScreen()));
+  testWidgets('Detalle muestra solo ventanas, sin tabs viejos', (tester) async {    await tester.pumpWidget(const MaterialApp(home: CoursesScreen()));
     await tester.pump(const Duration(milliseconds: 700));
     await tester.pump(const Duration(milliseconds: 300));
     await tester.tap(find.text('CÁLCULO III').first);
@@ -134,5 +134,25 @@ void main() {
     await tester.tap(find.byType(BackButton));
     await tester.pumpAndSettle();
     expect(find.text('VER UNIDADES'), findsOneWidget);
+  });
+
+  testWidgets('Calculadora embebida preselecciona la materia', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: GradeCalculatorScreen(
+              embedded: true,
+              initialCourse: 'Redes de Computadores',
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    // Materia antepuesta al dropdown y sin header propio (lo da la ventana).
+    expect(find.text('REDES DE COMPUTADORES'), findsOneWidget);
+    expect(find.text('CALCULADORA DE NOTAS'), findsNothing);
+    expect(find.text('CALCULAR PROMEDIO'), findsOneWidget);
   });
 }

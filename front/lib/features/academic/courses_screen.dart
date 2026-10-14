@@ -616,7 +616,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
           icon: Icons.description_rounded,
           label: 'Ver Materiales',
           active: false,
-          onTap: () => open(MaterialsWindow(subjectCode: code, subjectName: name)),
+          onTap: () => open(MaterialsWindow(subjectId: subjectId, subjectCode: code, subjectName: name)),
         ),
         _CourseTabButton(
           icon: Icons.bar_chart_rounded,

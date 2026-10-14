@@ -310,9 +310,10 @@ class _ContentsTabState extends State<ContentsTab> {
 /// Tab Evaluaciones (UX-05): notas backend con pin (una por materia),
 /// renombrar por PATCH y entrada a la calculadora (simulación local).
 class EvaluationsTab extends StatefulWidget {
-  const EvaluationsTab({super.key, required this.subjectId});
+  const EvaluationsTab({super.key, required this.subjectId, this.subjectName = ''});
 
   final String subjectId;
+  final String subjectName;
 
   @override
   State<EvaluationsTab> createState() => _EvaluationsTabState();
@@ -507,15 +508,15 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
             ),
           ),
         for (final node in _nodes) _gradeRow(node.grade),
-        const SizedBox(height: 12),
-        NeobrutalistButton(
-          label: 'Abrir calculadora',
-          icon: Icons.calculate_rounded,
-          variant: NeobrutalistButtonVariant.primary,
-          expand: true,
-          onPressed: () => Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const GradeCalculatorScreen()),
-          ),
+        const SizedBox(height: 20),
+        const Text(
+          'SIMULAR EN CALCULADORA',
+          style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppColors.text),
+        ),
+        const SizedBox(height: 10),
+        GradeCalculatorScreen(
+          embedded: true,
+          initialCourse: widget.subjectName.isEmpty ? null : widget.subjectName,
         ),
       ],
     );

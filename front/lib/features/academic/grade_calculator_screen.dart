@@ -93,19 +93,29 @@ class _CalcEntry {
 }
 
 class GradeCalculatorScreen extends StatefulWidget {
-  const GradeCalculatorScreen({super.key});
+  const GradeCalculatorScreen({super.key, this.initialCourse, this.embedded = false});
+
+  /// Curso preseleccionado (UX materiales: materia de la ventana).
+  /// Si no está en la lista, se antepone.
+  final String? initialCourse;
+
+  /// Embebida en otra ventana (sin Scaffold/scroll/header propios:
+  /// los provee el padre).
+  final bool embedded;
 
   @override
   State<GradeCalculatorScreen> createState() => _GradeCalculatorScreenState();
 }
 
 class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
-  final List<String> _courses = const [
+  static const List<String> _baseCourses = [
     'Cálculo III',
     'Estructuras de Datos',
     'Física General II',
     'Ingeniería de Software',
   ];
+
+  late final List<String> _courses;
 
   late String _selectedCourse;
   final TextEditingController _targetController =
@@ -140,7 +150,13 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
   @override
   void initState() {
     super.initState();
-    _selectedCourse = _courses.first;
+    final initial = widget.initialCourse?.trim();
+    if (initial != null && initial.isNotEmpty && !_baseCourses.contains(initial)) {
+      _courses = [initial, ..._baseCourses];
+    } else {
+      _courses = List<String>.of(_baseCourses);
+    }
+    _selectedCourse = (initial != null && initial.isNotEmpty) ? initial : _courses.first;
     _initializeNormalGrades();
     _loadFromBackend();
   }
@@ -876,6 +892,37 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     final isDesktop =
         MediaQuery.of(context).size.width > AppDimens.breakpointDesktop;
 
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (!widget.embedded) _buildHeader(),
+        if (!widget.embedded) const SizedBox(height: 20),
+        if (widget.embedded)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text(
+              _selectedCourse.toUpperCase(),
+              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: AppColors.muted),
+            ),
+          ),
+        _buildConfiguration(isDesktop),
+        const SizedBox(height: 18),
+        _buildBackendStatus(),
+        _finalExamMode
+            ? _buildFinalExamMode()
+            : _buildNormalMode(isDesktop),
+        const SizedBox(height: 18),
+        _buildWeightSummary(),
+        const SizedBox(height: 20),
+        _buildActions(),
+        const SizedBox(height: 22),
+        if (_resultState != _ResultState.none) _buildResult(),
+      ],
+    );
+
+    // Embebida: el padre provee Scaffold + scroll; se conserva el ancho.
+    if (widget.embedded) return content;
+
     return Scaffold(
       backgroundColor: AppColors.bg,
       body: SafeArea(
@@ -887,25 +934,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
           child: Center(
             child: ConstrainedBox(
               constraints: BoxConstraints(maxWidth: isDesktop ? 1040 : 640),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _buildHeader(),
-                  const SizedBox(height: 20),
-                  _buildConfiguration(isDesktop),
-                  const SizedBox(height: 18),
-                  _buildBackendStatus(),
-                  _finalExamMode
-                      ? _buildFinalExamMode()
-                      : _buildNormalMode(isDesktop),
-                  const SizedBox(height: 18),
-                  _buildWeightSummary(),
-                  const SizedBox(height: 20),
-                  _buildActions(),
-                  const SizedBox(height: 22),
-                  if (_resultState != _ResultState.none) _buildResult(),
-                ],
-              ),
+              child: content,
             ),
           ),
         ),

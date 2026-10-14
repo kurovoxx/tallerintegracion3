@@ -81,6 +81,7 @@ class AllNotesScreen extends StatefulWidget {
     super.key,
     this.database,
     this.initialSubjectCode,
+    this.initialSubjectId,
     this.autoOpenCreate = false,
     this.showBackButton = false,
   });
@@ -89,6 +90,9 @@ class AllNotesScreen extends StatefulWidget {
   /// Filtro de materia academic (código, ej. "INF-301"): lista solo notas
   /// cuyo título empieza con "[CODE] ". Null = sin filtro.
   final String? initialSubjectCode;
+
+  /// UUID de materia academic para el POST (subject_id del backend).
+  final String? initialSubjectId;
 
   /// Abre el diálogo de crear al iniciar (con el prefijo de materia).
   final bool autoOpenCreate;
@@ -248,7 +252,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     _notesFuture = _initAndLoad();
     if (widget.autoOpenCreate) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) openCreateDialog(initialTitle: _subjectTitlePrefix());
+        if (mounted) {
+          openCreateDialog(
+            initialTitle: _subjectTitlePrefix(),
+            subjectId: widget.initialSubjectId,
+          );
+        }
       });
     }
   }
@@ -769,12 +778,15 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     required String title,
     required String content,
     required String visibility,
+    String? subjectId,
   }) async {
     final url = '$notesBaseUrl/notes';
     final body = <String, String>{
       'title': title,
       'content': content,
       'visibility': visibility,
+      if (subjectId != null && subjectId.trim().isNotEmpty)
+        'subject_id': subjectId.trim(),
     };
     debugPrint(
       '[Notes] POST titleChars=${title.length} contentChars=${content.length}',
@@ -1821,10 +1833,10 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   /// Punto de entrada público para que el shell (sidebar, rail, FAB o atajo
   /// Ctrl+N) abra el diálogo de creación de nota.
   /// [initialTitle] pre-rellena el título (UX-05: prefijo "[CODE] " academic).
-  void openCreateDialog({String? initialTitle}) =>
-      _showCreateDialog(initialTitle: initialTitle);
+  void openCreateDialog({String? initialTitle, String? subjectId}) =>
+      _showCreateDialog(initialTitle: initialTitle, subjectId: subjectId);
 
-  void _showCreateDialog({String? initialTitle}) {
+  void _showCreateDialog({String? initialTitle, String? subjectId}) {
     showNeobrutalistDialog<void>(
       context: context,
       dialog: _CreateNoteDialog(
@@ -1878,6 +1890,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             note: note,
             attachments: attachments,
             revision: revision,
+            subjectId: subjectId,
           );
           _pendingNoteSyncs[tempId] = syncFuture;
           unawaited(syncFuture);
@@ -1895,6 +1908,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     required LocalNote note,
     required List<_DriveUploadResult> attachments,
     required int revision,
+    String? subjectId,
   }) async {
     String? resolvedId;
     try {
@@ -1902,6 +1916,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         title: note.title,
         content: _withoutPendingAttachments(note.content),
         visibility: note.visibility,
+        subjectId: subjectId,
       );
       if (realId != null &&
           realId.isNotEmpty &&
