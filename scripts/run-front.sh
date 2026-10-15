@@ -9,7 +9,7 @@ echo "Detectando SO: $(uname -s)"
 echo ""
 echo "¿Quieres correr Flutter para Linux o Windows?"
 echo "  0) local         - nativo Linux contra backend local (localhost:8085/8082/8083)"
-echo "  1) linux         - nativo Linux contra Pillán"
+echo "  1) linux         - igual que local (backend local)"
 echo "  2) windows       - nativo Windows contra Pillán (Windows + Visual Studio)"
 echo "  3) web           - flutter run -d chrome contra Pillán"
 echo "  4) docker        - docker compose up front (web via nginx http://localhost:8086)"
@@ -32,24 +32,13 @@ check_fedora_deps() {
 }
 
 case "$CHOICE" in
-  0|local|Local)
+  0|local|Local|1|linux|Linux)
     echo ">> Linux nativo contra backend local"
     check_fedora_deps
     if ! command -v flutter >/dev/null 2>&1; then echo "Flutter no encontrado"; exit 1; fi
     cd "$FRONT_DIR"
     flutter pub get
-    flutter run -d linux --dart-define=API_BASE_URL=http://localhost:8085 --dart-define=NOTES_BASE_URL=http://localhost:8082 --dart-define=SOCIAL_BASE_URL=http://localhost:8083
-    ;;
-  1|linux|Linux)
-    echo ">> Linux nativo"
-    check_fedora_deps
-    if ! command -v flutter >/dev/null 2>&1; then
-      echo "Flutter no encontrado. Instálalo: https://docs.flutter.dev/get-started/install/linux"
-      exit 1
-    fi
-    cd "$FRONT_DIR"
-    flutter pub get
-    flutter run -d linux
+    flutter run -d linux --dart-define=API_BASE_URL=http://localhost:8085 --dart-define=NOTES_BASE_URL=http://localhost:8082 --dart-define=SOCIAL_BASE_URL=http://localhost:8083 --dart-define=ACADEMIC_BASE_URL=http://localhost:8087
     ;;
   2|windows|Windows)
     if [[ "$(uname -s)" != *"NT"* && "$(uname -s)" != *"MINGW"* ]]; then
@@ -67,7 +56,7 @@ case "$CHOICE" in
     fi
     cd "$FRONT_DIR"
     flutter pub get
-    flutter run -d windows
+    flutter run -d windows --dart-define=API_BASE_URL=http://localhost:8085 --dart-define=NOTES_BASE_URL=http://localhost:8082 --dart-define=SOCIAL_BASE_URL=http://localhost:8083 --dart-define=ACADEMIC_BASE_URL=http://localhost:8087
     ;;
   3|web|Web)
     echo ">> Web (Chrome)"
@@ -95,10 +84,11 @@ case "$CHOICE" in
     API_URL="${API_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-auth}"
     NOTES_URL="${NOTES_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-notes}"
     SOCIAL_URL="${SOCIAL_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-social}"
+    ACADEMIC_URL="${ACADEMIC_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-academic}"
     echo "API: $API_URL"
     cd "$FRONT_DIR"
     flutter pub get
-    flutter run -d linux --dart-define=API_BASE_URL="$API_URL" --dart-define=NOTES_BASE_URL="$NOTES_URL" --dart-define=SOCIAL_BASE_URL="$SOCIAL_URL"
+    flutter run -d linux --dart-define=API_BASE_URL="$API_URL" --dart-define=NOTES_BASE_URL="$NOTES_URL" --dart-define=SOCIAL_BASE_URL="$SOCIAL_URL" --dart-define=ACADEMIC_BASE_URL="$ACADEMIC_URL"
     ;;
   6|windows-deploy|wdeploy|windows_deploy)
     echo ">> Windows nativo contra dominio del Ingress (sin auth local)"
@@ -118,10 +108,11 @@ case "$CHOICE" in
     API_URL="${API_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-auth}"
     NOTES_URL="${NOTES_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-notes}"
     SOCIAL_URL="${SOCIAL_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-social}"
+    ACADEMIC_URL="${ACADEMIC_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-academic}"
     echo "API: $API_URL"
     cd "$FRONT_DIR"
     flutter pub get
-    flutter run -d windows --dart-define=API_BASE_URL="$API_URL" --dart-define=NOTES_BASE_URL="$NOTES_URL" --dart-define=SOCIAL_BASE_URL="$SOCIAL_URL"
+    flutter run -d windows --dart-define=API_BASE_URL="$API_URL" --dart-define=NOTES_BASE_URL="$NOTES_URL" --dart-define=SOCIAL_BASE_URL="$SOCIAL_URL" --dart-define=ACADEMIC_BASE_URL="$ACADEMIC_URL"
     ;;
   *)
     echo "Opción inválida"
