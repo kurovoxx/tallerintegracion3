@@ -3,7 +3,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taller_integracion_front/features/academic/course_windows.dart';
 import 'package:taller_integracion_front/features/notes/all_notes_screen.dart';
-import 'package:taller_integracion_front/features/notes/notes_api.dart';
 
 // Consolidación UX (tester): ventanas con back + crear-apunte con preset
 // que cancela de vuelta a Materiales. Solo tests.
@@ -60,54 +59,22 @@ void main() {
     expect(find.text('EVALUACIONES · REDES'), findsNothing);
   });
 
-  testWidgets('MaterialsWindow: back vuelve al curso', (tester) async {
-    await pumpOnCourse(
-      tester,
-      const MaterialsWindow(subjectId: 'mat-1', subjectCode: 'INF-301', subjectName: 'Redes'),
-      'MATERIALES · REDES',
-    );
-    await tester.tap(find.byType(BackButton));
-    await tester.pumpAndSettle();
-    expect(find.text('CURSO'), findsOneWidget);
-    expect(find.text('MATERIALES · REDES'), findsNothing);
-  });
-
-  testWidgets('Flujo directo: tap abre visor sin AllNotesScreen intermedia',
+  testWidgets('Ver Materiales abre apuntes directo con preset y back',
       (tester) async {
+    // Contrato del botón Ver Materiales (courses_screen): AllNotesScreen
+    // con preset de materia + back, sin ventana intermedia.
     await tester.pumpWidget(
-      MaterialApp(
-        home: MaterialsWindow(
-          subjectId: 'mat-1',
-          subjectCode: 'INF-301',
-          subjectName: 'Redes',
-          initialNotes: [
-            RemoteNote(
-              id: 'n1',
-              title: 'Apunte 1',
-              content: 'Contenido directo',
-              visibility: 'private',
-              updatedAt: DateTime(2026, 10, 1),
-              subjectId: 'mat-1',
-            ),
-          ],
+      const MaterialApp(
+        home: AllNotesScreen(
+          initialSubjectCode: 'INF-301',
+          initialSubjectId: 'mat-1',
+          initialSubjectName: 'Redes',
+          showBackButton: true,
         ),
       ),
     );
-    await tester.pump();
-    expect(find.text('MATERIALES · REDES'), findsOneWidget);
-    expect(find.text('ABRIR APUNTES'), findsNothing);
-
-    await tester.tap(find.text('Apunte 1'));
-    await tester.pumpAndSettle();
-    // Visor directo, sin pasar por AllNotesScreen.
-    expect(find.byType(NoteViewerWindow), findsOneWidget);
-    expect(find.byType(AllNotesScreen), findsNothing);
-    expect(find.text('Contenido directo'), findsOneWidget);
-
-    // Back del visor vuelve a Materiales.
-    await tester.tap(find.byType(BackButton));
-    await tester.pumpAndSettle();
-    expect(find.byType(NoteViewerWindow), findsNothing);
-    expect(find.text('MATERIALES · REDES'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('NOTAS REDES'), findsOneWidget);
+    expect(find.byTooltip('Volver'), findsOneWidget);
   });
 }
