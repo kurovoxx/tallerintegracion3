@@ -102,6 +102,10 @@ message Member {
 
 message AccountDeletionCleanupRequest {
   string user_id = 1;
+  // JWT vigente del usuario: Identity lo reenvía ANTES de borrar su fila.
+  // Social lo reenvía a Notes unshare-all por grupo (caller == user, 3_5_7).
+  // Vacío = solo sucesión, sin limpieza en Notes.
+  string user_token = 2;
 }
 
 message AccountDeletionCleanupResponse {
