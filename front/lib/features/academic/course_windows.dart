@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
-import '../notes/all_notes_screen.dart';
 import '../notes/notes_api.dart';
 import 'course_detail_tabs.dart';
 
@@ -55,18 +54,25 @@ class MaterialsWindow extends StatefulWidget {
     required this.subjectId,
     required this.subjectCode,
     required this.subjectName,
+    this.notesApi,
+    this.initialNotes,
   });
 
   final String subjectId;
   final String subjectCode;
   final String subjectName;
 
+  /// Inyección solo para tests: evita I/O real y hace determinista el flujo
+  /// tap → visor sin depender de sesión/red.
+  final NotesApi? notesApi;
+  final List<RemoteNote>? initialNotes;
+
   @override
   State<MaterialsWindow> createState() => _MaterialsWindowState();
 }
 
 class _MaterialsWindowState extends State<MaterialsWindow> {
-  final NotesApi _api = NotesApi();
+  late final NotesApi _api;
   bool _isLoading = true;
   String? _error;
   List<RemoteNote> _notes = const [];
@@ -74,7 +80,13 @@ class _MaterialsWindowState extends State<MaterialsWindow> {
   @override
   void initState() {
     super.initState();
-    _load();
+    _api = widget.notesApi ?? NotesApi();
+    if (widget.initialNotes != null) {
+      _notes = widget.initialNotes!;
+      _isLoading = false;
+    } else {
+      _load();
+    }
   }
 
   @override
@@ -112,30 +124,11 @@ class _MaterialsWindowState extends State<MaterialsWindow> {
     }
   }
 
-  /// Abre la vista de notas de la materia (sin auto-disparar el
-  /// formulario: el botón crear existente lo activa) y refresca al volver.
-  Future<void> _openCreate() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => AllNotesScreen(
-          initialSubjectCode: widget.subjectCode,
-          initialSubjectId: widget.subjectId,
-          initialSubjectName: widget.subjectName,
-          showBackButton: true,
-        ),
-      ),
-    );
-    if (mounted) await _load();
-  }
-
-  void _openNote() {
+  /// Abre el visor directo de la nota (sin pantallas intermedias).
+  void _openViewer(RemoteNote note) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => AllNotesScreen(
-          initialSubjectCode: widget.subjectCode,
-          initialSubjectName: widget.subjectName,
-          showBackButton: true,
-        ),
+        builder: (_) => NoteViewerWindow(note: note, subjectName: widget.subjectName),
       ),
     );
   }
@@ -151,14 +144,6 @@ class _MaterialsWindowState extends State<MaterialsWindow> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              NeobrutalistButton(
-                label: 'Abrir apuntes',
-                icon: Icons.add_rounded,
-                variant: NeobrutalistButtonVariant.accent,
-                expand: true,
-                onPressed: _openCreate,
-              ),
-              const SizedBox(height: 12),
               if (_isLoading)
                 Container(
                   height: 120,
@@ -200,12 +185,12 @@ class _MaterialsWindowState extends State<MaterialsWindow> {
   }
 
   /// Tarjeta con el formato visual de nota (lista): badges + título +
-  /// extracto. Solo lectura; tap abre la materia filtrada.
+  /// extracto. Solo lectura; tap abre el visor directo.
   Widget _noteCard(RemoteNote n) {
     final snippet = n.content.trim().replaceAll(RegExp(r'\s+'), ' ');
     return InkWell(
       borderRadius: BorderRadius.circular(AppDimens.radius),
-      onTap: _openNote,
+      onTap: () => _openViewer(n),
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(10),
@@ -251,6 +236,116 @@ class _MaterialsWindowState extends State<MaterialsWindow> {
               style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: AppColors.muted, height: 1.3),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Visor directo de un apunte remoto (UX directo): muestra título +
+/// contenido con back a Materiales. Solo lectura; la creación/edición
+/// vive en el módulo de notas.
+class NoteViewerWindow extends StatelessWidget {
+  const NoteViewerWindow({
+    super.key,
+    required this.note,
+    required this.subjectName,
+  });
+
+  final RemoteNote note;
+  final String subjectName;
+
+  @override
+  Widget build(BuildContext context) {
+    final date =
+        '${note.updatedAt.day.toString().padLeft(2, '0')}/${note.updatedAt.month.toString().padLeft(2, '0')}/${note.updatedAt.year}';
+    final content =
+        note.content.trim().isEmpty ? 'Sin contenido.' : note.content;
+    return Scaffold(
+      backgroundColor: AppColors.bg,
+      appBar: _windowAppBar('APUNTE · ${subjectName.toUpperCase()}'),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              border: Border.all(
+                color: AppColors.border,
+                width: AppDimens.borderWidth,
+              ),
+              borderRadius: BorderRadius.circular(AppDimens.radius),
+              boxShadow: const [
+                BoxShadow(
+                  color: AppColors.border,
+                  offset: Offset(2, 2),
+                  blurRadius: 0,
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.bg,
+                        border: Border.all(
+                          color: AppColors.border,
+                          width: 1.5,
+                        ),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        note.visibility.toUpperCase(),
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w900,
+                          fontSize: 10,
+                          color: AppColors.text,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      date,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 11,
+                        color: AppColors.muted,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  note.title,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 18,
+                    color: AppColors.text,
+                    height: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SelectableText(
+                  content,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.text,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );

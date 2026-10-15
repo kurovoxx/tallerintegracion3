@@ -8,6 +8,7 @@ import 'package:taller_integracion_front/features/academic/course_windows.dart';
 import 'package:taller_integracion_front/features/academic/courses_screen.dart';
 import 'package:taller_integracion_front/features/academic/grade_calculator_screen.dart';
 import 'package:taller_integracion_front/features/notes/all_notes_screen.dart';
+import 'package:taller_integracion_front/features/notes/notes_api.dart';
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
@@ -64,13 +65,14 @@ void main() {
     expect(find.text('UNIDADES · REDES'), findsNothing);
   });
 
-  testWidgets('MaterialsWindow sin sesión: error visible con reintentar', (tester) async {
+  testWidgets('MaterialsWindow sin sesión: error visible con reintentar, sin paso intermedio', (tester) async {
     await pumpSettled(
       tester,
       const MaterialsWindow(subjectId: 's1', subjectCode: 'INF-301', subjectName: 'Redes'),
     );
     expect(find.text('MATERIALES · REDES'), findsOneWidget);
-    expect(find.text('ABRIR APUNTES'), findsOneWidget);
+    expect(find.text('ABRIR APUNTES'), findsNothing);
+    expect(find.text('NOTAS REDES'), findsNothing);
     expect(find.text('REINTENTAR'), findsOneWidget);
   });
 
@@ -95,24 +97,60 @@ void main() {
     expect(find.byTooltip('Volver'), findsNothing);
   });
 
-  testWidgets('Abrir apuntes entra directo a la lista; back vuelve', (tester) async {
-    await pumpSettled(
-      tester,
-      const MaterialsWindow(subjectId: 's1', subjectCode: 'INF-301', subjectName: 'Redes'),
+  testWidgets('MaterialsWindow es la lista inline (sin paso intermedio)', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: MaterialsWindow(
+          subjectId: 's1',
+          subjectCode: 'INF-301',
+          subjectName: 'Redes',
+          initialNotes: [],
+        ),
+      ),
     );
-    await tester.tap(find.text('ABRIR APUNTES'));
-    for (var i = 0; i < 6; i++) {
-      await tester.pump(const Duration(milliseconds: 300));
-    }
-    // Vista que lista (sin auto-formulario encima).
-    expect(find.text('NOTAS REDES'), findsOneWidget);
-    expect(find.text('NUEVA NOTA'), findsNothing);
-    // Back del header vuelve a Materiales (no al home).
-    await tester.tap(find.byTooltip('Volver'));
-    for (var i = 0; i < 6; i++) {
-      await tester.pump(const Duration(milliseconds: 300));
-    }
+    await tester.pump();
     expect(find.text('MATERIALES · REDES'), findsOneWidget);
+    expect(find.textContaining('SIN APUNTES'), findsOneWidget);
+    // Sin botón ni navegación intermedia: la lista inline es la vista.
+    expect(find.text('ABRIR APUNTES'), findsNothing);
+    expect(find.text('NOTAS REDES'), findsNothing);
+    expect(find.text('NUEVA NOTA'), findsNothing);
+  });
+
+  testWidgets('Tap en tarjeta abre visor directo; back vuelve a Materiales', (tester) async {
+    final note = RemoteNote(
+      id: 'n1',
+      title: 'Apunte 1',
+      content: 'Contenido del apunte',
+      visibility: 'private',
+      updatedAt: DateTime(2026, 10, 1),
+      subjectId: 's1',
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MaterialsWindow(
+          subjectId: 's1',
+          subjectCode: 'INF-301',
+          subjectName: 'Redes',
+          initialNotes: [note],
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Apunte 1'), findsOneWidget);
+    expect(find.text('ABRIR APUNTES'), findsNothing);
+
+    await tester.tap(find.text('Apunte 1'));
+    await tester.pumpAndSettle();
+    // Visor directo con contenido.
+    expect(find.text('APUNTE · REDES'), findsOneWidget);
+    expect(find.text('Contenido del apunte'), findsOneWidget);
+
+    // Back del visor vuelve a Materiales (no a lista intermedia).
+    await tester.tap(find.byType(BackButton));
+    await tester.pumpAndSettle();
+    expect(find.text('MATERIALES · REDES'), findsOneWidget);
+    expect(find.text('Apunte 1'), findsOneWidget);
   });
 
   testWidgets('Detalle muestra solo ventanas, sin tabs viejos', (tester) async {    await tester.pumpWidget(const MaterialApp(home: CoursesScreen()));
