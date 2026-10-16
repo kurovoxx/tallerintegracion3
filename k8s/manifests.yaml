@@ -71,6 +71,7 @@ spec:
             - {name: SOCIAL_SERVICE_URL, value: "http://social:8083"}
             - {name: SOCIAL_GRPC_ADDR, value: "social:9083"}
             - {name: SOCIAL_TIMEOUT, value: "5s"}
+            - {name: IDENTITY_GRPC_ADDR, value: "auth:9080"}
 ---
 apiVersion: v1
 kind: Service

@@ -33,6 +33,7 @@ generate: tools
 	cd back/proto/common && PATH="$(BIN_DIR):$$PATH" buf generate
 	cd back/proto/auth && PATH="$(BIN_DIR):$$PATH" buf lint && PATH="$(BIN_DIR):$$PATH" buf generate
 	cd back/proto/auth && PATH="$(BIN_DIR):$$PATH" buf generate --template buf.gen.social.yaml
+	cd back/proto/auth && PATH="$(BIN_DIR):$$PATH" buf generate --template buf.gen.notes.yaml
 	cd back/proto/social && PATH="$(BIN_DIR):$$PATH" buf lint && PATH="$(BIN_DIR):$$PATH" buf generate
 	cd back/proto/social && PATH="$(BIN_DIR):$$PATH" buf generate --template buf.gen.notes.yaml
 

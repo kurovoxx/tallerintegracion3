@@ -21,7 +21,8 @@ type Config struct {
 	AccessTTL   int
 	RefreshTTL  int
 	StorageMode string // "mock" | "drive"
-	// GoogleClientID/Secret permiten renovar el access_token de Drive cuando expiró.
+	// GoogleClientID/Secret: legado del store SQL (PGOAuthTokenStore). En modo
+	// drive productivo la renovación la hace Identity vía gRPC y no se usan.
 	GoogleClientID     string
 	GoogleClientSecret string
 	ReconcileInterval  time.Duration
@@ -31,6 +32,10 @@ type Config struct {
 	// SocialGRPCAddr (host:puerto de social.v1.SocialService). Si está, Notes
 	// usa gRPC para membresía/admin/correos; vacío = HTTP vía SocialServiceURL.
 	SocialGRPCAddr string
+	// IdentityGRPCAddr (host:puerto de identity.v1.IdentityService, tarea
+	// 3_4_6). Notes obtiene y renueva tokens Drive vía gRPC; por defecto
+	// auth:9080.
+	IdentityGRPCAddr string
 	// SocialTimeout acota cada llamada HTTP a Social para no bloquear el request
 	// ante un cuelgue del upstream (degradación controlada).
 	SocialTimeout time.Duration
@@ -71,11 +76,15 @@ func Load() *Config {
 		ReconcileInterval:  30 * time.Second,
 		SocialServiceURL:   strings.TrimSpace(os.Getenv("SOCIAL_SERVICE_URL")),
 		SocialGRPCAddr:     strings.TrimSpace(os.Getenv("SOCIAL_GRPC_ADDR")),
+		IdentityGRPCAddr:   strings.TrimSpace(os.Getenv("IDENTITY_GRPC_ADDR")),
 		SocialTimeout:      5 * time.Second,
 		InternalAPIKey:     strings.TrimSpace(os.Getenv("INTERNAL_API_KEY")),
 	}
 	if cfg.SocialServiceURL == "" {
 		cfg.SocialServiceURL = "http://social:8083"
+	}
+	if cfg.IdentityGRPCAddr == "" {
+		cfg.IdentityGRPCAddr = "auth:9080"
 	}
 	if value := strings.TrimSpace(os.Getenv("SOCIAL_TIMEOUT")); value != "" {
 		if timeout, err := time.ParseDuration(value); err == nil && timeout > 0 {
