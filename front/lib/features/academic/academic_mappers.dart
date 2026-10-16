@@ -426,3 +426,17 @@ String gradeRowLabel(String? backendName, String fallback) {
   if (name == null || name.isEmpty) return fallback;
   return name;
 }
+
+/// Hay notas guardadas para cargar (lista no vacía). El botón "Cargar Notas"
+/// recarga entries + lista + promedio solo si hay guardadas; vacío →
+///
+/// Notificación [reloadEmptyMessage], sin tocar lo local.
+bool hasSavedNotes(List nodes) => nodes.isNotEmpty;
+
+/// Sin notas guardadas: notificación, sin crash ni reseteo de lo local.
+const String reloadEmptyMessage = 'Sin notas para cargar';
+
+/// Con guardadas: recarga fresca (mismo path post-guardado) y descarta
+/// cambios locales sin guardar (documentado en el mensaje).
+const String reloadSuccessMessage =
+    'Notas cargadas (cambios locales descartados)';

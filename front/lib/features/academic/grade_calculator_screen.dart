@@ -167,6 +167,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
   String? _backendAverageStatus;
   String? _backendError;
   bool _isSavingBackend = false;
+  bool _isReloading = false;
 
   @override
   void initState() {
@@ -298,7 +299,19 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
 
   /// Hidrata el estado desde GET grades anidados + average. Sin match o sin
   /// sesión: modo local (comportamiento previo).
-  Future<void> _loadFromBackend() async {
+  ///
+  /// Con [manual] (botón "Cargar Notas" en embebida): recarga bajo demanda
+  /// que descarta cambios locales; reutiliza el mismo path post-guardado
+  /// (entries + lista + promedio vía `onSaved`). Vacío backend → SnackBar
+  /// [reloadEmptyMessage] sin tocar lo local. Error (sin sesión/red) →
+  /// error visible + SnackBar (el botón reintenta, patrón existente).
+  Future<void> _loadFromBackend({bool manual = false}) async {
+    if (manual) {
+      if (_isReloading) return;
+      setState(() {
+        _isReloading = true;
+      });
+    }
     AcademicSubject? match;
     List<AcademicGradeNode> nodes = const [];
     AcademicAverage? avg;
@@ -308,6 +321,15 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       match = _matchSubject(subjects, _selectedCourse);
       if (match == null) {
         if (!mounted) return;
+        if (manual) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(reloadEmptyMessage),
+              backgroundColor: AppColors.border,
+            ),
+          );
+          return;
+        }
         setState(() {
           _backendMode = false;
           _backendSubjectId = null;
@@ -325,6 +347,22 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       }
     } on AcademicApiException catch (e) {
       if (!mounted) return;
+      if (manual) {
+        setState(() {
+          _backendMode = false;
+          _backendSubjectId = null;
+          _backendAverage = null;
+          _backendAverageStatus = null;
+          _backendError = e.message;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.message),
+            backgroundColor: AppColors.border,
+          ),
+        );
+        return;
+      }
       setState(() {
         _backendMode = false;
         _backendSubjectId = null;
@@ -334,8 +372,56 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         _backendError = e.code == 'no_session' ? null : e.message;
       });
       return;
+    } finally {
+      if (manual && mounted) {
+        setState(() {
+          _isReloading = false;
+        });
+      }
     }
     if (!mounted) return;
+    if (manual) {
+      if (!hasSavedNotes(nodes)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(reloadEmptyMessage),
+            backgroundColor: AppColors.border,
+          ),
+        );
+        return;
+      }
+      final subjectId = match.id;
+      final average = avg;
+      setState(() {
+        _resetResult();
+        _disposeNormalGrades();
+        _normalGrades = nodes.map((n) {
+          final item = _itemFromGrade(n.grade, 'backend-${n.grade.id}');
+          item.children = n.children
+              .map((c) => _itemFromGrade(c, 'backend-${c.id}'))
+              .toList();
+          return item;
+        }).toList();
+        if (_normalGrades.isEmpty) _initializeNormalGrades();
+        _backendMode = true;
+        _backendSubjectId = subjectId;
+        _backendAverage = average?.average;
+        _backendAverageStatus = average?.status;
+        _backendError = null;
+      });
+      // Mismo path post-guardado: recarga lista + promedio en el padre para
+      // no desincronizar (recarga fresca, sin duplicados ni IDs viejos).
+      final cb = widget.onSaved;
+      if (cb != null) cb();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(reloadSuccessMessage),
+          backgroundColor: AppColors.border,
+        ),
+      );
+      return;
+    }
     setState(() {
       _resetResult();
       _disposeNormalGrades();
@@ -1026,6 +1112,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         _buildConfiguration(isDesktop),
         const SizedBox(height: 18),
         _buildBackendStatus(),
+        _buildReloadAction(),
         _finalExamMode
             ? _buildFinalExamMode()
             : _buildNormalMode(isDesktop),
@@ -1292,6 +1379,21 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
           ),
         ],
       ],
+    );
+  }
+
+  /// Botón "Cargar Notas" visible siempre en la calculadora embebida.
+  /// Recarga entries + lista + promedio (mismo path post-guardado).
+  Widget _buildReloadAction() {
+    if (!widget.embedded) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: OutlinedButton.icon(
+        onPressed:
+            _isReloading ? null : () => _loadFromBackend(manual: true),
+        icon: const Icon(Icons.cloud_download_rounded),
+        label: Text(_isReloading ? 'CARGANDO…' : 'CARGAR NOTAS'),
+      ),
     );
   }
 
