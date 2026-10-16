@@ -273,6 +273,139 @@ NeededResult computeNeeded({
   return const NeededResult(NeededStatus.unreachable);
 }
 
+/// Entrada para el reparto por confianza (100% local).
+class ConfidenceEntry {
+  const ConfidenceEntry({
+    required this.score,
+    required this.weight,
+    this.confidence = 2,
+  });
+
+  /// Nota conocida o null si pendiente.
+  final double? score;
+
+  /// Peso en fracción (0-1). Solo `> 0` participa del reparto.
+  final double weight;
+
+  /// Nivel de confianza 1/2/3 (default 2 = Media). Fuera de rango se clampa.
+  final int confidence;
+}
+
+class DistributeResult {
+  const DistributeResult({required this.assigned, required this.reached});
+
+  /// Misma longitud que la entrada: conocidas conservan su nota, pendientes
+  /// con peso > 0 traen el valor asignado (sin redondear; el fill UI lo hace
+  /// a 1 decimal). Pendientes con peso 0 quedan en null (sin reparto).
+  final List<double?> assigned;
+
+  /// true si con los asignados se alcanza el objetivo.
+  final bool reached;
+}
+
+/// Reparto por confianza: `base = (target − known) / pesoPendiente`;
+/// `confProm` = promedio de confianzas ponderado por peso (solo pendientes
+/// libres); cada pendiente `nota = base + 7 × (conf − confProm)`, clamp a
+/// [1.0, 7.0] con recálculo iterativo si alguna topa techo/piso (se fija la
+/// más violadora y se recalcula el resto hasta que ninguna viole o no quede
+/// libre; así se preserva la factibilidad cuando existe). Con confianzas
+/// iguales es idéntico a mínimos iguales.
+/// Si la meta ya está alcanzada (`target − known <= 0`) asigna 1.0 a las
+/// pendientes (mínimo) con `reached = true`. Si ni con 7.0 en todo lo
+/// pendiente se alcanza, asigna 7.0 y `reached = false`.
+DistributeResult distributeNeeded({
+  required double target,
+  required List<ConfidenceEntry> entries,
+}) {
+  int clampConf(int c) => c < 1 ? 1 : (c > 3 ? 3 : c);
+
+  double known = 0;
+  for (final e in entries) {
+    if (e.score != null) known += e.score! * e.weight;
+  }
+  final pendingIdx = <int>[];
+  for (var i = 0; i < entries.length; i++) {
+    if (entries[i].score == null && entries[i].weight > 0) pendingIdx.add(i);
+  }
+  final assigned =
+      List<double?>.generate(entries.length, (i) => entries[i].score);
+  if (pendingIdx.isEmpty) {
+    return DistributeResult(assigned: assigned, reached: known >= target);
+  }
+  final pendingWeight =
+      pendingIdx.fold<double>(0, (s, i) => s + entries[i].weight);
+  if (pendingWeight <= 0) {
+    return DistributeResult(assigned: assigned, reached: known >= target);
+  }
+  if (target - known <= 0) {
+    for (final i in pendingIdx) {
+      assigned[i] = minValidGrade;
+    }
+    return DistributeResult(assigned: assigned, reached: true);
+  }
+
+  const spread = 7.0;
+  final fixed = <int, double>{};
+  var free = Set<int>.from(pendingIdx);
+  while (free.isNotEmpty) {
+    final freeWeight = free.fold<double>(0, (s, i) => s + entries[i].weight);
+    if (freeWeight <= 0) break;
+    final fixedSum = fixed.entries.fold<double>(
+      0,
+      (s, e) => s + e.value * entries[e.key].weight,
+    );
+    final remaining = target - known - fixedSum;
+    final base = remaining / freeWeight;
+    double confSum = 0;
+    for (final i in free) {
+      confSum += clampConf(entries[i].confidence) * entries[i].weight;
+    }
+    final confAvg = confSum / freeWeight;
+    final tentative = <int, double>{};
+    for (final i in free) {
+      tentative[i] =
+          base + spread * (clampConf(entries[i].confidence) - confAvg);
+    }
+    int? worst;
+    double worstDist = 0;
+    for (final i in free) {
+      final t = tentative[i]!;
+      double d = 0;
+      if (t < minValidGrade - 1e-9) d = minValidGrade - t;
+      if (t > maxValidGrade + 1e-9) d = t - maxValidGrade;
+      if (d > worstDist + 1e-12) {
+        worstDist = d;
+        worst = i;
+      }
+    }
+    if (worst == null) {
+      for (final i in free) {
+        assigned[i] = tentative[i]!;
+        fixed[i] = tentative[i]!;
+      }
+      free = <int>{};
+      break;
+    }
+    final t = tentative[worst]!;
+    fixed[worst] = t < minValidGrade ? minValidGrade : maxValidGrade;
+    assigned[worst] = fixed[worst];
+    free.remove(worst);
+  }
+  for (final e in fixed.entries) {
+    assigned[e.key] = e.value;
+  }
+  double total = known;
+  for (var i = 0; i < entries.length; i++) {
+    if (entries[i].score == null && assigned[i] != null) {
+      total += assigned[i]! * entries[i].weight;
+    }
+  }
+  return DistributeResult(
+    assigned: assigned,
+    reached: total + 1e-9 >= target,
+  );
+}
+
 /// UX-05b: un apunte pertenece a la materia si su título empieza con
 /// "[CODE] " (insensible a caso). Convención de lado cliente: el modelo
 /// de notas no tiene campo materia y los corchetes romperían la sintaxis
