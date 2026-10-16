@@ -108,6 +108,7 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 			service.NewStreamMessageNotifier(streamRepo, streamClientFor(cfg)),
 		))
 	meetingH := httpHandler.NewMeetingHandler(meetingSvc)
+	notifH := httpHandler.NewNotificationHandler(service.NewNotificationService(meetingRepo))
 
 	streamTokenSvc := service.NewStreamTokenServiceWithKey(streamRepo, cfg.StreamSecret, cfg.StreamAPIKey)
 	// Sincronización server-side de membresía del canal al emitir tokens:
@@ -120,7 +121,7 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	viewSvc := service.NewViewService(groupSvc, todoSvc, sprintSvc, meetingSvc)
 	viewH := httpHandler.NewViewHandler(groupSvc, viewSvc)
 
-	startGin(groupSvc, todoH, sprintH, hoursH, meetingH, discordH, viewH, streamH, pool, cfg)
+	startGin(groupSvc, todoH, sprintH, hoursH, meetingH, notifH, discordH, viewH, streamH, pool, cfg)
 }
 
 // startGRPC sirve SocialService (membresía/admin/limpieza) para Notes e
@@ -193,7 +194,7 @@ func streamNotifierFor(cfg *config.Config, streamRepo *repository.StreamReposito
 	)
 }
 
-func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, meetingH *httpHandler.MeetingHandler, discordH *httpHandler.DiscordHandler, viewH *httpHandler.ViewHandler, streamH *httpHandler.StreamHandler, pool *pgxpool.Pool, cfg *config.Config) {
+func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, meetingH *httpHandler.MeetingHandler, notifH *httpHandler.NotificationHandler, discordH *httpHandler.DiscordHandler, viewH *httpHandler.ViewHandler, streamH *httpHandler.StreamHandler, pool *pgxpool.Pool, cfg *config.Config) {
 	validator := &middleware.SimpleHS256Validator{
 		Secret:   []byte(cfg.JWTSecret),
 		Issuer:   "apuntes-auth",
@@ -254,6 +255,9 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 		protected.POST("/sprint-sheet/:taskId/hours", hoursH.LogHours)
 		protected.GET("/sprint-sheet/:taskId/hours", hoursH.ListHours)
 		protected.POST("/groups/:id/meetings", meetingH.CreateMeeting)
+		protected.GET("/groups/:id/meetings", meetingH.ListMeetings)
+		protected.GET("/notifications/me", notifH.ListMine)
+		protected.POST("/notifications/:id/read", notifH.MarkRead)
 		protected.GET("/groups/:id/stream-token", streamH.Token)
 		discordH.RegisterRoutes(protected)
 	}

@@ -157,7 +157,7 @@ metadata:
 spec:
   selector: {app: infacadem}
   ports:
-    - {port: 8081, targetPort: 8081}
+    - {name: http, port: 8081, targetPort: 8081}
     - {name: grpc, port: 9081, targetPort: 9081}
 ---
 apiVersion: apps/v1
