@@ -500,6 +500,9 @@ type NoteService struct {
 	drive       drive.Client
 	social      SocialResolver
 	members     GroupMemberDirectory
+	// driveEmails resuelve el correo de la cuenta Google Drive de cada miembro
+	// (restricted). Si es nil, se usa members.ListMemberEmails (fallback previo).
+	driveEmails DriveEmailDirectory
 	// La idempotencia de Create/Copy/Update vive en notes.idempotency_keys
 	// (durable, compartida entre réplicas): no hay caché en memoria que perder
 	// ante un crash ni que purgar por TTL. idemClaimTTL actúa como lease de
@@ -549,6 +552,14 @@ func (s *NoteService) SetMemberDirectory(d GroupMemberDirectory) {
 		d = NewNoopMemberDirectory()
 	}
 	s.members = d
+}
+
+// SetDriveEmailDirectory inyecta el resolvedor de correos de la cuenta Google
+// Drive de los miembros (share restricted). En producción main.go lo construye
+// con Social (user_id de miembros) + identity.oauth_connections. Sin él, se
+// cae al correo que devuelve Social (comportamiento previo; tests).
+func (s *NoteService) SetDriveEmailDirectory(d DriveEmailDirectory) {
+	s.driveEmails = d
 }
 
 // notFoundNote es el error canónico 404 para notas inexistentes o inaccesibles.
@@ -1969,10 +1980,7 @@ func (s *NoteService) ComputeDesiredDrivePermissions(ctx context.Context, visibi
 			continue
 		}
 		groups[sh.GroupID] = true
-		if s.members == nil {
-			return DesiredDrivePermissions{}, ErrInternalDatabase
-		}
-		emails, err := s.members.ListMemberEmails(ctx, sh.GroupID)
+		emails, err := s.restrictedGroupEmails(ctx, sh.GroupID)
 		if err != nil {
 			return DesiredDrivePermissions{}, ErrInternalDatabase
 		}
@@ -1980,6 +1988,36 @@ func (s *NoteService) ComputeDesiredDrivePermissions(ctx context.Context, visibi
 	}
 	policy.Emails = NormalizeEmails(policy.Emails)
 	return policy, nil
+}
+
+// restrictedGroupEmails resuelve los correos a los que se otorgará permiso
+// Drive para un grupo restricted.
+//
+// Con resolvedor de identidades Google (producción), usa ÚNICAMENTE el correo
+// de la cuenta Google Drive conectada de cada miembro
+// (identity.oauth_connections.external_account_email), nunca su correo de
+// registro en Sigma Academy. Los miembros sin conexión Drive vigente NO reciben
+// permiso (no tienen Drive con qué abrir el archivo) y NO se sustituye su
+// correo: se cuentan y se registra un aviso, manteniendo la convergencia
+// diferida para el resto.
+//
+// Sin resolvedor (tests / sin BD), se conserva el comportamiento previo:
+// el correo de miembros que devuelve Social.
+func (s *NoteService) restrictedGroupEmails(ctx context.Context, groupID string) ([]string, error) {
+	if s.driveEmails != nil {
+		emails, withoutDrive, err := s.driveEmails.ListMemberDriveEmails(ctx, groupID)
+		if err != nil {
+			return nil, err
+		}
+		if withoutDrive > 0 {
+			log.Printf("notes: grupo %s: %d miembro(s) sin conexión Google Drive; no se otorgan permisos de Drive a su correo de registro", groupID, withoutDrive)
+		}
+		return emails, nil
+	}
+	if s.members == nil {
+		return nil, ErrInternalDatabase
+	}
+	return s.members.ListMemberEmails(ctx, groupID)
 }
 
 // persistManagedPermission hace upsert del estado deseado/observado de un
@@ -2381,9 +2419,70 @@ func (s *NoteService) UnshareAll(ctx context.Context, userID string, groupID str
 			}
 		}
 		if next == "" {
-			return nil
+			break
 		}
 		cursor = next
+	}
+	// Tras retirar los shares PROPIOS del usuario, reconvergencia de los
+	// permisos Drive de las notas que siguen compartidas con el grupo: revoca
+	// el correo (cuenta Google) de quien ya no tiene via legitima de acceso y
+	// conserva el de los miembros vigentes (incluido el saliente si aun
+	// pertenece a otro grupo que comparte la misma nota). No borra shares de
+	// otros autores ni afecta link/anyone. Best-effort: los fallos de Drive
+	// quedan pending/failed para el reconciliador.
+	s.reconcileGroupNotePermissions(ctx, groupID)
+	return nil
+}
+
+// reconcileGroupNotePermissions recomputa y converge el ACL de Google Drive de
+// cada nota que sigue compartida con groupID, tras una salida/expulsion/ban.
+func (s *NoteService) reconcileGroupNotePermissions(ctx context.Context, groupID string) {
+	seen := make(map[string]bool)
+	cursor := ""
+	for {
+		shares, next, err := s.shared.ListByGroup(ctx, groupID, 100, cursor)
+		if err != nil {
+			log.Printf("notes: unshare-all grupo %s: no se pudieron listar las notas: %v", groupID, err)
+			return
+		}
+		for _, sh := range shares {
+			if sh == nil || seen[sh.NoteID] {
+				continue
+			}
+			seen[sh.NoteID] = true
+			s.reconcileNotePermissions(ctx, sh.NoteID)
+		}
+		if next == "" {
+			return
+		}
+		cursor = next
+	}
+}
+
+// reconcileNotePermissions recomputa el estado deseado de una nota (union de
+// TODOS sus grupos restricted, link y visibilidad) y lo converge bajo el lock
+// distribuido por nota. Idempotente; no bloquea el camino de usuario.
+func (s *NoteService) reconcileNotePermissions(ctx context.Context, noteID string) {
+	lockErr := s.shared.WithNoteLock(ctx, noteID, func(lockCtx context.Context) error {
+		note, err := s.observedNotesGetByID(lockCtx, noteID)
+		if err != nil {
+			return ErrInternalDatabase
+		}
+		if note == nil {
+			return nil
+		}
+		shares, err := s.shared.ListByNote(lockCtx, noteID)
+		if err != nil {
+			return ErrInternalDatabase
+		}
+		desired, err := s.ComputeDesiredDrivePermissions(lockCtx, note.Visibility, shares)
+		if err != nil {
+			return err
+		}
+		return s.syncDrivePermissions(lockCtx, note, desired, true)
+	})
+	if lockErr != nil {
+		log.Printf("notes: unshare-all: convergencia de la nota %s diferida: %v", noteID, lockErr)
 	}
 }
 

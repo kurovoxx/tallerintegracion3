@@ -83,6 +83,12 @@ func runServer(pool *pgxpool.Pool, driveClient drive.Client, cfg *config.Config)
 	// Directorio de correos para share restricted: adaptador HTTP real a Social
 	// (o memoria solo con DEV_SEED_SOCIAL explícito).
 	svc.SetMemberDirectory(members)
+	// Restricted: conceder a la cuenta Google Drive real de cada miembro
+	// (identity.oauth_connections.external_account_email), no al correo de
+	// registro. El adaptador Social provee los user_id; el correo sale de BD.
+	if memberIDs, ok := members.(service.MemberUserIDs); ok && pool != nil {
+		svc.SetDriveEmailDirectory(service.NewDriveEmailDirectory(memberIDs, service.NewPGDriveEmailStore(pool)))
+	}
 	startServers(svc, cfg)
 }
 
