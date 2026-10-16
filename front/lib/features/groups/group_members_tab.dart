@@ -5,6 +5,7 @@ import '../../core/services/session_manager.dart';
 import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import 'cleanup_shared_notes_checkbox.dart';
 
 /// Pestaña "MIEMBROS" del grupo: lista integrantes con su rol, permite ver su
 /// información y, si el usuario actual es admin, expulsar o banear (endpoints
@@ -174,7 +175,8 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
     GroupMember m, {
     required bool ban,
   }) async {
-    final ok = await showNeobrutalistDialog<bool>(
+    var cleanupSharedNotes = true; // Marcada por defecto; el usuario puede quitarla.
+    final cleanup = await showNeobrutalistDialog<bool>(
       context: context,
       dialog: NeobrutalistDialog(
         title: ban ? 'Banear integrante' : 'Expulsar integrante',
@@ -182,21 +184,43 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
         confirmLabel: 'Confirmar',
         confirmVariant: NeobrutalistButtonVariant.danger,
         closeOnConfirm: false,
-        onConfirm: () => Navigator.of(context).pop(true),
-        content: Text(
-          ban
-              ? '¿Banear a ${m.displayLabel}? No podrá reingresar al grupo ni con un enlace válido.'
-              : '¿Expulsar a ${m.displayLabel} del grupo? Podrá volver con una invitación.',
+        onConfirm: () => Navigator.of(context).pop(cleanupSharedNotes),
+        content: StatefulBuilder(
+          builder: (ctx, setDialogState) => Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                ban
+                    ? '¿Banear a ${m.displayLabel}? No podrá reingresar al grupo ni con un enlace válido.'
+                    : '¿Expulsar a ${m.displayLabel} del grupo? Podrá volver con una invitación.',
+              ),
+              const SizedBox(height: AppDimens.spaceMd),
+              CleanupSharedNotesCheckbox(
+                value: cleanupSharedNotes,
+                onChanged: (v) =>
+                    setDialogState(() => cleanupSharedNotes = v),
+              ),
+            ],
+          ),
         ),
       ),
     );
-    if (ok != true || !mounted) return;
+    if (cleanup == null || !mounted) return;
     setState(() => _busyUserId = m.userId);
     try {
       if (ban) {
-        await _service.banMember(groupId: _groupId, userId: m.userId);
+        await _service.banMember(
+          groupId: _groupId,
+          userId: m.userId,
+          cleanupSharedNotes: cleanup,
+        );
       } else {
-        await _service.kickMember(groupId: _groupId, userId: m.userId);
+        await _service.kickMember(
+          groupId: _groupId,
+          userId: m.userId,
+          cleanupSharedNotes: cleanup,
+        );
       }
       if (!mounted) return;
       await _load();

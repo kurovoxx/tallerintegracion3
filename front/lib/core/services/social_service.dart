@@ -213,6 +213,7 @@ class SocialService {
   Future<void> kickMember({
     required String groupId,
     required String userId,
+    bool cleanupSharedNotes = false,
   }) async {
     final gid = groupId.trim();
     final uid = userId.trim();
@@ -224,6 +225,9 @@ class SocialService {
           .post(
             Uri.parse('$baseUrl/groups/$gid/members/$uid/kick'),
             headers: _headers(json: true),
+            body: jsonEncode(<String, dynamic>{
+              'cleanup_shared_notes': cleanupSharedNotes,
+            }),
           )
           .timeout(const Duration(seconds: 10)),
     );
@@ -235,6 +239,7 @@ class SocialService {
   Future<void> banMember({
     required String groupId,
     required String userId,
+    bool cleanupSharedNotes = false,
   }) async {
     final gid = groupId.trim();
     final uid = userId.trim();
@@ -246,6 +251,9 @@ class SocialService {
           .post(
             Uri.parse('$baseUrl/groups/$gid/members/$uid/ban'),
             headers: _headers(json: true),
+            body: jsonEncode(<String, dynamic>{
+              'cleanup_shared_notes': cleanupSharedNotes,
+            }),
           )
           .timeout(const Duration(seconds: 10)),
     );
@@ -729,7 +737,10 @@ class SocialService {
   // Si eres el único admin, el backend promueve al miembro más antiguo
   // (RN-GRUPO-10). Si eres el último miembro, el grupo se elimina.
   // Ver back/social/internal/handler/http/group_handler.go:277 LeaveGroup.
-  Future<void> leaveGroup(String groupId) async {
+  Future<void> leaveGroup(
+    String groupId, {
+    bool cleanupSharedNotes = false,
+  }) async {
     final id = groupId.trim();
     if (id.isEmpty) {
       throw SocialApiException('groupId vacío.', code: 'invalid_group_id');
@@ -739,7 +750,9 @@ class SocialService {
           .post(
             Uri.parse('$baseUrl/groups/$id/leave'),
             headers: _headers(json: true),
-            body: jsonEncode(const <String, dynamic>{}),
+            body: jsonEncode(<String, dynamic>{
+              'cleanup_shared_notes': cleanupSharedNotes,
+            }),
           )
           .timeout(const Duration(seconds: 10)),
     );

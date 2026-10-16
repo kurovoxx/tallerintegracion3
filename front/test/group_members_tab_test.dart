@@ -27,12 +27,23 @@ class _FakeMembersApi {
 
   final List<Map<String, dynamic>> members;
   final List<String> actions = <String>[];
+  bool? lastKickCleanup;
+  bool? lastBanCleanup;
 
   http.Response _json(int code, Object body) => http.Response(
     jsonEncode(body),
     code,
     headers: {'content-type': 'application/json'},
   );
+
+  bool _cleanupOf(http.Request req) {
+    try {
+      final b = jsonDecode(req.body) as Map<String, dynamic>;
+      return b['cleanup_shared_notes'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
 
   Future<http.Response> handle(http.Request req) async {
     final p = req.url.path;
@@ -41,11 +52,13 @@ class _FakeMembersApi {
     }
     if (req.method == 'POST' && p.endsWith('/kick')) {
       actions.add('kick');
+      lastKickCleanup = _cleanupOf(req);
       members.removeWhere((m) => p.contains(m['user_id'].toString()));
       return http.Response('', 204);
     }
     if (req.method == 'POST' && p.endsWith('/ban')) {
       actions.add('ban');
+      lastBanCleanup = _cleanupOf(req);
       members.removeWhere((m) => p.contains(m['user_id'].toString()));
       return http.Response('', 204);
     }
@@ -137,7 +150,9 @@ void main() {
     expect(find.text('ROL'), findsOneWidget);
   });
 
-  testWidgets('expulsar llama al endpoint y refresca la lista', (tester) async {
+  testWidgets('expulsar con limpieza (por defecto) envía cleanup=true', (
+    tester,
+  ) async {
     SessionManager.saveSession(_jwtFor(_adminId), {'id': 'x'});
     final api = _seed();
     final service = SocialService(client: MockClient(api.handle));
@@ -146,15 +161,45 @@ void main() {
     await _pump(tester, service);
     await tester.tap(find.text('EXPULSAR'));
     await tester.pumpAndSettle();
+    expect(
+      find.text('Retirar del grupo las notas compartidas por este integrante'),
+      findsOneWidget,
+    );
     await tester.tap(find.text('CONFIRMAR'));
     await tester.pumpAndSettle();
 
     expect(api.actions, contains('kick'));
+    expect(api.lastKickCleanup, isTrue);
     expect(find.text('Beto Miembro'), findsNothing);
     expect(find.text('Ana Admin'), findsOneWidget);
   });
 
-  testWidgets('banear llama al endpoint y refresca la lista', (tester) async {
+  testWidgets('expulsar desactivando la casilla envía cleanup=false', (
+    tester,
+  ) async {
+    SessionManager.saveSession(_jwtFor(_adminId), {'id': 'x'});
+    final api = _seed();
+    final service = SocialService(client: MockClient(api.handle));
+    addTearDown(service.dispose);
+
+    await _pump(tester, service);
+    await tester.tap(find.text('EXPULSAR'));
+    await tester.pumpAndSettle();
+    // Desactivar la casilla (marcada por defecto).
+    await tester.tap(
+      find.text('Retirar del grupo las notas compartidas por este integrante'),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('CONFIRMAR'));
+    await tester.pumpAndSettle();
+
+    expect(api.actions, contains('kick'));
+    expect(api.lastKickCleanup, isFalse);
+  });
+
+  testWidgets('banear con limpieza por defecto envía cleanup=true', (
+    tester,
+  ) async {
     SessionManager.saveSession(_jwtFor(_adminId), {'id': 'x'});
     final api = _seed();
     final service = SocialService(client: MockClient(api.handle));
@@ -167,6 +212,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(api.actions, contains('ban'));
+    expect(api.lastBanCleanup, isTrue);
     expect(find.text('Beto Miembro'), findsNothing);
   });
 }

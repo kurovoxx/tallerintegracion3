@@ -16,6 +16,7 @@ import '../../core/models/social_models.dart';
 import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import 'cleanup_shared_notes_checkbox.dart';
 import 'group_detail_screen.dart';
 
 class GroupsScreen extends StatefulWidget {
@@ -557,7 +558,8 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
 
   Future<void> _leave() async {
     if (_leaving) return;
-    final ok = await showNeobrutalistDialog<bool>(
+    var cleanupSharedNotes = true; // Marcada por defecto; el usuario puede quitarla.
+    final cleanup = await showNeobrutalistDialog<bool>(
       context: context,
       dialog: NeobrutalistDialog(
         title: 'ABANDONAR GRUPO',
@@ -565,18 +567,35 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
         confirmLabel: 'Abandonar',
         confirmVariant: NeobrutalistButtonVariant.danger,
         closeOnConfirm: false,
-        onConfirm: () => Navigator.of(context).pop(true),
-        content: Text(
-          '¿Abandonar "${widget.group.name}"? Si eres el único admin con más '
-          'miembros, la administración pasará automáticamente al integrante más antiguo.',
+        onConfirm: () => Navigator.of(context).pop(cleanupSharedNotes),
+        content: StatefulBuilder(
+          builder: (ctx, setDialogState) => Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                '¿Abandonar "${widget.group.name}"? Si eres el único admin con más '
+                'miembros, la administración pasará automáticamente al integrante más antiguo.',
+              ),
+              const SizedBox(height: AppDimens.spaceMd),
+              CleanupSharedNotesCheckbox(
+                value: cleanupSharedNotes,
+                onChanged: (v) =>
+                    setDialogState(() => cleanupSharedNotes = v),
+              ),
+            ],
+          ),
         ),
       ),
     );
-    if (ok != true || !mounted) return;
+    if (cleanup == null || !mounted) return;
     setState(() => _leaving = true);
     try {
       // POST /groups/:id/leave real (204). Sucesión/admin según backend.
-      await widget.service.leaveGroup(widget.group.groupId);
+      await widget.service.leaveGroup(
+        widget.group.groupId,
+        cleanupSharedNotes: cleanup,
+      );
       if (!mounted) return;
       Navigator.of(context).pop(true);
       ScaffoldMessenger.of(context).showSnackBar(
