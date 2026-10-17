@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/config"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/drive"
+	identityv1 "github.com/kurovoxx/tallerintegracion3/back/notes/internal/gen/identityv1"
 	notesv1 "github.com/kurovoxx/tallerintegracion3/back/notes/internal/gen/notesv1/v1"
 	grpcHandler "github.com/kurovoxx/tallerintegracion3/back/notes/internal/handler/grpc"
 	httpHandler "github.com/kurovoxx/tallerintegracion3/back/notes/internal/handler/http"
@@ -24,6 +25,7 @@ import (
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/repository"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/service"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
@@ -58,18 +60,50 @@ func main() {
 }
 
 // selectDriveClient elige el cliente Drive según STORAGE_MODE.
-// Con "drive" usa la API oficial (tokens por usuario desde identity.oauth_connections);
-// en cualquier otro caso (o sin BD) usa el mock en memoria.
+// Con "drive" usa la API oficial con tokens de Identity vía gRPC (tarea
+// 3_4_6): Identity renueva el access_token, Notes solo lo consume. La
+// conexión es perezosa y compartida toda la vida del proceso; si Identity
+// está caído, cada operación falla controlada hasta que vuelve.
+// En cualquier otro caso (o sin BD) usa el mock en memoria.
 func selectDriveClient(p *pgxpool.Pool, cfg *config.Config) drive.Client {
 	if !strings.EqualFold(strings.TrimSpace(cfg.StorageMode), "drive") {
 		log.Printf("notes: Drive mock activado (STORAGE_MODE=%s)", cfg.StorageMode)
 		return drive.NewMockClient()
 	}
-	if cfg.GoogleClientID == "" || cfg.GoogleClientSecret == "" {
-		log.Println("notes: STORAGE_MODE=drive con GOOGLE_CLIENT_ID/SECRET vacíos — el refresh de tokens queda deshabilitado")
+	return newGRPCDriveClient(cfg)
+}
+
+// newGRPCDriveClient conecta con Identity y devuelve el cliente Drive real.
+// Solo una dirección malformada (error de configuración) detiene el arranque;
+// Identity caído degrada por operación, sin bloquear ni usar tokens ficticios.
+func newGRPCDriveClient(cfg *config.Config) drive.Client {
+	conn, err := grpc.NewClient(strings.TrimSpace(cfg.IdentityGRPCAddr), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Fatalf("notes: IDENTITY_GRPC_ADDR inválida %q: %v", cfg.IdentityGRPCAddr, err)
 	}
-	log.Println("notes: Drive real activado (STORAGE_MODE=drive, drive/v3, tokens desde identity.oauth_connections)")
-	return drive.NewRealDriveClient(drive.NewPGOAuthTokenStore(p, cfg.GoogleClientID, cfg.GoogleClientSecret))
+	if strings.TrimSpace(cfg.InternalAPIKey) == "" {
+		log.Println("notes: sin INTERNAL_API_KEY, Identity rechazará las llamadas gRPC")
+	}
+	trackGRPCConn(conn) // cierre en shutdown (ver startServers)
+	log.Println("notes: Drive real activado (STORAGE_MODE=drive, drive/v3, tokens vía Identity gRPC)")
+	return drive.NewRealDriveClient(&drive.GRPCOAuthTokenProvider{
+		Client: identityv1.NewIdentityServiceClient(conn),
+		Key:    cfg.InternalAPIKey,
+	})
+}
+
+// grpcConns son las conexiones gRPC compartidas (vida del proceso).
+var grpcConns []*grpc.ClientConn
+
+func trackGRPCConn(conn *grpc.ClientConn) {
+	grpcConns = append(grpcConns, conn)
+}
+
+func closeGRPCConns() {
+	for _, c := range grpcConns {
+		_ = c.Close() // idempotente
+	}
+	grpcConns = nil
 }
 
 func runServer(pool *pgxpool.Pool, driveClient drive.Client, cfg *config.Config) {
@@ -255,6 +289,7 @@ func startServers(svc *service.NoteService, cfg *config.Config) {
 		log.Printf("notes: graceful shutdown HTTP: %v", err)
 		_ = httpSrv.Close()
 	}
+	closeGRPCConns()
 	<-reconcileDone
 	log.Print("notes: apagado OK")
 }
