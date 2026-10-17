@@ -306,6 +306,28 @@ Sin Services/containers gRPC para auth/notes hasta que existan sus servidores
 - **No entra**: servidores gRPC de auth/notes, Ingress gRPC (solo HTTP hoy),
   Telepresence/vcluster.
 
+## 3_5_9 — CI workflow gRPC (generate + breaking check)
+
+### Archivo
+
+| Archivo | Contenido |
+|---|---|
+| `.github/workflows/grpc-ci.yml` | Workflow de GitHub Actions con 3 jobs: `lint`, `generate`, `breaking` |
+
+### Jobs
+
+| Job | Qué hace | Módulos |
+|---|---|---|
+| `lint` | `buf lint` en cada módulo de protos | `common`, `social`, `infacadem` |
+| `generate` | `make generate` + `buf generate` en social, luego `git diff --exit-code` para verificar que el código generado esté commiteado | `common`, `social` |
+| `breaking` | `buf breaking --against remotes/origin/Development` para detectar cambios rompientes | `common`, `social`, `infacadem` |
+
+### Reglas
+
+- Cada job corre `make tools` para instalar `buf` + `protoc-gen-go` + `protoc-gen-go-grpc` en `./bin/`.
+- **Nunca se corre `buf` en `back/proto` raíz**: siempre dentro de cada módulo (`back/proto/<modulo>`).
+- El workflow se dispara en `push` a `Development` y en `PR` contra `Development`, solo cuando cambian archivos bajo `back/proto/`, el `Makefile` o el propio workflow.
+
 ## 3_5_14 — Notificación de reunión en app
 
 ### Alcance (jefe: front hace la cajita + ventana "próximas reuniones")
