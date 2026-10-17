@@ -27,7 +27,7 @@ jobs:
         run: make tools
       - name: Lint protobuf files
         working-directory: back/proto/${{ matrix.module }}
-        run: PATH="$PWD/../../bin:$PATH" buf lint
+        run: PATH="${{ github.workspace }}/bin:$PATH" buf lint
 
   # Genera los stubs Go y verifica que no haya cambios sin commitear.
   generate:
@@ -40,7 +40,7 @@ jobs:
         run: make generate
       - name: Generate Go stubs for social module
         working-directory: back/proto/social
-        run: PATH="$PWD/../../bin:$PATH" buf generate
+        run: PATH="${{ github.workspace }}/bin:$PATH" buf generate
       - name: Verify no uncommitted changes
         run: git diff --exit-code -- back/proto/ back/social/internal/gen/
 
@@ -60,4 +60,4 @@ jobs:
         run: git fetch origin Development
       - name: Check for breaking changes
         working-directory: back/proto/${{ matrix.module }}
-        run: PATH="$PWD/../../bin:$PATH" buf breaking --against remotes/origin/Development
+        run: PATH="${{ github.workspace }}/bin:$PATH" buf breaking --against remotes/origin/Development
