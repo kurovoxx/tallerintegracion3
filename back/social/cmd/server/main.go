@@ -138,21 +138,6 @@ func startGRPC(groupSvc *service.GroupService, cfg *config.Config) {
 	}()
 }
 
-// newMeetingMailer arma el mailer de avisos (tarea 3_5_15, remitente noreply).
-// Sin SMTP configurado el notifier hace skip silencioso por reunión.
-func newMeetingMailer(cfg *config.Config) *mail.MeetingMailer {
-	m := &mail.MeetingMailer{
-		Host:     cfg.SMTPHost,
-		Port:     cfg.SMTPPort,
-		Username: cfg.SMTPUsername,
-		Password: cfg.SMTPPassword,
-	}
-	if !m.Ready() {
-		log.Printf("meeting mail: SMTP sin configurar, avisos por mail desactivados")
-	}
-	return m
-}
-
 func calendarNotifierFor(cfg *config.Config, meetingRepo *repository.MeetingRepository) service.MeetingCreatedNotifier {
 	// CALENDAR_MODE=mock (default): sync simulado, sin llamar a Google ni a Auth.
 	// Persiste un google_calendar_event_id falso para verificar el cableado E2E.
@@ -171,6 +156,21 @@ func calendarNotifierFor(cfg *config.Config, meetingRepo *repository.MeetingRepo
 		calendar.NewRESTClient(),
 		meetingRepo,
 	)
+}
+
+// newMeetingMailer arma el mailer de avisos (tarea 3_5_15, remitente noreply).
+// Sin SMTP configurado el notifier hace skip silencioso por reunión.
+func newMeetingMailer(cfg *config.Config) *mail.MeetingMailer {
+	m := &mail.MeetingMailer{
+		Host:     cfg.SMTPHost,
+		Port:     cfg.SMTPPort,
+		Username: cfg.SMTPUsername,
+		Password: cfg.SMTPPassword,
+	}
+	if !m.Ready() {
+		log.Printf("meeting mail: SMTP sin configurar, avisos por mail desactivados")
+	}
+	return m
 }
 
 func streamClientFor(cfg *config.Config) stream.Client {
