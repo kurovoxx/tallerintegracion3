@@ -6,9 +6,9 @@ name: test-auth
 # Solo auth. Sin secretos reales en el repo; Go fijado a 1.26 (go.mod).
 on:
   pull_request:
-    paths: ["back/auth/**", ".github/workflows/test-auth.yml"]
+    paths: ["back/auth/**", "back/proto/auth/**", ".github/workflows/test-auth.yml"]
   push:
-    paths: ["back/auth/**", ".github/workflows/test-auth.yml"]
+    paths: ["back/auth/**", "back/proto/auth/**", ".github/workflows/test-auth.yml"]
   workflow_dispatch:
     inputs:
       base_url:
@@ -87,6 +87,66 @@ jobs:
       # -p 1: ambas suites crean/borran SCHEMA identity; secuencial evita carreras.
       - name: integración (postgres service container)
         run: go test ./... -p 1 -run 'TestAuthIntegration_|TestPasswordResetRepository' -count=1 -v
+
+  integration-grpc:
+    # gRPC Identity con PostgreSQL propio y aislado (no comparte BD ni
+    # esquema con integration: ambos crean/borran SCHEMA identity).
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: back/auth
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: grpc_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d grpc_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # BD dedicada de prueba, nunca la de desarrollo ni la de integration.
+      AUTH_GRPC_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/grpc_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: back/auth/go.sum
+      - name: grpc unitarios + detector de carreras
+        run: go test ./internal/handler/grpc/ ./internal/interceptor/ ./cmd/server/ -count=1 -race
+      # Cadena real cliente→interceptores→servidor→servicios→repos→PG con
+      # filas de prueba (providers simulados, sin Google). Falla ante FAIL o SKIP.
+      - name: integración gRPC (PASS real, SKIP = fallo)
+        run: |
+          set -euo pipefail
+          go test ./internal/handler/grpc/ -run '^TestIdentityServerPG$' -count=1 -v -json > /tmp/grpc-pg.json
+          python3 - <<'EOF'
+          import json
+          passed = skipped = failed = False
+          with open('/tmp/grpc-pg.json') as f:
+              for line in f:
+                  try:
+                      ev = json.loads(line)
+                  except ValueError:
+                      continue
+                  if ev.get('Test') != 'TestIdentityServerPG':
+                      continue
+                  if ev.get('Action') == 'pass':
+                      passed = True
+                  elif ev.get('Action') == 'skip':
+                      skipped = True
+                  elif ev.get('Action') == 'fail':
+                      failed = True
+          print(f"PASS={passed} SKIP={skipped} FAIL={failed}")
+          if failed or not passed or skipped:
+              raise SystemExit('la integración gRPC debe producir un PASS real (sin FAIL ni SKIP)')
+          print('grpc PG: PASS real')
+          EOF
 
   build:
     runs-on: ubuntu-latest

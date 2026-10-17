@@ -455,6 +455,53 @@ class MeetingItem {
   }
 }
 
+/// Notificación in-app de reunión (tarea 3_5_14).
+/// Backend: GET /notifications/me, POST /notifications/:id/read.
+class MeetingNotification {
+  MeetingNotification({
+    required this.id,
+    required this.meetingId,
+    required this.groupId,
+    required this.title,
+    required this.scheduledAt,
+    required this.read,
+    this.readAt,
+    required this.createdAt,
+  });
+
+  final String id;
+  final String meetingId;
+  final String groupId;
+  final String title;
+  final DateTime scheduledAt;
+  final bool read;
+  final DateTime? readAt;
+  final DateTime createdAt;
+
+  factory MeetingNotification.fromJson(Map<String, dynamic> j) {
+    DateTime when = DateTime.now();
+    final raw = j['scheduled_at'];
+    if (raw is String) when = DateTime.tryParse(raw) ?? when;
+    DateTime? readAt;
+    final rawRead = j['read_at'];
+    if (rawRead is String) readAt = DateTime.tryParse(rawRead);
+    DateTime created = DateTime.now();
+    final rawCreated = j['created_at'];
+    if (rawCreated is String) created = DateTime.tryParse(rawCreated) ?? created;
+    final read = j['read'] is bool ? j['read'] as bool : readAt != null;
+    return MeetingNotification(
+      id: _str(j, 'id'),
+      meetingId: _str(j, 'meeting_id'),
+      groupId: _str(j, 'group_id'),
+      title: _str(j, 'title', 'Reunión'),
+      scheduledAt: when,
+      read: read,
+      readAt: readAt,
+      createdAt: created,
+    );
+  }
+}
+
 class Workspace {
   Workspace({
     required this.group,

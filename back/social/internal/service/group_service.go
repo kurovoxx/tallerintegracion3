@@ -572,7 +572,10 @@ func (s *GroupService) unshareNotesHTTP(userID, groupID, token string) {
 // usuario elimina su cuenta: en cada grupo donde es el único admin se promueve
 // al miembro más antiguo; si era el último miembro, el grupo se elimina.
 // Es idempotente: sin membresías restantes no hace nada.
-func (s *GroupService) HandleAccountDeletion(ctx context.Context, userID string) ([]model.SuccessionResult, error) {
+// Con token (JWT vigente reenviado por Identity vía gRPC, tarea 3_5_7) pide
+// además a Notes retirar los apuntes del usuario en CADA grupo afectado
+// (best-effort, caller == user). Sin token solo hace sucesión.
+func (s *GroupService) HandleAccountDeletion(ctx context.Context, userID string, token string) ([]model.SuccessionResult, error) {
 	if userID == "" {
 		return nil, ErrUnauthorized
 	}
@@ -586,6 +589,9 @@ func (s *GroupService) HandleAccountDeletion(ctx context.Context, userID string)
 			log.Printf("social: grupo %s: admin %s eliminó su cuenta, se promovió a %s", r.GroupID, userID, *r.PromotedUserID)
 		case r.GroupDeleted:
 			log.Printf("social: grupo %s eliminado: %s era el último miembro", r.GroupID, userID)
+		}
+		if strings.TrimSpace(token) != "" {
+			go s.unshareNotes(userID, r.GroupID, token)
 		}
 	}
 	if results == nil {

@@ -18,6 +18,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 import 'cleanup_shared_notes_checkbox.dart';
 import 'group_detail_screen.dart';
+import 'notifications_bell.dart';
 
 class GroupsScreen extends StatefulWidget {
   const GroupsScreen({super.key, SocialService? service})
@@ -467,7 +468,13 @@ class _GroupsScreenState extends State<GroupsScreen> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          titleColumn,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: titleColumn),
+              const NotificationsBell(),
+            ],
+          ),
           const SizedBox(height: AppDimens.spaceMd),
           NeobrutalistButton(
             label: _isJoining ? 'Uniéndose...' : 'Unirse a grupo',
@@ -483,6 +490,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Expanded(child: titleColumn),
+        const NotificationsBell(),
         const SizedBox(width: AppDimens.spaceMd),
         Column(
           crossAxisAlignment: CrossAxisAlignment.end,
