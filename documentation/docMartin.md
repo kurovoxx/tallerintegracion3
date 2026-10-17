@@ -308,3 +308,29 @@ Backend: exponer lo que faltaba para esas dos vistas. El "enviar" ya existía
 | `front/lib/features/groups/groups_screen.dart` | Campana en header compacto y ancho |
 
 - `flutter analyze` en los archivos tocados: sin issues nuevos (los restantes son preexistentes).
+
+## 3_5_15 — Notificación de reunión por Gmail (solo mail, remitente noreply)
+
+### Alcance
+
+Aviso por correo a los invitados al agendar, sin Google Calendar/Meet ni OAuth:
+SMTP clásico con el patrón `ResetMailer` de auth. Best-effort como el resto de
+notifiers (un fallo no revierte la reunión).
+
+### Archivos
+
+| Archivo | Contenido |
+|---|---|
+| `back/social/internal/mail/mailer.go` | `MeetingMailer` (STARTTLS, valida direcciones) + `BuildMeetingMessage` pura (asunto `Grupo {g}: {título}`, cuerpo con fecha/descripción) |
+| `back/social/internal/mail/mailer_test.go` | Composición, `Ready`, validaciones (email malo/sin destinatarios fallan antes de red) |
+| `back/social/internal/service/meeting_mail_notifier.go` | `MeetingMailNotifier` (lee invitados + nombre del grupo, skip sin invitados, loguea fallos) |
+| `back/social/internal/service/meeting_mail_notifier_test.go` | Mailer falso (envía a invitados, skip sin ellos, fallo best-effort) |
+| `back/social/internal/config/config.go` | `+ SMTP_HOST/PORT/USERNAME/PASSWORD` |
+| `back/social/cmd/server/main.go` | `newMeetingMailer` (avisa si SMTP ausente) + 4º notifier en `MultiMeetingNotifier` |
+| `docker-compose.yml` | `SMTP_*` en social (defaults Gmail + noreply) |
+
+### Verificación
+
+- 6 tests nuevos PASS; `go test ./...` (social): `ok` todo; `docker compose config` válido.
+- **No entra**: Meet/Jitsi (sin link), Gmail API (solo SMTP), HTML en el mail, front.
+- Para envío real: `SMTP_PASSWORD` en `.env` (contraseña de aplicación).

@@ -22,6 +22,10 @@ type Config struct {
 	StreamAPIKey string // API key de Stream (solo backend, jamás al front)
 	StreamSecret string // API secret de Stream para firmar tokens server-side
 	StreamMode   string // "mock" (default, sin Stream) o "real"
+	SMTPHost     string // SMTP para avisos por mail (tarea 3_5_15)
+	SMTPPort     string
+	SMTPUsername string // remitente noreply
+	SMTPPassword string
 }
 
 func Load() *Config {
@@ -89,5 +93,9 @@ func Load() *Config {
 	if cfg.StreamMode == "" {
 		cfg.StreamMode = "mock"
 	}
+	cfg.SMTPHost = os.Getenv("SMTP_HOST")
+	cfg.SMTPPort = os.Getenv("SMTP_PORT")
+	cfg.SMTPUsername = os.Getenv("SMTP_USERNAME")
+	cfg.SMTPPassword = os.Getenv("SMTP_PASSWORD")
 	return cfg
 }

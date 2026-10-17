@@ -106,6 +106,10 @@ services:
       STREAM_API_KEY: ${STREAM_API_KEY}
       STREAM_API_SECRET: ${STREAM_API_SECRET:-dev-stream-secret-change-me}
       STREAM_MODE: ${STREAM_MODE:-mock}
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-sigmaacademy.noreply@gmail.com}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
     depends_on:
       postgres:
         condition: service_healthy
