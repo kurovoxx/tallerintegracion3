@@ -1,0 +1,63 @@
+name: gRPC CI
+
+on:
+  push:
+    branches: [Development]
+    paths:
+      - 'back/proto/**'
+      - 'Makefile'
+      - '.github/workflows/grpc-ci.yml'
+  pull_request:
+    branches: [Development]
+    paths:
+      - 'back/proto/**'
+      - 'Makefile'
+      - '.github/workflows/grpc-ci.yml'
+
+jobs:
+  # Valida que los .proto cumplan las reglas de estilo de buf en cada módulo.
+  lint:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: [common, social, infacadem]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install buf and protoc plugins
+        run: make tools
+      - name: Lint protobuf files
+        working-directory: back/proto/${{ matrix.module }}
+        run: PATH="$PWD/../../bin:$PATH" buf lint
+
+  # Genera los stubs Go y verifica que no haya cambios sin commitear.
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install buf and protoc plugins
+        run: make tools
+      - name: Generate Go stubs
+        run: make generate
+      - name: Generate Go stubs for social module
+        working-directory: back/proto/social
+        run: PATH="$PWD/../../bin:$PATH" buf generate
+      - name: Verify no uncommitted changes
+        run: git diff --exit-code -- back/proto/ back/social/internal/gen/
+
+  # Detecta cambios rompientes en los protos frente a Development.
+  breaking:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: [common, social, infacadem]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install buf and protoc plugins
+        run: make tools
+      - name: Fetch base branch
+        run: git fetch origin Development
+      - name: Check for breaking changes
+        working-directory: back/proto/${{ matrix.module }}
+        run: PATH="$PWD/../../bin:$PATH" buf breaking --against remotes/origin/Development
