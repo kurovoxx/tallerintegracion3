@@ -237,6 +237,48 @@ reusa; VerifyToken no existía (los servicios solo validaban firma local).
   se usa donde importe: 3_5_4/3_5_5), interceptores gRPC sobre esto (3_5_3 ya
   cubre internal-key), cambios en Notes.
 
+## 3_5_7 — Borrado de cuenta end-to-end Identity→Social→Notes
+
+### Estado previo
+
+Social tenía sucesión (`HandleAccountDeletion`) y el dueño de Social ya la
+exponía por gRPC (`AccountDeletionCleanup`), pero sin limpieza en Notes: el
+request solo traía `user_id` y sin JWT no hay cómo autorizar `unshare-all`.
+
+### Implementado
+
+- Proto (aditivo, compatible): `AccountDeletionCleanupRequest` suma
+  `user_token` (JWT vigente que Identity reenvía ANTES de borrar su fila).
+  Regen con `make generate` (diff mínimo: solo `social.pb.go`).
+- `GroupService.HandleAccountDeletion` acepta `token`: tras la sucesión pide a
+  Notes `unshare-all` en CADA grupo afectado (promovido o eliminado,
+  best-effort, caller == user). Sin token solo hay sucesión.
+- Handler gRPC reenvía `req.GetUserToken()`. Llamadas existentes actualizadas.
+
+### Cadena completa (contrato para el orquestador de Identity)
+
+1. Identity valida la identidad y toma el JWT vigente del usuario.
+2. Identity llama `Social.AccountDeletionCleanup{user_id, user_token}` (gRPC
+   `:9083`, auth interna 3_5_3).
+3. Social hace sucesión por grupo y llama `POST /notes/unshare-all`
+   `{user_id, group_id}` con el JWT (HTTP, 3_5_5).
+4. Identity recién ahí borra su fila y revoca tokens.
+
+### Archivos
+
+| Archivo | Contenido |
+|---|---|
+| `back/proto/social/v1/social.proto` | `+ user_token = 2` (+ regen) |
+| `back/social/internal/service/group_service.go` | Hook unshare por grupo en `HandleAccountDeletion` |
+| `back/social/internal/handler/grpc/social_server.go` | Passthrough del token |
+| `back/social/internal/service/group_service_test.go` | `TestAccountDeletionCleansNotesInAllGroups` (limpia ambos grupos con token; sin token solo sucesión) |
+
+### Verificación
+
+- Subtests 2/2 PASS; `go test ./...` (social): `ok` todo.
+- **No entra**: el orquestador en Identity (tarea de su dueño; el contrato lo
+  espera), migrar `unshare-all` a gRPC (tarea de Notes; el llamado sigue HTTP).
+
 ## 3_5_8 — Discovery: env/puertos gRPC, compose + manifests k8s
 
 ### Mapa fijado (ver `back/proto/README.md`)

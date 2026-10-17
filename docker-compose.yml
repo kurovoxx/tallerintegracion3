@@ -57,8 +57,8 @@ services:
       dockerfile: Dockerfile
     container_name: ti3-notes
     ports:
-      - "8082:8082"
-      - "9082:9082" # gRPC (reservado, tarea dueño Notes)
+      - "8082:8082" # HTTP (Gin): API pública de Notes
+      - "9082:9082" # gRPC (NotesService): servicio-a-servicio (Social)
     environment:
       DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable}
       DIRECT_URL: ${DOCKER_DATABASE_URL:-postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable}
@@ -67,6 +67,7 @@ services:
       PORT: 8082
       NOTES_PORT: 8082
       GRPC_PORT: 9082
+      NOTES_GRPC_PORT: 9082
       STORAGE_MODE: drive
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
@@ -89,7 +90,6 @@ services:
     container_name: ti3-social
     ports:
       - "8083:8083"
-      - "9083:9083" # gRPC SocialService
       - "9083:9083" # gRPC SocialService (servicio-a-servicio)
     environment:
       DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable}
@@ -102,6 +102,8 @@ services:
       SOCIAL_GRPC_PORT: 9083
       AUTH_BASE_URL: http://auth:8080
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
+      # gRPC de Notes (limpieza unshare-all al salir de grupo).
+      NOTES_GRPC_URL: ${NOTES_GRPC_URL:-notes:9082}
       CALENDAR_MODE: ${CALENDAR_MODE:-mock}
       STREAM_API_KEY: ${STREAM_API_KEY}
       STREAM_API_SECRET: ${STREAM_API_SECRET:-dev-stream-secret-change-me}
@@ -148,7 +150,7 @@ services:
     container_name: ti3-academic
     ports:
       - "8087:8081" # host 8081 reservado para callback OAuth local de Drive
-      - "9081:9081" # gRPC AcademicService
+      - "9081:9081" # gRPC AcademicService (GetSubject consumido por Notes)
     environment:
       DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable}
       DIRECT_URL: ${DOCKER_DATABASE_URL:-postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable}

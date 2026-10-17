@@ -59,63 +59,22 @@ void main() {
     expect(find.text('EVALUACIONES · REDES'), findsNothing);
   });
 
-  testWidgets('MaterialsWindow: back vuelve al curso', (tester) async {
-    await pumpOnCourse(
-      tester,
-      const MaterialsWindow(subjectId: 'mat-1', subjectCode: 'INF-301', subjectName: 'Redes'),
-      'MATERIALES · REDES',
-    );
-    await tester.tap(find.byType(BackButton));
-    await tester.pumpAndSettle();
-    expect(find.text('CURSO'), findsOneWidget);
-    expect(find.text('MATERIALES · REDES'), findsNothing);
-  });
-
-  testWidgets('Crear manual hereda preset de materia y vuelve',
+  testWidgets('Ver Materiales abre apuntes directo con preset y back',
       (tester) async {
+    // Contrato del botón Ver Materiales (courses_screen): AllNotesScreen
+    // con preset de materia + back, sin ventana intermedia.
     await tester.pumpWidget(
       const MaterialApp(
-        home: MaterialsWindow(subjectId: 'mat-1', subjectCode: 'INF-301', subjectName: 'Redes'),
+        home: AllNotesScreen(
+          initialSubjectCode: 'INF-301',
+          initialSubjectId: 'mat-1',
+          initialSubjectName: 'Redes',
+          showBackButton: true,
+        ),
       ),
     );
-    await pumpWindows(tester);
-    expect(find.text('MATERIALES · REDES'), findsOneWidget);
-
-    await tester.tap(find.text('ABRIR APUNTES'));
-    await pumpWindows(tester);
-
-    // Vista que lista con preset, SIN auto-formulario encima.
-    expect(find.byType(AllNotesScreen), findsOneWidget);
-    final notes =
-        tester.widget<AllNotesScreen>(find.byType(AllNotesScreen));
-    expect(notes.initialSubjectCode, 'INF-301');
-    expect(notes.initialSubjectId, 'mat-1');
-    expect(notes.autoOpenCreate, isFalse);
-    expect(find.text('NUEVA NOTA'), findsNothing);
-
-    // El botón crear existe en desktop: viewport ancho y clic.
-    tester.view.physicalSize = const Size(1400, 900);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pump(const Duration(milliseconds: 300));
-    // NeobrutalistButton mayuscula el label ('Nueva nota' -> 'NUEVA NOTA').
-    await tester.tap(find.text('NUEVA NOTA'));
-    await pumpWindows(tester);
-    expect(find.widgetWithText(TextField, '[INF-301] '), findsOneWidget);
-
-    // Cancelar cierra el diálogo, queda AllNotesScreen.
-    // (En desktop el botón crear muestra 'NUEVA NOTA': el diálogo se
-    // detecta por su campo con preset, que debe desaparecer.)
-    await tester.tap(find.text('CANCELAR'));
-    await pumpWindows(tester);
-    expect(find.widgetWithText(TextField, '[INF-301] '), findsNothing);
-    expect(find.byType(AllNotesScreen), findsOneWidget);
-
-    // Back vuelve a Materiales (no al home ni cierra la app).
-    await tester.tap(find.byTooltip('Volver'));
-    await pumpWindows(tester);
-    expect(find.byType(AllNotesScreen), findsNothing);
-    expect(find.text('MATERIALES · REDES'), findsOneWidget);
+    expect(find.text('NOTAS REDES'), findsOneWidget);
+    expect(find.byTooltip('Volver'), findsOneWidget);
   });
 }

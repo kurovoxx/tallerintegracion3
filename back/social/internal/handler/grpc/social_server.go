@@ -86,7 +86,7 @@ func (s *SocialServer) AccountDeletionCleanup(ctx context.Context, req *socialv1
 	if !utils.ValidateUUID(req.GetUserId()) {
 		return nil, status.Error(codes.InvalidArgument, "user_id inválido (UUID esperado)")
 	}
-	results, err := s.groups.HandleAccountDeletion(ctx, req.GetUserId())
+	results, err := s.groups.HandleAccountDeletion(ctx, req.GetUserId(), req.GetUserToken())
 	if err != nil {
 		return nil, toStatus(err)
 	}

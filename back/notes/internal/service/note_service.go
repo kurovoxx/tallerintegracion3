@@ -500,6 +500,9 @@ type NoteService struct {
 	drive       drive.Client
 	social      SocialResolver
 	members     GroupMemberDirectory
+	// driveEmails resuelve el correo de la cuenta Google Drive de cada miembro
+	// (restricted). Si es nil, se usa members.ListMemberEmails (fallback previo).
+	driveEmails DriveEmailDirectory
 	// La idempotencia de Create/Copy/Update vive en notes.idempotency_keys
 	// (durable, compartida entre réplicas): no hay caché en memoria que perder
 	// ante un crash ni que purgar por TTL. idemClaimTTL actúa como lease de
@@ -549,6 +552,14 @@ func (s *NoteService) SetMemberDirectory(d GroupMemberDirectory) {
 		d = NewNoopMemberDirectory()
 	}
 	s.members = d
+}
+
+// SetDriveEmailDirectory inyecta el resolvedor de correos de la cuenta Google
+// Drive de los miembros (share restricted). En producción main.go lo construye
+// con Social (user_id de miembros) + identity.oauth_connections. Sin él, se
+// cae al correo que devuelve Social (comportamiento previo; tests).
+func (s *NoteService) SetDriveEmailDirectory(d DriveEmailDirectory) {
+	s.driveEmails = d
 }
 
 // notFoundNote es el error canónico 404 para notas inexistentes o inaccesibles.
@@ -1969,10 +1980,7 @@ func (s *NoteService) ComputeDesiredDrivePermissions(ctx context.Context, visibi
 			continue
 		}
 		groups[sh.GroupID] = true
-		if s.members == nil {
-			return DesiredDrivePermissions{}, ErrInternalDatabase
-		}
-		emails, err := s.members.ListMemberEmails(ctx, sh.GroupID)
+		emails, err := s.restrictedGroupEmails(ctx, sh.GroupID)
 		if err != nil {
 			return DesiredDrivePermissions{}, ErrInternalDatabase
 		}
@@ -1980,6 +1988,36 @@ func (s *NoteService) ComputeDesiredDrivePermissions(ctx context.Context, visibi
 	}
 	policy.Emails = NormalizeEmails(policy.Emails)
 	return policy, nil
+}
+
+// restrictedGroupEmails resuelve los correos a los que se otorgará permiso
+// Drive para un grupo restricted.
+//
+// Con resolvedor de identidades Google (producción), usa ÚNICAMENTE el correo
+// de la cuenta Google Drive conectada de cada miembro
+// (identity.oauth_connections.external_account_email), nunca su correo de
+// registro en Sigma Academy. Los miembros sin conexión Drive vigente NO reciben
+// permiso (no tienen Drive con qué abrir el archivo) y NO se sustituye su
+// correo: se cuentan y se registra un aviso, manteniendo la convergencia
+// diferida para el resto.
+//
+// Sin resolvedor (tests / sin BD), se conserva el comportamiento previo:
+// el correo de miembros que devuelve Social.
+func (s *NoteService) restrictedGroupEmails(ctx context.Context, groupID string) ([]string, error) {
+	if s.driveEmails != nil {
+		emails, withoutDrive, err := s.driveEmails.ListMemberDriveEmails(ctx, groupID)
+		if err != nil {
+			return nil, err
+		}
+		if withoutDrive > 0 {
+			log.Printf("notes: grupo %s: %d miembro(s) sin conexión Google Drive; no se otorgan permisos de Drive a su correo de registro", groupID, withoutDrive)
+		}
+		return emails, nil
+	}
+	if s.members == nil {
+		return nil, ErrInternalDatabase
+	}
+	return s.members.ListMemberEmails(ctx, groupID)
 }
 
 // persistManagedPermission hace upsert del estado deseado/observado de un
@@ -2167,10 +2205,15 @@ func (s *NoteService) syncDrivePermissions(ctx context.Context, note *model.Note
 	}
 
 	// 4) Drive: otorgar altas (409 = ya otorgado, cuenta como convergencia).
+	// Se captura el ID nominal devuelto por Drive y se persiste para poder
+	// revocarlo después por ID, sin re-listar el ACL.
 	for _, email := range toGrant {
 		driveCtx, cancel := withDriveTimeout(ctx)
+		var permissionID string
 		grantErr := retryDriveOperation(driveCtx, driveRetryMaxAttempts, func() error {
-			return s.observedDriveGrantPermission(driveCtx, ownerID, fileID, email, "reader")
+			var opErr error
+			permissionID, opErr = s.observedDriveGrantPermission(driveCtx, ownerID, fileID, email, "reader")
+			return opErr
 		})
 		cancel()
 		if grantErr != nil && !isPermissionAlreadyExists(grantErr) {
@@ -2180,7 +2223,13 @@ func (s *NoteService) syncDrivePermissions(ctx context.Context, note *model.Note
 			noteErr(ErrDriveUnavailable)
 			continue
 		}
-		if err := s.persistManagedPermission(ctx, note.ID, fileID, model.PermissionPrincipalEmail, email, nil, model.PermissionSyncInSync); err != nil {
+		// En un 409 (ya otorgado) Drive no devuelve ID: se persiste in_sync sin
+		// ID y la revocación futura cae al camino por email.
+		var pid *string
+		if strings.TrimSpace(permissionID) != "" {
+			pid = &permissionID
+		}
+		if err := s.persistManagedPermission(ctx, note.ID, fileID, model.PermissionPrincipalEmail, email, pid, model.PermissionSyncInSync); err != nil {
 			noteErr(err)
 		}
 	}
@@ -2370,9 +2419,70 @@ func (s *NoteService) UnshareAll(ctx context.Context, userID string, groupID str
 			}
 		}
 		if next == "" {
-			return nil
+			break
 		}
 		cursor = next
+	}
+	// Tras retirar los shares PROPIOS del usuario, reconvergencia de los
+	// permisos Drive de las notas que siguen compartidas con el grupo: revoca
+	// el correo (cuenta Google) de quien ya no tiene via legitima de acceso y
+	// conserva el de los miembros vigentes (incluido el saliente si aun
+	// pertenece a otro grupo que comparte la misma nota). No borra shares de
+	// otros autores ni afecta link/anyone. Best-effort: los fallos de Drive
+	// quedan pending/failed para el reconciliador.
+	s.reconcileGroupNotePermissions(ctx, groupID)
+	return nil
+}
+
+// reconcileGroupNotePermissions recomputa y converge el ACL de Google Drive de
+// cada nota que sigue compartida con groupID, tras una salida/expulsion/ban.
+func (s *NoteService) reconcileGroupNotePermissions(ctx context.Context, groupID string) {
+	seen := make(map[string]bool)
+	cursor := ""
+	for {
+		shares, next, err := s.shared.ListByGroup(ctx, groupID, 100, cursor)
+		if err != nil {
+			log.Printf("notes: unshare-all grupo %s: no se pudieron listar las notas: %v", groupID, err)
+			return
+		}
+		for _, sh := range shares {
+			if sh == nil || seen[sh.NoteID] {
+				continue
+			}
+			seen[sh.NoteID] = true
+			s.reconcileNotePermissions(ctx, sh.NoteID)
+		}
+		if next == "" {
+			return
+		}
+		cursor = next
+	}
+}
+
+// reconcileNotePermissions recomputa el estado deseado de una nota (union de
+// TODOS sus grupos restricted, link y visibilidad) y lo converge bajo el lock
+// distribuido por nota. Idempotente; no bloquea el camino de usuario.
+func (s *NoteService) reconcileNotePermissions(ctx context.Context, noteID string) {
+	lockErr := s.shared.WithNoteLock(ctx, noteID, func(lockCtx context.Context) error {
+		note, err := s.observedNotesGetByID(lockCtx, noteID)
+		if err != nil {
+			return ErrInternalDatabase
+		}
+		if note == nil {
+			return nil
+		}
+		shares, err := s.shared.ListByNote(lockCtx, noteID)
+		if err != nil {
+			return ErrInternalDatabase
+		}
+		desired, err := s.ComputeDesiredDrivePermissions(lockCtx, note.Visibility, shares)
+		if err != nil {
+			return err
+		}
+		return s.syncDrivePermissions(lockCtx, note, desired, true)
+	})
+	if lockErr != nil {
+		log.Printf("notes: unshare-all: convergencia de la nota %s diferida: %v", noteID, lockErr)
 	}
 }
 
@@ -2535,7 +2645,19 @@ func DriveSyncStatusFromManagedPermissions(rows []*model.DriveManagedPermission)
 	return status
 }
 
-func (s *NoteService) ListGroupNotes(ctx context.Context, requesterID string, groupID string, cursor string, limit int) ([]*model.Note, string, error) {
+// GroupNote asocia una nota con su vínculo a grupo (notes.shared_notes). Es el
+// shape de GET /groups/{id}/notes y del RPC ListGroupNotes; se expone para que
+// la capa gRPC pueda mapear Note + SharedNote sin volver a consultar el store.
+type GroupNote struct {
+	Note   *model.Note
+	Shared *model.SharedNote
+}
+
+// ListGroupNotePairs resuelve las notas compartidas con un grupo junto a su
+// vínculo, aplicando membresía y el orden formal (admin → likes → fecha). Es
+// la única implementación de la lógica; ListGroupNotes (HTTP) delega en ella
+// para no duplicarla en el handler gRPC.
+func (s *NoteService) ListGroupNotePairs(ctx context.Context, requesterID string, groupID string, cursor string, limit int) ([]GroupNote, string, error) {
 	if !utils.ValidateUUID(groupID) {
 		return nil, "", newServiceErrorMsg(utils.ErrNotFound, "grupo no encontrado")
 	}
@@ -2553,30 +2675,36 @@ func (s *NoteService) ListGroupNotes(ctx context.Context, requesterID string, gr
 		return nil, "", ErrInternalDatabase
 	}
 	// Asociar cada shared con su nota para ordenar por criterios formales
-	type pair struct {
-		note   *model.Note
-		shared *model.SharedNote
-	}
-	var pairs []pair
+	var pairs []GroupNote
 	for _, sh := range sharedList {
 		n, _ := s.observedNotesGetByID(ctx, sh.NoteID)
 		if n != nil {
-			pairs = append(pairs, pair{note: n, shared: sh})
+			pairs = append(pairs, GroupNote{Note: n, Shared: sh})
 		}
 	}
 	// Orden formal: 1) is_admin_note == true primero, 2) likes_count DESC, 3) shared_at DESC
 	sort.SliceStable(pairs, func(i, j int) bool {
-		if pairs[i].shared.IsAdminNote != pairs[j].shared.IsAdminNote {
-			return pairs[i].shared.IsAdminNote && !pairs[j].shared.IsAdminNote
+		if pairs[i].Shared.IsAdminNote != pairs[j].Shared.IsAdminNote {
+			return pairs[i].Shared.IsAdminNote && !pairs[j].Shared.IsAdminNote
 		}
-		if pairs[i].note.LikesCount != pairs[j].note.LikesCount {
-			return pairs[i].note.LikesCount > pairs[j].note.LikesCount
+		if pairs[i].Note.LikesCount != pairs[j].Note.LikesCount {
+			return pairs[i].Note.LikesCount > pairs[j].Note.LikesCount
 		}
-		return pairs[i].shared.SharedAt.After(pairs[j].shared.SharedAt)
+		return pairs[i].Shared.SharedAt.After(pairs[j].Shared.SharedAt)
 	})
-	var notes []*model.Note
+	return pairs, next, nil
+}
+
+// ListGroupNotes (HTTP) devuelve solo las notas del grupo, delegando en
+// ListGroupNotePairs para compartir membresía y orden con el RPC gRPC.
+func (s *NoteService) ListGroupNotes(ctx context.Context, requesterID string, groupID string, cursor string, limit int) ([]*model.Note, string, error) {
+	pairs, next, err := s.ListGroupNotePairs(ctx, requesterID, groupID, cursor, limit)
+	if err != nil {
+		return nil, "", err
+	}
+	notes := make([]*model.Note, 0, len(pairs))
 	for _, p := range pairs {
-		notes = append(notes, p.note)
+		notes = append(notes, p.Note)
 	}
 	return notes, next, nil
 }

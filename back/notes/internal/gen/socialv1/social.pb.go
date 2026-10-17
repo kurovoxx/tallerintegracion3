@@ -528,8 +528,12 @@ func (x *Member) GetDisplayName() string {
 }
 
 type AccountDeletionCleanupRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	UserId string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	// JWT vigente del usuario: Identity lo reenvía ANTES de borrar su fila.
+	// Social lo reenvía a Notes unshare-all por grupo (caller == user, 3_5_7).
+	// Vacío = solo sucesión, sin limpieza en Notes.
+	UserToken     string `protobuf:"bytes,2,opt,name=user_token,json=userToken,proto3" json:"user_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -567,6 +571,13 @@ func (*AccountDeletionCleanupRequest) Descriptor() ([]byte, []int) {
 func (x *AccountDeletionCleanupRequest) GetUserId() string {
 	if x != nil {
 		return x.UserId
+	}
+	return ""
+}
+
+func (x *AccountDeletionCleanupRequest) GetUserToken() string {
+	if x != nil {
+		return x.UserToken
 	}
 	return ""
 }
@@ -710,9 +721,11 @@ const file_v1_social_proto_rawDesc = "" +
 	"\x05email\x18\x04 \x01(\tH\x00R\x05email\x88\x01\x01\x12&\n" +
 	"\fdisplay_name\x18\x05 \x01(\tH\x01R\vdisplayName\x88\x01\x01B\b\n" +
 	"\x06_emailB\x0f\n" +
-	"\r_display_name\"8\n" +
+	"\r_display_name\"W\n" +
 	"\x1dAccountDeletionCleanupRequest\x12\x17\n" +
-	"\auser_id\x18\x01 \x01(\tR\x06userId\"T\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x1d\n" +
+	"\n" +
+	"user_token\x18\x02 \x01(\tR\tuserToken\"T\n" +
 	"\x1eAccountDeletionCleanupResponse\x122\n" +
 	"\x06groups\x18\x01 \x03(\v2\x1a.social.v1.GroupSuccessionR\x06groups\"\x95\x01\n" +
 	"\x0fGroupSuccession\x12\x19\n" +

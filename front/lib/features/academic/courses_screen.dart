@@ -9,6 +9,7 @@ import 'academic_mappers.dart';
 import 'academic_models.dart';
 import 'attendance_screen.dart';
 import 'course_windows.dart';
+import '../notes/all_notes_screen.dart';
 
 const String kSubjectApproved = 'approved';
 const String kSubjectInProgress = 'in_progress';
@@ -616,7 +617,17 @@ class _CoursesScreenState extends State<CoursesScreen> {
           icon: Icons.description_rounded,
           label: 'Ver Materiales',
           active: false,
-          onTap: () => open(MaterialsWindow(subjectId: subjectId, subjectCode: code, subjectName: name)),
+          // Directo a los apuntes de la materia (sin paso intermedio).
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => AllNotesScreen(
+                initialSubjectCode: code,
+                initialSubjectId: subjectId,
+                initialSubjectName: name,
+                showBackButton: true,
+              ),
+            ),
+          ),
         ),
         _CourseTabButton(
           icon: Icons.bar_chart_rounded,

@@ -1516,7 +1516,9 @@ func TestShareLinkNoGrants(t *testing.T) {
 }
 
 func TestNormalizeEmails(t *testing.T) {
-	got := NormalizeEmails([]string{"  A@X.com ", "a@x.com", "", "B@y.cl", " b@Y.cl\t"})
+	// Incluye malformados (sin @, sin dominio con punto, con display name):
+	// deben descartarse sin afectar a los correos válidos.
+	got := NormalizeEmails([]string{"  A@X.com ", "a@x.com", "", "B@y.cl", " b@Y.cl\t", "no-es-email", "sin@dominio", "Foo <c@z.com>", "   "})
 	want := []string{"a@x.com", "b@y.cl"}
 	if len(got) != len(want) {
 		t.Fatalf("esperaba %v, got %v", want, got)

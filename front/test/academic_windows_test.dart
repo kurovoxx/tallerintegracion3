@@ -64,14 +64,22 @@ void main() {
     expect(find.text('UNIDADES · REDES'), findsNothing);
   });
 
-  testWidgets('MaterialsWindow sin sesión: error visible con reintentar', (tester) async {
-    await pumpSettled(
-      tester,
-      const MaterialsWindow(subjectId: 's1', subjectCode: 'INF-301', subjectName: 'Redes'),
+  testWidgets('Ver Materiales abre apuntes directo con preset y back', (tester) async {
+    // Contrato del botón Ver Materiales (courses_screen): AllNotesScreen
+    // con preset de materia + back, sin ventana intermedia.
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: AllNotesScreen(
+          initialSubjectCode: 'INF-301',
+          initialSubjectId: 's1',
+          initialSubjectName: 'Redes',
+          showBackButton: true,
+        ),
+      ),
     );
-    expect(find.text('MATERIALES · REDES'), findsOneWidget);
-    expect(find.text('ABRIR APUNTES'), findsOneWidget);
-    expect(find.text('REINTENTAR'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('NOTAS REDES'), findsOneWidget);
+    expect(find.byTooltip('Volver'), findsOneWidget);
   });
 
   testWidgets('EvaluationsWindow sin sesión: error visible con reintentar', (tester) async {
@@ -95,25 +103,6 @@ void main() {
     expect(find.byTooltip('Volver'), findsNothing);
   });
 
-  testWidgets('Abrir apuntes entra directo a la lista; back vuelve', (tester) async {
-    await pumpSettled(
-      tester,
-      const MaterialsWindow(subjectId: 's1', subjectCode: 'INF-301', subjectName: 'Redes'),
-    );
-    await tester.tap(find.text('ABRIR APUNTES'));
-    for (var i = 0; i < 6; i++) {
-      await tester.pump(const Duration(milliseconds: 300));
-    }
-    // Vista que lista (sin auto-formulario encima).
-    expect(find.text('NOTAS REDES'), findsOneWidget);
-    expect(find.text('NUEVA NOTA'), findsNothing);
-    // Back del header vuelve a Materiales (no al home).
-    await tester.tap(find.byTooltip('Volver'));
-    for (var i = 0; i < 6; i++) {
-      await tester.pump(const Duration(milliseconds: 300));
-    }
-    expect(find.text('MATERIALES · REDES'), findsOneWidget);
-  });
 
   testWidgets('Detalle muestra solo ventanas, sin tabs viejos', (tester) async {    await tester.pumpWidget(const MaterialApp(home: CoursesScreen()));
     await tester.pump(const Duration(milliseconds: 700));

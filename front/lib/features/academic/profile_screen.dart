@@ -382,15 +382,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text(
-              'Autoriza en la pestaña de Google y copia el parámetro code= de la dirección a la que te redirige.',
+              'Autoriza en la pestaña de Google. Cuando te redirija a una '
+              'dirección que no carga (localhost:8081), copia ESA dirección '
+              'completa (o solo el parámetro code=) y pégala aquí.',
               style: TextStyle(fontSize: 13),
             ),
             const SizedBox(height: 12),
             TextField(
               controller: codeController,
               decoration: const InputDecoration(
-                labelText: 'CÓDIGO (code=...)',
-                hintText: '4/0A...',
+                labelText: 'URL O CÓDIGO',
+                hintText: 'http://localhost:8081/...?code=4/0A...',
               ),
             ),
           ],
@@ -407,7 +409,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ],
       ),
     );
-    final code = (pasted ?? '').trim();
+    // Acepta la URL completa, la query o el código crudo (y lo decodifica).
+    final code = GoogleDriveService.extractOAuthCode(pasted ?? '');
     return code.isEmpty ? null : code;
   }
 

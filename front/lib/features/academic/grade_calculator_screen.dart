@@ -66,6 +66,9 @@ class _GradeItem {
   final TextEditingController weightController;
   List<_GradeItem> children;
 
+  /// Nivel de confianza 1/2/3 (default 2 = Media) para el reparto.
+  int confidence = 2;
+
   /// Nombre backend preservado al hidratar (para guardar sin renombrar).
   String? backendName;
 
@@ -90,6 +93,14 @@ class _CalcEntry {
   final String label;
   final double? score;
   final double weight;
+}
+
+/// Hoja para el reparto por confianza (tops simples, examen/final o hijas).
+class _ConfidenceLeaf {
+  const _ConfidenceLeaf({required this.item, required this.entry});
+
+  final _GradeItem item;
+  final ConfidenceEntry entry;
 }
 
 class GradeCalculatorScreen extends StatefulWidget {
@@ -140,6 +151,12 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
   double? _neededPendingGrade;
   bool _isReachable = true;
 
+  /// Fill-back de la calculadora con confianza: ids con nota auto-calculada
+  /// + si con ellas se alcanza el objetivo (verde) o no (rojo). Se limpian
+  /// al editar (vuelven a negro) vía [_resetResult].
+  final Set<String> _calculatedIds = {};
+  bool _calcReached = true;
+
   // Backend Academic: con sesión se hidratan las notas (GET anidados +
   // average) y se persiste el árbol (fan-out de hijas); sin sesión rige
   // el estado local.
@@ -150,6 +167,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
   String? _backendAverageStatus;
   String? _backendError;
   bool _isSavingBackend = false;
+  bool _isReloading = false;
 
   @override
   void initState() {
@@ -201,6 +219,26 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     _average = null;
     _neededPendingGrade = null;
     _isReachable = true;
+    _calculatedIds.clear();
+    _calcReached = true;
+  }
+
+  /// Confianza 1/2/3: invalida el resultado (limpia fill verde/rojo).
+  void _changeConfidence(_GradeItem item, int value) {
+    if (value < 1 || value > 3 || item.confidence == value) return;
+    setState(() {
+      item.confidence = value;
+      _resetResult();
+    });
+  }
+
+  Color _scoreColor(String id) {
+    if (!_calculatedIds.contains(id)) return AppColors.text;
+    return _calcReached ? AppColors.successDeep : AppColors.error;
+  }
+
+  String _formatCalc(double v) {
+    return roundHalfUp(v, 1).toStringAsFixed(1);
   }
 
   void _resetCalculator() {
@@ -261,7 +299,19 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
 
   /// Hidrata el estado desde GET grades anidados + average. Sin match o sin
   /// sesión: modo local (comportamiento previo).
-  Future<void> _loadFromBackend() async {
+  ///
+  /// Con [manual] (botón "Cargar Notas" en embebida): recarga bajo demanda
+  /// que descarta cambios locales; reutiliza el mismo path post-guardado
+  /// (entries + lista + promedio vía `onSaved`). Vacío backend → SnackBar
+  /// [reloadEmptyMessage] sin tocar lo local. Error (sin sesión/red) →
+  /// error visible + SnackBar (el botón reintenta, patrón existente).
+  Future<void> _loadFromBackend({bool manual = false}) async {
+    if (manual) {
+      if (_isReloading) return;
+      setState(() {
+        _isReloading = true;
+      });
+    }
     AcademicSubject? match;
     List<AcademicGradeNode> nodes = const [];
     AcademicAverage? avg;
@@ -271,6 +321,15 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       match = _matchSubject(subjects, _selectedCourse);
       if (match == null) {
         if (!mounted) return;
+        if (manual) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(reloadEmptyMessage),
+              backgroundColor: AppColors.border,
+            ),
+          );
+          return;
+        }
         setState(() {
           _backendMode = false;
           _backendSubjectId = null;
@@ -288,6 +347,22 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       }
     } on AcademicApiException catch (e) {
       if (!mounted) return;
+      if (manual) {
+        setState(() {
+          _backendMode = false;
+          _backendSubjectId = null;
+          _backendAverage = null;
+          _backendAverageStatus = null;
+          _backendError = e.message;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.message),
+            backgroundColor: AppColors.border,
+          ),
+        );
+        return;
+      }
       setState(() {
         _backendMode = false;
         _backendSubjectId = null;
@@ -297,8 +372,56 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         _backendError = e.code == 'no_session' ? null : e.message;
       });
       return;
+    } finally {
+      if (manual && mounted) {
+        setState(() {
+          _isReloading = false;
+        });
+      }
     }
     if (!mounted) return;
+    if (manual) {
+      if (!hasSavedNotes(nodes)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(reloadEmptyMessage),
+            backgroundColor: AppColors.border,
+          ),
+        );
+        return;
+      }
+      final subjectId = match.id;
+      final average = avg;
+      setState(() {
+        _resetResult();
+        _disposeNormalGrades();
+        _normalGrades = nodes.map((n) {
+          final item = _itemFromGrade(n.grade, 'backend-${n.grade.id}');
+          item.children = n.children
+              .map((c) => _itemFromGrade(c, 'backend-${c.id}'))
+              .toList();
+          return item;
+        }).toList();
+        if (_normalGrades.isEmpty) _initializeNormalGrades();
+        _backendMode = true;
+        _backendSubjectId = subjectId;
+        _backendAverage = average?.average;
+        _backendAverageStatus = average?.status;
+        _backendError = null;
+      });
+      // Mismo path post-guardado: recarga lista + promedio en el padre para
+      // no desincronizar (recarga fresca, sin duplicados ni IDs viejos).
+      final cb = widget.onSaved;
+      if (cb != null) cb();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(reloadSuccessMessage),
+          backgroundColor: AppColors.border,
+        ),
+      );
+      return;
+    }
     setState(() {
       _resetResult();
       _disposeNormalGrades();
@@ -809,6 +932,57 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     );
   }
 
+  /// Hojas para el reparto por confianza: tops simples, examen/final o
+  /// hijas con peso efectivo (padre × hija) antes del promedio al padre.
+  List<_ConfidenceLeaf> _buildConfidenceLeaves() {
+    final out = <_ConfidenceLeaf>[];
+    if (_finalExamMode && _finalGrade != null && _exam != null) {
+      for (final item in <_GradeItem>[_finalGrade!, _exam!]) {
+        out.add(
+          _ConfidenceLeaf(
+            item: item,
+            entry: ConfidenceEntry(
+              score: _parseNumber(item.scoreController.text),
+              weight: _readWeight(item) / 100,
+              confidence: item.confidence,
+            ),
+          ),
+        );
+      }
+      return out;
+    }
+    for (final top in _normalGrades) {
+      final parentFrac = _readWeight(top) / 100;
+      if (top.isSubdivided) {
+        for (final child in top.children) {
+          final eff = parentFrac * (_readWeight(child) / 100);
+          out.add(
+            _ConfidenceLeaf(
+              item: child,
+              entry: ConfidenceEntry(
+                score: _parseNumber(child.scoreController.text),
+                weight: eff,
+                confidence: child.confidence,
+              ),
+            ),
+          );
+        }
+      } else {
+        out.add(
+          _ConfidenceLeaf(
+            item: top,
+            entry: ConfidenceEntry(
+              score: _parseNumber(top.scoreController.text),
+              weight: parentFrac,
+              confidence: top.confidence,
+            ),
+          ),
+        );
+      }
+    }
+    return out;
+  }
+
   void _calculate() {
     FocusManager.instance.primaryFocus?.unfocus();
 
@@ -832,49 +1006,71 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       return;
     }
 
-    final entries = _buildEntries();
-    final knownEntries = entries.where((entry) => entry.score != null);
-    final pendingEntries = entries.where(
-      (entry) => entry.score == null && entry.weight > 0,
-    );
-
+    final leaves = _buildConfidenceLeaves();
     double weightedKnown = 0;
-    for (final entry in knownEntries) {
-      weightedKnown += entry.score! * entry.weight;
+    double pendingWeight = 0;
+    for (final leaf in leaves) {
+      if (leaf.entry.score != null) {
+        weightedKnown += leaf.entry.score! * leaf.entry.weight;
+      } else if (leaf.entry.weight > 0) {
+        pendingWeight += leaf.entry.weight;
+      }
     }
 
-    final pendingWeight = pendingEntries.fold<double>(
-      0,
-      (sum, entry) => sum + entry.weight,
-    );
-
     setState(() {
-      _average = roundHalfUp(weightedKnown, 1);
+      _calculatedIds.clear();
       _error = null;
 
       if (pendingWeight == 0) {
+        _average = roundHalfUp(weightedKnown, 1);
         _neededPendingGrade = null;
         _resultState = _ResultState.success;
         _isReachable = weightedKnown >= target;
+        _calcReached = true;
       } else {
         final res = computeNeeded(
           target: target,
           weightedKnown: weightedKnown,
           pendingWeight: pendingWeight,
         );
-        switch (res.status) {
-          case NeededStatus.reached:
-            _neededPendingGrade = null;
-            _resultState = _ResultState.reached;
-            _isReachable = true;
-          case NeededStatus.needed:
+        if (res.status == NeededStatus.reached) {
+          for (final leaf in leaves) {
+            if (leaf.entry.score == null && leaf.entry.weight > 0) {
+              leaf.item.scoreController.text = '1.0';
+              _calculatedIds.add(leaf.item.id);
+            }
+          }
+          _calcReached = true;
+          _average = roundHalfUp(weightedKnown + pendingWeight * 1.0, 1);
+          _neededPendingGrade = null;
+          _resultState = _ResultState.reached;
+          _isReachable = true;
+        } else {
+          final dist = distributeNeeded(
+            target: target,
+            entries: leaves.map((l) => l.entry).toList(),
+          );
+          _calcReached = dist.reached;
+          for (var i = 0; i < leaves.length; i++) {
+            final orig = leaves[i].entry.score;
+            final a = dist.assigned[i];
+            if (orig == null &&
+                a != null &&
+                leaves[i].entry.weight > 0) {
+              leaves[i].item.scoreController.text = _formatCalc(a);
+              _calculatedIds.add(leaves[i].item.id);
+            }
+          }
+          _average = roundHalfUp(weightedKnown, 1);
+          if (dist.reached) {
             _neededPendingGrade = roundHalfUp(res.needed!, 1);
             _resultState = _ResultState.success;
             _isReachable = true;
-          case NeededStatus.unreachable:
+          } else {
             _neededPendingGrade = null;
             _resultState = _ResultState.success;
             _isReachable = false;
+          }
         }
       }
     });
@@ -886,6 +1082,8 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       _average = null;
       _neededPendingGrade = null;
       _resultState = _ResultState.invalid;
+      _calculatedIds.clear();
+      _calcReached = true;
     });
   }
 
@@ -914,6 +1112,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         _buildConfiguration(isDesktop),
         const SizedBox(height: 18),
         _buildBackendStatus(),
+        _buildReloadAction(),
         _finalExamMode
             ? _buildFinalExamMode()
             : _buildNormalMode(isDesktop),
@@ -1050,12 +1249,16 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
           item: finalItem,
           onScoreChanged: () => setState(_resetResult),
           onWeightChanged: _changeFinalWeight,
+          onConfidenceChanged: (v) => _changeConfidence(finalItem, v),
+          scoreColor: _scoreColor(finalItem.id),
         ),
         const SizedBox(height: 12),
         _ExamCard(
           item: examItem,
           onScoreChanged: () => setState(_resetResult),
           onWeightChanged: _changeExamWeight,
+          onConfidenceChanged: (v) => _changeConfidence(examItem, v),
+          scoreColor: _scoreColor(examItem.id),
         ),
       ],
     );
@@ -1112,6 +1315,12 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
                         _changeChildWeight(item, child),
                     onAddChild: () => _addChild(item),
                     onRemoveChild: () => _removeChild(item),
+                    onConfidenceChanged: (v) =>
+                        _changeConfidence(item, v),
+                    scoreColor: _scoreColor(item.id),
+                    onChildConfidenceChanged: (child, v) =>
+                        _changeConfidence(child, v),
+                    childScoreColor: (child) => _scoreColor(child.id),
                   ),
                 );
               }).toList(),
@@ -1173,6 +1382,21 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     );
   }
 
+  /// Botón "Cargar Notas" visible siempre en la calculadora embebida.
+  /// Recarga entries + lista + promedio (mismo path post-guardado).
+  Widget _buildReloadAction() {
+    if (!widget.embedded) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: OutlinedButton.icon(
+        onPressed:
+            _isReloading ? null : () => _loadFromBackend(manual: true),
+        icon: const Icon(Icons.cloud_download_rounded),
+        label: Text(_isReloading ? 'CARGANDO…' : 'CARGAR NOTAS'),
+      ),
+    );
+  }
+
   Widget _buildResult() {
     if (_resultState == _ResultState.invalid) {
       return _ResultCard(
@@ -1185,13 +1409,15 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
 
     if (_resultState == _ResultState.reached) {
       final current = (_average ?? 0).toStringAsFixed(1);
+      final filled = _calculatedIds.isNotEmpty;
       return _ResultCard(
         background: AppColors.accentYellow,
         foreground: AppColors.text,
         title: 'META YA ALCANZADA',
         value: current,
-        message:
-            'Tu promedio actual ya cubre la meta. Las evaluaciones pendientes solo pueden mantenerlo.',
+        message: filled
+            ? 'Meta alcanzada: se rellenó 1.0 en las pendientes. Promedio calculado con esos 1.0.'
+            : 'Tu promedio actual ya cubre la meta. Las evaluaciones pendientes solo pueden mantenerlo.',
       );
     }
 
@@ -1207,6 +1433,17 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         );
       }
 
+      return _ResultCard(
+        background: const Color(0xFFFFE1DE),
+        foreground: AppColors.error,
+        title: 'META NO ALCANZABLE',
+        message: 'La nota necesaria supera 7.0.',
+      );
+    }
+
+    if (_resultState == _ResultState.success &&
+        !_isReachable &&
+        _calculatedIds.isNotEmpty) {
       return _ResultCard(
         background: const Color(0xFFFFE1DE),
         foreground: AppColors.error,
@@ -1369,11 +1606,15 @@ class _FinalGradeCard extends StatelessWidget {
     required this.item,
     required this.onScoreChanged,
     required this.onWeightChanged,
+    required this.onConfidenceChanged,
+    required this.scoreColor,
   });
 
   final _GradeItem item;
   final VoidCallback onScoreChanged;
   final VoidCallback onWeightChanged;
+  final ValueChanged<int> onConfidenceChanged;
+  final Color scoreColor;
 
   @override
   Widget build(BuildContext context) {
@@ -1400,6 +1641,9 @@ class _FinalGradeCard extends StatelessWidget {
             scoreHint: 'Promedio',
             onScoreChanged: onScoreChanged,
             onWeightChanged: onWeightChanged,
+            confidence: item.confidence,
+            onConfidenceChanged: onConfidenceChanged,
+            scoreColor: scoreColor,
           ),
         ],
       ),
@@ -1412,11 +1656,15 @@ class _ExamCard extends StatelessWidget {
     required this.item,
     required this.onScoreChanged,
     required this.onWeightChanged,
+    required this.onConfidenceChanged,
+    required this.scoreColor,
   });
 
   final _GradeItem item;
   final VoidCallback onScoreChanged;
   final VoidCallback onWeightChanged;
+  final ValueChanged<int> onConfidenceChanged;
+  final Color scoreColor;
 
   @override
   Widget build(BuildContext context) {
@@ -1443,6 +1691,9 @@ class _ExamCard extends StatelessWidget {
             scoreHint: 'Nota examen',
             onScoreChanged: onScoreChanged,
             onWeightChanged: onWeightChanged,
+            confidence: item.confidence,
+            onConfidenceChanged: onConfidenceChanged,
+            scoreColor: scoreColor,
           ),
         ],
       ),
@@ -1462,6 +1713,10 @@ class _NormalGradeCard extends StatelessWidget {
     required this.onChildWeightChanged,
     required this.onAddChild,
     required this.onRemoveChild,
+    required this.onConfidenceChanged,
+    required this.scoreColor,
+    required this.onChildConfidenceChanged,
+    required this.childScoreColor,
   });
 
   final _GradeItem item;
@@ -1473,6 +1728,10 @@ class _NormalGradeCard extends StatelessWidget {
   final ValueChanged<_GradeItem> onChildWeightChanged;
   final VoidCallback onAddChild;
   final VoidCallback onRemoveChild;
+  final ValueChanged<int> onConfidenceChanged;
+  final Color scoreColor;
+  final void Function(_GradeItem child, int value) onChildConfidenceChanged;
+  final Color Function(_GradeItem child) childScoreColor;
 
   @override
   Widget build(BuildContext context) {
@@ -1520,6 +1779,9 @@ class _NormalGradeCard extends StatelessWidget {
               scoreHint: 'Nota opcional',
               onScoreChanged: onScoreChanged,
               onWeightChanged: onWeightChanged,
+              confidence: item.confidence,
+              onConfidenceChanged: onConfidenceChanged,
+              scoreColor: scoreColor,
             ),
             const SizedBox(height: 8),
             Align(
@@ -1590,6 +1852,10 @@ class _NormalGradeCard extends StatelessWidget {
                 onWeightChanged: () {
                   onChildWeightChanged(item.children[index]);
                 },
+                onConfidenceChanged: (v) {
+                  onChildConfidenceChanged(item.children[index], v);
+                },
+                scoreColor: childScoreColor(item.children[index]),
               ),
             ],
             const SizedBox(height: 8),
@@ -1615,6 +1881,51 @@ class _NormalGradeCard extends StatelessWidget {
   }
 }
 
+class _ConfidenceSwitch extends StatelessWidget {
+  const _ConfidenceSwitch({
+    required this.value,
+    required this.onChanged,
+  });
+
+  final int value;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [1, 2, 3].map((v) {
+        final selected = v == value;
+        return Padding(
+          padding: EdgeInsets.only(left: v == 1 ? 0 : 3),
+          child: InkWell(
+            onTap: () => onChanged(v),
+            borderRadius: BorderRadius.circular(4),
+            child: Container(
+              width: 26,
+              height: 30,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: selected ? AppColors.text : AppColors.surface,
+                border: Border.all(color: AppColors.border, width: 1.5),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                '$v',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                  color: selected ? AppColors.surface : AppColors.text,
+                ),
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+}
+
 class _ChildGradeRow extends StatelessWidget {
   const _ChildGradeRow({
     super.key,
@@ -1622,43 +1933,62 @@ class _ChildGradeRow extends StatelessWidget {
     required this.item,
     required this.onScoreChanged,
     required this.onWeightChanged,
+    required this.onConfidenceChanged,
+    required this.scoreColor,
   });
 
   final String label;
   final _GradeItem item;
   final VoidCallback onScoreChanged;
   final VoidCallback onWeightChanged;
+  final ValueChanged<int> onConfidenceChanged;
+  final Color scoreColor;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(
-          child: Text(
-            label,
-            style: const TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.w800,
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
             ),
-          ),
+            _ConfidenceSwitch(
+              value: item.confidence,
+              onChanged: onConfidenceChanged,
+            ),
+          ],
         ),
-        Expanded(
-          flex: 2,
-          child: _NumericInput(
-            controller: item.scoreController,
-            hint: 'Nota',
-            onChanged: onScoreChanged,
-          ),
-        ),
-        const SizedBox(width: 6),
-        SizedBox(
-          width: 68,
-          child: _NumericInput(
-            controller: item.weightController,
-            hint: '%',
-            integer: true,
-            onChanged: onWeightChanged,
-          ),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Expanded(
+              flex: 2,
+              child: _NumericInput(
+                controller: item.scoreController,
+                hint: 'Nota',
+                onChanged: onScoreChanged,
+                textColor: scoreColor,
+              ),
+            ),
+            const SizedBox(width: 6),
+            SizedBox(
+              width: 68,
+              child: _NumericInput(
+                controller: item.weightController,
+                hint: '%',
+                integer: true,
+                onChanged: onWeightChanged,
+              ),
+            ),
+          ],
         ),
       ],
     );
@@ -1672,6 +2002,9 @@ class _ScoreAndWeightRow extends StatelessWidget {
     required this.scoreHint,
     required this.onScoreChanged,
     required this.onWeightChanged,
+    required this.confidence,
+    required this.onConfidenceChanged,
+    required this.scoreColor,
   });
 
   final TextEditingController scoreController;
@@ -1679,27 +2012,55 @@ class _ScoreAndWeightRow extends StatelessWidget {
   final String scoreHint;
   final VoidCallback onScoreChanged;
   final VoidCallback onWeightChanged;
+  final int confidence;
+  final ValueChanged<int> onConfidenceChanged;
+  final Color scoreColor;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(
-          child: _NumericInput(
-            controller: scoreController,
-            hint: scoreHint,
-            onChanged: onScoreChanged,
-          ),
+        Row(
+          children: [
+            Expanded(
+              child: _NumericInput(
+                controller: scoreController,
+                hint: scoreHint,
+                onChanged: onScoreChanged,
+                textColor: scoreColor,
+              ),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 78,
+              child: _NumericInput(
+                controller: weightController,
+                hint: '%',
+                integer: true,
+                onChanged: onWeightChanged,
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: 8),
-        SizedBox(
-          width: 78,
-          child: _NumericInput(
-            controller: weightController,
-            hint: '%',
-            integer: true,
-            onChanged: onWeightChanged,
-          ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            const Expanded(
+              child: Text(
+                'CONFIANZA',
+                style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w900,
+                  color: AppColors.muted,
+                ),
+              ),
+            ),
+            _ConfidenceSwitch(
+              value: confidence,
+              onChanged: onConfidenceChanged,
+            ),
+          ],
         ),
       ],
     );
@@ -1712,12 +2073,14 @@ class _NumericInput extends StatelessWidget {
     required this.hint,
     required this.onChanged,
     this.integer = false,
+    this.textColor = AppColors.text,
   });
 
   final TextEditingController controller;
   final String hint;
   final VoidCallback onChanged;
   final bool integer;
+  final Color textColor;
 
   @override
   Widget build(BuildContext context) {
@@ -1729,10 +2092,10 @@ class _NumericInput extends StatelessWidget {
       inputFormatters: [
         FilteringTextInputFormatter.allow(_numberRegex),
       ],
-      style: const TextStyle(
+      style: TextStyle(
         fontWeight: FontWeight.w800,
         fontSize: 13,
-        color: AppColors.text,
+        color: textColor,
       ),
       decoration: appInputDecoration(hint),
       onChanged: (_) => onChanged(),

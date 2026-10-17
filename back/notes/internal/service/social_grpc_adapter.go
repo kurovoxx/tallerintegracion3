@@ -28,6 +28,7 @@ type SocialGRPCAdapter struct {
 var (
 	_ SocialResolver       = (*SocialGRPCAdapter)(nil)
 	_ GroupMemberDirectory = (*SocialGRPCAdapter)(nil)
+	_ MemberUserIDs        = (*SocialGRPCAdapter)(nil)
 )
 
 // NewSocialGRPCAdapter crea el cliente (conexión perezosa: no falla si Social
@@ -83,6 +84,28 @@ func (a *SocialGRPCAdapter) IsAdmin(ctx context.Context, userID, groupID string)
 // servicio ya lo trata como best-effort, así que 0 es el mismo resultado.
 func (a *SocialGRPCAdapter) GetFollowersCount(context.Context, string) (int, error) {
 	return 0, nil
+}
+
+// ListMemberUserIDs devuelve los user_id de los miembros (Social GetMembers),
+// para resolver su correo de cuenta Google Drive. NotFound = grupo sin
+// miembros (lista vacía); el resto de errores se propaga (fail-closed).
+func (a *SocialGRPCAdapter) ListMemberUserIDs(ctx context.Context, groupID string) ([]string, error) {
+	ctx, cancel := a.ctx(ctx)
+	defer cancel()
+	resp, err := a.client.GetMembers(ctx, &socialv1.GetMembersRequest{GroupId: groupID})
+	if status.Code(err) == codes.NotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("social grpc: %w", err)
+	}
+	ids := make([]string, 0, len(resp.GetMembers()))
+	for _, m := range resp.GetMembers() {
+		if id := strings.TrimSpace(m.GetUserId()); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
 }
 
 func (a *SocialGRPCAdapter) ListMemberEmails(ctx context.Context, groupID string) ([]string, error) {
