@@ -14,9 +14,11 @@ import (
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/calendar"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/config"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/discord"
+	identityv1 "github.com/kurovoxx/tallerintegracion3/back/social/internal/gen/identityv1"
 	socialv1 "github.com/kurovoxx/tallerintegracion3/back/social/internal/gen/socialv1"
 	grpcHandler "github.com/kurovoxx/tallerintegracion3/back/social/internal/handler/grpc"
 	httpHandler "github.com/kurovoxx/tallerintegracion3/back/social/internal/handler/http"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/identity"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/interceptor"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/mail"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/middleware"
@@ -71,9 +73,18 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	groupRepo := repository.NewGroupRepository(pool)
 	streamRepo := repository.NewStreamRepository(pool)
 	groupSvc := service.NewGroupService(groupRepo, streamNotifierFor(cfg, streamRepo))
-	// Directorio Identity para nombres en GET /groups/{id}/members
+	// Cliente Identity por gRPC con conexión compartida (directorio y
+	// Calendar). La conexión es perezosa: Auth caído no impide arrancar;
+	// cada operación falla controlada y se recupera solo al volver Auth.
+	// Vive lo que el proceso (Close idempotente al salir).
+	identityConn, err := identity.DialConn(cfg.IdentityGRPCAddr)
+	if err != nil {
+		log.Fatalf("identity grpc: dirección inválida %q: %v", cfg.IdentityGRPCAddr, err)
+	}
+	defer identityConn.Close()
+	// Directorio Identity por gRPC para nombres en GET /groups/{id}/members
 	// (best-effort: sin Auth responde solo IDs, sin romper).
-	groupSvc.SetUserDirectory(service.NewHTTPUserDirectory(cfg.AuthBaseURL, cfg.InternalKey))
+	groupSvc.SetUserDirectory(identity.NewGRPCUserDirectory(identity.NewGRPCClientWithConn(identityConn, cfg.InternalKey, 5*time.Second)))
 
 	todoRepo := repository.NewTodoRepository(pool)
 	todoSvc := service.NewTodoService(todoRepo)
@@ -93,7 +104,7 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	discordH := httpHandler.NewDiscordHandler(discordSvc)
 	meetingSvc := service.NewMeetingService(meetingRepo,
 		service.NewMultiMeetingNotifier(
-			calendarNotifierFor(cfg, meetingRepo),
+			calendarNotifierFor(cfg, meetingRepo, identityConn),
 			service.NewDiscordMeetingNotifier(discordRepo, discord.NewWebhookClient()),
 			service.NewStreamMessageNotifier(streamRepo, streamClientFor(cfg)),
 			service.NewMeetingMailNotifier(meetingRepo, newMeetingMailer(cfg)),
@@ -138,7 +149,7 @@ func startGRPC(groupSvc *service.GroupService, cfg *config.Config) {
 	}()
 }
 
-func calendarNotifierFor(cfg *config.Config, meetingRepo *repository.MeetingRepository) service.MeetingCreatedNotifier {
+func calendarNotifierFor(cfg *config.Config, meetingRepo *repository.MeetingRepository, identityConn *grpc.ClientConn) service.MeetingCreatedNotifier {
 	// CALENDAR_MODE=mock (default): sync simulado, sin llamar a Google ni a Auth.
 	// Persiste un google_calendar_event_id falso para verificar el cableado E2E.
 	if strings.ToLower(strings.TrimSpace(cfg.CalendarMode)) != "real" {
@@ -149,10 +160,14 @@ func calendarNotifierFor(cfg *config.Config, meetingRepo *repository.MeetingRepo
 			meetingRepo,
 		)
 	}
-	// CALENDAR_MODE=real: token vía Auth interno + API REST de Google.
-	log.Printf("calendar sync: modo real contra Auth %s", cfg.AuthBaseURL)
+	// CALENDAR_MODE=real: token vía Auth gRPC + API REST de Google.
+	// Sin validación bloqueante: si Auth está caído al arrancar, Social igual
+	// inicia y cada operación falla controlada (Unavailable) hasta que Auth
+	// vuelve, gracias a la conexión perezosa. La distinción revocación vs
+	// clave mala se hace por mensaje de dominio en el gateway, no al arrancar.
+	log.Printf("calendar sync: modo real contra Identity gRPC %s (degradable si Auth está caído)", cfg.IdentityGRPCAddr)
 	return service.NewCalendarMeetingNotifier(
-		&service.AuthCalendarGateway{BaseURL: cfg.AuthBaseURL, InternalKey: cfg.InternalKey},
+		&service.GRPCalendarGateway{Client: identityv1.NewIdentityServiceClient(identityConn), Key: cfg.InternalKey},
 		calendar.NewRESTClient(),
 		meetingRepo,
 	)

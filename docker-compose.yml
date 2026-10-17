@@ -75,6 +75,8 @@ services:
       # Membresía/admin/correos por gRPC; vacío = vuelve al HTTP interno.
       SOCIAL_GRPC_ADDR: ${SOCIAL_GRPC_ADDR-social:9083}
       SOCIAL_TIMEOUT: 5s
+      # Tokens Drive por gRPC (tarea 3_4_6); el refresh lo hace Identity.
+      IDENTITY_GRPC_ADDR: ${IDENTITY_GRPC_ADDR-auth:9080}
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
     depends_on:
       postgres:
@@ -101,6 +103,7 @@ services:
       GRPC_PORT: 9083
       SOCIAL_GRPC_PORT: 9083
       AUTH_BASE_URL: http://auth:8080
+      IDENTITY_GRPC_ADDR: ${IDENTITY_GRPC_ADDR-auth:9080}
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
       # gRPC de Notes (limpieza unshare-all al salir de grupo).
       NOTES_GRPC_URL: ${NOTES_GRPC_URL:-notes:9082}
