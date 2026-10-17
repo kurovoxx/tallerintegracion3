@@ -9,18 +9,22 @@ import (
 )
 
 type Config struct {
-	DatabaseURL      string
-	DirectURL        string
-	SupabaseURL      string
-	SupabaseKey      string
-	JWTSecret        string
-	Port             string
-	GRPCPort         string // servidor gRPC servicio-a-servicio (SocialService)
-	AuthBaseURL      string // base del servicio Auth para el gateway interno de Calendar
+	DatabaseURL  string
+	DirectURL    string
+	SupabaseURL  string
+	SupabaseKey  string
+	JWTSecret    string
+	Port         string
+	GRPCPort     string // servidor gRPC servicio-a-servicio (SocialService)
+	AuthBaseURL  string // base del servicio Auth para el gateway interno de Calendar
+	InternalKey  string // secreto X-Internal-Key compartido con Auth
+	CalendarMode string // "mock" (default, sin Google) o "real"
+	StreamAPIKey string // API key de Stream (solo backend, jamás al front)
+	SMTPHost     string // SMTP para avisos por mail (tarea 3_5_15)
+	SMTPPort     string
+	SMTPUsername string // remitente noreply
+	SMTPPassword string
 	IdentityGRPCAddr string // dirección gRPC de Identity (tarea 3_4_3), ej. "auth:9080"
-	InternalKey      string // secreto X-Internal-Key compartido con Auth
-	CalendarMode     string // "mock" (default, sin Google) o "real"
-	StreamAPIKey     string // API key de Stream (solo backend, jamás al front)
 	StreamSecret     string // API secret de Stream para firmar tokens server-side
 	StreamMode       string // "mock" (default, sin Stream) o "real"
 }
@@ -94,5 +98,9 @@ func Load() *Config {
 	if cfg.StreamMode == "" {
 		cfg.StreamMode = "mock"
 	}
+	cfg.SMTPHost = os.Getenv("SMTP_HOST")
+	cfg.SMTPPort = os.Getenv("SMTP_PORT")
+	cfg.SMTPUsername = os.Getenv("SMTP_USERNAME")
+	cfg.SMTPPassword = os.Getenv("SMTP_PASSWORD")
 	return cfg
 }

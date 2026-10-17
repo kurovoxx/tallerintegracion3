@@ -20,6 +20,7 @@ import (
 	httpHandler "github.com/kurovoxx/tallerintegracion3/back/social/internal/handler/http"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/identity"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/interceptor"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/mail"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/middleware"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/service"
@@ -106,6 +107,7 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 			calendarNotifierFor(cfg, meetingRepo, identityConn),
 			service.NewDiscordMeetingNotifier(discordRepo, discord.NewWebhookClient()),
 			service.NewStreamMessageNotifier(streamRepo, streamClientFor(cfg)),
+			service.NewMeetingMailNotifier(meetingRepo, newMeetingMailer(cfg)),
 		))
 	meetingH := httpHandler.NewMeetingHandler(meetingSvc)
 	notifH := httpHandler.NewNotificationHandler(service.NewNotificationService(meetingRepo))
@@ -169,6 +171,21 @@ func calendarNotifierFor(cfg *config.Config, meetingRepo *repository.MeetingRepo
 		calendar.NewRESTClient(),
 		meetingRepo,
 	)
+}
+
+// newMeetingMailer arma el mailer de avisos (tarea 3_5_15, remitente noreply).
+// Sin SMTP configurado el notifier hace skip silencioso por reunión.
+func newMeetingMailer(cfg *config.Config) *mail.MeetingMailer {
+	m := &mail.MeetingMailer{
+		Host:     cfg.SMTPHost,
+		Port:     cfg.SMTPPort,
+		Username: cfg.SMTPUsername,
+		Password: cfg.SMTPPassword,
+	}
+	if !m.Ready() {
+		log.Printf("meeting mail: SMTP sin configurar, avisos por mail desactivados")
+	}
+	return m
 }
 
 func streamClientFor(cfg *config.Config) stream.Client {
