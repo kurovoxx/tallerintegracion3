@@ -141,6 +141,20 @@ func GetUserIDFromContext(ctx context.Context) (string, bool) {
 	return "", false
 }
 
+// WithUserID inyecta el user_id en un context.Context usando la misma clave
+// interna que RequireAuth, de modo que el interceptor gRPC (que no tiene
+// *gin.Context) y los handlers gRPC compartan el mismo canal que
+// GetUserIDFromContext. Mantiene un único origen de verdad para el user_id
+// autenticado en ambos transports (HTTP y gRPC).
+func WithUserID(ctx context.Context, userID string) context.Context {
+	return context.WithValue(ctx, contextKeyUserID, userID)
+}
+
+// WithRole inyecta el rol en el contexto (equivalente gRPC de c.Set(role)).
+func WithRole(ctx context.Context, role string) context.Context {
+	return context.WithValue(ctx, contextKeyRole, role)
+}
+
 func GetRole(c *gin.Context) (string, bool) {
 	if v, exists := c.Get(ContextRoleKey); exists {
 		if s, ok := v.(string); ok && s != "" {

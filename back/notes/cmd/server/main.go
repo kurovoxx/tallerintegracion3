@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -13,10 +14,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
-	identityv1 "github.com/kurovoxx/tallerintegracion3/back/notes/internal/gen/identityv1"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/config"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/drive"
+	identityv1 "github.com/kurovoxx/tallerintegracion3/back/notes/internal/gen/identityv1"
+	notesv1 "github.com/kurovoxx/tallerintegracion3/back/notes/internal/gen/notesv1/v1"
+	grpcHandler "github.com/kurovoxx/tallerintegracion3/back/notes/internal/handler/grpc"
 	httpHandler "github.com/kurovoxx/tallerintegracion3/back/notes/internal/handler/http"
+	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/interceptor"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/middleware"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/repository"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/service"
@@ -80,7 +84,7 @@ func newGRPCDriveClient(cfg *config.Config) drive.Client {
 	if strings.TrimSpace(cfg.InternalAPIKey) == "" {
 		log.Println("notes: sin INTERNAL_API_KEY, Identity rechazará las llamadas gRPC")
 	}
-	trackGRPCConn(conn) // cierre en shutdown (ver startGin)
+	trackGRPCConn(conn) // cierre en shutdown (ver startServers)
 	log.Println("notes: Drive real activado (STORAGE_MODE=drive, drive/v3, tokens vía Identity gRPC)")
 	return drive.NewRealDriveClient(&drive.GRPCOAuthTokenProvider{
 		Client: identityv1.NewIdentityServiceClient(conn),
@@ -113,7 +117,13 @@ func runServer(pool *pgxpool.Pool, driveClient drive.Client, cfg *config.Config)
 	// Directorio de correos para share restricted: adaptador HTTP real a Social
 	// (o memoria solo con DEV_SEED_SOCIAL explícito).
 	svc.SetMemberDirectory(members)
-	startGin(svc, cfg)
+	// Restricted: conceder a la cuenta Google Drive real de cada miembro
+	// (identity.oauth_connections.external_account_email), no al correo de
+	// registro. El adaptador Social provee los user_id; el correo sale de BD.
+	if memberIDs, ok := members.(service.MemberUserIDs); ok && pool != nil {
+		svc.SetDriveEmailDirectory(service.NewDriveEmailDirectory(memberIDs, service.NewPGDriveEmailStore(pool)))
+	}
+	startServers(svc, cfg)
 }
 
 func runServerMemory(driveClient drive.Client, cfg *config.Config) {
@@ -127,7 +137,7 @@ func runServerMemory(driveClient drive.Client, cfg *config.Config) {
 
 	svc := service.NewNoteService(noteStore, attStore, savedStore, likeStore, sharedStore, driveClient, social)
 	svc.SetMemberDirectory(members)
-	startGin(svc, cfg)
+	startServers(svc, cfg)
 }
 
 // newSocialAdapters inyecta los adaptadores de Social: clientes HTTP reales
@@ -148,15 +158,10 @@ func newSocialAdapters(cfg *config.Config) (service.SocialResolver, service.Grou
 	return adapter, adapter
 }
 
-// startGin inicia Gin con middleware y rutas según agentApiContract.md
-func startGin(svc *service.NoteService, cfg *config.Config) {
-	// JWT validator HS256
-	validator := &middleware.SimpleHS256Validator{
-		Secret:   []byte(cfg.JWTSecret),
-		Issuer:   "apuntes-auth",
-		Audience: "apuntes-client",
-	}
-	authMw := middleware.NewAuthMiddleware(validator)
+// newHTTPRouter arma el router Gin con middleware y rutas según
+// agentApiContract.md. Extraído de startServers para compartir el validador
+// JWT con el servidor gRPC.
+func newHTTPRouter(svc *service.NoteService, cfg *config.Config, authMw *middleware.AuthMiddleware) *gin.Engine {
 	h := httpHandler.NewNoteHandler(svc)
 
 	r := gin.Default()
@@ -193,11 +198,37 @@ func startGin(svc *service.NoteService, cfg *config.Config) {
 		protected.DELETE("/notes/shared/:sharedNoteId", h.Unshare)
 		protected.GET("/groups/:id/notes", h.ListGroupNotes)
 	}
+	return r
+}
 
-	addr := ":" + cfg.Port
-	log.Printf("Notes service corriendo en http://localhost%s", addr)
+// startServers levanta en paralelo el HTTP (Gin, :PORT) y el gRPC
+// (NotesService, :NOTES_GRPC_PORT) con un apagado gracioso coordinado por
+// SIGINT/SIGTERM. Ambos comparten el mismo *service.NoteService y validador
+// HS256, de modo que la semántica HTTP y gRPC es idéntica (dual-serve).
+func startServers(svc *service.NoteService, cfg *config.Config) {
+	// JWT validator HS256 (compartido HTTP + gRPC).
+	validator := &middleware.SimpleHS256Validator{
+		Secret:   []byte(cfg.JWTSecret),
+		Issuer:   "apuntes-auth",
+		Audience: "apuntes-client",
+	}
+	authMw := middleware.NewAuthMiddleware(validator)
+	router := newHTTPRouter(svc, cfg, authMw)
+
+	// gRPC: logging afuera para auditar también los rechazos de auth; el
+	// router aplica JWT a los RPCs de usuario y x-internal-key a UnshareAll.
+	grpcSrv := grpc.NewServer(grpc.ChainUnaryInterceptor(
+		interceptor.NewLogging(log.Default()),
+		interceptor.NewAuthRouter(
+			interceptor.NewJWTAuth(validator),
+			interceptor.NewInternalAuth(cfg.InternalAPIKey),
+		),
+	))
+	notesv1.RegisterNotesServiceServer(grpcSrv, grpcHandler.NewNotesServer(svc))
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
 	interval := cfg.ReconcileInterval
 	if interval <= 0 {
 		interval = 30 * time.Second
@@ -218,23 +249,47 @@ func startGin(svc *service.NoteService, cfg *config.Config) {
 			}
 		}
 	}()
-	server := &http.Server{Addr: addr, Handler: r, ReadHeaderTimeout: 10 * time.Second}
-	serverDone := make(chan error, 1)
-	go func() { serverDone <- server.ListenAndServe() }()
+
+	// HTTP (Gin)
+	httpAddr := ":" + cfg.Port
+	httpSrv := &http.Server{Addr: httpAddr, Handler: router, ReadHeaderTimeout: 10 * time.Second}
+	httpDone := make(chan error, 1)
+	go func() { httpDone <- httpSrv.ListenAndServe() }()
+	log.Printf("notes: HTTP (Gin) escuchando en http://localhost%s", httpAddr)
+
+	// gRPC (NotesService)
+	grpcAddr := ":" + cfg.GRPCPort
+	grpcLis, err := net.Listen("tcp", grpcAddr)
+	if err != nil {
+		log.Fatalf("notes: no se pudo escuchar gRPC en %s: %v", grpcAddr, err)
+	}
+	grpcDone := make(chan error, 1)
+	go func() { grpcDone <- grpcSrv.Serve(grpcLis) }()
+	log.Printf("notes: gRPC (NotesService) escuchando en :%s", cfg.GRPCPort)
+
 	select {
 	case <-ctx.Done():
-	case err := <-serverDone:
+		log.Print("notes: señal recibida, iniciando apagado...")
+	case err := <-httpDone:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("Error iniciando notes service: %v", err)
+			log.Printf("notes: error HTTP: %v", err)
+		}
+	case err := <-grpcDone:
+		if err != nil {
+			log.Printf("notes: error gRPC: %v", err)
 		}
 	}
 	stop()
+
+	// Apagado gracioso: drena gRPC (espera RPCs en vuelo) y luego HTTP.
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancelShutdown()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("notes: graceful shutdown: %v", err)
-		_ = server.Close()
+	grpcSrv.GracefulStop()
+	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("notes: graceful shutdown HTTP: %v", err)
+		_ = httpSrv.Close()
 	}
 	closeGRPCConns()
 	<-reconcileDone
+	log.Print("notes: apagado OK")
 }
