@@ -771,8 +771,14 @@ type unshareAllRequest struct {
 	GroupID string `json:"group_id" binding:"required,uuid"`
 }
 
+// UnshareAll (HTTP) está DEPRECADO en favor del RPC gRPC
+// notes.v1.NotesService/UnshareAll (auth servicio-a-servicio con x-internal-key,
+// sin superficie pública). Se mantiene como fallback dual-serve mientras Social
+// completa la migración; retirar cuando ya no haya consumidores HTTP.
+// El log "[DEPRECATED]" registra cada uso residual para medir la migración.
 func (h *NoteHandler) UnshareAll(c *gin.Context) {
 	defer traceNotesOperation(c, "/notes/unshare-all")()
+	log.Printf("[DEPRECATED] POST /notes/unshare-all vía HTTP; usar el RPC gRPC NotesService/UnshareAll")
 	// FIX IDOR: endpoint protegido con JWT de usuario. Solo el propio usuario
 	// o un admin del grupo puede desvincular a user_id de group_id. Sin esta
 	// verificación cualquier usuario autenticado podía desvincular a terceros

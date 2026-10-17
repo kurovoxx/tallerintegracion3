@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/utils"
@@ -104,6 +103,9 @@ type GroupService struct {
 	groups       GroupStore
 	notifier     GroupCreatedNotifier
 	notesBaseURL string
+	// unsharer es el transporte de limpieza de apuntes (gRPC por defecto, con
+	// fallback HTTP interno). Inyectable para tests.
+	unsharer NotesUnsharer
 	// users es opcional: directorio Identity para enriquecer miembros.
 	// Nil = respuesta sin nombres (comportamiento anterior).
 	users UserDirectory
@@ -117,12 +119,23 @@ func NewGroupService(groups GroupStore, notifier GroupCreatedNotifier) *GroupSer
 	if notesURL == "" {
 		notesURL = defaultNotesBaseURL
 	}
-	return &GroupService{groups: groups, notifier: notifier, notesBaseURL: notesURL}
+	return &GroupService{
+		groups:       groups,
+		notifier:     notifier,
+		notesBaseURL: notesURL,
+		unsharer:     newNotesGRPCUnsharer(os.Getenv("NOTES_GRPC_URL"), os.Getenv("INTERNAL_API_KEY")),
+	}
 }
 
 // SetNotesBaseURL cambia la URL base del servicio Notes (usado por tests).
 func (s *GroupService) SetNotesBaseURL(url string) {
 	s.notesBaseURL = strings.TrimRight(url, "/")
+}
+
+// SetNotesUnsharer sustituye el transporte de limpieza (tests): nil desactiva
+// gRPC y fuerza el fallback HTTP.
+func (s *GroupService) SetNotesUnsharer(u NotesUnsharer) {
+	s.unsharer = u
 }
 
 // SetUserDirectory inyecta el directorio Identity (usado por tests y main).
@@ -510,9 +523,30 @@ func (s *GroupService) LeaveGroup(ctx context.Context, groupID string, userID st
 }
 
 // unshareNotes pide a Notes retirar los apuntes que el usuario compartió en el
-// grupo. Es best-effort: un fallo solo se registra. Reenvía el JWT del usuario
-// para pasar el middleware de Notes.
+// grupo. Best-effort: un fallo solo se registra.
+//
+// Durante la migración el transporte primario es gRPC
+// (notes.v1.NotesService/UnshareAll con x-internal-key); si la conexión gRPC
+// falla, cae al HTTP POST /notes/unshare-all reenviando el JWT del usuario,
+// mientras Notes siga sirviendo ambos (dual-serve).
 func (s *GroupService) unshareNotes(userID, groupID, token string) {
+	if s.unsharer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), notesUnshareTimeout)
+		err := s.unsharer.UnshareAll(ctx, userID, groupID)
+		cancel()
+		if err == nil {
+			return
+		}
+		log.Printf("social: unshare-all gRPC falló, reintentando por HTTP: %v", err)
+	}
+	s.unshareNotesHTTP(userID, groupID, token)
+}
+
+// unshareNotesHTTP es el transporte legacy de limpieza a Notes (endpoint HTTP
+// POST /notes/unshare-all, deprecado). Se mantiene solo como fallback
+// controlado durante la migración a gRPC; reenvía el JWT del usuario para
+// pasar el middleware de Notes.
+func (s *GroupService) unshareNotesHTTP(userID, groupID, token string) {
 	payload, err := json.Marshal(map[string]string{"user_id": userID, "group_id": groupID})
 	if err != nil {
 		return
@@ -526,7 +560,7 @@ func (s *GroupService) unshareNotes(userID, groupID, token string) {
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	resp, err := (&http.Client{Timeout: notesUnshareTimeout}).Do(req)
 	if err != nil {
 		log.Printf("social: error llamando a notes/unshare-all: %v", err)
 		return

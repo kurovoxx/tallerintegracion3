@@ -37,6 +37,7 @@ type SocialHTTPAdapter struct {
 var (
 	_ SocialResolver       = (*SocialHTTPAdapter)(nil)
 	_ GroupMemberDirectory = (*SocialHTTPAdapter)(nil)
+	_ MemberUserIDs        = (*SocialHTTPAdapter)(nil)
 )
 
 // errSocialNotFound marca un 404 del servicio Social sin filtrar detalles.
@@ -136,6 +137,23 @@ func (a *SocialHTTPAdapter) ListMemberEmails(ctx context.Context, groupID string
 		return nil, fmt.Errorf("social: respuesta de member-emails inválida")
 	}
 	return wrapper.Emails, nil
+}
+
+// ListMemberUserIDs devuelve los user_id de los miembros del grupo
+// (GET /internal/groups/{id}/members), para resolver su correo de cuenta Google
+// Drive. 404 = grupo sin miembros (lista vacía); el resto de errores se propaga.
+func (a *SocialHTTPAdapter) ListMemberUserIDs(ctx context.Context, groupID string) ([]string, error) {
+	members, err := a.listMembers(ctx, groupID)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(members))
+	for _, m := range members {
+		if id := strings.TrimSpace(m.UserID); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
 }
 
 func (a *SocialHTTPAdapter) listMembers(ctx context.Context, groupID string) ([]socialMember, error) {

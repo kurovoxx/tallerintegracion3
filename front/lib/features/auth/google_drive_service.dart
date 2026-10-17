@@ -218,6 +218,47 @@ class GoogleDriveService {
     );
   }
 
+  /// Extrae el `oauth_code` del texto pegado por el usuario en el flujo web
+  /// manual. Acepta tres formas, porque en web Google redirige a
+  /// `http://localhost:8081/...` (que no carga) y el usuario copia desde la
+  /// barra de direcciones:
+  ///   - la URL completa: `http://localhost:8081/auth/google/callback?code=...&scope=...`
+  ///   - la query: `code=...`
+  ///   - el código crudo: `4/0A...`
+  /// El valor se decodifica si viene URL-encoded (Google entrega `4%2F0A...`).
+  /// Devuelve '' si el retorno trae `error=` (p. ej. access_denied) o si no hay
+  /// código. No valida contra el proveedor: eso lo hace el backend.
+  static String extractOAuthCode(String raw) {
+    final input = raw.trim();
+    if (input.isEmpty) return '';
+
+    // URL/query con parámetro code= (permite code= al inicio o tras ? & #).
+    final codeMatch = RegExp(
+      r'(?:^|[?&#\s])code=([^&\s#]+)',
+    ).firstMatch(input);
+    if (codeMatch != null) {
+      return _decodeCodeValue(codeMatch.group(1) ?? '');
+    }
+
+    // Retorno con error= (access_denied, etc.): no hay código que canjear.
+    if (RegExp(r'(?:^|[?&#\s])error=').hasMatch(input)) return '';
+
+    // Código crudo (posiblemente URL-encoded).
+    return _decodeCodeValue(input);
+  }
+
+  static String _decodeCodeValue(String value) {
+    var v = value.trim();
+    if (v.contains('%')) {
+      try {
+        v = Uri.decodeComponent(v);
+      } catch (_) {
+        // Si no es decodificable se usa tal cual.
+      }
+    }
+    return v.trim();
+  }
+
   /// Envía oauth_code al backend. Requiere access_token de tu app (de POST /auth/login).
   /// expectedEmail (opcional): el backend lo compara con la cuenta real de
   /// Google y rechaza con email_mismatch si elegiste otra cuenta. El campo es

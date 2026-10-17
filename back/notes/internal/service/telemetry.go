@@ -104,11 +104,11 @@ func (s *NoteService) observedDriveFindFileByNoteID(ctx context.Context, ownerUs
 	return result0, err
 }
 
-func (s *NoteService) observedDriveGrantPermission(ctx context.Context, ownerUserID string, fileID string, granteeEmail string, role string) error {
+func (s *NoteService) observedDriveGrantPermission(ctx context.Context, ownerUserID string, fileID string, granteeEmail string, role string) (string, error) {
 	started := time.Now()
-	err := s.drive.GrantPermission(ctx, ownerUserID, fileID, granteeEmail, role)
-	logNotesResult(ctx, started, "DRIVE SYNC", fileID, err, "drive_owner_user_id", ownerUserID, "drive_file_id", fileID, "email", granteeEmail)
-	return err
+	result0, err := s.drive.GrantPermission(ctx, ownerUserID, fileID, granteeEmail, role)
+	logNotesResult(ctx, started, "DRIVE SYNC", result0, err, "drive_owner_user_id", ownerUserID, "drive_file_id", fileID, "email", granteeEmail)
+	return result0, err
 }
 
 func (s *NoteService) observedDriveGrantLinkPermission(ctx context.Context, ownerUserID string, fileID string) (string, error) {
