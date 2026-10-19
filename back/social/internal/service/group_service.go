@@ -580,9 +580,8 @@ func (s *GroupService) HandleAccountDeletion(ctx context.Context, userID string,
 		return nil, ErrUnauthorized
 	}
 	results, err := s.groups.HandleAccountDeletion(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
+	// El repositorio confirma por grupo: incluso con error parcial hay que
+	// limpiar los grupos completados, que no aparecerán en el reintento.
 	for _, r := range results {
 		switch {
 		case r.PromotedUserID != nil:
@@ -597,5 +596,5 @@ func (s *GroupService) HandleAccountDeletion(ctx context.Context, userID string,
 	if results == nil {
 		results = []model.SuccessionResult{}
 	}
-	return results, nil
+	return results, err
 }
