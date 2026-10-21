@@ -62,8 +62,8 @@ spec:
             - {name: http, containerPort: 8082}
             - {name: grpc, containerPort: 9082}
           resources:
-            requests: {cpu: 50m, memory: 64Mi}
-            limits: {cpu: 250m, memory: 256Mi}
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {cpu: 100m, memory: 128Mi}
           envFrom: [{secretRef: {name: ti3-secrets}}]
           env:
             - {name: PORT, value: "8082"}
@@ -106,8 +106,8 @@ spec:
           image: ghcr.io/kurovoxx/tallerintegracion3-social:latest
           ports: [{containerPort: 8083}, {containerPort: 9083}]
           resources:
-            requests: {cpu: 50m, memory: 64Mi}
-            limits: {cpu: 250m, memory: 256Mi}
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {cpu: 100m, memory: 128Mi}
           envFrom: [{secretRef: {name: ti3-secrets}}]
           env:
             - {name: PORT, value: "8083"}
@@ -149,8 +149,8 @@ spec:
           image: ghcr.io/kurovoxx/tallerintegracion3-infacadem:latest
           ports: [{containerPort: 8081}, {containerPort: 9081}]
           resources:
-            requests: {cpu: 50m, memory: 64Mi}
-            limits: {cpu: 250m, memory: 256Mi}
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {cpu: 100m, memory: 128Mi}
           envFrom: [{secretRef: {name: ti3-secrets}}]
           env:
             - {name: PORT, value: "8081"}
