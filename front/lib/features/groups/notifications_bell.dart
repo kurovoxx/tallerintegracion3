@@ -19,51 +19,77 @@ class NotificationsBell extends StatefulWidget {
 
 class _NotificationsBellState extends State<NotificationsBell> {
   late final SocialService _service;
-  int _unread = 0;
+  // Contador compartido con el popup abierto: al marcar una como leída, el
+  // badge "N nuevas" del popup y el de la campana bajan a la vez.
+  final ValueNotifier<int> _unread = ValueNotifier<int>(0);
+  // Un solo popup a la vez: tocar la campana dos veces apilaba overlays
+  // duplicados (y cada uno lanzaba su propia carga de notificaciones).
+  OverlayEntry? _entry;
+  // Descarta respuestas de cargas anteriores que lleguen tarde.
+  int _refreshSeq = 0;
 
   @override
   void initState() {
     super.initState();
     _service = widget._serviceOverride ?? SocialService();
+    _unread.addListener(_onUnreadChanged);
     _refresh();
+  }
+
+  void _onUnreadChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    // Si la campana se desmonta con el popup abierto (navegación), el overlay
+    // quedaba huérfano usando un SocialService ya cerrado.
+    _removeEntry();
+    _unread.removeListener(_onUnreadChanged);
+    _unread.dispose();
     if (widget._serviceOverride == null) _service.dispose();
     super.dispose();
   }
 
+  void _removeEntry() {
+    final entry = _entry;
+    _entry = null;
+    if (entry != null && entry.mounted) entry.remove();
+  }
+
   Future<void> _refresh() async {
+    final seq = ++_refreshSeq;
     try {
       final items = await _service.myNotifications();
-      if (!mounted) return;
-      setState(() => _unread = items.where((e) => !e.read).length);
+      if (!mounted || seq != _refreshSeq) return;
+      _unread.value = _countUnread(items);
     } catch (_) {
       // Silencioso: sin sesión o backend caído, la campana no estorba.
     }
   }
 
   Future<void> _open() async {
+    if (_entry != null) return;
     final box = context.findRenderObject() as RenderBox?;
     final overlay = Overlay.of(context);
     final position = box?.localToGlobal(Offset.zero) ?? Offset.zero;
     final size = box?.size ?? const Size(48, 48);
 
-    late final OverlayEntry entry;
     void close() {
-      entry.remove();
+      if (_entry == null) return;
+      _removeEntry();
       if (mounted) _refresh();
     }
 
-    entry = OverlayEntry(
+    final entry = OverlayEntry(
       builder: (_) => _NotificationsPopup(
         service: _service,
         anchorTop: position.dy + size.height + 4,
-        unreadCount: _unread,
+        unread: _unread,
         onClose: close,
       ),
     );
+    _entry = entry;
     overlay.insert(entry);
   }
 
@@ -77,23 +103,27 @@ class _NotificationsBellState extends State<NotificationsBell> {
           tooltip: 'Notificaciones',
           onPressed: _open,
         ),
-        if (_unread > 0)
+        if (_unread.value > 0)
           Positioned(
             right: 6,
             top: 6,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-              decoration: BoxDecoration(
-                color: AppColors.error,
-                border: Border.all(color: AppColors.border, width: 2),
-                borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-              ),
-              child: Text(
-                _unread > 9 ? '9+' : '$_unread',
-                style: const TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w900,
-                  color: AppColors.surface,
+            // El badge se dibuja encima del botón: sin IgnorePointer capturaba
+            // el toque y, con notificaciones sin leer, la campana no abría.
+            child: IgnorePointer(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: AppColors.error,
+                  border: Border.all(color: AppColors.border, width: 2),
+                  borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+                ),
+                child: Text(
+                  _unread.value > 9 ? '9+' : '${_unread.value}',
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                    color: AppColors.surface,
+                  ),
                 ),
               ),
             ),
@@ -109,13 +139,13 @@ class _NotificationsPopup extends StatelessWidget {
   const _NotificationsPopup({
     required this.service,
     required this.anchorTop,
-    required this.unreadCount,
+    required this.unread,
     required this.onClose,
   });
 
   final SocialService service;
   final double anchorTop;
-  final int unreadCount;
+  final ValueNotifier<int> unread;
   final VoidCallback onClose;
 
   @override
@@ -165,16 +195,26 @@ class _NotificationsPopup extends StatelessWidget {
                             ),
                           ),
                         ),
-                        if (unreadCount > 0) ...[
-                          NeobrutalistBadge(
-                            label: unreadCount > 9
-                                ? '9+ nuevas'
-                                : '$unreadCount nuevas',
-                            tone: NeobrutalistTone.accent,
-                            compact: true,
-                          ),
-                          const SizedBox(width: AppDimens.spaceSm),
-                        ],
+                        ValueListenableBuilder<int>(
+                          valueListenable: unread,
+                          builder: (context, count, _) {
+                            if (count <= 0) return const SizedBox.shrink();
+                            return Padding(
+                              padding: const EdgeInsets.only(
+                                right: AppDimens.spaceSm,
+                              ),
+                              child: NeobrutalistBadge(
+                                label: count > 9
+                                    ? '9+ nuevas'
+                                    : (count == 1
+                                          ? '1 nueva'
+                                          : '$count nuevas'),
+                                tone: NeobrutalistTone.accent,
+                                compact: true,
+                              ),
+                            );
+                          },
+                        ),
                         NeobrutalistIconButton(
                           icon: Icons.close_rounded,
                           tooltip: 'Cerrar',
@@ -185,7 +225,12 @@ class _NotificationsPopup extends StatelessWidget {
                     ),
                   ),
                   Container(height: 2, color: AppColors.border),
-                  Flexible(child: _NotificationsList(service: service)),
+                  Flexible(
+                    child: _NotificationsList(
+                      service: service,
+                      onUnreadChanged: (count) => unread.value = count,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -198,9 +243,12 @@ class _NotificationsPopup extends StatelessWidget {
 
 /// Lista de notificaciones; tocar una la marca como leída y recarga.
 class _NotificationsList extends StatefulWidget {
-  const _NotificationsList({required this.service});
+  const _NotificationsList({required this.service, this.onUnreadChanged});
 
   final SocialService service;
+
+  /// Avisa el número de no leídas tras cada carga o marcado.
+  final ValueChanged<int>? onUnreadChanged;
 
   @override
   State<_NotificationsList> createState() => _NotificationsListState();
@@ -210,6 +258,10 @@ class _NotificationsListState extends State<_NotificationsList> {
   List<MeetingNotification> _items = const [];
   bool _loading = true;
   String? _error;
+  // Cargas superpuestas (marcar varias seguidas): solo vale la última.
+  int _loadSeq = 0;
+  // Ids con POST /read en vuelo: un doble toque no repite la petición.
+  final Set<String> _marking = <String>{};
 
   @override
   void initState() {
@@ -218,30 +270,47 @@ class _NotificationsListState extends State<_NotificationsList> {
   }
 
   Future<void> _load() async {
+    final seq = ++_loadSeq;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
       final items = await widget.service.myNotifications();
-      if (!mounted) return;
-      setState(() => _items = items);
+      if (!mounted || seq != _loadSeq) return;
+      final unique = _dedupeById(items);
+      setState(() => _items = unique);
+      widget.onUnreadChanged?.call(_countUnread(unique));
     } on SocialApiException catch (e) {
-      if (!mounted) return;
+      if (!mounted || seq != _loadSeq) return;
       setState(() => _error = e.message);
+    } catch (_) {
+      // Red caída u otro fallo: antes quedaba como "Sin notificaciones".
+      if (!mounted || seq != _loadSeq) return;
+      setState(() => _error = 'No se pudieron cargar las notificaciones.');
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && seq == _loadSeq) setState(() => _loading = false);
     }
   }
 
   Future<void> _markRead(MeetingNotification n) async {
-    if (n.read) return;
+    if (n.read || !_marking.add(n.id)) return;
+    // Optimista: la fila y los contadores reflejan "leída" al instante; la
+    // recarga posterior trae el estado persistido en el backend.
+    setState(() {
+      _items = [
+        for (final item in _items) item.id == n.id ? item.asRead() : item,
+      ];
+    });
+    widget.onUnreadChanged?.call(_countUnread(_items));
     try {
       await widget.service.markNotificationRead(n.id);
     } catch (_) {
-      // Best-effort: igual se recarga la lista.
+      // Best-effort: la recarga muestra el estado real del servidor.
+    } finally {
+      _marking.remove(n.id);
     }
-    if (mounted) _load();
+    if (mounted) await _load();
   }
 
   @override
@@ -429,4 +498,31 @@ class _NotificationTile extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Número de notificaciones no leídas.
+int _countUnread(List<MeetingNotification> items) =>
+    items.where((e) => !e.read).length;
+
+/// Una notificación por id aunque la respuesta la repita.
+List<MeetingNotification> _dedupeById(List<MeetingNotification> items) {
+  final seen = <String>{};
+  return [
+    for (final n in items)
+      if (seen.add(n.id)) n,
+  ];
+}
+
+extension on MeetingNotification {
+  /// Copia marcada como leída (actualización optimista).
+  MeetingNotification asRead() => MeetingNotification(
+    id: id,
+    meetingId: meetingId,
+    groupId: groupId,
+    title: title,
+    scheduledAt: scheduledAt,
+    read: true,
+    readAt: readAt ?? DateTime.now(),
+    createdAt: createdAt,
+  );
 }
