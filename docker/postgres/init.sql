@@ -30,12 +30,16 @@ CREATE TABLE identity.refresh_tokens (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id uuid NOT NULL REFERENCES identity.users(id) ON DELETE CASCADE,
     token_hash varchar(255) NOT NULL,
+    token_fingerprint bytea,
     expires_at timestamptz NOT NULL,
     revoked boolean NOT NULL DEFAULT false,
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_refresh_tokens_user_id ON identity.refresh_tokens(user_id);
+CREATE UNIQUE INDEX idx_refresh_tokens_fingerprint
+    ON identity.refresh_tokens(token_fingerprint)
+    WHERE token_fingerprint IS NOT NULL;
 
 CREATE TABLE identity.password_resets (
     user_id uuid PRIMARY KEY REFERENCES identity.users(id) ON DELETE CASCADE,
