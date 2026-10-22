@@ -5,3 +5,6 @@
 *.kubeconfig
 kubeconfig*
 CLAUDE.md
+
+# Base SQLite local del entorno E2E aislado
+.local-e2e/
