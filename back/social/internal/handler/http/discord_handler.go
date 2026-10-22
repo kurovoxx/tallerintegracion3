@@ -1,10 +1,15 @@
 package http
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -12,6 +17,83 @@ import (
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/middleware"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/service"
 )
+
+// Constantes de Discord OAuth2 para conexión automática (tarea 3_5_18).
+// Estas se inyectan desde el entorno en main.go.
+var (
+	discordClientID     string
+	discordClientSecret string
+	discordRedirectURI  string
+)
+
+// SetDiscordOAuthConfig configura las credenciales de Discord OAuth2.
+// Se llama desde main.go al iniciar el servidor.
+func SetDiscordOAuthConfig(clientID, clientSecret, redirectURI string) {
+	discordClientID = clientID
+	discordClientSecret = clientSecret
+	discordRedirectURI = redirectURI
+}
+
+// discordState almacena temporalmente el estado de autenticación OAuth2
+// para prevenir ataques CSRF. Mapea state -> {groupID, userID}.
+var discordState = make(map[string]struct {
+	GroupID  string
+	UserID   string
+	Created  time.Time
+})
+var discordStateMu sync.RWMutex
+
+// init limpia estados expirados cada 5 minutos.
+func init() {
+	go func() {
+		for {
+			time.Sleep(5 * time.Minute)
+			discordStateMu.Lock()
+			for k, v := range discordState {
+				if time.Since(v.Created) > 10*time.Minute {
+					delete(discordState, k)
+				}
+			}
+			discordStateMu.Unlock()
+		}
+	}()
+}
+
+// generateState crea un estado aleatorio para OAuth2.
+func generateState() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// stateFor guarda el estado asociado a un grupo y usuario.
+func stateFor(groupID, userID string) (string, error) {
+	state, err := generateState()
+	if err != nil {
+		return "", err
+	}
+	discordStateMu.Lock()
+	discordState[state] = struct {
+		GroupID string
+		UserID  string
+		Created time.Time
+	}{groupID, userID, time.Now()}
+	discordStateMu.Unlock()
+	return state, nil
+}
+
+// popState recupera y elimina un estado.
+func popState(state string) (groupID, userID string, ok bool) {
+	discordStateMu.Lock()
+	defer discordStateMu.Unlock()
+	v, ok := discordState[state]
+	if ok {
+		delete(discordState, state)
+	}
+	return v.GroupID, v.UserID, ok
+}
 
 type DiscordHandler struct {
 	svc *service.DiscordService
@@ -26,6 +108,85 @@ func NewDiscordHandler(svc *service.DiscordService) *DiscordHandler {
 func (h *DiscordHandler) RegisterRoutes(r gin.IRoutes) {
 	r.GET("/groups/:id/discord-config", h.GetConfig)
 	r.PUT("/groups/:id/discord-config", h.PutConfig)
+}
+
+// RegisterAuthRoutes registra las rutas de callback de Discord OAuth2.
+// Estas rutas NO requieren JWT de usuario (son llamadas por Discord).
+func (h *DiscordHandler) RegisterAuthRoutes(r gin.IRoutes) {
+	r.GET("/auth/discord/callback", h.DiscordCallback)
+}
+
+// ConnectDiscord maneja GET /groups/:id/discord/connect.
+// Redirige a Discord para autorizar la conexión OAuth2.
+// Requiere JWT de usuario.
+func (h *DiscordHandler) ConnectDiscord(c *gin.Context) {
+	groupID := strings.TrimSpace(c.Param("id"))
+	if groupID == "" {
+		fail(c, "ConnectDiscord", http.StatusBadRequest, "invalid_group_id", "group ID is required")
+		return
+	}
+	if _, err := uuid.Parse(groupID); err != nil {
+		fail(c, "ConnectDiscord", http.StatusBadRequest, "invalid_group_id", "invalid group ID format")
+		return
+	}
+
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		fail(c, "ConnectDiscord", http.StatusUnauthorized, "unauthorized", "unauthorized")
+		return
+	}
+
+	state, err := stateFor(groupID, userID)
+	if err != nil {
+		fail(c, "ConnectDiscord", http.StatusInternalServerError, "internal", "could not generate state")
+		return
+	}
+
+	params := url.Values{}
+	params.Set("client_id", discordClientID)
+	params.Set("redirect_uri", discordRedirectURI)
+	params.Set("response_type", "code")
+	params.Set("scope", "guilds webhook.incoming")
+	params.Set("state", state)
+
+	authURL := "https://discord.com/api/oauth2/authorize?" + params.Encode()
+	c.JSON(http.StatusOK, gin.H{
+		"redirect_url": authURL,
+		"message":      "Redirect to Discord for authorization",
+	})
+}
+
+// DiscordCallback maneja GET /auth/discord/callback.
+// Es llamado por Discord tras la autorización del usuario.
+// No requiere JWT de usuario (es llamado por el navegador tras el OAuth de Discord).
+func (h *DiscordHandler) DiscordCallback(c *gin.Context) {
+	code := strings.TrimSpace(c.Query("code"))
+	state := strings.TrimSpace(c.Query("state"))
+	errorParam := strings.TrimSpace(c.Query("error"))
+
+	if errorParam != "" {
+		c.Redirect(http.StatusTemporaryRedirect, "/groups/error?error="+url.QueryEscape(errorParam))
+		return
+	}
+	if code == "" || state == "" {
+		c.Redirect(http.StatusTemporaryRedirect, "/groups/error?error=missing_code_or_state")
+		return
+	}
+
+	groupID, userID, ok := popState(state)
+	if !ok {
+		c.Redirect(http.StatusTemporaryRedirect, "/groups/error?error=invalid_or_expired_state")
+		return
+	}
+
+	ctx := c.Request.Context()
+	if _, err := h.svc.ConnectDiscord(ctx, groupID, userID, code); err != nil {
+		log.Printf("DiscordCallback error: %v", err)
+		c.Redirect(http.StatusTemporaryRedirect, "/groups/error?error="+url.QueryEscape(err.Error()))
+		return
+	}
+
+	c.Redirect(http.StatusTemporaryRedirect, "/groups/"+groupID+"/discord-config?connected=1")
 }
 
 // GetConfig maneja GET /groups/{id}/discord-config.

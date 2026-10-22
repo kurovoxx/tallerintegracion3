@@ -460,6 +460,37 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
     _loadRole();
   }
 
+  /// Conectar con Discord vía OAuth2 (tarea 3_5_18).
+  /// Abre el flujo de autorización de Discord en el navegador del sistema.
+  Future<void> _connectDiscord() async {
+    if (!_hasGroup) return;
+    setState(() => _loadingConfig = true);
+    try {
+      await _social.connectDiscord(widget.groupId!.trim());
+      if (!mounted) return;
+      // Recargar la configuración tras conectar
+      await _loadRole();
+    } on SocialApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.message),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error conectando con Discord: $e'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _loadingConfig = false);
+    }
+  }
+
   @override
   void dispose() {
     if (widget._serviceOverride == null) _social.dispose();
@@ -753,6 +784,14 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
                               ],
                             ),
                           ),
+                        ),
+                      // Botón rojo para conectar con Discord automáticamente (solo admin)
+                      if (_isAdmin && !hasInvite)
+                        NeobrutalistButton(
+                          label: 'Conectar con Discord',
+                          icon: Icons.discord,
+                          onPressed: _loadingConfig ? null : _connectDiscord,
+                          variant: NeobrutalistButtonVariant.danger,
                         ),
                       // Solo admin: acción secundaria que abre el formulario.
                       if (_isAdmin) ...[

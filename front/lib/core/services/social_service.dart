@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/social_models.dart';
 import 'api_config.dart';
@@ -690,6 +691,32 @@ class SocialService {
           .timeout(const Duration(seconds: 10)),
     );
     if (res.statusCode != 200) throw _toError(res);
+  }
+
+  // POST /groups/:id/discord/connect -> inicia flujo OAuth2 de Discord
+  // Redirige a Discord para autorizar; el callback completa la conexión.
+  // Solo miembros del grupo.
+  Future<void> connectDiscord(String groupId) async {
+    final id = groupId.trim();
+    if (id.isEmpty) {
+      throw SocialApiException('groupId vacío.', code: 'invalid_group_id');
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .post(
+            Uri.parse('$baseUrl/groups/$id/discord/connect'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200 && res.statusCode != 302) throw _toError(res);
+    // El handler redirige (302) a Discord para autorizar.
+    // El front simplemente debe abrir la URL de redirect que devolvió el servidor.
+    final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    final redirectUrl = body['redirect_url'] as String?;
+    if (redirectUrl != null && redirectUrl.isNotEmpty) {
+      await launchUrl(Uri.parse(redirectUrl), mode: LaunchMode.externalApplication);
+    }
   }
 
   // POST /groups/:id/meetings

@@ -123,6 +123,9 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	viewSvc := service.NewViewService(groupSvc, todoSvc, sprintSvc, meetingSvc)
 	viewH := httpHandler.NewViewHandler(groupSvc, viewSvc)
 
+	// Configuración de Discord OAuth2 para conexión automática (tarea 3_5_18).
+	newDiscordOAuthConfig(cfg)
+
 	startGin(groupSvc, todoH, sprintH, hoursH, meetingH, notifH, discordH, viewH, streamH, pool, cfg)
 }
 
@@ -276,6 +279,7 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 		protected.GET("/notifications/me", notifH.ListMine)
 		protected.POST("/notifications/:id/read", notifH.MarkRead)
 		protected.GET("/groups/:id/stream-token", streamH.Token)
+		protected.POST("/groups/:id/discord/connect", discordH.ConnectDiscord)
 		discordH.RegisterRoutes(protected)
 	}
 
@@ -289,9 +293,31 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 		internal.GET("/groups/:id/member-emails", internalH.MemberEmails)
 	}
 
+	// OAuth2 de Discord para conexión automática (tarea 3_5_18).
+	// No requiere JWT de usuario (es llamado por el navegador tras el OAuth de Discord).
+	r.GET("/auth/discord/callback", discordH.DiscordCallback)
+
 	addr := ":" + cfg.Port
 	log.Printf("Social service corriendo en http://localhost%s", addr)
 	if err := r.Run(addr); err != nil {
 		log.Fatalf("Error iniciando social service: %v", err)
 	}
+}
+
+// newDiscordOAuthConfig inicializa la configuración de Discord OAuth2 para
+// la conexión automática (tarea 3_5_18). Lee las variables de entorno:
+// DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET, DISCORD_REDIRECT_URI.
+func newDiscordOAuthConfig(cfg *config.Config) {
+	clientID := strings.TrimSpace(os.Getenv("DISCORD_CLIENT_ID"))
+	clientSecret := strings.TrimSpace(os.Getenv("DISCORD_CLIENT_SECRET"))
+	redirectURI := strings.TrimSpace(os.Getenv("DISCORD_REDIRECT_URI"))
+
+	if clientID == "" || clientSecret == "" || redirectURI == "" {
+		log.Printf("Discord OAuth: variables de entorno no configuradas (DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET, DISCORD_REDIRECT_URI). La conexión automática de Discord no estará disponible.")
+		return
+	}
+
+	httpHandler.SetDiscordOAuthConfig(clientID, clientSecret, redirectURI)
+	service.SetDiscordOAuthConfig(clientID, clientSecret, redirectURI)
+	log.Printf("Discord OAuth: configurado con client_id=%s redirect_uri=%s", clientID, redirectURI)
 }
