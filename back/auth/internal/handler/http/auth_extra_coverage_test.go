@@ -142,7 +142,7 @@ func TestCoverage_Refresh_Expirado_401(t *testing.T) {
 	}
 	user, _ := repo.GetByEmail(context.Background(), "exp@test.invalid")
 	raw, hash, _ := repository.GenerateRawToken()
-	if _, err := refreshRepo.Create(context.Background(), user.ID, hash, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := refreshRepo.Create(context.Background(), user.ID, hash, nil, time.Now().Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := json.Marshal(map[string]string{"refresh_token": raw})

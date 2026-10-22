@@ -42,11 +42,11 @@ type UserRepository interface {
 }
 
 type RefreshTokenRepository interface {
-	Create(ctx context.Context, userID string, tokenHash string, expiresAt time.Time) (string, error)
+	Create(ctx context.Context, userID string, tokenHash string, fingerprint []byte, expiresAt time.Time) (string, error)
 	CountByUser(ctx context.Context, userID string) (int, error)
 	FindByRawToken(ctx context.Context, raw string) (*repository.RefreshToken, error)
 	Revoke(ctx context.Context, id string) error
-	Rotate(ctx context.Context, oldID, userID, newHash string, newExpires time.Time) (string, error)
+	Rotate(ctx context.Context, oldID, userID, newHash string, newFingerprint []byte, newExpires time.Time) (string, error)
 }
 
 type AuthService struct {
@@ -181,14 +181,14 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*Login
 	if err != nil {
 		return nil, err
 	}
-	expiresAt := jwtRes.ExpiraEn.Add(time.Duration(s.cfgRefreshExp - s.cfgAccessExp) * time.Second)
+	expiresAt := jwtRes.ExpiraEn.Add(time.Duration(s.cfgRefreshExp-s.cfgAccessExp) * time.Second)
 	// Si jwt duración es 900s y refresh 7d, refresh expira 7d desde ahora = now + refreshExp
 	// jwtRes.ExpiraEn = now + 900, entonces refresh = now + 604800
 	// Ajuste: si jwt no está ligado, usar now directamente
 	if s.cfgRefreshExp > 0 {
 		expiresAt = time.Now().Add(time.Duration(s.cfgRefreshExp) * time.Second)
 	}
-	if _, err := s.refreshTokens.Create(ctx, user.ID, hash, expiresAt); err != nil {
+	if _, err := s.refreshTokens.Create(ctx, user.ID, hash, repository.FingerprintRawToken(raw), expiresAt); err != nil {
 		return nil, err
 	}
 	return &LoginResult{
@@ -214,7 +214,7 @@ func (s *AuthService) Refresh(ctx context.Context, rawToken string) (*RefreshRes
 	if s.jwt == nil {
 		return nil, &ServiceError{Code: "internal_error", Message: "jwt service no configurado"}
 	}
-	// Localizar fila por bcrypt (sin índice SHA256)
+	// Locate by indexed fingerprint, falling back to active legacy bcrypt rows.
 	rt, err := s.refreshTokens.FindByRawToken(ctx, rawToken)
 	if err != nil {
 		return nil, err
@@ -239,7 +239,7 @@ func (s *AuthService) Refresh(ctx context.Context, rawToken string) (*RefreshRes
 		return nil, err
 	}
 	newExpires := time.Now().Add(time.Duration(s.cfgRefreshExp) * time.Second)
-	if _, err := s.refreshTokens.Rotate(ctx, rt.ID, rt.UserID, newHash, newExpires); err != nil {
+	if _, err := s.refreshTokens.Rotate(ctx, rt.ID, rt.UserID, newHash, repository.FingerprintRawToken(newRaw), newExpires); err != nil {
 		// Mapear errores de Rotate a códigos de dominio
 		msg := err.Error()
 		if strings.Contains(msg, "revoked") {
