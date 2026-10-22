@@ -243,7 +243,7 @@ void main() {
       );
       await tester.tap(find.text('INFO').first);
       await tester.pumpAndSettle();
-      expect(find.text('Abandonar grupo'), findsOneWidget);
+      expect(find.text('ABANDONAR GRUPO'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   });
@@ -637,15 +637,15 @@ void main() {
       // INFO sin código: el código vive solo en INVITAR.
       await tester.tap(find.byTooltip('Información del grupo'));
       await tester.pumpAndSettle();
-      expect(find.text('Abandonar grupo'), findsOneWidget);
-      expect(find.text('Código de invitación'), findsNothing);
+      expect(find.text('ABANDONAR GRUPO'), findsOneWidget);
+      expect(find.text('CÓDIGO DE INVITACIÓN'), findsNothing);
       await tester.tap(find.text('CERRAR'));
       await tester.pumpAndSettle();
       // INVITAR muestra identificador + código, ambos copiables.
       await tester.tap(find.text('INVITAR'));
       await tester.pumpAndSettle();
-      expect(find.text('Identificador del grupo'), findsOneWidget);
-      expect(find.text('Código de invitación'), findsOneWidget);
+      expect(find.text('IDENTIFICADOR DEL GRUPO'), findsOneWidget);
+      expect(find.text('CÓDIGO DE INVITACIÓN'), findsOneWidget);
       // Ambos valores son SelectableText (seleccionables/copiables).
       expect(
         find.byWidgetPredicate((w) => w is SelectableText && w.data == _gid),
@@ -657,8 +657,8 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(find.text('Generar nuevo código'), findsOneWidget);
-      expect(find.text('Copiar datos de invitación'), findsOneWidget);
+      expect(find.text('GENERAR NUEVO CÓDIGO'), findsOneWidget);
+      expect(find.text('COPIAR DATOS DE INVITACIÓN'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 
