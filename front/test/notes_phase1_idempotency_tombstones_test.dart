@@ -256,9 +256,18 @@ void main() {
         () => find.text('Edición pendiente').evaluate().isNotEmpty,
       );
 
-      // Primer intento falla; la nota sigue local.
+      // Primer intento falla; la nota sigue local. La sincronización
+      // automática posterior al REFRESCAR reintenta la MISMA intención, por
+      // eso puede haber más de un POST (todos con el snapshot original).
       await tapSync(t);
-      await waitFor(t, () => postBodies.length == 1);
+      await waitFor(t, () => postBodies.isNotEmpty);
+      await waitFor(
+        t,
+        () => find
+            .text('Reconciliando notas con Google Drive…')
+            .evaluate()
+            .isEmpty,
+      );
 
       // Editar mientras el CREATE sigue pendiente.
       await t.tap(find.text('Edición pendiente'));
@@ -284,7 +293,13 @@ void main() {
         'contenido original',
         reason: 'el snapshot congela el payload de la primera intención',
       );
-      expect(postBodies[1]['content'], 'contenido original');
+      for (final body in postBodies) {
+        expect(
+          body['content'],
+          'contenido original',
+          reason: 'todo reintento usa el mismo payload (misma clave)',
+        );
+      }
       expect(patchBodies.single['content'], 'contenido editado offline');
 
       final stored = await t.runAsync(() => repo.getAllNotes(ownerId: 'owner'));

@@ -43,9 +43,7 @@ class LocalNotesRepository {
     required String key,
     required String snapshot,
   }) async {
-    await (db.update(
-      db.localNotes,
-    )..where((t) => t.id.equals(id))).write(
+    await (db.update(db.localNotes)..where((t) => t.id.equals(id))).write(
       LocalNotesCompanion(
         createKey: Value(key),
         createSnapshot: Value(snapshot),
@@ -53,11 +51,74 @@ class LocalNotesRepository {
     );
   }
 
+  /// Nota por id (o null si no existe).
+  Future<LocalNote?> getNoteById(String id) {
+    return (db.select(
+      db.localNotes,
+    )..where((t) => t.id.equals(id))).getSingleOrNull();
+  }
+
+  /// Promueve de forma ATÓMICA la fila temporal [tempId] (id local epoch-ms)
+  /// al UUID remoto [realId] una vez que el backend confirmó la creación.
+  ///
+  /// En una sola transacción: copia el contenido local vigente (el usuario
+  /// pudo editar mientras el POST seguía en vuelo) sobre la fila [realId]
+  /// —que un GET /notes/me concurrente pudo haber insertado ya—, limpia la
+  /// intención de creación y borra la fila temporal. Así nunca coexisten la
+  /// fila temporal y la remota (causa del duplicado visible) ni se pierde la
+  /// nota si el proceso muere entre ambos pasos.
+  ///
+  /// Devuelve la fila resultante, o null si [tempId] ya no existe (otra
+  /// sincronización la promovió antes o el usuario la borró).
+  Future<LocalNote?> promoteTempNote(
+    String tempId,
+    String realId, {
+    int? version,
+  }) {
+    return db.transaction(() async {
+      final temp = await getNoteById(tempId);
+      if (temp == null) return null;
+      final existing = await getNoteById(realId);
+      final promoted = LocalNote(
+        id: realId,
+        version: version ?? existing?.version ?? temp.version,
+        title: temp.title,
+        content: temp.content,
+        visibility: temp.visibility,
+        updatedAt: temp.updatedAt,
+        ownerUserId: temp.ownerUserId ?? existing?.ownerUserId,
+      );
+      await (db.delete(db.localNotes)..where((t) => t.id.equals(tempId))).go();
+      await db
+          .into(db.localNotes)
+          .insertOnConflictUpdate(
+            LocalNotesCompanion(
+              id: Value(promoted.id),
+              version: Value(promoted.version),
+              title: Value(promoted.title),
+              content: Value(promoted.content),
+              visibility: Value(promoted.visibility),
+              updatedAt: Value(promoted.updatedAt),
+              ownerUserId: Value(promoted.ownerUserId),
+              createKey: const Value(null),
+              createSnapshot: const Value(null),
+            ),
+          );
+      return promoted;
+    });
+  }
+
+  /// true si existe un tombstone para [id].
+  Future<bool> hasTombstone(String id) async {
+    final row = await (db.select(
+      db.noteTombstones,
+    )..where((t) => t.id.equals(id))).getSingleOrNull();
+    return row != null;
+  }
+
   /// Limpia la clave/snapshot de creación una vez que la nota ya existe remoto.
   Future<void> clearPendingCreate(String id) async {
-    await (db.update(
-      db.localNotes,
-    )..where((t) => t.id.equals(id))).write(
+    await (db.update(db.localNotes)..where((t) => t.id.equals(id))).write(
       const LocalNotesCompanion(
         createKey: Value(null),
         createSnapshot: Value(null),
@@ -221,9 +282,7 @@ class LocalNotesRepository {
     required bool remotePending,
     String? lastError,
   }) async {
-    await (db.update(
-      db.noteTombstones,
-    )..where((t) => t.id.equals(id))).write(
+    await (db.update(db.noteTombstones)..where((t) => t.id.equals(id))).write(
       NoteTombstonesCompanion(
         remotePending: Value(remotePending),
         lastError: Value(lastError),
