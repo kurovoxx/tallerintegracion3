@@ -4,6 +4,7 @@ import 'package:http/testing.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taller_integracion_front/core/services/session_manager.dart';
+import 'package:taller_integracion_front/core/database/app_database_manager.dart';
 import 'package:taller_integracion_front/features/notes/all_notes_screen.dart';
 
 Future<void> _pumpNotes(WidgetTester tester) async {
@@ -23,6 +24,10 @@ Future<void> _pumpNotes(WidgetTester tester) async {
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+  });
+
+  tearDown(() async {
+    await AppDatabaseManager.instance.resetForTesting();
   });
 
   testWidgets(

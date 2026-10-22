@@ -19,6 +19,30 @@ class LocalNotes extends Table {
   // o creada sin sesión (visible solo sin sesión, nunca como ajena).
   IntColumn get version => integer().nullable()();
   TextColumn get ownerUserId => text().nullable()();
+  // Fase 1 (creación idempotente): clave de idempotencia y snapshot del payload
+  // original de la PRIMERA intención de creación. Se persisten junto a la nota
+  // para reutilizarse tras reiniciar y evitar duplicados en PG/Drive.
+  TextColumn get createKey => text().nullable()();
+  TextColumn get createSnapshot => text().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+// Tombstones de borrado persistentes (Fase 1 §P3): una nota borrada no debe
+// reaparecer si el backend/Drive aún la devuelve en un sync posterior.
+@DataClassName('NoteTombstoneEntry')
+class NoteTombstones extends Table {
+  // id de la nota (temporal epoch-ms o UUID remoto).
+  TextColumn get id => text()();
+  TextColumn get ownerUserId => text().nullable()();
+  DateTimeColumn get deletedAt => dateTime()();
+  // true = el borrado remoto aún no se confirmó (reintentable). false = el
+  // borrado remoto ya obtuvo 200/204/404; se conserva como defensa contra
+  // resurrecciones hasta que el sync deje de devolver el id.
+  BoolColumn get remotePending =>
+      boolean().withDefault(const Constant(true))();
+  TextColumn get lastError => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -49,14 +73,14 @@ class LocalNotesFts extends Table {
   // Para FTS5, Drift requiere definir qué columnas existen; no necesitamos PK.
 }
 
-@DriftDatabase(tables: [LocalNotes, LocalNotesFts])
+@DriftDatabase(tables: [LocalNotes, LocalNotesFts, NoteTombstones])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
   AppDatabase.forTesting(super.e);
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   /// Bandera de disponibilidad del motor FTS5.
   /// true si la tabla virtual y sus triggers se crearon correctamente
@@ -84,6 +108,13 @@ class AppDatabase extends _$AppDatabase {
           );
         } catch (_) {}
       }
+
+      // Tabla de tombstones (Fase 1 §P3): se garantiza su creación aunque el
+      // createAll() haya fallado por el problema de la tabla virtual FTS5.
+      await _createTableIfMissing(
+        'note_tombstones',
+        () => m.createTable(noteTombstones),
+      );
 
       // Verificar que local_notes_fts sea realmente una tabla virtual FTS5
       // y no una tabla regular mal generada por drift.
@@ -156,6 +187,26 @@ END
           () => m.addColumn(localNotes, localNotes.ownerUserId),
         );
       }
+      // v3 -> v4 (Fase 1): idempotencia de creación (clave + snapshot) y
+      // tombstones persistentes de borrado.
+      if (from < 4) {
+        await _addColumnIfMissing(
+          m,
+          'local_notes',
+          'create_key',
+          () => m.addColumn(localNotes, localNotes.createKey),
+        );
+        await _addColumnIfMissing(
+          m,
+          'local_notes',
+          'create_snapshot',
+          () => m.addColumn(localNotes, localNotes.createSnapshot),
+        );
+        await _createTableIfMissing(
+          'note_tombstones',
+          () => m.createTable(noteTombstones),
+        );
+      }
     },
     beforeOpen: (details) async {
       // Verificar FTS5 en caliente, si falla, no bloquear
@@ -167,6 +218,29 @@ END
       }
     },
   );
+
+  /// true si [table] existe en el esquema local (sqlite_master).
+  Future<bool> _hasTable(String table) async {
+    final rows = await customSelect(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      variables: [Variable.withString(table)],
+    ).get();
+    return rows.isNotEmpty;
+  }
+
+  /// Ejecuta la creación de [table] solo si aún no existe. Tolera archivos
+  /// locales donde la tabla ya fue creada por otra rama/versión.
+  Future<void> _createTableIfMissing(
+    String table,
+    Future<void> Function() create,
+  ) async {
+    if (await _hasTable(table)) return;
+    try {
+      await create();
+    } catch (_) {
+      if (!await _hasTable(table)) rethrow;
+    }
+  }
 
   /// true si [table] ya tiene la columna [column] (PRAGMA table_info).
   /// Permite que las migraciones de columna sean tolerantes a archivos que

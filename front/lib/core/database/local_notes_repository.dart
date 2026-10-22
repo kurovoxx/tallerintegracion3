@@ -22,8 +22,47 @@ class LocalNotesRepository {
             visibility: Value(note.visibility),
             updatedAt: Value(note.updatedAt),
             ownerUserId: Value(note.ownerUserId),
+            // null = "no tocar": una edición normal no debe borrar una clave de
+            // creación pendiente ya persistida. La limpieza explícita se hace
+            // con clearPendingCreate().
+            createKey: note.createKey == null
+                ? const Value.absent()
+                : Value(note.createKey),
+            createSnapshot: note.createSnapshot == null
+                ? const Value.absent()
+                : Value(note.createSnapshot),
           ),
         );
+  }
+
+  /// Persiste la clave de idempotencia y el snapshot del payload original de la
+  /// intención de creación (Fase 1 §P1). Se reutilizan en cada reintento para
+  /// que el backend haga replay en lugar de crear una segunda nota/archivo.
+  Future<void> setPendingCreate(
+    String id, {
+    required String key,
+    required String snapshot,
+  }) async {
+    await (db.update(
+      db.localNotes,
+    )..where((t) => t.id.equals(id))).write(
+      LocalNotesCompanion(
+        createKey: Value(key),
+        createSnapshot: Value(snapshot),
+      ),
+    );
+  }
+
+  /// Limpia la clave/snapshot de creación una vez que la nota ya existe remoto.
+  Future<void> clearPendingCreate(String id) async {
+    await (db.update(
+      db.localNotes,
+    )..where((t) => t.id.equals(id))).write(
+      const LocalNotesCompanion(
+        createKey: Value(null),
+        createSnapshot: Value(null),
+      ),
+    );
   }
 
   /// Búsqueda offline FTS5 instantánea con ranking por relevancia,
@@ -81,6 +120,7 @@ class LocalNotesRepository {
           .customSelect(
             '''
         SELECT n.id, n.title, n.content, n.visibility, n.updated_at, n.owner_user_id, n.version,
+               n.create_key, n.create_snapshot,
                bm25(local_notes_fts, 2.0, 1.0) AS score
         FROM local_notes n
         JOIN local_notes_fts fts ON n.rowid = fts.rowid
@@ -101,6 +141,8 @@ class LocalNotesRepository {
           visibility: row.read<String>('visibility'),
           updatedAt: row.read<DateTime>('updated_at'),
           ownerUserId: row.readNullable<String>('owner_user_id'),
+          createKey: row.readNullable<String>('create_key'),
+          createSnapshot: row.readNullable<String>('create_snapshot'),
         );
       }).toList();
     } catch (e) {
@@ -149,6 +191,66 @@ class LocalNotesRepository {
   Future<void> clearOwner(String ownerId) async {
     await (db.delete(
       db.localNotes,
+    )..where((t) => t.ownerUserId.equals(ownerId))).go();
+  }
+
+  /// Registra (upsert) un tombstone de borrado persistente (Fase 1 §P3).
+  /// [remotePending] indica si el borrado remoto aún debe reintentarse.
+  Future<void> addTombstone({
+    required String id,
+    String? ownerUserId,
+    bool remotePending = true,
+    String? lastError,
+  }) async {
+    await db
+        .into(db.noteTombstones)
+        .insertOnConflictUpdate(
+          NoteTombstonesCompanion.insert(
+            id: id,
+            ownerUserId: Value(ownerUserId),
+            deletedAt: DateTime.now(),
+            remotePending: Value(remotePending),
+            lastError: Value(lastError),
+          ),
+        );
+  }
+
+  /// Actualiza el estado del tombstone tras un intento de borrado remoto.
+  Future<void> updateTombstone(
+    String id, {
+    required bool remotePending,
+    String? lastError,
+  }) async {
+    await (db.update(
+      db.noteTombstones,
+    )..where((t) => t.id.equals(id))).write(
+      NoteTombstonesCompanion(
+        remotePending: Value(remotePending),
+        lastError: Value(lastError),
+      ),
+    );
+  }
+
+  /// Elimina el tombstone de [id] (el backend ya no devuelve la nota).
+  Future<void> removeTombstone(String id) async {
+    await (db.delete(db.noteTombstones)..where((t) => t.id.equals(id))).go();
+  }
+
+  /// Lista los tombstones del dueño (o los legacy sin dueño si [ownerId] nulo).
+  Future<List<NoteTombstoneEntry>> getTombstones({String? ownerId}) async {
+    final query = db.select(db.noteTombstones);
+    if (ownerId == null) {
+      query.where((t) => t.ownerUserId.isNull());
+    } else {
+      query.where((t) => t.ownerUserId.equals(ownerId));
+    }
+    return query.get();
+  }
+
+  /// Elimina todos los tombstones del dueño (logout selectivo).
+  Future<void> clearOwnerTombstones(String ownerId) async {
+    await (db.delete(
+      db.noteTombstones,
     )..where((t) => t.ownerUserId.equals(ownerId))).go();
   }
 }

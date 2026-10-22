@@ -1,5 +1,8 @@
+import 'dart:ui' show AppExitResponse;
+
 import 'package:flutter/material.dart';
 
+import 'core/database/app_database_manager.dart';
 import 'core/services/insecure_http.dart';
 import 'core/services/session_manager.dart';
 import 'core/theme/app_theme.dart';
@@ -42,10 +45,36 @@ Future<void> main() async {
   );
 }
 
-class TallerIntegracionApp extends StatelessWidget {
+class TallerIntegracionApp extends StatefulWidget {
   const TallerIntegracionApp({super.key, this.home});
 
   final Widget? home;
+
+  @override
+  State<TallerIntegracionApp> createState() => _TallerIntegracionAppState();
+}
+
+class _TallerIntegracionAppState extends State<TallerIntegracionApp> {
+  late final AppLifecycleListener _lifecycle;
+
+  @override
+  void initState() {
+    super.initState();
+    // Cierre controlado de SQLite: espera operaciones en vuelo antes de que
+    // el proceso termine (evita "isolate channel connection was closed").
+    _lifecycle = AppLifecycleListener(
+      onExitRequested: () async {
+        await AppDatabaseManager.instance.close();
+        return AppExitResponse.exit;
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _lifecycle.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -54,7 +83,7 @@ class TallerIntegracionApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
       navigatorKey: appNavigatorKey,
-      home: home ?? const LoginScreen(),
+      home: widget.home ?? const LoginScreen(),
     );
   }
 }

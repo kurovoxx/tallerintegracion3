@@ -13,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taller_integracion_front/core/services/session_manager.dart';
 import 'package:taller_integracion_front/core/services/authed_client.dart';
 import 'package:taller_integracion_front/core/services/auth_service.dart';
+import 'package:taller_integracion_front/core/database/app_database_manager.dart';
 import 'package:taller_integracion_front/core/widgets/neobrutalism.dart';
 import 'package:taller_integracion_front/features/notes/all_notes_screen.dart';
 import 'package:taller_integracion_front/features/notes/attachment_resources.dart';
@@ -25,6 +26,10 @@ void main() {
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+  });
+
+  tearDown(() async {
+    await AppDatabaseManager.instance.resetForTesting();
   });
 
   setUpAll(() {

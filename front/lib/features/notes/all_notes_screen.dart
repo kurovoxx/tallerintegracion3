@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/database/app_database.dart';
+import '../../core/database/app_database_manager.dart';
 import '../../core/database/local_notes_repository.dart';
 import '../../core/services/api_config.dart';
 import '../../core/services/authed_client.dart';
@@ -113,6 +114,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   AppDatabase? _db;
   LocalNotesRepository? _repo;
 
+  /// Dueño capturado al abrir la pantalla. Evita que una sincronización en
+  /// vuelo escriba filas del usuario anterior si la sesión cambia mientras
+  /// la operación sigue viva (aislamiento entre usuarios).
+  late final String? _sessionOwnerId;
+  bool _ownsDatabase = false;
+
   final TextEditingController _searchController = TextEditingController();
   Timer? _debounce;
 
@@ -154,9 +161,9 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   };
 
   bool _isKnownDemo(LocalNote n) => _kDemoTitles[n.id] == n.title;
-  // Dueño para aislamiento por cuenta: user_id del JWT activo (solo scoping
-  // local; el backend sigue siendo la autoridad). Null sin sesión.
-  String? _ownerId() => SessionManager.currentUserId;
+  // Dueño para aislamiento por cuenta: user_id del JWT al abrir la pantalla
+  // (solo scoping local; el backend sigue siendo la autoridad). Null sin sesión.
+  String? _ownerId() => _sessionOwnerId;
   // Sellado de dueño en notas que pertenecen a la cuenta activa.
   LocalNote _stampOwner(LocalNote n) => n.ownerUserId == _ownerId()
       ? n
@@ -253,13 +260,14 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   @override
   void initState() {
     super.initState();
+    _sessionOwnerId = SessionManager.currentUserId;
     _subjectFilter = widget.initialSubjectCode?.trim().isNotEmpty == true
         ? widget.initialSubjectCode!.trim()
         : null;
     _subjectIdForCreate = widget.initialSubjectId?.trim().isNotEmpty == true
         ? widget.initialSubjectId!.trim()
         : null;
-    _notesFuture = _initAndLoad();
+    _notesFuture = AppDatabaseManager.instance.guard(_initAndLoad);
     if (widget.autoOpenCreate) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
@@ -299,9 +307,17 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     }
     try {
       try {
-        _db = widget.database ?? AppDatabase();
+        final injected = widget.database;
+        if (injected != null) {
+          _db = injected;
+          _ownsDatabase = false;
+        } else if (_db == null || !_ownsDatabase) {
+          _db = await AppDatabaseManager.instance.acquire();
+          _ownsDatabase = true;
+        }
         _repo = LocalNotesRepository(_db!);
         await _repo!.getAllNotes(ownerId: _ownerId());
+        await _loadTombstones();
       } catch (e) {
         debugPrint('Drift init falló, fallback a memoria: $e');
         final token = SessionManager.token;
@@ -396,10 +412,29 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     }
   }
 
+  /// Carga los tombstones persistentes del dueño activo (Fase 1 §P3) para que
+  /// una nota borrada no reaparezca tras reiniciar la app.
+  Future<void> _loadTombstones() async {
+    if (_useMemoryFallback || _repo == null) return;
+    try {
+      final tombstones = await _repo!.getTombstones(ownerId: _ownerId());
+      for (final t in tombstones) {
+        _deletedNoteIds.add(t.id);
+      }
+    } catch (e) {
+      debugPrint('No se pudieron cargar tombstones: $e');
+    }
+  }
+
   // Sincroniza GET /notes/me (real). Si hay sesión y falla, guarda
   // _backendError real en vez de ocultar el fallo tras datos demo.
   // Ver back/notes/cmd/server/main.go:130 y note_handler.go:241 ListMy.
   Future<void> _syncFromBackend() async {
+    if (AppDatabaseManager.instance.isClosed) return;
+    await AppDatabaseManager.instance.guard(_syncFromBackendImpl);
+  }
+
+  Future<void> _syncFromBackendImpl() async {
     if (_useMemoryFallback || _repo == null) return;
     if (mounted) {
       setState(() {
@@ -434,6 +469,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         }
         final data = jsonDecode(utf8.decode(res.bodyBytes));
         final List notes = data['notes'] ?? [];
+        final remoteIds = <String>{};
         final cached = {
           for (final n in await _repo!.getAllNotes(ownerId: _ownerId()))
             n.id: n,
@@ -442,6 +478,10 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           try {
             final remoteId = n['id'] as String?;
             if (remoteId != null && remoteId.isNotEmpty) {
+              remoteIds.add(remoteId);
+              // No resucitar una nota borrada localmente (tombstone §P3): el
+              // backend puede seguir devolviéndola hasta confirmar el DELETE.
+              if (_deletedNoteIds.contains(remoteId)) continue;
               _ownedNoteIds.add(remoteId);
             }
             await _repo!.upsertNote(
@@ -461,6 +501,19 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                 ),
               ),
             );
+          } catch (_) {}
+        }
+        // Convergencia de tombstones: si el servidor ya no devuelve una nota
+        // cuyo DELETE se confirmó, el tombstone dejó de ser necesario.
+        if (!_useMemoryFallback && _repo != null) {
+          try {
+            final tombstones = await _repo!.getTombstones(ownerId: _ownerId());
+            for (final t in tombstones) {
+              if (!t.remotePending && !remoteIds.contains(t.id)) {
+                await _repo!.removeTombstone(t.id);
+                _deletedNoteIds.remove(t.id);
+              }
+            }
           } catch (_) {}
         }
       } else {
@@ -543,6 +596,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   /// sincronizada sin cambios NO recibe PATCH. Termina con GET /notes/me.
   /// No duplica el pipeline de creación: si hay un Future en curso lo espera.
   Future<void> _syncWithDrive() async {
+    if (AppDatabaseManager.instance.isClosed) return;
+    await AppDatabaseManager.instance.guard(_syncWithDriveImpl);
+  }
+
+  Future<void> _syncWithDriveImpl() async {
     if (_isReconciling) return;
     final token = SessionManager.token;
     if (token == null || token.isEmpty) {
@@ -557,19 +615,51 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     var refreshed = 0;
     var failed = 0;
     var linkedAttachments = 0;
+    var tombstonesCleared = 0;
     try {
+      // 0. Tombstones pendientes (Fase 1 §P3): reintentar el DELETE de notas
+      //    borradas sin conexión. Solo ids propios marcados localmente; nunca
+      //    notas ajenas ni comparticiones de otros usuarios.
+      if (!_useMemoryFallback && _repo != null) {
+        final pendingTombstones = await _repo!.getTombstones(
+          ownerId: _ownerId(),
+        );
+        for (final t in pendingTombstones.where((t) => t.remotePending)) {
+          if (!_isRemoteNote(t.id)) continue;
+          final res = await _deleteNoteRemoteById(t.id);
+          if (res.ok || res.status == 404) {
+            await _repo!.updateTombstone(t.id, remotePending: false);
+            tombstonesCleared++;
+          } else {
+            await _repo!.updateTombstone(
+              t.id,
+              remotePending: true,
+              lastError: res.message ?? res.code,
+            );
+            failed++;
+          }
+        }
+      }
       final notes = _useMemoryFallback
           ? List<LocalNote>.from(_memoryFallback)
           : await _repo!.getAllNotes(ownerId: _ownerId());
       // 1. Sin respaldo remoto: id local (timestamp) => crear en backend y
       //    asociar los adjuntos pendientes que sigan en memoria.
       for (final note in notes.where(
-        (n) => !_isRemoteNote(n.id) && !_isKnownDemo(n),
+        (n) =>
+            !_isRemoteNote(n.id) &&
+            !_isKnownDemo(n) &&
+            !_deletedNoteIds.contains(n.id),
       )) {
+        // Idempotente: reutiliza la misma clave/snapshot en cada reintento
+        // (misma nota, sin duplicar fila PG ni archivo Drive).
+        final intent = await _ensureCreateIntent(note);
         final realId = await _createNoteOnBackend(
-          title: note.title,
-          content: _withoutPendingAttachments(note.content),
-          visibility: note.visibility,
+          title: intent.title,
+          content: intent.content,
+          visibility: intent.visibility,
+          subjectId: intent.subjectId,
+          idempotencyKey: intent.key,
         );
         if (realId == null || realId.isEmpty) {
           failed++;
@@ -587,7 +677,9 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         );
         linkedAttachments += uploadedIds.length;
         failed += failedNames.length;
-        if (newContent != _withoutPendingAttachments(remoteNote.content)) {
+        // PATCH si cambiaron los adjuntos O si el contenido/título vigentes
+        // difieren del snapshot con el que se creó (edición con CREATE pendiente).
+        if (newContent != intent.content || remoteNote.title != intent.title) {
           final saved = await _patchNoteRemote(
             remoteNote,
             remoteNote.title,
@@ -608,7 +700,10 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       // (placeholders pendientes o error conocido). Sin pendientes no hay
       // PATCH: pulsar el botón con todo sincronizado es solo un refresh.
       for (final note in notes.where(
-        (n) => _isRemoteNote(n.id) && _isMine(n),
+        (n) =>
+            _isRemoteNote(n.id) &&
+            _isMine(n) &&
+            !_deletedNoteIds.contains(n.id),
       )) {
         // Pipeline de creación en curso: esperarlo en vez de duplicarlo.
         final pending = _pendingSyncFor(note.id);
@@ -622,8 +717,9 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           continue;
         }
         final needsRetry = _noteSyncState[note.id] == _NoteSyncState.error;
-        final hasPendingAttachments =
-            note.content.contains('attachment-pending://');
+        final hasPendingAttachments = note.content.contains(
+          'attachment-pending://',
+        );
         if (!needsRetry && !hasPendingAttachments) continue;
         final uploadedIds = <String>[];
         final failedNames = <String>[];
@@ -687,7 +783,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         refreshed == 0 &&
         linkedAttachments == 0 &&
         removedNotes == 0 &&
-        removedAttachments == 0) {
+        removedAttachments == 0 &&
+        tombstonesCleared == 0) {
       _notifySnack('Tus notas están sincronizadas.');
       return;
     }
@@ -696,6 +793,9 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     if (refreshed > 0) parts.add('$refreshed actualizada(s)');
     if (linkedAttachments > 0) {
       parts.add('$linkedAttachments adjunto(s) vinculado(s)');
+    }
+    if (tombstonesCleared > 0) {
+      parts.add('$tombstonesCleared borrado(s) pendiente(s) confirmado(s)');
     }
     if (removedNotes > 0 || removedAttachments > 0) {
       parts.add(
@@ -782,13 +882,23 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     return _withoutPendingAttachments(content);
   }
 
-  /// Intento de creación remota. Devuelve el UUID real del backend (201) o null.
-  /// No bloquea el guardado local: si el backend falla, solo se imprime el error (offline-first).
+  /// Intento de creación remota. Devuelve el UUID real del backend (201/200) o
+  /// null. No bloquea el guardado local: si el backend falla, solo se imprime
+  /// el error (offline-first).
+  ///
+  /// Idempotencia (Fase 1 §P1): [idempotencyKey] viaja como `X-Idempotency-Key`
+  /// y debe ser ESTABLE entre reintentos y acompañar SIEMPRE al MISMO payload.
+  /// El backend reclama la clave antes de tocar PG/Drive, de modo que
+  /// misma clave + mismo payload => replay del recurso ya creado (sin segunda
+  /// fila ni segundo archivo); misma clave + payload distinto => 409. Por eso un
+  /// 409 NUNCA dispara aquí una creación independiente (evitaría duplicados):
+  /// se devuelve null y se reintenta más tarde con la misma intención.
   Future<String?> _createNoteOnBackend({
     required String title,
     required String content,
     required String visibility,
     String? subjectId,
+    String? idempotencyKey,
   }) async {
     final url = '$notesBaseUrl/notes';
     final body = <String, String>{
@@ -798,23 +908,24 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       if (subjectId != null && subjectId.trim().isNotEmpty)
         'subject_id': subjectId.trim(),
     };
+    final headers = _authHeaders();
+    if (idempotencyKey != null && idempotencyKey.isNotEmpty) {
+      headers['X-Idempotency-Key'] = idempotencyKey;
+    }
     debugPrint(
-      '[Notes] POST titleChars=${title.length} contentChars=${content.length}',
+      '[Notes] POST titleChars=${title.length} contentChars=${content.length} '
+      'idem=${idempotencyKey != null && idempotencyKey.isNotEmpty}',
     );
     try {
       final res = await AuthedHttp.run(
         () => _withNotesClient(
           (client) => client
-              .post(
-                Uri.parse(url),
-                headers: _authHeaders(),
-                body: jsonEncode(body),
-              )
+              .post(Uri.parse(url), headers: headers, body: jsonEncode(body))
               .timeout(const Duration(seconds: 8)),
         ),
       );
       debugPrint('[Notes] POST /notes status=${res.statusCode}');
-      if (res.statusCode == 201) {
+      if (res.statusCode == 201 || res.statusCode == 200) {
         try {
           final data = jsonDecode(utf8.decode(res.bodyBytes));
           final newId = data['note_id'] as String?;
@@ -828,11 +939,118 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             return newId;
           }
         } catch (_) {}
+      } else if (res.statusCode == 409) {
+        // Claim en progreso o clave reutilizada con payload distinto: se
+        // reintentará con la misma intención, nunca con una creación nueva.
+        debugPrint(
+          '[Notes] POST /notes 409 idempotencia -> reintento diferido',
+        );
       }
     } catch (e) {
       debugPrint('[Notes] POST /notes status=error offline_or_failed');
     }
     return null;
+  }
+
+  /// Clave de idempotencia estable derivada del id local persistente: el mismo
+  /// id produce la misma clave en cada reintento y tras reiniciar la app.
+  String _createKeyFor(String tempId) => 'flutter-note-create-$tempId';
+
+  /// Serializa el payload original de creación (la "intención") a JSON para
+  /// persistirlo junto a la nota local.
+  String _encodeCreateSnapshot(
+    String title,
+    String content,
+    String visibility,
+    String? subjectId,
+  ) => jsonEncode(<String, String>{
+    'title': title,
+    'content': content,
+    'visibility': visibility,
+    if (subjectId != null && subjectId.trim().isNotEmpty)
+      'subject_id': subjectId.trim(),
+  });
+
+  /// Obtiene (o crea y persiste la primera vez) la intención de creación de una
+  /// nota local: la clave idempotente y el snapshot congelado del payload.
+  ///
+  /// El payload se congela porque el backend hashea (clave+payload): enviar
+  /// contenido editado con la misma clave daría 409 y obligaría a crear una
+  /// segunda nota. Si el usuario edita mientras el CREATE sigue pendiente, se
+  /// crea con este snapshot y luego se aplica un PATCH con el contenido vigente.
+  Future<_CreateIntent> _ensureCreateIntent(
+    LocalNote note, {
+    String? subjectId,
+  }) async {
+    final existingKey = note.createKey;
+    final existingSnapshot = note.createSnapshot;
+    if (existingKey != null &&
+        existingKey.isNotEmpty &&
+        existingSnapshot != null &&
+        existingSnapshot.isNotEmpty) {
+      try {
+        final map = jsonDecode(existingSnapshot) as Map<String, dynamic>;
+        return _CreateIntent(
+          key: existingKey,
+          title: map['title'] as String? ?? note.title,
+          content:
+              map['content'] as String? ??
+              _withoutPendingAttachments(note.content),
+          visibility: map['visibility'] as String? ?? note.visibility,
+          subjectId: map['subject_id'] as String?,
+        );
+      } catch (_) {
+        // Snapshot corrupto: se reutiliza la MISMA clave con el payload actual.
+        // Si un intento previo usó otro payload, el backend responderá 409 y no
+        // se creará un duplicado (nunca se genera una clave nueva a ciegas).
+      }
+    }
+    final key = (existingKey != null && existingKey.isNotEmpty)
+        ? existingKey
+        : _createKeyFor(note.id);
+    final snapshotContent = _withoutPendingAttachments(note.content);
+    final snapshot = _encodeCreateSnapshot(
+      note.title,
+      snapshotContent,
+      note.visibility,
+      subjectId,
+    );
+    if (!_useMemoryFallback && _repo != null) {
+      try {
+        await _repo!.setPendingCreate(note.id, key: key, snapshot: snapshot);
+      } catch (_) {}
+    } else {
+      final i = _memoryFallback.indexWhere((n) => n.id == note.id);
+      if (i >= 0) {
+        _memoryFallback[i] = _memoryFallback[i].copyWith(
+          createKey: Value(key),
+          createSnapshot: Value(snapshot),
+        );
+      }
+    }
+    return _CreateIntent(
+      key: key,
+      title: note.title,
+      content: snapshotContent,
+      visibility: note.visibility,
+      subjectId: subjectId,
+    );
+  }
+
+  /// Crea una nota local (id sin UUID) en el backend de forma idempotente:
+  /// garantiza que cada reintento reutilice la misma clave y el mismo payload.
+  Future<String?> _createLocalNoteIdempotent(
+    LocalNote note, {
+    String? subjectId,
+  }) async {
+    final intent = await _ensureCreateIntent(note, subjectId: subjectId);
+    return _createNoteOnBackend(
+      title: intent.title,
+      content: intent.content,
+      visibility: intent.visibility,
+      subjectId: intent.subjectId,
+      idempotencyKey: intent.key,
+    );
   }
 
   /// Reemplaza el id temporal (timestamp) por el UUID real del backend en
@@ -1094,8 +1312,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   }
 
   /// Borrado en cascada: DELETE /notes/:id. Éxito con 200 o 204.
-  Future<_RemoteResult> _deleteNoteRemote(LocalNote note) async {
-    final url = '$notesBaseUrl/notes/${note.id}';
+  Future<_RemoteResult> _deleteNoteRemote(LocalNote note) =>
+      _deleteNoteRemoteById(note.id);
+
+  Future<_RemoteResult> _deleteNoteRemoteById(String id) async {
+    final url = '$notesBaseUrl/notes/$id';
     try {
       final res = await AuthedHttp.run(
         () => _withNotesClient(
@@ -1107,9 +1328,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
               .timeout(const Duration(seconds: 30)),
         ),
       );
-      debugPrint(
-        '[Notes] DELETE NOTE note=${note.id} status=${res.statusCode}',
-      );
+      debugPrint('[Notes] DELETE NOTE note=$id status=${res.statusCode}');
       if (res.statusCode == 200 || res.statusCode == 204) {
         return _RemoteResult(ok: true, status: res.statusCode);
       }
@@ -1209,10 +1428,14 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     await _applySearch(_currentQuery);
   }
 
-  Future<void> _applyLocalDelete(LocalNote note) async {
+  Future<void> _applyLocalDelete(
+    LocalNote note, {
+    bool remotePending = false,
+    String? lastError,
+  }) async {
     if (!mounted) return;
     setState(() {
-      // Tombstone de Development: la nota borrada no reaparece por sync.
+      // Tombstone (memoria + persistente §P3): la nota borrada no reaparece.
       _deletedNoteIds.add(note.id);
       _filtered.removeWhere((n) => n.id == note.id);
       _latestNotes.remove(note.id);
@@ -1228,6 +1451,16 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       _memoryFallback.removeWhere((n) => n.id == note.id);
     });
     if (!_useMemoryFallback && _repo != null) {
+      try {
+        // Persistir ANTES de borrar la fila: si el proceso muere justo después,
+        // el tombstone sigue bloqueando la resurrección y conserva el reintento.
+        await _repo!.addTombstone(
+          id: note.id,
+          ownerUserId: note.ownerUserId ?? _ownerId(),
+          remotePending: remotePending,
+          lastError: lastError,
+        );
+      } catch (_) {}
       try {
         await _repo!.deleteNote(note.id);
       } catch (_) {
@@ -1358,6 +1591,28 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       );
       return const _RemoteResult(ok: true, status: 404);
     }
+    // Sin conexión (offline-first §P3): el borrado local se aplica de inmediato
+    // y se encola en un tombstone persistente. El siguiente REFRESCAR /
+    // SINCRONIZAR DRIVE reintenta el DELETE remoto de forma idempotente.
+    if (remote.status == -1) {
+      await _applyLocalDelete(
+        note,
+        remotePending: true,
+        lastError: remote.message ?? remote.code ?? 'offline',
+      );
+      if (!mounted) return const _RemoteResult(ok: true, status: 202);
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: Colors.black,
+          content: Text(
+            'La nota se eliminó de este equipo; se borrará del servidor al recuperar la conexión.',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+          ),
+        ),
+      );
+      return const _RemoteResult(ok: true, status: 202);
+    }
     return remote;
   }
 
@@ -1438,7 +1693,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     _searchController.clear();
     _currentQuery = '';
     _selectedFilter = 'all';
-    _notesFuture = _initAndLoad();
+    _notesFuture = AppDatabaseManager.instance.guard(_initAndLoad);
     await _notesFuture;
   }
 
@@ -1718,8 +1973,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           onToggleSave: () => _toggleSave(opened),
           onShare: () => _shareNote(opened),
           onFetchRemote: () => _fetchHybridContent(opened),
-          onSaveEdit: (title, content) =>
-              _saveEditFlow(opened, title, content),
+          onSaveEdit: (title, content) => _saveEditFlow(opened, title, content),
           onDelete: () => _deleteFlow(opened),
           onClone: () => _cloneFlow(opened),
           pendingSyncOf: _pendingSyncFor,
@@ -1737,7 +1991,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   void dispose() {
     _debounce?.cancel();
     _searchController.dispose();
-    _db?.close();
+    // La base es compartida y la posee AppDatabaseManager. Cerrarla aquí
+    // mataba el isolate mientras una sincronización seguía en vuelo.
+    if (_ownsDatabase) {
+      AppDatabaseManager.instance.release();
+    }
     super.dispose();
   }
 
@@ -1936,10 +2194,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   }) async {
     String? resolvedId;
     try {
-      final realId = await _createNoteOnBackend(
-        title: note.title,
-        content: _withoutPendingAttachments(note.content),
-        visibility: note.visibility,
+      final realId = await _createLocalNoteIdempotent(
+        note,
         subjectId: subjectId,
       );
       if (realId != null &&
@@ -3026,6 +3282,24 @@ enum _EditSaveOutcome {
 /// tiene entrada en [_noteSyncState] y se comporta como antes.
 enum _NoteSyncState { syncing, synced, error }
 
+/// Intención de creación idempotente (Fase 1 §P1): clave + payload congelado.
+/// El payload se reutiliza en cada reintento para que el backend haga replay
+/// (misma fila/archivo) en lugar de crear un duplicado.
+class _CreateIntent {
+  const _CreateIntent({
+    required this.key,
+    required this.title,
+    required this.content,
+    required this.visibility,
+    this.subjectId,
+  });
+  final String key;
+  final String title;
+  final String content;
+  final String visibility;
+  final String? subjectId;
+}
+
 /// Modal de detalle con lectura híbrida (GET /notes/:id), edición (PATCH) y
 /// borrado (DELETE). El contenido local se muestra de inmediato como fallback.
 class _NoteDetailSheet extends StatefulWidget {
@@ -3771,9 +4045,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                   resource: img,
                   onTap: () => _showResourceDialog(img),
                   // X de Development recableada al ÚNICO mecanismo pending.
-                  onRemove: canRemove
-                      ? () => _togglePendingRemove(img)
-                      : null,
+                  onRemove: canRemove ? () => _togglePendingRemove(img) : null,
                 ),
               ),
           ],

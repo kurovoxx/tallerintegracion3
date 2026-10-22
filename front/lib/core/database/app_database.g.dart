@@ -91,6 +91,28 @@ class $LocalNotesTable extends LocalNotes
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _createKeyMeta = const VerificationMeta(
+    'createKey',
+  );
+  @override
+  late final GeneratedColumn<String> createKey = GeneratedColumn<String>(
+    'create_key',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _createSnapshotMeta = const VerificationMeta(
+    'createSnapshot',
+  );
+  @override
+  late final GeneratedColumn<String> createSnapshot = GeneratedColumn<String>(
+    'create_snapshot',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -100,6 +122,8 @@ class $LocalNotesTable extends LocalNotes
     updatedAt,
     version,
     ownerUserId,
+    createKey,
+    createSnapshot,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -163,6 +187,21 @@ class $LocalNotesTable extends LocalNotes
         ),
       );
     }
+    if (data.containsKey('create_key')) {
+      context.handle(
+        _createKeyMeta,
+        createKey.isAcceptableOrUnknown(data['create_key']!, _createKeyMeta),
+      );
+    }
+    if (data.containsKey('create_snapshot')) {
+      context.handle(
+        _createSnapshotMeta,
+        createSnapshot.isAcceptableOrUnknown(
+          data['create_snapshot']!,
+          _createSnapshotMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -200,6 +239,14 @@ class $LocalNotesTable extends LocalNotes
         DriftSqlType.string,
         data['${effectivePrefix}owner_user_id'],
       ),
+      createKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}create_key'],
+      ),
+      createSnapshot: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}create_snapshot'],
+      ),
     );
   }
 
@@ -217,6 +264,8 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
   final DateTime updatedAt;
   final int? version;
   final String? ownerUserId;
+  final String? createKey;
+  final String? createSnapshot;
   const LocalNote({
     required this.id,
     required this.title,
@@ -225,6 +274,8 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
     required this.updatedAt,
     this.version,
     this.ownerUserId,
+    this.createKey,
+    this.createSnapshot,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -239,6 +290,12 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
     }
     if (!nullToAbsent || ownerUserId != null) {
       map['owner_user_id'] = Variable<String>(ownerUserId);
+    }
+    if (!nullToAbsent || createKey != null) {
+      map['create_key'] = Variable<String>(createKey);
+    }
+    if (!nullToAbsent || createSnapshot != null) {
+      map['create_snapshot'] = Variable<String>(createSnapshot);
     }
     return map;
   }
@@ -256,6 +313,12 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
       ownerUserId: ownerUserId == null && nullToAbsent
           ? const Value.absent()
           : Value(ownerUserId),
+      createKey: createKey == null && nullToAbsent
+          ? const Value.absent()
+          : Value(createKey),
+      createSnapshot: createSnapshot == null && nullToAbsent
+          ? const Value.absent()
+          : Value(createSnapshot),
     );
   }
 
@@ -272,6 +335,8 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
       version: serializer.fromJson<int?>(json['version']),
       ownerUserId: serializer.fromJson<String?>(json['ownerUserId']),
+      createKey: serializer.fromJson<String?>(json['createKey']),
+      createSnapshot: serializer.fromJson<String?>(json['createSnapshot']),
     );
   }
   @override
@@ -285,6 +350,8 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
       'version': serializer.toJson<int?>(version),
       'ownerUserId': serializer.toJson<String?>(ownerUserId),
+      'createKey': serializer.toJson<String?>(createKey),
+      'createSnapshot': serializer.toJson<String?>(createSnapshot),
     };
   }
 
@@ -296,6 +363,8 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
     DateTime? updatedAt,
     Value<int?> version = const Value.absent(),
     Value<String?> ownerUserId = const Value.absent(),
+    Value<String?> createKey = const Value.absent(),
+    Value<String?> createSnapshot = const Value.absent(),
   }) => LocalNote(
     id: id ?? this.id,
     title: title ?? this.title,
@@ -304,6 +373,10 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
     updatedAt: updatedAt ?? this.updatedAt,
     version: version.present ? version.value : this.version,
     ownerUserId: ownerUserId.present ? ownerUserId.value : this.ownerUserId,
+    createKey: createKey.present ? createKey.value : this.createKey,
+    createSnapshot: createSnapshot.present
+        ? createSnapshot.value
+        : this.createSnapshot,
   );
   LocalNote copyWithCompanion(LocalNotesCompanion data) {
     return LocalNote(
@@ -318,6 +391,10 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
       ownerUserId: data.ownerUserId.present
           ? data.ownerUserId.value
           : this.ownerUserId,
+      createKey: data.createKey.present ? data.createKey.value : this.createKey,
+      createSnapshot: data.createSnapshot.present
+          ? data.createSnapshot.value
+          : this.createSnapshot,
     );
   }
 
@@ -330,7 +407,9 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
           ..write('visibility: $visibility, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('version: $version, ')
-          ..write('ownerUserId: $ownerUserId')
+          ..write('ownerUserId: $ownerUserId, ')
+          ..write('createKey: $createKey, ')
+          ..write('createSnapshot: $createSnapshot')
           ..write(')'))
         .toString();
   }
@@ -344,6 +423,8 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
     updatedAt,
     version,
     ownerUserId,
+    createKey,
+    createSnapshot,
   );
   @override
   bool operator ==(Object other) =>
@@ -355,7 +436,9 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
           other.visibility == this.visibility &&
           other.updatedAt == this.updatedAt &&
           other.version == this.version &&
-          other.ownerUserId == this.ownerUserId);
+          other.ownerUserId == this.ownerUserId &&
+          other.createKey == this.createKey &&
+          other.createSnapshot == this.createSnapshot);
 }
 
 class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
@@ -366,6 +449,8 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
   final Value<DateTime> updatedAt;
   final Value<int?> version;
   final Value<String?> ownerUserId;
+  final Value<String?> createKey;
+  final Value<String?> createSnapshot;
   final Value<int> rowid;
   const LocalNotesCompanion({
     this.id = const Value.absent(),
@@ -375,6 +460,8 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
     this.updatedAt = const Value.absent(),
     this.version = const Value.absent(),
     this.ownerUserId = const Value.absent(),
+    this.createKey = const Value.absent(),
+    this.createSnapshot = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   LocalNotesCompanion.insert({
@@ -385,6 +472,8 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
     required DateTime updatedAt,
     this.version = const Value.absent(),
     this.ownerUserId = const Value.absent(),
+    this.createKey = const Value.absent(),
+    this.createSnapshot = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        title = Value(title),
@@ -398,6 +487,8 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
     Expression<DateTime>? updatedAt,
     Expression<int>? version,
     Expression<String>? ownerUserId,
+    Expression<String>? createKey,
+    Expression<String>? createSnapshot,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -408,6 +499,8 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
       if (updatedAt != null) 'updated_at': updatedAt,
       if (version != null) 'version': version,
       if (ownerUserId != null) 'owner_user_id': ownerUserId,
+      if (createKey != null) 'create_key': createKey,
+      if (createSnapshot != null) 'create_snapshot': createSnapshot,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -420,6 +513,8 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
     Value<DateTime>? updatedAt,
     Value<int?>? version,
     Value<String?>? ownerUserId,
+    Value<String?>? createKey,
+    Value<String?>? createSnapshot,
     Value<int>? rowid,
   }) {
     return LocalNotesCompanion(
@@ -430,6 +525,8 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
       updatedAt: updatedAt ?? this.updatedAt,
       version: version ?? this.version,
       ownerUserId: ownerUserId ?? this.ownerUserId,
+      createKey: createKey ?? this.createKey,
+      createSnapshot: createSnapshot ?? this.createSnapshot,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -458,6 +555,12 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
     if (ownerUserId.present) {
       map['owner_user_id'] = Variable<String>(ownerUserId.value);
     }
+    if (createKey.present) {
+      map['create_key'] = Variable<String>(createKey.value);
+    }
+    if (createSnapshot.present) {
+      map['create_snapshot'] = Variable<String>(createSnapshot.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -474,6 +577,8 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
           ..write('updatedAt: $updatedAt, ')
           ..write('version: $version, ')
           ..write('ownerUserId: $ownerUserId, ')
+          ..write('createKey: $createKey, ')
+          ..write('createSnapshot: $createSnapshot, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -694,11 +799,389 @@ class LocalNotesFtsCompanion extends UpdateCompanion<LocalNoteFtsEntry> {
   }
 }
 
+class $NoteTombstonesTable extends NoteTombstones
+    with TableInfo<$NoteTombstonesTable, NoteTombstoneEntry> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $NoteTombstonesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _ownerUserIdMeta = const VerificationMeta(
+    'ownerUserId',
+  );
+  @override
+  late final GeneratedColumn<String> ownerUserId = GeneratedColumn<String>(
+    'owner_user_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _deletedAtMeta = const VerificationMeta(
+    'deletedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> deletedAt = GeneratedColumn<DateTime>(
+    'deleted_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _remotePendingMeta = const VerificationMeta(
+    'remotePending',
+  );
+  @override
+  late final GeneratedColumn<bool> remotePending = GeneratedColumn<bool>(
+    'remote_pending',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("remote_pending" IN (0, 1))',
+    ),
+    defaultValue: const Constant(true),
+  );
+  static const VerificationMeta _lastErrorMeta = const VerificationMeta(
+    'lastError',
+  );
+  @override
+  late final GeneratedColumn<String> lastError = GeneratedColumn<String>(
+    'last_error',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    ownerUserId,
+    deletedAt,
+    remotePending,
+    lastError,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'note_tombstones';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<NoteTombstoneEntry> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('owner_user_id')) {
+      context.handle(
+        _ownerUserIdMeta,
+        ownerUserId.isAcceptableOrUnknown(
+          data['owner_user_id']!,
+          _ownerUserIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('deleted_at')) {
+      context.handle(
+        _deletedAtMeta,
+        deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_deletedAtMeta);
+    }
+    if (data.containsKey('remote_pending')) {
+      context.handle(
+        _remotePendingMeta,
+        remotePending.isAcceptableOrUnknown(
+          data['remote_pending']!,
+          _remotePendingMeta,
+        ),
+      );
+    }
+    if (data.containsKey('last_error')) {
+      context.handle(
+        _lastErrorMeta,
+        lastError.isAcceptableOrUnknown(data['last_error']!, _lastErrorMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  NoteTombstoneEntry map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return NoteTombstoneEntry(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      ownerUserId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}owner_user_id'],
+      ),
+      deletedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}deleted_at'],
+      )!,
+      remotePending: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}remote_pending'],
+      )!,
+      lastError: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}last_error'],
+      ),
+    );
+  }
+
+  @override
+  $NoteTombstonesTable createAlias(String alias) {
+    return $NoteTombstonesTable(attachedDatabase, alias);
+  }
+}
+
+class NoteTombstoneEntry extends DataClass
+    implements Insertable<NoteTombstoneEntry> {
+  final String id;
+  final String? ownerUserId;
+  final DateTime deletedAt;
+  final bool remotePending;
+  final String? lastError;
+  const NoteTombstoneEntry({
+    required this.id,
+    this.ownerUserId,
+    required this.deletedAt,
+    required this.remotePending,
+    this.lastError,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    if (!nullToAbsent || ownerUserId != null) {
+      map['owner_user_id'] = Variable<String>(ownerUserId);
+    }
+    map['deleted_at'] = Variable<DateTime>(deletedAt);
+    map['remote_pending'] = Variable<bool>(remotePending);
+    if (!nullToAbsent || lastError != null) {
+      map['last_error'] = Variable<String>(lastError);
+    }
+    return map;
+  }
+
+  NoteTombstonesCompanion toCompanion(bool nullToAbsent) {
+    return NoteTombstonesCompanion(
+      id: Value(id),
+      ownerUserId: ownerUserId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(ownerUserId),
+      deletedAt: Value(deletedAt),
+      remotePending: Value(remotePending),
+      lastError: lastError == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastError),
+    );
+  }
+
+  factory NoteTombstoneEntry.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return NoteTombstoneEntry(
+      id: serializer.fromJson<String>(json['id']),
+      ownerUserId: serializer.fromJson<String?>(json['ownerUserId']),
+      deletedAt: serializer.fromJson<DateTime>(json['deletedAt']),
+      remotePending: serializer.fromJson<bool>(json['remotePending']),
+      lastError: serializer.fromJson<String?>(json['lastError']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'ownerUserId': serializer.toJson<String?>(ownerUserId),
+      'deletedAt': serializer.toJson<DateTime>(deletedAt),
+      'remotePending': serializer.toJson<bool>(remotePending),
+      'lastError': serializer.toJson<String?>(lastError),
+    };
+  }
+
+  NoteTombstoneEntry copyWith({
+    String? id,
+    Value<String?> ownerUserId = const Value.absent(),
+    DateTime? deletedAt,
+    bool? remotePending,
+    Value<String?> lastError = const Value.absent(),
+  }) => NoteTombstoneEntry(
+    id: id ?? this.id,
+    ownerUserId: ownerUserId.present ? ownerUserId.value : this.ownerUserId,
+    deletedAt: deletedAt ?? this.deletedAt,
+    remotePending: remotePending ?? this.remotePending,
+    lastError: lastError.present ? lastError.value : this.lastError,
+  );
+  NoteTombstoneEntry copyWithCompanion(NoteTombstonesCompanion data) {
+    return NoteTombstoneEntry(
+      id: data.id.present ? data.id.value : this.id,
+      ownerUserId: data.ownerUserId.present
+          ? data.ownerUserId.value
+          : this.ownerUserId,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
+      remotePending: data.remotePending.present
+          ? data.remotePending.value
+          : this.remotePending,
+      lastError: data.lastError.present ? data.lastError.value : this.lastError,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('NoteTombstoneEntry(')
+          ..write('id: $id, ')
+          ..write('ownerUserId: $ownerUserId, ')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('remotePending: $remotePending, ')
+          ..write('lastError: $lastError')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(id, ownerUserId, deletedAt, remotePending, lastError);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is NoteTombstoneEntry &&
+          other.id == this.id &&
+          other.ownerUserId == this.ownerUserId &&
+          other.deletedAt == this.deletedAt &&
+          other.remotePending == this.remotePending &&
+          other.lastError == this.lastError);
+}
+
+class NoteTombstonesCompanion extends UpdateCompanion<NoteTombstoneEntry> {
+  final Value<String> id;
+  final Value<String?> ownerUserId;
+  final Value<DateTime> deletedAt;
+  final Value<bool> remotePending;
+  final Value<String?> lastError;
+  final Value<int> rowid;
+  const NoteTombstonesCompanion({
+    this.id = const Value.absent(),
+    this.ownerUserId = const Value.absent(),
+    this.deletedAt = const Value.absent(),
+    this.remotePending = const Value.absent(),
+    this.lastError = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  NoteTombstonesCompanion.insert({
+    required String id,
+    this.ownerUserId = const Value.absent(),
+    required DateTime deletedAt,
+    this.remotePending = const Value.absent(),
+    this.lastError = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       deletedAt = Value(deletedAt);
+  static Insertable<NoteTombstoneEntry> custom({
+    Expression<String>? id,
+    Expression<String>? ownerUserId,
+    Expression<DateTime>? deletedAt,
+    Expression<bool>? remotePending,
+    Expression<String>? lastError,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (ownerUserId != null) 'owner_user_id': ownerUserId,
+      if (deletedAt != null) 'deleted_at': deletedAt,
+      if (remotePending != null) 'remote_pending': remotePending,
+      if (lastError != null) 'last_error': lastError,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  NoteTombstonesCompanion copyWith({
+    Value<String>? id,
+    Value<String?>? ownerUserId,
+    Value<DateTime>? deletedAt,
+    Value<bool>? remotePending,
+    Value<String?>? lastError,
+    Value<int>? rowid,
+  }) {
+    return NoteTombstonesCompanion(
+      id: id ?? this.id,
+      ownerUserId: ownerUserId ?? this.ownerUserId,
+      deletedAt: deletedAt ?? this.deletedAt,
+      remotePending: remotePending ?? this.remotePending,
+      lastError: lastError ?? this.lastError,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (ownerUserId.present) {
+      map['owner_user_id'] = Variable<String>(ownerUserId.value);
+    }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt.value);
+    }
+    if (remotePending.present) {
+      map['remote_pending'] = Variable<bool>(remotePending.value);
+    }
+    if (lastError.present) {
+      map['last_error'] = Variable<String>(lastError.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('NoteTombstonesCompanion(')
+          ..write('id: $id, ')
+          ..write('ownerUserId: $ownerUserId, ')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('remotePending: $remotePending, ')
+          ..write('lastError: $lastError, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
   late final $LocalNotesTable localNotes = $LocalNotesTable(this);
   late final $LocalNotesFtsTable localNotesFts = $LocalNotesFtsTable(this);
+  late final $NoteTombstonesTable noteTombstones = $NoteTombstonesTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -706,6 +1189,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   List<DatabaseSchemaEntity> get allSchemaEntities => [
     localNotes,
     localNotesFts,
+    noteTombstones,
   ];
 }
 
@@ -718,6 +1202,8 @@ typedef $$LocalNotesTableCreateCompanionBuilder =
       required DateTime updatedAt,
       Value<int?> version,
       Value<String?> ownerUserId,
+      Value<String?> createKey,
+      Value<String?> createSnapshot,
       Value<int> rowid,
     });
 typedef $$LocalNotesTableUpdateCompanionBuilder =
@@ -729,6 +1215,8 @@ typedef $$LocalNotesTableUpdateCompanionBuilder =
       Value<DateTime> updatedAt,
       Value<int?> version,
       Value<String?> ownerUserId,
+      Value<String?> createKey,
+      Value<String?> createSnapshot,
       Value<int> rowid,
     });
 
@@ -773,6 +1261,16 @@ class $$LocalNotesTableFilterComposer
 
   ColumnFilters<String> get ownerUserId => $composableBuilder(
     column: $table.ownerUserId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get createKey => $composableBuilder(
+    column: $table.createKey,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get createSnapshot => $composableBuilder(
+    column: $table.createSnapshot,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -820,6 +1318,16 @@ class $$LocalNotesTableOrderingComposer
     column: $table.ownerUserId,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get createKey => $composableBuilder(
+    column: $table.createKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get createSnapshot => $composableBuilder(
+    column: $table.createSnapshot,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$LocalNotesTableAnnotationComposer
@@ -853,6 +1361,14 @@ class $$LocalNotesTableAnnotationComposer
 
   GeneratedColumn<String> get ownerUserId => $composableBuilder(
     column: $table.ownerUserId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get createKey =>
+      $composableBuilder(column: $table.createKey, builder: (column) => column);
+
+  GeneratedColumn<String> get createSnapshot => $composableBuilder(
+    column: $table.createSnapshot,
     builder: (column) => column,
   );
 }
@@ -895,6 +1411,8 @@ class $$LocalNotesTableTableManager
                 Value<DateTime> updatedAt = const Value.absent(),
                 Value<int?> version = const Value.absent(),
                 Value<String?> ownerUserId = const Value.absent(),
+                Value<String?> createKey = const Value.absent(),
+                Value<String?> createSnapshot = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => LocalNotesCompanion(
                 id: id,
@@ -904,6 +1422,8 @@ class $$LocalNotesTableTableManager
                 updatedAt: updatedAt,
                 version: version,
                 ownerUserId: ownerUserId,
+                createKey: createKey,
+                createSnapshot: createSnapshot,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -915,6 +1435,8 @@ class $$LocalNotesTableTableManager
                 required DateTime updatedAt,
                 Value<int?> version = const Value.absent(),
                 Value<String?> ownerUserId = const Value.absent(),
+                Value<String?> createKey = const Value.absent(),
+                Value<String?> createSnapshot = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => LocalNotesCompanion.insert(
                 id: id,
@@ -924,6 +1446,8 @@ class $$LocalNotesTableTableManager
                 updatedAt: updatedAt,
                 version: version,
                 ownerUserId: ownerUserId,
+                createKey: createKey,
+                createSnapshot: createSnapshot,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
@@ -1095,6 +1619,216 @@ typedef $$LocalNotesFtsTableProcessedTableManager =
       LocalNoteFtsEntry,
       PrefetchHooks Function()
     >;
+typedef $$NoteTombstonesTableCreateCompanionBuilder =
+    NoteTombstonesCompanion Function({
+      required String id,
+      Value<String?> ownerUserId,
+      required DateTime deletedAt,
+      Value<bool> remotePending,
+      Value<String?> lastError,
+      Value<int> rowid,
+    });
+typedef $$NoteTombstonesTableUpdateCompanionBuilder =
+    NoteTombstonesCompanion Function({
+      Value<String> id,
+      Value<String?> ownerUserId,
+      Value<DateTime> deletedAt,
+      Value<bool> remotePending,
+      Value<String?> lastError,
+      Value<int> rowid,
+    });
+
+class $$NoteTombstonesTableFilterComposer
+    extends Composer<_$AppDatabase, $NoteTombstonesTable> {
+  $$NoteTombstonesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get ownerUserId => $composableBuilder(
+    column: $table.ownerUserId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get remotePending => $composableBuilder(
+    column: $table.remotePending,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get lastError => $composableBuilder(
+    column: $table.lastError,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$NoteTombstonesTableOrderingComposer
+    extends Composer<_$AppDatabase, $NoteTombstonesTable> {
+  $$NoteTombstonesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get ownerUserId => $composableBuilder(
+    column: $table.ownerUserId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get remotePending => $composableBuilder(
+    column: $table.remotePending,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get lastError => $composableBuilder(
+    column: $table.lastError,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$NoteTombstonesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $NoteTombstonesTable> {
+  $$NoteTombstonesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get ownerUserId => $composableBuilder(
+    column: $table.ownerUserId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
+
+  GeneratedColumn<bool> get remotePending => $composableBuilder(
+    column: $table.remotePending,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get lastError =>
+      $composableBuilder(column: $table.lastError, builder: (column) => column);
+}
+
+class $$NoteTombstonesTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $NoteTombstonesTable,
+          NoteTombstoneEntry,
+          $$NoteTombstonesTableFilterComposer,
+          $$NoteTombstonesTableOrderingComposer,
+          $$NoteTombstonesTableAnnotationComposer,
+          $$NoteTombstonesTableCreateCompanionBuilder,
+          $$NoteTombstonesTableUpdateCompanionBuilder,
+          (
+            NoteTombstoneEntry,
+            BaseReferences<
+              _$AppDatabase,
+              $NoteTombstonesTable,
+              NoteTombstoneEntry
+            >,
+          ),
+          NoteTombstoneEntry,
+          PrefetchHooks Function()
+        > {
+  $$NoteTombstonesTableTableManager(
+    _$AppDatabase db,
+    $NoteTombstonesTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$NoteTombstonesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$NoteTombstonesTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$NoteTombstonesTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String?> ownerUserId = const Value.absent(),
+                Value<DateTime> deletedAt = const Value.absent(),
+                Value<bool> remotePending = const Value.absent(),
+                Value<String?> lastError = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => NoteTombstonesCompanion(
+                id: id,
+                ownerUserId: ownerUserId,
+                deletedAt: deletedAt,
+                remotePending: remotePending,
+                lastError: lastError,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                Value<String?> ownerUserId = const Value.absent(),
+                required DateTime deletedAt,
+                Value<bool> remotePending = const Value.absent(),
+                Value<String?> lastError = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => NoteTombstonesCompanion.insert(
+                id: id,
+                ownerUserId: ownerUserId,
+                deletedAt: deletedAt,
+                remotePending: remotePending,
+                lastError: lastError,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$NoteTombstonesTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $NoteTombstonesTable,
+      NoteTombstoneEntry,
+      $$NoteTombstonesTableFilterComposer,
+      $$NoteTombstonesTableOrderingComposer,
+      $$NoteTombstonesTableAnnotationComposer,
+      $$NoteTombstonesTableCreateCompanionBuilder,
+      $$NoteTombstonesTableUpdateCompanionBuilder,
+      (
+        NoteTombstoneEntry,
+        BaseReferences<_$AppDatabase, $NoteTombstonesTable, NoteTombstoneEntry>,
+      ),
+      NoteTombstoneEntry,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -1103,4 +1837,6 @@ class $AppDatabaseManager {
       $$LocalNotesTableTableManager(_db, _db.localNotes);
   $$LocalNotesFtsTableTableManager get localNotesFts =>
       $$LocalNotesFtsTableTableManager(_db, _db.localNotesFts);
+  $$NoteTombstonesTableTableManager get noteTombstones =>
+      $$NoteTombstonesTableTableManager(_db, _db.noteTombstones);
 }
