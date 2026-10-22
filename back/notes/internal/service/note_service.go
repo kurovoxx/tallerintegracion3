@@ -844,9 +844,11 @@ func (s *NoteService) Create(ctx context.Context, userID string, title string, s
 			// En el caso determinista, conservar la fila 'failed_sync' deja una
 			// nota fantasma (sin archivo ni contenido legible) que el
 			// reconciliador preserva para siempre y que además impide reutilizar
-			// limpiamente la intención: se elimina SOLO la fila recién creada
-			// (nunca filas antiguas) y se libera el claim, de modo que el retry
-			// con la misma clave vuelve a crear sin duplicar.
+			// limpiamente la intención: se elimina SOLO la fila de ESTA intención
+			// (la recién creada o la preasociada por un intento previo de la
+			// misma clave que tampoco dejó archivo; su id nunca llegó al cliente)
+			// y se libera el claim, de modo que el retry con la misma clave
+			// vuelve a crear sin duplicar.
 			if driveFailureIsDefinitive(err) {
 				if delErr := s.notes.Delete(ctx, note.ID); delErr != nil {
 					log.Printf("notes: create nota %s: rechazo definitivo de Drive pero no se pudo limpiar la fila: %v", note.ID, delErr)
