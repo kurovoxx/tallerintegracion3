@@ -306,6 +306,28 @@ Sin Services/containers gRPC para auth/notes hasta que existan sus servidores
 - **No entra**: servidores gRPC de auth/notes, Ingress gRPC (solo HTTP hoy),
   Telepresence/vcluster.
 
+## 3_5_9 — CI workflow gRPC (generate + breaking check)
+
+### Archivo
+
+| Archivo | Contenido |
+|---|---|
+| `.github/workflows/grpc-ci.yml` | Workflow de GitHub Actions con 3 jobs: `lint`, `generate`, `breaking` |
+
+### Jobs
+
+| Job | Qué hace | Módulos |
+|---|---|---|
+| `lint` | `buf lint` en cada módulo de protos | `common`, `social`, `infacadem` |
+| `generate` | `make generate` + `buf generate` en social, luego `git diff --exit-code` para verificar que el código generado esté commiteado | `common`, `social` |
+| `breaking` | `buf breaking --against remotes/origin/Development` para detectar cambios rompientes | `common`, `social`, `infacadem` |
+
+### Reglas
+
+- Cada job corre `make tools` para instalar `buf` + `protoc-gen-go` + `protoc-gen-go-grpc` en `./bin/`.
+- **Nunca se corre `buf` en `back/proto` raíz**: siempre dentro de cada módulo (`back/proto/<modulo>`).
+- El workflow se dispara en `push` a `Development` y en `PR` contra `Development`, solo cuando cambian archivos bajo `back/proto/`, el `Makefile` o el propio workflow.
+
 ## 3_5_14 — Notificación de reunión en app
 
 ### Alcance (jefe: front hace la cajita + ventana "próximas reuniones")
@@ -350,3 +372,29 @@ Backend: exponer lo que faltaba para esas dos vistas. El "enviar" ya existía
 | `front/lib/features/groups/groups_screen.dart` | Campana en header compacto y ancho |
 
 - `flutter analyze` en los archivos tocados: sin issues nuevos (los restantes son preexistentes).
+
+## 3_5_15 — Notificación de reunión por Gmail (solo mail, remitente noreply)
+
+### Alcance
+
+Aviso por correo a los invitados al agendar, sin Google Calendar/Meet ni OAuth:
+SMTP clásico con el patrón `ResetMailer` de auth. Best-effort como el resto de
+notifiers (un fallo no revierte la reunión).
+
+### Archivos
+
+| Archivo | Contenido |
+|---|---|
+| `back/social/internal/mail/mailer.go` | `MeetingMailer` (STARTTLS, valida direcciones) + `BuildMeetingMessage` pura (asunto `Grupo {g}: {título}`, cuerpo con fecha/descripción) |
+| `back/social/internal/mail/mailer_test.go` | Composición, `Ready`, validaciones (email malo/sin destinatarios fallan antes de red) |
+| `back/social/internal/service/meeting_mail_notifier.go` | `MeetingMailNotifier` (lee invitados + nombre del grupo, skip sin invitados, loguea fallos) |
+| `back/social/internal/service/meeting_mail_notifier_test.go` | Mailer falso (envía a invitados, skip sin ellos, fallo best-effort) |
+| `back/social/internal/config/config.go` | `+ SMTP_HOST/PORT/USERNAME/PASSWORD` |
+| `back/social/cmd/server/main.go` | `newMeetingMailer` (avisa si SMTP ausente) + 4º notifier en `MultiMeetingNotifier` |
+| `docker-compose.yml` | `SMTP_*` en social (defaults Gmail + noreply) |
+
+### Verificación
+
+- 6 tests nuevos PASS; `go test ./...` (social): `ok` todo; `docker compose config` válido.
+- **No entra**: Meet/Jitsi (sin link), Gmail API (solo SMTP), HTML en el mail, front.
+- Para envío real: `SMTP_PASSWORD` en `.env` (contraseña de aplicación).

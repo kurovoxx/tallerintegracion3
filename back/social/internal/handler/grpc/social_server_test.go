@@ -39,7 +39,7 @@ func (f *fakeDirectory) LookupEmailsStrict(_ context.Context, ids []string) ([]s
 	return out, nil
 }
 
-// TestSocialServer recorre los 4 RPC sobre bufconn con la misma cadena de
+// TestSocialServer recorre los 5 RPC sobre bufconn con la misma cadena de
 // interceptores que main, usando el store en memoria.
 func TestSocialServer(t *testing.T) {
 	store := service.NewMemoryGroupStore()
@@ -75,9 +75,36 @@ func TestSocialServer(t *testing.T) {
 		}
 	}
 
-	t.Run("sin clave interna", func(t *testing.T) {
-		_, err := c.IsMember(context.Background(), &socialv1.IsMemberRequest{GroupId: g.ID, UserId: admin})
-		wantCode(t, err, codes.Unauthenticated)
+	t.Run("todos los RPC requieren clave interna", func(t *testing.T) {
+		calls := map[string]func(context.Context) error{
+			"IsMember": func(ctx context.Context) error {
+				_, err := c.IsMember(ctx, &socialv1.IsMemberRequest{GroupId: g.ID, UserId: admin})
+				return err
+			},
+			"IsAdmin": func(ctx context.Context) error {
+				_, err := c.IsAdmin(ctx, &socialv1.IsAdminRequest{GroupId: g.ID, UserId: admin})
+				return err
+			},
+			"GetMembers": func(ctx context.Context) error {
+				_, err := c.GetMembers(ctx, &socialv1.GetMembersRequest{GroupId: g.ID})
+				return err
+			},
+			"GetMemberEmails": func(ctx context.Context) error {
+				_, err := c.GetMemberEmails(ctx, &socialv1.GetMemberEmailsRequest{GroupId: g.ID})
+				return err
+			},
+			"AccountDeletionCleanup": func(ctx context.Context) error {
+				_, err := c.AccountDeletionCleanup(ctx, &socialv1.AccountDeletionCleanupRequest{UserId: admin})
+				return err
+			},
+		}
+		for name, call := range calls {
+			t.Run(name, func(t *testing.T) {
+				wantCode(t, call(context.Background()), codes.Unauthenticated)
+				wrongKey := metadata.AppendToOutgoingContext(context.Background(), interceptor.MetadataInternalKey, "wrong-key")
+				wantCode(t, call(wrongKey), codes.Unauthenticated)
+			})
+		}
 	})
 
 	t.Run("IsMember/IsAdmin", func(t *testing.T) {
@@ -105,10 +132,20 @@ func TestSocialServer(t *testing.T) {
 	t.Run("errores de entrada y grupo inexistente", func(t *testing.T) {
 		_, err := c.IsMember(ctx, &socialv1.IsMemberRequest{GroupId: "no-uuid", UserId: admin})
 		wantCode(t, err, codes.InvalidArgument)
+		_, err = c.IsMember(ctx, &socialv1.IsMemberRequest{GroupId: g.ID, UserId: "no-uuid"})
+		wantCode(t, err, codes.InvalidArgument)
+		_, err = c.IsAdmin(ctx, &socialv1.IsAdminRequest{GroupId: "no-uuid", UserId: admin})
+		wantCode(t, err, codes.InvalidArgument)
+		_, err = c.IsAdmin(ctx, &socialv1.IsAdminRequest{GroupId: g.ID, UserId: "no-uuid"})
+		wantCode(t, err, codes.InvalidArgument)
 		_, err = c.IsAdmin(ctx, &socialv1.IsAdminRequest{GroupId: uuid.NewString(), UserId: admin})
 		wantCode(t, err, codes.NotFound)
+		_, err = c.GetMembers(ctx, &socialv1.GetMembersRequest{GroupId: "no-uuid"})
+		wantCode(t, err, codes.InvalidArgument)
 		_, err = c.GetMembers(ctx, &socialv1.GetMembersRequest{GroupId: uuid.NewString()})
 		wantCode(t, err, codes.NotFound)
+		_, err = c.GetMemberEmails(ctx, &socialv1.GetMemberEmailsRequest{GroupId: "no-uuid"})
+		wantCode(t, err, codes.InvalidArgument)
 		_, err = c.AccountDeletionCleanup(ctx, &socialv1.AccountDeletionCleanupRequest{})
 		wantCode(t, err, codes.InvalidArgument)
 	})

@@ -75,6 +75,8 @@ services:
       # Membresía/admin/correos por gRPC; vacío = vuelve al HTTP interno.
       SOCIAL_GRPC_ADDR: ${SOCIAL_GRPC_ADDR-social:9083}
       SOCIAL_TIMEOUT: 5s
+      # Tokens Drive por gRPC (tarea 3_4_6); el refresh lo hace Identity.
+      IDENTITY_GRPC_ADDR: ${IDENTITY_GRPC_ADDR-auth:9080}
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
     depends_on:
       postgres:
@@ -101,6 +103,7 @@ services:
       GRPC_PORT: 9083
       SOCIAL_GRPC_PORT: 9083
       AUTH_BASE_URL: http://auth:8080
+      IDENTITY_GRPC_ADDR: ${IDENTITY_GRPC_ADDR-auth:9080}
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
       # gRPC de Notes (limpieza unshare-all al salir de grupo).
       NOTES_GRPC_URL: ${NOTES_GRPC_URL:-notes:9082}
@@ -108,6 +111,10 @@ services:
       STREAM_API_KEY: ${STREAM_API_KEY}
       STREAM_API_SECRET: ${STREAM_API_SECRET:-dev-stream-secret-change-me}
       STREAM_MODE: ${STREAM_MODE:-mock}
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-sigmaacademy.noreply@gmail.com}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
     depends_on:
       postgres:
         condition: service_healthy
