@@ -60,6 +60,7 @@ class _NotificationsBellState extends State<NotificationsBell> {
       builder: (_) => _NotificationsPopup(
         service: _service,
         anchorTop: position.dy + size.height + 4,
+        unreadCount: _unread,
         onClose: close,
       ),
     );
@@ -84,15 +85,15 @@ class _NotificationsBellState extends State<NotificationsBell> {
               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
               decoration: BoxDecoration(
                 color: AppColors.error,
-                border: Border.all(color: Colors.black, width: 1.5),
-                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppColors.border, width: 2),
+                borderRadius: BorderRadius.circular(AppDimens.radiusChip),
               ),
               child: Text(
                 _unread > 9 ? '9+' : '$_unread',
                 style: const TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w900,
-                  color: Colors.white,
+                  color: AppColors.surface,
                 ),
               ),
             ),
@@ -108,11 +109,13 @@ class _NotificationsPopup extends StatelessWidget {
   const _NotificationsPopup({
     required this.service,
     required this.anchorTop,
+    required this.unreadCount,
     required this.onClose,
   });
 
   final SocialService service;
   final double anchorTop;
+  final int unreadCount;
   final VoidCallback onClose;
 
   @override
@@ -124,47 +127,67 @@ class _NotificationsPopup extends StatelessWidget {
         GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: onClose,
-          child: Container(color: Colors.transparent),
+          child: const SizedBox.expand(),
         ),
         Positioned(
           top: anchorTop,
           right: 12,
-          child: Container(
-            width: popupWidth,
-            constraints: const BoxConstraints(maxHeight: 420),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              border: Border.all(color: AppColors.border, width: 2),
-              borderRadius: BorderRadius.circular(AppDimens.radius),
-              boxShadow: AppShadows.card,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 10, 4, 6),
-                  child: Row(
-                    children: [
-                      const Expanded(
-                        child: Text(
-                          'NOTIFICACIONES',
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w900,
+          child: Material(
+            type: MaterialType.transparency,
+            child: Container(
+              width: popupWidth,
+              constraints: const BoxConstraints(maxHeight: 440),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                border: Border.all(
+                  color: AppColors.border,
+                  width: AppDimens.borderWidth,
+                ),
+                borderRadius: BorderRadius.circular(AppDimens.radius),
+                boxShadow: AppShadows.card,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 10, 4, 10),
+                    child: Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'NOTIFICACIONES',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 0.6,
+                              color: AppColors.text,
+                              decoration: TextDecoration.none,
+                            ),
                           ),
                         ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close_rounded, size: 18),
-                        tooltip: 'Cerrar',
-                        onPressed: onClose,
-                      ),
-                    ],
+                        if (unreadCount > 0) ...[
+                          NeobrutalistBadge(
+                            label: unreadCount > 9
+                                ? '9+ nuevas'
+                                : '$unreadCount nuevas',
+                            tone: NeobrutalistTone.accent,
+                            compact: true,
+                          ),
+                          const SizedBox(width: AppDimens.spaceSm),
+                        ],
+                        NeobrutalistIconButton(
+                          icon: Icons.close_rounded,
+                          tooltip: 'Cerrar',
+                          size: 34,
+                          onPressed: onClose,
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-                Container(height: 2, color: AppColors.border),
-                Flexible(child: _NotificationsList(service: service)),
-              ],
+                  Container(height: 2, color: AppColors.border),
+                  Flexible(child: _NotificationsList(service: service)),
+                ],
+              ),
             ),
           ),
         ),
@@ -221,6 +244,110 @@ class _NotificationsListState extends State<_NotificationsList> {
     if (mounted) _load();
   }
 
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Padding(
+        padding: EdgeInsets.all(AppDimens.spaceXl),
+        child: Center(
+          child: SizedBox(
+            width: 22,
+            height: 22,
+            child: CircularProgressIndicator(strokeWidth: 2.5),
+          ),
+        ),
+      );
+    }
+
+    if (_error != null) {
+      return Padding(
+        padding: const EdgeInsets.all(AppDimens.spaceXl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.cloud_off_rounded,
+              size: 28,
+              color: AppColors.muted,
+            ),
+            const SizedBox(height: AppDimens.spaceSm),
+            Text(
+              _error!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: AppColors.mutedStrong,
+              ),
+            ),
+            const SizedBox(height: AppDimens.spaceMd),
+            NeobrutalistButton(
+              label: 'Reintentar',
+              icon: Icons.refresh_rounded,
+              variant: NeobrutalistButtonVariant.secondary,
+              onPressed: _load,
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_items.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.all(AppDimens.spaceXl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.notifications_none_rounded,
+              size: 28,
+              color: AppColors.muted,
+            ),
+            SizedBox(height: AppDimens.spaceSm),
+            Text(
+              'SIN NOTIFICACIONES',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 0.4,
+                color: AppColors.text,
+              ),
+            ),
+            SizedBox(height: AppDimens.spaceXs),
+            Text(
+              'Aquí verás los recordatorios de tus reuniones.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w700,
+                color: AppColors.mutedStrong,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      shrinkWrap: true,
+      padding: const EdgeInsets.all(AppDimens.spaceSm),
+      itemCount: _items.length,
+      itemBuilder: (context, i) => _NotificationTile(
+        notification: _items[i],
+        onTap: () => _markRead(_items[i]),
+      ),
+    );
+  }
+}
+
+/// Fila de notificación: badge Nueva/Leída, sombra dura si no leída y
+/// texto multilínea sin overflow.
+class _NotificationTile extends StatelessWidget {
+  const _NotificationTile({required this.notification, required this.onTap});
+
+  final MeetingNotification notification;
+  final VoidCallback onTap;
+
   static String _formatWhen(DateTime when) {
     final local = when.toLocal();
     return '${local.day.toString().padLeft(2, '0')}/${local.month.toString().padLeft(2, '0')}/${local.year} · '
@@ -229,97 +356,77 @@ class _NotificationsListState extends State<_NotificationsList> {
 
   @override
   Widget build(BuildContext context) {
-    Widget content;
-    if (_loading) {
-      content = const Padding(
-        padding: EdgeInsets.all(16),
-        child: Center(
-          child: SizedBox(
-            width: 24,
-            height: 24,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-        ),
-      );
-    } else if (_error != null) {
-      content = Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(_error!),
-          const SizedBox(height: 8),
-          NeobrutalistButton(
-            label: 'Reintentar',
-            icon: Icons.refresh_rounded,
-            onPressed: _load,
-          ),
-        ],
-      );
-    } else if (_items.isEmpty) {
-      content = const Padding(
-        padding: EdgeInsets.all(12),
-        child: Text('Sin notificaciones.'),
-      );
-    } else {
-      content = ListView.builder(
-        shrinkWrap: true,
-        padding: const EdgeInsets.all(8),
-        itemCount: _items.length,
-        itemBuilder: (context, i) {
-            final n = _items[i];
-            return Container(
-              margin: const EdgeInsets.only(bottom: 8),
-              decoration: BoxDecoration(
-                color: n.read ? AppColors.bg : Colors.white,
-                border: Border.all(color: AppColors.border, width: 2),
-                borderRadius: BorderRadius.circular(AppDimens.radius),
+    final unread = !notification.read;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppDimens.spaceSm),
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(AppDimens.radius),
+          child: Container(
+            padding: const EdgeInsets.all(AppDimens.spaceMd),
+            decoration: BoxDecoration(
+              color: unread ? AppColors.surface : AppColors.surfaceLow,
+              border: Border.all(
+                color: AppColors.border,
+                width: AppDimens.borderWidth,
               ),
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () => _markRead(n),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
-                  ),
-                  child: Row(
+              borderRadius: BorderRadius.circular(AppDimens.radius),
+              boxShadow: unread ? const [AppShadows.hard2] : null,
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  unread ? Icons.event_rounded : Icons.event_available_rounded,
+                  size: 20,
+                  color: AppColors.text,
+                ),
+                const SizedBox(width: AppDimens.spaceSm),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(
-                        n.read
-                            ? Icons.event_available_rounded
-                            : Icons.event_rounded,
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              n.title,
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: n.read
-                                    ? FontWeight.w600
-                                    : FontWeight.w800,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              _formatWhen(n.scheduledAt),
-                              style: const TextStyle(fontSize: 11),
-                            ),
-                          ],
+                      Text(
+                        notification.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: unread
+                              ? FontWeight.w900
+                              : FontWeight.w700,
+                          color: AppColors.text,
+                          height: 1.25,
                         ),
                       ),
-                      if (!n.read) const Icon(Icons.circle, size: 10),
+                      const SizedBox(height: AppDimens.spaceXs),
+                      Text(
+                        _formatWhen(notification.scheduledAt),
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.mutedStrong,
+                        ),
+                      ),
                     ],
                   ),
                 ),
-              ),
-            );
-          },
-        );
-    }
-    return content;
+                const SizedBox(width: AppDimens.spaceSm),
+                NeobrutalistBadge(
+                  label: unread ? 'Nueva' : 'Leída',
+                  tone: unread
+                      ? NeobrutalistTone.accent
+                      : NeobrutalistTone.neutral,
+                  compact: true,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }

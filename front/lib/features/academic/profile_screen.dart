@@ -581,25 +581,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _buildPersonalDataCard(isDesktop),
       const SizedBox(height: AppDimens.spaceLg),
       _buildDriveCard(isDesktop),
-      const SizedBox(height: AppDimens.spaceLg),
-      _buildSessionActions(isDesktop),
     ];
-  }
-
-  Widget _buildSessionActions(bool isDesktop) {
-    final logoutButton = NeobrutalistButton(
-      label: 'CERRAR SESIÓN',
-      icon: Icons.logout_rounded,
-      variant: NeobrutalistButtonVariant.secondary,
-      expand: !isDesktop,
-      onPressed: _handleLogout,
-    );
-
-    if (!isDesktop) return logoutButton;
-    return Align(
-      alignment: Alignment.centerRight,
-      child: SizedBox(width: 220, child: logoutButton),
-    );
   }
 
   Widget _buildIdentityCard(bool isDesktop) {
