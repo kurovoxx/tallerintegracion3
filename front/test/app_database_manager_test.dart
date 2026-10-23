@@ -47,6 +47,7 @@ void main() {
       await gate.future;
       await repo.upsertNote(
         LocalNote(
+          needsSync: false,
           id: '1',
           title: 'en vuelo',
           content: 'x',

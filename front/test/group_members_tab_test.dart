@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -46,7 +47,7 @@ class _FakeMembersApi {
   }
 
   Future<http.Response> handle(http.Request req) async {
-    final p = req.url.path;
+    final p = req.url.servicePath;
     if (req.method == 'GET' && p.endsWith('/groups/$_gid/members')) {
       return _json(200, members);
     }
@@ -89,7 +90,9 @@ _FakeMembersApi _seed() => _FakeMembersApi(<Map<String, dynamic>>[
 Future<void> _pump(WidgetTester tester, SocialService service) async {
   await tester.pumpWidget(
     MaterialApp(
-      home: Scaffold(body: GroupMembersTab(groupId: _gid, service: service)),
+      home: Scaffold(
+        body: GroupMembersTab(groupId: _gid, service: service),
+      ),
     ),
   );
   await tester.pumpAndSettle();

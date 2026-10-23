@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -45,7 +46,8 @@ void main() {
     addTearDown(SessionManager.clear);
     final service = SocialService(
       client: MockClient((request) async {
-        if (request.method == 'GET' && request.url.path == '/groups/$_gid') {
+        if (request.method == 'GET' &&
+            request.url.servicePath == '/groups/$_gid') {
           return http.Response(
             jsonEncode(<String, dynamic>{
               'id': _gid,

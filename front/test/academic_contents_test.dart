@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -24,7 +25,7 @@ void main() {
   test('contents: lista ordenada, crea, edita, reordena y elimina', () async {
     final api = await apiWith(
       MockClient((request) async {
-        final path = request.url.path;
+        final path = request.url.servicePath;
         if (request.method == 'GET' && path.endsWith('/contents')) {
           return http.Response(
             jsonEncode({

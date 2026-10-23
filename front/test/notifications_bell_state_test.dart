@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -37,8 +38,9 @@ void main() {
   SocialService buildService({bool duplicate = false}) {
     return SocialService(
       client: MockClient((r) async {
-        calls.add('${r.method} ${r.url.path}');
-        if (r.method == 'GET' && r.url.path.endsWith('/notifications/me')) {
+        calls.add('${r.method} ${r.url.servicePath}');
+        if (r.method == 'GET' &&
+            r.url.servicePath.endsWith('/notifications/me')) {
           return json({
             'data': [
               item(n1, 'Reunión sprint'),
@@ -48,7 +50,7 @@ void main() {
             ],
           });
         }
-        if (r.method == 'POST' && r.url.path.endsWith('/read')) {
+        if (r.method == 'POST' && r.url.servicePath.endsWith('/read')) {
           final id = r.url.pathSegments[r.url.pathSegments.length - 2];
           readIds.add(id);
           return json({});

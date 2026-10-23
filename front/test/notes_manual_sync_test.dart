@@ -1,4 +1,4 @@
-import 'dart:async';
+import 'support/service_uri.dart';
 import 'dart:convert';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -11,7 +11,6 @@ import 'package:taller_integracion_front/core/database/local_notes_repository.da
 import 'package:taller_integracion_front/core/services/session_manager.dart';
 import 'package:taller_integracion_front/core/widgets/neobrutalism.dart';
 import 'package:taller_integracion_front/features/notes/all_notes_screen.dart';
-import 'package:taller_integracion_front/features/notes/note_file_picker.dart';
 import 'package:taller_integracion_front/features/notes/note_file_picker.dart';
 
 // Botón REFRESCAR / SINCRONIZAR DRIVE: solo procesa pendientes.
@@ -44,10 +43,8 @@ void main() {
     expect(ready(), isTrue, reason: 'operación no terminó');
   }
 
-  Finder syncButton() => find.widgetWithText(
-    NeobrutalistButton,
-    'REFRESCAR / SINCRONIZAR DRIVE',
-  );
+  Finder syncButton() =>
+      find.widgetWithText(NeobrutalistButton, 'REFRESCAR / SINCRONIZAR DRIVE');
 
   Future<AppDatabase> seedDb(List<LocalNote> notes) async {
     SharedPreferences.setMockInitialValues({});
@@ -66,6 +63,7 @@ void main() {
     String content = 'contenido',
     int? version,
   }) => LocalNote(
+    needsSync: false,
     id: id,
     title: title,
     content: content,
@@ -114,8 +112,8 @@ void main() {
       note(id: uuid2, title: 'Dos', version: 3),
     ]);
     notesHttpClientOverride = MockClient((r) async {
-      calls.add('${r.method} ${r.url.path}');
-      if (r.method == 'POST' && r.url.path == '/notes/reconcile') {
+      calls.add('${r.method} ${r.url.servicePath}');
+      if (r.method == 'POST' && r.url.servicePath == '/notes/reconcile') {
         return json({
           'removed_notes': 0,
           'removed_attachments': 0,
@@ -123,7 +121,7 @@ void main() {
           'removed_note_ids': [],
         });
       }
-      if (r.url.path == '/notes/me') {
+      if (r.url.servicePath == '/notes/me') {
         return json({
           'notes': [
             {'id': uuid1, 'title': 'Una', 'version': 2},
@@ -154,11 +152,11 @@ void main() {
     final calls = <String>[];
     final db = await seedDb([note(id: tempId, title: 'Local')]);
     notesHttpClientOverride = MockClient((r) async {
-      calls.add('${r.method} ${r.url.path}');
-      if (r.method == 'POST' && r.url.path == '/notes') {
+      calls.add('${r.method} ${r.url.servicePath}');
+      if (r.method == 'POST' && r.url.servicePath == '/notes') {
         return json({'note_id': realNew, 'version': 1}, 201);
       }
-      if (r.url.path == '/notes/$realNew') {
+      if (r.url.servicePath == '/notes/$realNew') {
         return json({
           'id': realNew,
           'title': 'Local',
@@ -168,7 +166,7 @@ void main() {
           'attachments': [],
         });
       }
-      if (r.method == 'POST' && r.url.path == '/notes/reconcile') {
+      if (r.method == 'POST' && r.url.servicePath == '/notes/reconcile') {
         return json({
           'removed_notes': 0,
           'removed_attachments': 0,
@@ -176,7 +174,7 @@ void main() {
           'removed_note_ids': [],
         });
       }
-      if (r.url.path == '/notes/me') {
+      if (r.url.servicePath == '/notes/me') {
         return json({
           'notes': [
             {'id': realNew, 'title': 'Local', 'version': 1},
@@ -189,10 +187,7 @@ void main() {
     calls.clear();
     await tapSync(t);
     await waitIdle(t);
-    expect(
-      calls.where((c) => c == 'POST /notes').length,
-      1,
-    );
+    expect(calls.where((c) => c == 'POST /notes').length, 1);
     // Ningún PATCH (ni a tempId ni a UUID): sin cambios que empujar.
     expect(calls.where((c) => c.startsWith('PATCH')), isEmpty);
     expect(find.text('Editar'), findsNothing);
@@ -216,14 +211,15 @@ void main() {
       PickedNoteFile('foto.png', pngBytes, 'image/png'),
     );
     notesHttpClientOverride = MockClient((r) async {
-      calls.add('${r.method} ${r.url.path}');
-      if (r.method == 'POST' && r.url.path == '/notes/$uuid1/attachments') {
+      calls.add('${r.method} ${r.url.servicePath}');
+      if (r.method == 'POST' &&
+          r.url.servicePath == '/notes/$uuid1/attachments') {
         return json({'attachment_id': attId}, 201);
       }
       if (r.method == 'PATCH') {
         return json({'version': 3, 'title': 'Con pendiente'});
       }
-      if (r.method == 'POST' && r.url.path == '/notes/reconcile') {
+      if (r.method == 'POST' && r.url.servicePath == '/notes/reconcile') {
         return json({
           'removed_notes': 0,
           'removed_attachments': 0,
@@ -231,7 +227,7 @@ void main() {
           'removed_note_ids': [],
         });
       }
-      if (r.url.path == '/notes/me') {
+      if (r.url.servicePath == '/notes/me') {
         return json({
           'notes': [
             {'id': uuid1, 'title': 'Con pendiente', 'version': 3},
@@ -244,14 +240,8 @@ void main() {
     calls.clear();
     await tapSync(t);
     await waitIdle(t);
-    expect(
-      calls.where((c) => c == 'POST /notes/$uuid1/attachments').length,
-      1,
-    );
-    expect(
-      calls.where((c) => c == 'PATCH /notes/$uuid1').length,
-      1,
-    );
+    expect(calls.where((c) => c == 'POST /notes/$uuid1/attachments').length, 1);
+    expect(calls.where((c) => c == 'PATCH /notes/$uuid1').length, 1);
     expect(calls, contains('GET /notes/me'));
     expect(find.text('Editar'), findsNothing);
     await t.pumpWidget(const SizedBox());
@@ -262,11 +252,11 @@ void main() {
     final calls = <String>[];
     final db = await seedDb([note(id: tempId, title: 'Falla')]);
     notesHttpClientOverride = MockClient((r) async {
-      calls.add('${r.method} ${r.url.path}');
-      if (r.method == 'POST' && r.url.path == '/notes') {
+      calls.add('${r.method} ${r.url.servicePath}');
+      if (r.method == 'POST' && r.url.servicePath == '/notes') {
         return json({}, 500);
       }
-      if (r.method == 'POST' && r.url.path == '/notes/reconcile') {
+      if (r.method == 'POST' && r.url.servicePath == '/notes/reconcile') {
         return json({
           'removed_notes': 0,
           'removed_attachments': 0,
@@ -274,7 +264,7 @@ void main() {
           'removed_note_ids': [],
         });
       }
-      if (r.url.path == '/notes/me') {
+      if (r.url.servicePath == '/notes/me') {
         return json({'notes': []});
       }
       return json({}, 404);
@@ -295,13 +285,13 @@ void main() {
     final calls = <String>[];
     final db = await seedDb([note(id: tempId, title: 'Doble')]);
     notesHttpClientOverride = MockClient((r) async {
-      calls.add('${r.method} ${r.url.path}');
-      if (r.method == 'POST' && r.url.path == '/notes') {
+      calls.add('${r.method} ${r.url.servicePath}');
+      if (r.method == 'POST' && r.url.servicePath == '/notes') {
         // Retraso virtual: segunda pulsación cae con el sync en curso.
         await Future.delayed(const Duration(seconds: 2));
         return json({'note_id': realNew, 'version': 1}, 201);
       }
-      if (r.url.path == '/notes/$realNew') {
+      if (r.url.servicePath == '/notes/$realNew') {
         return json({
           'id': realNew,
           'title': 'Doble',
@@ -311,7 +301,7 @@ void main() {
           'attachments': [],
         });
       }
-      if (r.method == 'POST' && r.url.path == '/notes/reconcile') {
+      if (r.method == 'POST' && r.url.servicePath == '/notes/reconcile') {
         return json({
           'removed_notes': 0,
           'removed_attachments': 0,
@@ -319,7 +309,7 @@ void main() {
           'removed_note_ids': [],
         });
       }
-      if (r.url.path == '/notes/me') {
+      if (r.url.servicePath == '/notes/me') {
         return json({
           'notes': [
             {'id': realNew, 'title': 'Doble', 'version': 1},
@@ -333,15 +323,10 @@ void main() {
     await tapSync(t);
     // Segunda pulsación con el sync en curso: el botón muestra
     // SINCRONIZANDO… y está deshabilitado (onPressed null) → no-op.
-    await t.tap(
-      find.widgetWithText(NeobrutalistButton, 'SINCRONIZANDO…'),
-    );
+    await t.tap(find.widgetWithText(NeobrutalistButton, 'SINCRONIZANDO…'));
     await t.pump();
     await waitIdle(t);
-    expect(
-      calls.where((c) => c == 'POST /notes').length,
-      1,
-    );
+    expect(calls.where((c) => c == 'POST /notes').length, 1);
     await t.pumpWidget(const SizedBox());
   });
 }

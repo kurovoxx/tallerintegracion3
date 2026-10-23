@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:drift/drift.dart';
 
 import 'app_database.dart';
@@ -22,6 +23,7 @@ class LocalNotesRepository {
             visibility: Value(note.visibility),
             updatedAt: Value(note.updatedAt),
             ownerUserId: Value(note.ownerUserId),
+            needsSync: Value(note.needsSync),
             // null = "no tocar": una edición normal no debe borrar una clave de
             // creación pendiente ya persistida. La limpieza explícita se hace
             // con clearPendingCreate().
@@ -33,6 +35,11 @@ class LocalNotesRepository {
                 : Value(note.createSnapshot),
           ),
         );
+    if (!note.needsSync && !note.content.contains('attachment-pending://')) {
+      await (db.delete(
+        db.pendingNoteAttachments,
+      )..where((t) => t.noteId.equals(note.id))).go();
+    }
   }
 
   /// Persiste la clave de idempotencia y el snapshot del payload original de la
@@ -79,6 +86,17 @@ class LocalNotesRepository {
       final temp = await getNoteById(tempId);
       if (temp == null) return null;
       final existing = await getNoteById(realId);
+      var edited = temp.needsSync;
+      try {
+        final original = jsonDecode(temp.createSnapshot ?? '{}') as Map;
+        edited =
+            edited ||
+            original['title'] != temp.title ||
+            original['content'] != temp.content ||
+            original['visibility'] != temp.visibility;
+      } catch (_) {
+        edited = true;
+      }
       final promoted = LocalNote(
         id: realId,
         version: version ?? existing?.version ?? temp.version,
@@ -87,7 +105,11 @@ class LocalNotesRepository {
         visibility: temp.visibility,
         updatedAt: temp.updatedAt,
         ownerUserId: temp.ownerUserId ?? existing?.ownerUserId,
+        needsSync: edited,
       );
+      await (db.update(db.pendingNoteAttachments)
+            ..where((t) => t.noteId.equals(tempId)))
+          .write(PendingNoteAttachmentsCompanion(noteId: Value(realId)));
       await (db.delete(db.localNotes)..where((t) => t.id.equals(tempId))).go();
       await db
           .into(db.localNotes)
@@ -100,6 +122,7 @@ class LocalNotesRepository {
               visibility: Value(promoted.visibility),
               updatedAt: Value(promoted.updatedAt),
               ownerUserId: Value(promoted.ownerUserId),
+              needsSync: Value(promoted.needsSync),
               createKey: const Value(null),
               createSnapshot: const Value(null),
             ),
@@ -180,7 +203,7 @@ class LocalNotesRepository {
       final rows = await db
           .customSelect(
             '''
-        SELECT n.id, n.title, n.content, n.visibility, n.updated_at, n.owner_user_id, n.version,
+        SELECT n.id, n.title, n.content, n.visibility, n.updated_at, n.owner_user_id, n.version, n.needs_sync,
                n.create_key, n.create_snapshot,
                bm25(local_notes_fts, 2.0, 1.0) AS score
         FROM local_notes n
@@ -204,6 +227,7 @@ class LocalNotesRepository {
           ownerUserId: row.readNullable<String>('owner_user_id'),
           createKey: row.readNullable<String>('create_key'),
           createSnapshot: row.readNullable<String>('create_snapshot'),
+          needsSync: row.read<bool>('needs_sync'),
         );
       }).toList();
     } catch (e) {
@@ -239,17 +263,141 @@ class LocalNotesRepository {
   /// Elimina una nota por id (útil para sincronización).
   /// Opera sobre `local_notes`; el trigger AFTER DELETE limpia el índice FTS.
   Future<void> deleteNote(String id) async {
-    await (db.delete(db.localNotes)..where((t) => t.id.equals(id))).go();
+    await db.transaction(() async {
+      await (db.delete(
+        db.pendingNoteAttachments,
+      )..where((t) => t.noteId.equals(id))).go();
+      await (db.delete(db.localNotes)..where((t) => t.id.equals(id))).go();
+    });
+  }
+
+  /// Tope por archivo pendiente: el mismo que acepta el backend (10 MB).
+  static const int maxPendingAttachmentBytes = 10 * 1024 * 1024;
+
+  /// Tope total de bytes pendientes por cuenta en SQLite. Evita que una sesión
+  /// offline larga haga crecer la base sin límite.
+  static const int maxPendingBytesPerOwner = 100 * 1024 * 1024;
+
+  /// Bytes de adjuntos pendientes ya guardados para [ownerId].
+  Future<int> pendingAttachmentBytes(String? ownerId) async {
+    final row = await db
+        .customSelect(
+          'SELECT COALESCE(SUM(length(bytes)), 0) AS total '
+          'FROM pending_note_attachments WHERE owner_user_id IS ?',
+          variables: [Variable<String>(ownerId)],
+          readsFrom: {db.pendingNoteAttachments},
+        )
+        .getSingle();
+    return row.read<int>('total');
+  }
+
+  /// true si [incomingBytes] más lo ya pendiente cabe en la cuota del dueño.
+  Future<bool> canStorePendingAttachments(
+    String? ownerId,
+    Iterable<int> incomingBytes,
+  ) async {
+    var incoming = 0;
+    for (final size in incomingBytes) {
+      if (size > maxPendingAttachmentBytes) return false;
+      incoming += size;
+    }
+    if (incoming == 0) return true;
+    return await pendingAttachmentBytes(ownerId) + incoming <=
+        maxPendingBytesPerOwner;
+  }
+
+  /// Persiste los bytes de un adjunto seleccionado antes de que la nota exista
+  /// en el backend, para que sobreviva a un reinicio. Rechaza archivos sobre
+  /// [maxPendingAttachmentBytes] y escrituras que superen la cuota por dueño.
+  Future<void> savePendingAttachment({
+    required String placeholder,
+    required String noteId,
+    required String? ownerId,
+    required String fileName,
+    required String mime,
+    required Uint8List bytes,
+  }) async {
+    if (bytes.length > maxPendingAttachmentBytes) {
+      throw ArgumentError.value(
+        bytes.length,
+        'bytes',
+        'El adjunto supera el límite de 10 MB',
+      );
+    }
+    final existing = await (db.select(
+      db.pendingNoteAttachments,
+    )..where((t) => t.placeholder.equals(placeholder))).getSingleOrNull();
+    final already = await pendingAttachmentBytes(ownerId);
+    final replaced = existing?.ownerUserId == ownerId
+        ? (existing?.bytes.length ?? 0)
+        : 0;
+    if (already - replaced + bytes.length > maxPendingBytesPerOwner) {
+      throw StateError('Cuota de adjuntos offline excedida');
+    }
+    await db
+        .into(db.pendingNoteAttachments)
+        .insertOnConflictUpdate(
+          PendingNoteAttachmentsCompanion.insert(
+            placeholder: placeholder,
+            noteId: noteId,
+            ownerUserId: Value(ownerId),
+            fileName: fileName,
+            mime: mime,
+            bytes: bytes,
+          ),
+        );
+  }
+
+  /// Adjuntos pendientes de una nota (diagnóstico y tests de integridad).
+  Future<List<PendingNoteAttachment>> pendingAttachmentsForNote(String noteId) {
+    return (db.select(
+      db.pendingNoteAttachments,
+    )..where((t) => t.noteId.equals(noteId))).get();
+  }
+
+  Future<PendingNoteAttachment?> pendingAttachment(
+    String placeholder,
+    String? ownerId,
+  ) {
+    return (db.select(db.pendingNoteAttachments)..where(
+          (t) =>
+              t.placeholder.equals(placeholder) &
+              (ownerId == null
+                  ? t.ownerUserId.isNull()
+                  : t.ownerUserId.equals(ownerId)),
+        ))
+        .getSingleOrNull();
+  }
+
+  Future<void> recordAttachmentUpload(
+    String placeholder,
+    String attachmentId,
+  ) async {
+    await (db.update(
+      db.pendingNoteAttachments,
+    )..where((t) => t.placeholder.equals(placeholder))).write(
+      PendingNoteAttachmentsCompanion(uploadedId: Value(attachmentId)),
+    );
+  }
+
+  Future<void> removePendingAttachment(String placeholder) async {
+    await (db.delete(
+      db.pendingNoteAttachments,
+    )..where((t) => t.placeholder.equals(placeholder))).go();
   }
 
   /// Limpia todo (para tests o logout).
   /// Opera sobre `local_notes`; los triggers mantienen el índice consistente.
   Future<void> clearAll() async {
+    await db.delete(db.pendingNoteAttachments).go();
     await db.delete(db.localNotes).go();
   }
 
   /// Limpia solo las filas de un dueño (logout selectivo).
   Future<void> clearOwner(String ownerId) async {
+    await (db.delete(
+      db.pendingNoteAttachments,
+    )..where((t) => t.ownerUserId.equals(ownerId))).go();
     await (db.delete(
       db.localNotes,
     )..where((t) => t.ownerUserId.equals(ownerId))).go();

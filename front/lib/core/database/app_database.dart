@@ -24,6 +24,7 @@ class LocalNotes extends Table {
   // para reutilizarse tras reiniciar y evitar duplicados en PG/Drive.
   TextColumn get createKey => text().nullable()();
   TextColumn get createSnapshot => text().nullable()();
+  BoolColumn get needsSync => boolean().withDefault(const Constant(false))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -40,12 +41,26 @@ class NoteTombstones extends Table {
   // true = el borrado remoto aún no se confirmó (reintentable). false = el
   // borrado remoto ya obtuvo 200/204/404; se conserva como defensa contra
   // resurrecciones hasta que el sync deje de devolver el id.
-  BoolColumn get remotePending =>
-      boolean().withDefault(const Constant(true))();
+  BoolColumn get remotePending => boolean().withDefault(const Constant(true))();
   TextColumn get lastError => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};
+}
+
+// Bytes seleccionados antes de crear remoto. El recibo uploadedId evita volver
+// a subir si el PATCH del Markdown falla o la app se reinicia después del upload.
+class PendingNoteAttachments extends Table {
+  TextColumn get placeholder => text()();
+  TextColumn get noteId => text()();
+  TextColumn get ownerUserId => text().nullable()();
+  TextColumn get fileName => text()();
+  TextColumn get mime => text()();
+  BlobColumn get bytes => blob()();
+  TextColumn get uploadedId => text().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {placeholder};
 }
 
 // Tabla virtual FTS5 para búsqueda offline instantánea por título y contenido.
@@ -73,14 +88,16 @@ class LocalNotesFts extends Table {
   // Para FTS5, Drift requiere definir qué columnas existen; no necesitamos PK.
 }
 
-@DriftDatabase(tables: [LocalNotes, LocalNotesFts, NoteTombstones])
+@DriftDatabase(
+  tables: [LocalNotes, LocalNotesFts, NoteTombstones, PendingNoteAttachments],
+)
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
   AppDatabase.forTesting(super.e);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   /// Bandera de disponibilidad del motor FTS5.
   /// true si la tabla virtual y sus triggers se crearon correctamente
@@ -114,6 +131,10 @@ class AppDatabase extends _$AppDatabase {
       await _createTableIfMissing(
         'note_tombstones',
         () => m.createTable(noteTombstones),
+      );
+      await _createTableIfMissing(
+        'pending_note_attachments',
+        () => m.createTable(pendingNoteAttachments),
       );
 
       // Verificar que local_notes_fts sea realmente una tabla virtual FTS5
@@ -205,6 +226,18 @@ END
         await _createTableIfMissing(
           'note_tombstones',
           () => m.createTable(noteTombstones),
+        );
+      }
+      if (from < 5) {
+        await _addColumnIfMissing(
+          m,
+          'local_notes',
+          'needs_sync',
+          () => m.addColumn(localNotes, localNotes.needsSync),
+        );
+        await _createTableIfMissing(
+          'pending_note_attachments',
+          () => m.createTable(pendingNoteAttachments),
         );
       }
     },

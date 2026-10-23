@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -86,6 +87,7 @@ void main() {
       final repo = LocalNotesRepository(db);
       await repo.upsertNote(
         LocalNote(
+          needsSync: false,
           id: tempId,
           title: 'Idem retry',
           content: 'cuerpo v1',
@@ -100,7 +102,7 @@ void main() {
       var version = 1;
       var postCount = 0;
       notesHttpClientOverride = MockClient((r) async {
-        if (r.method == 'POST' && r.url.path == '/notes') {
+        if (r.method == 'POST' && r.url.servicePath == '/notes') {
           postCount++;
           postKeys.add(r.headers['X-Idempotency-Key'] ?? '');
           final body = jsonDecode(r.body) as Map<String, dynamic>;
@@ -126,7 +128,7 @@ void main() {
           remote[realId]!['version'] = version;
           return json({'version': version, 'title': body['title']});
         }
-        if (r.url.path == '/notes/me') {
+        if (r.url.servicePath == '/notes/me') {
           return json({
             'notes': [
               for (final n in remote.values)
@@ -134,14 +136,14 @@ void main() {
             ],
           });
         }
-        if (r.url.path == '/notes/reconcile') {
+        if (r.url.servicePath == '/notes/reconcile') {
           return json({
             'removed_notes': 0,
             'removed_attachments': 0,
             'pending': 0,
           });
         }
-        if (r.url.path == '/notes/$realId') return json(remote[realId]!);
+        if (r.url.servicePath == '/notes/$realId') return json(remote[realId]!);
         return json({}, 404);
       });
 
@@ -193,6 +195,7 @@ void main() {
       final repo = LocalNotesRepository(db);
       await repo.upsertNote(
         LocalNote(
+          needsSync: false,
           id: tempId,
           title: 'Edición pendiente',
           content: 'contenido original',
@@ -207,7 +210,7 @@ void main() {
       var createSucceeded = false;
       final remote = <String, Map<String, dynamic>>{};
       notesHttpClientOverride = MockClient((r) async {
-        if (r.method == 'POST' && r.url.path == '/notes') {
+        if (r.method == 'POST' && r.url.servicePath == '/notes') {
           final body = jsonDecode(r.body) as Map<String, dynamic>;
           postBodies.add(body);
           if (!createSucceeded) {
@@ -231,7 +234,7 @@ void main() {
           remote[realId]!['version'] = 2;
           return json({'version': 2, 'title': body['title']});
         }
-        if (r.url.path == '/notes/me') {
+        if (r.url.servicePath == '/notes/me') {
           return json({
             'notes': [
               for (final n in remote.values)
@@ -239,14 +242,14 @@ void main() {
             ],
           });
         }
-        if (r.url.path == '/notes/reconcile') {
+        if (r.url.servicePath == '/notes/reconcile') {
           return json({
             'removed_notes': 0,
             'removed_attachments': 0,
             'pending': 0,
           });
         }
-        if (r.url.path == '/notes/$realId') return json(remote[realId]!);
+        if (r.url.servicePath == '/notes/$realId') return json(remote[realId]!);
         return json({}, 404);
       });
 
@@ -334,6 +337,7 @@ void main() {
     final repo = LocalNotesRepository(db);
     await repo.upsertNote(
       LocalNote(
+        needsSync: false,
         id: realId,
         title: 'Borrada offline',
         content: 'cuerpo',
@@ -347,13 +351,13 @@ void main() {
     var offline = true;
     var deleteCalls = 0;
     notesHttpClientOverride = MockClient((r) async {
-      if (r.method == 'DELETE' && r.url.path == '/notes/$realId') {
+      if (r.method == 'DELETE' && r.url.servicePath == '/notes/$realId') {
         deleteCalls++;
         if (offline) throw Exception('sin conexión');
         exists = false;
         return http.Response('', 204);
       }
-      if (r.url.path == '/notes/me') {
+      if (r.url.servicePath == '/notes/me') {
         return json({
           'notes': exists
               ? [
@@ -362,14 +366,14 @@ void main() {
               : [],
         });
       }
-      if (r.url.path == '/notes/reconcile') {
+      if (r.url.servicePath == '/notes/reconcile') {
         return json({
           'removed_notes': 0,
           'removed_attachments': 0,
           'pending': 0,
         });
       }
-      if (r.url.path == '/notes/$realId') {
+      if (r.url.servicePath == '/notes/$realId') {
         return json({
           'id': realId,
           'title': 'Borrada offline',

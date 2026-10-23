@@ -1,6 +1,6 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:file_selector/file_selector.dart';
 import 'package:taller_integracion_front/features/notes/note_file_picker.dart';
 
@@ -386,7 +386,7 @@ void main() {
       });
       notesHttpClientOverride = MockClient((request) async {
         expect(request.headers['Authorization'], 'Bearer jwt-private-note');
-        if (request.url.path == '/notes/me') {
+        if (request.url.servicePath == '/notes/me') {
           return http.Response(
             jsonEncode({
               'notes': [
@@ -401,7 +401,7 @@ void main() {
             headers: {'content-type': 'application/json'},
           );
         }
-        if (request.url.path == '/notes/$noteId') {
+        if (request.url.servicePath == '/notes/$noteId') {
           return http.Response(
             jsonEncode({
               'content': '![Diagrama]($driveUrl?usp=drivesdk)',
@@ -419,8 +419,8 @@ void main() {
             headers: {'content-type': 'application/json'},
           );
         }
-        if (request.url.path.endsWith('/content')) {
-          contentPaths.add(request.url.path);
+        if (request.url.servicePath.endsWith('/content')) {
+          contentPaths.add(request.url.servicePath);
           return http.Response.bytes(
             png,
             200,
@@ -470,7 +470,8 @@ void main() {
       const url =
           'https://drive.google.com/file/d/private-image/view?usp=drivesdk';
       notesHttpClientOverride = MockClient((request) async {
-        if (request.method == 'POST' && request.url.path == '/notes/upload') {
+        if (request.method == 'POST' &&
+            request.url.servicePath == '/notes/upload') {
           return http.Response(
             jsonEncode({
               'external_file_id': 'private-image',
@@ -542,12 +543,12 @@ void main() {
         final paths = <String>[];
         var created = false;
         notesHttpClientOverride = MockClient((r) async {
-          paths.add('${r.method} ${r.url.path}');
-          if (r.method == 'POST' && r.url.path == '/notes') {
+          paths.add('${r.method} ${r.url.servicePath}');
+          if (r.method == 'POST' && r.url.servicePath == '/notes') {
             created = true;
             return http.Response('{"note_id":"$id"}', 201);
           }
-          if (r.url.path == '/notes/$id/attachments') {
+          if (r.url.servicePath == '/notes/$id/attachments') {
             expect(created, isTrue);
             attachmentAttempts++;
             if (refresh && attachmentAttempts == 1) {
@@ -622,7 +623,7 @@ void main() {
           );
         }
         expect(
-          paths.where((p) => RegExp(r'/notes/\d{13}/attachments').hasMatch(p)),
+          paths.where((p) => RegExp(r'/notes/\d+/attachments').hasMatch(p)),
           isEmpty,
         );
         expect(tester.takeException(), isNull);

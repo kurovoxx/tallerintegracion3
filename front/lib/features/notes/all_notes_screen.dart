@@ -64,8 +64,15 @@ void debugClearPendingAttachments() {
 /// disparadores de creación (diálogo, sincronización automática y REFRESCAR).
 /// Una segunda petición con la misma clave se une al Future existente en vez
 /// de lanzar otro POST que el backend respondería con 409 "en progreso".
-final Map<String, Future<String?>> _inflightCreates =
-    <String, Future<String?>>{};
+final Map<(String?, int, String, String), Future<String?>> _inflightCreates =
+    {};
+int _lastTempNoteId = 0;
+
+String _newTempNoteId() {
+  final now = DateTime.now().microsecondsSinceEpoch;
+  _lastTempNoteId = now > _lastTempNoteId ? now : _lastTempNoteId + 1;
+  return '$_lastTempNoteId';
+}
 
 /// Límite de páginas de GET /notes/me por sincronización (50 × 40 = 2000).
 const int _kMaxNotesPages = 40;
@@ -136,6 +143,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   /// vuelo escriba filas del usuario anterior si la sesión cambia mientras
   /// la operación sigue viva (aislamiento entre usuarios).
   late final String? _sessionOwnerId;
+  late final int _sessionRevision;
   bool _ownsDatabase = false;
 
   final TextEditingController _searchController = TextEditingController();
@@ -217,6 +225,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     final now = DateTime.now();
     return [
       LocalNote(
+        needsSync: false,
         id: '1',
         title: 'Cálculo - Límites y derivadas',
         content:
@@ -225,6 +234,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         updatedAt: now,
       ),
       LocalNote(
+        needsSync: false,
         id: '2',
         title: 'Estructuras de Datos - Árboles',
         content:
@@ -233,6 +243,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         updatedAt: now.subtract(const Duration(hours: 2)),
       ),
       LocalNote(
+        needsSync: false,
         id: '3',
         title: 'Bases de Datos - SQL Joins',
         content:
@@ -241,6 +252,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         updatedAt: now.subtract(const Duration(days: 1)),
       ),
       LocalNote(
+        needsSync: false,
         id: '4',
         title: 'Redes - Modelo OSI',
         content:
@@ -249,6 +261,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         updatedAt: now.subtract(const Duration(days: 2)),
       ),
       LocalNote(
+        needsSync: false,
         id: '5',
         title: 'Frontend - NestJS MVC',
         content:
@@ -257,6 +270,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         updatedAt: now.subtract(const Duration(days: 3)),
       ),
       LocalNote(
+        needsSync: false,
         id: '6',
         title: 'Cálculo - Integrales dobles',
         content:
@@ -265,6 +279,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         updatedAt: now.subtract(const Duration(days: 4)),
       ),
       LocalNote(
+        needsSync: false,
         id: '7',
         title: 'Nota con Adjuntos de Prueba (Conejita y PDF)',
         content:
@@ -279,6 +294,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   void initState() {
     super.initState();
     _sessionOwnerId = SessionManager.currentUserId;
+    _sessionRevision = SessionManager.revision.value;
     _subjectFilter = widget.initialSubjectCode?.trim().isNotEmpty == true
         ? widget.initialSubjectCode!.trim()
         : null;
@@ -479,16 +495,26 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   /// abrió la pantalla. Si cambió (logout/login de otra cuenta), ninguna
   /// operación en vuelo debe escribir filas: se sellarían con el dueño
   /// anterior y mezclarían notas entre cuentas.
-  bool _sessionStillOwner() => SessionManager.currentUserId == _sessionOwnerId;
+  bool _sessionStillOwner() =>
+      SessionManager.currentUserId == _sessionOwnerId &&
+      SessionManager.revision.value == _sessionRevision;
+
+  (String?, int, String, String) _inflightKey(String key) =>
+      (_sessionOwnerId, _sessionRevision, notesBaseUrl, key);
 
   /// GET /notes/me paginado con `next_cursor`. Antes solo se pedía la primera
   /// página (limit=50) y las notas más antiguas nunca llegaban a SQLite.
   /// Devuelve null si alguna página falla (no se hace convergencia parcial).
   Future<({List<Map<String, dynamic>> notes, bool complete})?>
   _fetchAllMyNotes() async {
-    final out = <Map<String, dynamic>>[];
+    final out = <String, Map<String, dynamic>>{};
+    final seenCursors = <String>{};
     var cursor = '';
     for (var page = 0; page < _kMaxNotesPages; page++) {
+      if (!_sessionStillOwner()) return null;
+      if (!seenCursors.add(cursor)) {
+        return (notes: out.values.toList(), complete: false);
+      }
       final uri = Uri.parse('$notesBaseUrl/notes/me').replace(
         queryParameters: <String, String>{
           'limit': '50',
@@ -517,14 +543,16 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       final data = jsonDecode(utf8.decode(res.bodyBytes));
       final List notes = (data is Map ? data['notes'] : null) ?? const [];
       for (final n in notes) {
-        if (n is Map<String, dynamic>) out.add(n);
+        if (n is Map<String, dynamic> && n['id'] is String) {
+          out[n['id'] as String] = n;
+        }
       }
       final next = data is Map ? data['next_cursor'] : null;
       cursor = next is String ? next.trim() : '';
-      if (cursor.isEmpty) return (notes: out, complete: true);
+      if (cursor.isEmpty) return (notes: out.values.toList(), complete: true);
     }
     // Tope de páginas alcanzado: se fusiona lo leído sin converger tombstones.
-    return (notes: out, complete: false);
+    return (notes: out.values.toList(), complete: false);
   }
 
   Future<void> _syncFromBackendImpl() async {
@@ -575,11 +603,20 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             remoteIds.add(remoteId);
             // No resucitar una nota borrada localmente (tombstone §P3): el
             // backend puede seguir devolviéndola hasta confirmar el DELETE.
-            if (_deletedNoteIds.contains(remoteId)) continue;
+            if (await _isTombstoned(remoteId)) continue;
+            // El listado se pidió antes de resolver creaciones/ediciones. Una
+            // respuesta antigua no puede rebajar una versión ya confirmada.
+            final remoteVersion = (n['version'] as num?)?.toInt();
+            if (cached[remoteId]?.needsSync == true ||
+                (cached[remoteId]?.version ?? 0) > (remoteVersion ?? 0)) {
+              continue;
+            }
+            if (!_sessionStillOwner()) return;
             _ownedNoteIds.add(remoteId);
             await _repo!.upsertNote(
               _stampOwner(
                 LocalNote(
+                  needsSync: false,
                   id: remoteId,
                   version: (n['version'] as num?)?.toInt(),
                   title: n['title'] as String? ?? 'Sin título',
@@ -608,7 +645,9 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             for (final t in tombstones) {
               if (t.remotePending || remoteIds.contains(t.id)) continue;
               if (!_isRemoteNote(t.id) &&
-                  (_inflightCreates.containsKey(_createKeyFor(t.id)) ||
+                  (_inflightCreates.containsKey(
+                        _inflightKey(_createKeyFor(t.id)),
+                      ) ||
                       _pendingNoteSyncs.containsKey(t.id))) {
                 continue;
               }
@@ -667,6 +706,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       }
       await _pushPendingCreate(note);
     }
+    // Una creación ya promovida puede tener un PATCH pendiente tras reiniciar.
+    for (final note in local.where((n) => _isRemoteNote(n.id) && n.needsSync)) {
+      if (!_sessionStillOwner() || await _isTombstoned(note.id)) continue;
+      if (_pendingSyncFor(note.id) != null) continue;
+      await _retryPendingEdit(note);
+    }
   }
 
   /// Crea en el backend (idempotente) una nota local con id temporal, la
@@ -714,17 +759,20 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     );
     // PATCH si cambiaron los adjuntos O si el contenido/título vigentes
     // difieren del snapshot con el que se creó (edición con CREATE pendiente).
-    if (newContent != intent.content || remoteNote.title != intent.title) {
+    if (newContent != intent.content ||
+        remoteNote.title != intent.title ||
+        remoteNote.needsSync) {
       final saved = await _patchNoteRemote(
         remoteNote,
         remoteNote.title,
-        newContent,
+        _withoutPendingAttachments(newContent),
       );
       if (saved.ok) {
         await _applyLocalUpsert(
           remoteNote.copyWith(
             content: newContent,
             version: Value(_versions[realId]),
+            needsSync: newContent.contains('attachment-pending://'),
           ),
         );
       }
@@ -734,6 +782,31 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       linked: uploadedIds.length,
       failed: failedNames.length,
     );
+  }
+
+  Future<bool> _retryPendingEdit(LocalNote note) async {
+    final uploaded = <String>[];
+    final failures = <String>[];
+    final content = await _uploadPendingAttachmentsToNote(
+      note,
+      note.id,
+      uploaded,
+      failures,
+    );
+    final result = await _patchNoteRemote(
+      note,
+      note.title,
+      _withoutPendingAttachments(content),
+    );
+    if (!_sessionStillOwner()) return false;
+    await _applyLocalUpsert(
+      note.copyWith(
+        content: content,
+        version: Value(result.ok ? _versions[note.id] : note.version),
+        needsSync: !result.ok || content.contains('attachment-pending://'),
+      ),
+    );
+    return result.ok && failures.isEmpty;
   }
 
   /// SnackBar neobrutalista reutilizable: borde negro, esquinas rectas y texto
@@ -869,7 +942,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           }
           continue;
         }
-        final needsRetry = _noteSyncState[note.id] == _NoteSyncState.error;
+        final needsRetry =
+            note.needsSync || _noteSyncState[note.id] == _NoteSyncState.error;
         final hasPendingAttachments = note.content.contains(
           'attachment-pending://',
         );
@@ -884,13 +958,18 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         );
         linkedAttachments += uploadedIds.length;
         failed += failedNames.length;
-        final res = await _patchNoteRemote(note, note.title, newContent);
+        final res = await _patchNoteRemote(
+          note,
+          note.title,
+          _withoutPendingAttachments(newContent),
+        );
         if (res.ok) {
-          if (newContent != note.content) {
+          if (newContent != note.content || note.needsSync) {
             await _applyLocalUpsert(
               note.copyWith(
                 content: newContent,
                 version: Value(_versions[note.id]),
+                needsSync: newContent.contains('attachment-pending://'),
               ),
             );
           }
@@ -1013,8 +1092,21 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     for (final match in matches) {
       final url = match.group(1);
       if (url == null) continue;
-      final file = _pendingAttachmentFiles[url];
-      if (file == null) continue;
+      if (!_sessionStillOwner()) break;
+      final stored = await _repo?.pendingAttachment(url, _ownerId());
+      final file = stored == null
+          ? _pendingAttachmentFiles[url]
+          : PickedNoteFile(stored.fileName, stored.bytes, stored.mime);
+      if (file == null) {
+        failedNames.add(url);
+        continue; // Conservar referencia; nunca borrar silenciosamente el adjunto.
+      }
+      final previousId = stored?.uploadedId;
+      if (previousId != null) {
+        content = content.replaceAll('($url)', '(attachment:$previousId)');
+        uploadedIds.add(previousId);
+        continue;
+      }
       final result = await _uploadAttachmentBinary(
         noteId: noteId,
         bytes: file.bytes,
@@ -1022,17 +1114,21 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         isInline: file.isImage,
       );
       if (result.ok && result.attachmentId != null) {
+        await _repo?.recordAttachmentUpload(url, result.attachmentId!);
+        _pendingAttachmentFiles.remove(url);
         content = content.replaceAll(
           '($url)',
           '(attachment:${result.attachmentId})',
         );
         uploadedIds.add(result.attachmentId!);
-        _pendingAttachmentFiles.remove(url);
       } else {
         failedNames.add(file.name);
       }
     }
-    return _withoutPendingAttachments(content);
+    if (content != note.content) {
+      await _applyLocalUpsert(note.copyWith(content: content, needsSync: true));
+    }
+    return content;
   }
 
   /// Intento de creación remota. Devuelve el UUID real del backend (201/200) o
@@ -1063,7 +1159,9 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         idempotencyKey: null,
       );
     }
-    final inflight = _inflightCreates[key];
+    if (!_sessionStillOwner()) return Future.value(null);
+    final scopedKey = _inflightKey(key);
+    final inflight = _inflightCreates[scopedKey];
     if (inflight != null) return inflight;
     final future = _postCreate(
       title: title,
@@ -1072,10 +1170,10 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       subjectId: subjectId,
       idempotencyKey: key,
     );
-    _inflightCreates[key] = future;
+    _inflightCreates[scopedKey] = future;
     return future.whenComplete(() {
-      if (identical(_inflightCreates[key], future)) {
-        _inflightCreates.remove(key);
+      if (identical(_inflightCreates[scopedKey], future)) {
+        _inflightCreates.remove(scopedKey);
       }
     });
   }
@@ -1095,10 +1193,6 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       if (subjectId != null && subjectId.trim().isNotEmpty)
         'subject_id': subjectId.trim(),
     };
-    final headers = _authHeaders();
-    if (idempotencyKey != null && idempotencyKey.isNotEmpty) {
-      headers['X-Idempotency-Key'] = idempotencyKey;
-    }
     debugPrint(
       '[Notes] POST titleChars=${title.length} contentChars=${content.length} '
       'idem=${idempotencyKey != null && idempotencyKey.isNotEmpty}',
@@ -1107,7 +1201,15 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       final res = await AuthedHttp.run(
         () => _withNotesClient(
           (client) => client
-              .post(Uri.parse(url), headers: headers, body: jsonEncode(body))
+              .post(
+                Uri.parse(url),
+                headers: {
+                  ..._authHeaders(),
+                  if (idempotencyKey != null && idempotencyKey.isNotEmpty)
+                    'X-Idempotency-Key': idempotencyKey,
+                },
+                body: jsonEncode(body),
+              )
               .timeout(_kCreateTimeout),
         ),
       );
@@ -1299,6 +1401,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       visibility: current.visibility,
       updatedAt: current.updatedAt,
       ownerUserId: current.ownerUserId,
+      needsSync: current.needsSync,
     );
     _latestNotes[realId] = renamed;
     void migrate() {
@@ -1349,6 +1452,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   /// `remotePending` y REFRESCAR lo reintenta; mientras tanto el tombstone
   /// impide que GET /notes/me la vuelva a mostrar.
   Future<void> _forwardDeleteToRemote(String tempId, String realId) async {
+    if (!_sessionStillOwner()) return;
     _deletedNoteIds.add(realId);
     _ownedNoteIds.remove(realId);
     _remoteIds.remove(tempId);
@@ -1434,6 +1538,9 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   }
 
   Map<String, String> _authHeaders() {
+    if (!_sessionStillOwner()) {
+      throw StateError('La sesión de esta pantalla cambió');
+    }
     final headers = <String, String>{'Content-Type': 'application/json'};
     final token = SessionManager.token;
     if (token != null && token.isNotEmpty) {
@@ -1532,6 +1639,16 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         final data =
             jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
         final version = (data['version'] as num?)?.toInt();
+        final local = await _repo?.getNoteById(note.id);
+        if (local?.needsSync == true) {
+          // Mantener edición/adjuntos locales mientras falla PATCH. La respuesta
+          // al editor combina metadata remota con el borrador durable.
+          return _RemoteResult(
+            ok: true,
+            status: 200,
+            data: {...data, 'title': local!.title, 'content': local.content},
+          );
+        }
         if (version != null) _versions[note.id] = version;
         await _applyLocalUpsert(
           note.copyWith(
@@ -1817,6 +1934,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     if (remote.ok) {
       await _applyLocalUpsert(
         LocalNote(
+          needsSync: false,
           id: note.id,
           version: _versions[note.id],
           ownerUserId: note.ownerUserId,
@@ -1908,7 +2026,6 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       return const _RemoteResult(ok: true, status: 204);
     }
     final remote = await _deleteNoteRemote(note);
-    if (!mounted) return remote;
     if (remote.ok) {
       await _applyLocalDelete(note);
       if (!mounted) return remote;
@@ -2467,7 +2584,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         onCreate: (title, content, visibility, attachments) async {
           final revision = SessionManager.revision.value;
           final note = LocalNote(
-            id: DateTime.now().millisecondsSinceEpoch.toString(),
+            needsSync: false,
+            id: _newTempNoteId(),
             title: title,
             content: content,
             visibility: visibility,
@@ -2476,6 +2594,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           );
           _noteTags[note.id] = visibility == 'public' ? 'General' : 'Privado';
           final tempId = note.id;
+          var persistedAttachments = false;
           if (_useMemoryFallback) {
             setState(() {
               _memoryFallback.insert(0, note);
@@ -2486,7 +2605,38 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             _applySearch(_currentQuery);
           } else {
             try {
-              await _repo!.upsertNote(note);
+              final toPersist = [
+                for (final a in attachments)
+                  if (a.selectedFile != null && a.fileUrl != null) a,
+              ];
+              // Cuota offline: si no caben, la nota se guarda igual y esos
+              // bytes quedan solo en memoria (se avisa al usuario).
+              persistedAttachments = await _repo!.canStorePendingAttachments(
+                _ownerId(),
+                toPersist.map((a) => a.selectedFile!.bytes.length),
+              );
+              await _db!.transaction(() async {
+                await _repo!.upsertNote(note);
+                if (!persistedAttachments) return;
+                for (final attachment in toPersist) {
+                  final file = attachment.selectedFile!;
+                  await _repo!.savePendingAttachment(
+                    placeholder: attachment.fileUrl!,
+                    noteId: note.id,
+                    ownerId: _ownerId(),
+                    fileName: file.name,
+                    mime: file.mime,
+                    bytes: file.bytes,
+                  );
+                }
+              });
+              if (!persistedAttachments) {
+                _notifySnack(
+                  'No hay espacio offline para guardar estos adjuntos en el '
+                  'equipo; mantén la app abierta hasta que se suban.',
+                  ok: false,
+                );
+              }
               _likesCount[note.id] = 0;
               _isLiked[note.id] = false;
               _isSaved[note.id] = false;
@@ -2508,12 +2658,15 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           _noteSyncState[tempId] = _NoteSyncState.syncing;
           debugPrint('[Notes] CREATE temp=$tempId state=syncing');
           if (mounted) setState(() {});
-          final syncFuture = _completeRemoteCreation(
-            tempId: tempId,
-            note: note,
-            attachments: attachments,
-            revision: revision,
-            subjectId: subjectId,
+          final syncFuture = AppDatabaseManager.instance.guard(
+            () => _completeRemoteCreation(
+              tempId: tempId,
+              note: note,
+              attachments: attachments,
+              revision: revision,
+              subjectId: subjectId,
+              attachmentsPersisted: persistedAttachments,
+            ),
           );
           _pendingNoteSyncs[tempId] = syncFuture;
           unawaited(syncFuture);
@@ -2532,6 +2685,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     required List<_DriveUploadResult> attachments,
     required int revision,
     String? subjectId,
+    bool attachmentsPersisted = false,
   }) async {
     String? resolvedId;
     try {
@@ -2549,82 +2703,64 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         // trasladó el borrado al UUID. Subir adjuntos o hacer PATCH ahora
         // recrearía la fila local de una nota eliminada.
         if (_deletedNoteIds.contains(realId)) return;
-        var finalContent = _latestNotes[realId]?.content ?? note.content;
-        final uploaded = <_DriveUploadResult>[];
-        for (final pending in attachments) {
-          if (revision != SessionManager.revision.value) return;
-          if (pending.selectedFile == null) {
-            // Ya vive en Drive (subido antes de crear la nota): se vincula
-            // por external_file_id (JSON) más abajo. Compat, no flujo normal.
-            uploaded.add(pending);
-            continue;
-          }
-          final file = pending.selectedFile!;
-          // Flujo canónico multipart (Development): el binario va directo a
-          // POST /notes/{uuid}/attachments y la referencia se reescribe con
-          // el attachment_id devuelto. Sin paso por /notes/upload para crear.
-          final result = await _uploadAttachmentBinary(
-            noteId: realId,
-            bytes: file.bytes,
-            fileName: file.name,
-            isInline: file.isImage,
-          );
-          if (revision != SessionManager.revision.value) return;
-          if (result.ok && result.attachmentId != null) {
-            final placeholder = pending.fileUrl;
-            if (placeholder != null && placeholder.isNotEmpty) {
-              finalContent = finalContent.replaceAll(
-                '($placeholder)',
-                '(attachment:${result.attachmentId})',
-              );
-            }
-          } else if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  'La nota se creó, pero no se pudo adjuntar ${file.name}. ${result.message ?? ''}',
-                ),
-              ),
-            );
-          }
-        }
-        final references = await _linkAttachmentsToNote(realId, uploaded);
+        final currentLocal = _latestNotes[realId] ?? note.copyWith(id: realId);
+        final uploadedIds = <String>[];
+        final failedNames = <String>[];
+        var finalContent = await _uploadPendingAttachmentsToNote(
+          currentLocal,
+          realId,
+          uploadedIds,
+          failedNames,
+        );
+        final legacy = attachments
+            .where((a) => a.selectedFile == null)
+            .toList();
+        final references = await _linkAttachmentsToNote(realId, legacy);
         for (final ref in references.entries) {
           finalContent = finalContent.replaceAll(
             '(${ref.key})',
             '(${ref.value})',
           );
         }
-        finalContent = _withoutPendingAttachments(finalContent);
-        if (finalContent != _withoutPendingAttachments(note.content) ||
-            (_latestNotes[realId]?.title ?? note.title) != note.title) {
-          final remoteNote = LocalNote(
-            id: realId,
-            version: _versions[realId],
-            title: _latestNotes[realId]?.title ?? note.title,
-            content: finalContent,
-            visibility: note.visibility,
-            updatedAt: DateTime.now(),
-            ownerUserId: note.ownerUserId,
-          );
+        if (revision != SessionManager.revision.value) return;
+        final remoteNote = currentLocal.copyWith(content: finalContent);
+        var patchOk = true;
+        if (_withoutPendingAttachments(finalContent) !=
+                _withoutPendingAttachments(note.content) ||
+            remoteNote.title != note.title ||
+            remoteNote.needsSync) {
           final saved = await _patchNoteRemote(
             remoteNote,
             remoteNote.title,
-            finalContent,
+            _withoutPendingAttachments(finalContent),
           );
-          if (revision != SessionManager.revision.value) return;
-          await _applyLocalUpsert(
-            remoteNote.copyWith(version: Value(_versions[realId])),
+          patchOk = saved.ok;
+        }
+        if (revision != SessionManager.revision.value) return;
+        final pending =
+            !patchOk || finalContent.contains('attachment-pending://');
+        await _applyLocalUpsert(
+          remoteNote.copyWith(
+            version: Value(_versions[realId]),
+            needsSync: pending,
+          ),
+        );
+        if (pending) {
+          _noteSyncState[realId] = _NoteSyncState.error;
+          _noteSyncState.remove(tempId);
+          final names = failedNames
+              .where((n) => !n.startsWith('attachment-pending://'))
+              .toList();
+          _notifySnack(
+            names.isEmpty
+                ? 'La nota se conservó en este equipo. Hay cambios o adjuntos '
+                      'pendientes de sincronizar.'
+                : 'La nota se creó, pero no se pudo adjuntar '
+                      '${names.join(', ')}. Quedó guardado en este equipo y se '
+                      'reintentará al sincronizar.',
+            ok: false,
           );
-          if (!saved.ok && mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'La nota se creó, pero no se pudo actualizar el contenido de sus adjuntos.',
-                ),
-              ),
-            );
-          }
+          return;
         }
         if (revision != SessionManager.revision.value) return;
         // GET real final: la apertura posterior muestra el estado del
@@ -2648,9 +2784,16 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         setState(() {});
         debugPrint('[Notes] CREATE temp=$tempId state=error');
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             content: Text(
-              'La nota quedó guardada localmente. No se pudieron subir sus archivos; vuelve a seleccionarlos cuando se recupere la conexión.',
+              attachmentsPersisted
+                  // Los bytes ya están en SQLite: pedir que los vuelva a
+                  // seleccionar provocaría adjuntos duplicados.
+                  ? 'La nota y sus archivos quedaron guardados en este equipo; '
+                        'se subirán al recuperar la conexión.'
+                  : 'La nota quedó guardada localmente. No se pudieron subir '
+                        'sus archivos; vuelve a seleccionarlos cuando se '
+                        'recupere la conexión.',
             ),
           ),
         );

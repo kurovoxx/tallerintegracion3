@@ -113,6 +113,21 @@ class $LocalNotesTable extends LocalNotes
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _needsSyncMeta = const VerificationMeta(
+    'needsSync',
+  );
+  @override
+  late final GeneratedColumn<bool> needsSync = GeneratedColumn<bool>(
+    'needs_sync',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("needs_sync" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -124,6 +139,7 @@ class $LocalNotesTable extends LocalNotes
     ownerUserId,
     createKey,
     createSnapshot,
+    needsSync,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -202,6 +218,12 @@ class $LocalNotesTable extends LocalNotes
         ),
       );
     }
+    if (data.containsKey('needs_sync')) {
+      context.handle(
+        _needsSyncMeta,
+        needsSync.isAcceptableOrUnknown(data['needs_sync']!, _needsSyncMeta),
+      );
+    }
     return context;
   }
 
@@ -247,6 +269,10 @@ class $LocalNotesTable extends LocalNotes
         DriftSqlType.string,
         data['${effectivePrefix}create_snapshot'],
       ),
+      needsSync: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}needs_sync'],
+      )!,
     );
   }
 
@@ -266,6 +292,7 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
   final String? ownerUserId;
   final String? createKey;
   final String? createSnapshot;
+  final bool needsSync;
   const LocalNote({
     required this.id,
     required this.title,
@@ -276,6 +303,7 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
     this.ownerUserId,
     this.createKey,
     this.createSnapshot,
+    required this.needsSync,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -297,6 +325,7 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
     if (!nullToAbsent || createSnapshot != null) {
       map['create_snapshot'] = Variable<String>(createSnapshot);
     }
+    map['needs_sync'] = Variable<bool>(needsSync);
     return map;
   }
 
@@ -319,6 +348,7 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
       createSnapshot: createSnapshot == null && nullToAbsent
           ? const Value.absent()
           : Value(createSnapshot),
+      needsSync: Value(needsSync),
     );
   }
 
@@ -337,6 +367,7 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
       ownerUserId: serializer.fromJson<String?>(json['ownerUserId']),
       createKey: serializer.fromJson<String?>(json['createKey']),
       createSnapshot: serializer.fromJson<String?>(json['createSnapshot']),
+      needsSync: serializer.fromJson<bool>(json['needsSync']),
     );
   }
   @override
@@ -352,6 +383,7 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
       'ownerUserId': serializer.toJson<String?>(ownerUserId),
       'createKey': serializer.toJson<String?>(createKey),
       'createSnapshot': serializer.toJson<String?>(createSnapshot),
+      'needsSync': serializer.toJson<bool>(needsSync),
     };
   }
 
@@ -365,6 +397,7 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
     Value<String?> ownerUserId = const Value.absent(),
     Value<String?> createKey = const Value.absent(),
     Value<String?> createSnapshot = const Value.absent(),
+    bool? needsSync,
   }) => LocalNote(
     id: id ?? this.id,
     title: title ?? this.title,
@@ -377,6 +410,7 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
     createSnapshot: createSnapshot.present
         ? createSnapshot.value
         : this.createSnapshot,
+    needsSync: needsSync ?? this.needsSync,
   );
   LocalNote copyWithCompanion(LocalNotesCompanion data) {
     return LocalNote(
@@ -395,6 +429,7 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
       createSnapshot: data.createSnapshot.present
           ? data.createSnapshot.value
           : this.createSnapshot,
+      needsSync: data.needsSync.present ? data.needsSync.value : this.needsSync,
     );
   }
 
@@ -409,7 +444,8 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
           ..write('version: $version, ')
           ..write('ownerUserId: $ownerUserId, ')
           ..write('createKey: $createKey, ')
-          ..write('createSnapshot: $createSnapshot')
+          ..write('createSnapshot: $createSnapshot, ')
+          ..write('needsSync: $needsSync')
           ..write(')'))
         .toString();
   }
@@ -425,6 +461,7 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
     ownerUserId,
     createKey,
     createSnapshot,
+    needsSync,
   );
   @override
   bool operator ==(Object other) =>
@@ -438,7 +475,8 @@ class LocalNote extends DataClass implements Insertable<LocalNote> {
           other.version == this.version &&
           other.ownerUserId == this.ownerUserId &&
           other.createKey == this.createKey &&
-          other.createSnapshot == this.createSnapshot);
+          other.createSnapshot == this.createSnapshot &&
+          other.needsSync == this.needsSync);
 }
 
 class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
@@ -451,6 +489,7 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
   final Value<String?> ownerUserId;
   final Value<String?> createKey;
   final Value<String?> createSnapshot;
+  final Value<bool> needsSync;
   final Value<int> rowid;
   const LocalNotesCompanion({
     this.id = const Value.absent(),
@@ -462,6 +501,7 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
     this.ownerUserId = const Value.absent(),
     this.createKey = const Value.absent(),
     this.createSnapshot = const Value.absent(),
+    this.needsSync = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   LocalNotesCompanion.insert({
@@ -474,6 +514,7 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
     this.ownerUserId = const Value.absent(),
     this.createKey = const Value.absent(),
     this.createSnapshot = const Value.absent(),
+    this.needsSync = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        title = Value(title),
@@ -489,6 +530,7 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
     Expression<String>? ownerUserId,
     Expression<String>? createKey,
     Expression<String>? createSnapshot,
+    Expression<bool>? needsSync,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -501,6 +543,7 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
       if (ownerUserId != null) 'owner_user_id': ownerUserId,
       if (createKey != null) 'create_key': createKey,
       if (createSnapshot != null) 'create_snapshot': createSnapshot,
+      if (needsSync != null) 'needs_sync': needsSync,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -515,6 +558,7 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
     Value<String?>? ownerUserId,
     Value<String?>? createKey,
     Value<String?>? createSnapshot,
+    Value<bool>? needsSync,
     Value<int>? rowid,
   }) {
     return LocalNotesCompanion(
@@ -527,6 +571,7 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
       ownerUserId: ownerUserId ?? this.ownerUserId,
       createKey: createKey ?? this.createKey,
       createSnapshot: createSnapshot ?? this.createSnapshot,
+      needsSync: needsSync ?? this.needsSync,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -561,6 +606,9 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
     if (createSnapshot.present) {
       map['create_snapshot'] = Variable<String>(createSnapshot.value);
     }
+    if (needsSync.present) {
+      map['needs_sync'] = Variable<bool>(needsSync.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -579,6 +627,7 @@ class LocalNotesCompanion extends UpdateCompanion<LocalNote> {
           ..write('ownerUserId: $ownerUserId, ')
           ..write('createKey: $createKey, ')
           ..write('createSnapshot: $createSnapshot, ')
+          ..write('needsSync: $needsSync, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1176,12 +1225,495 @@ class NoteTombstonesCompanion extends UpdateCompanion<NoteTombstoneEntry> {
   }
 }
 
+class $PendingNoteAttachmentsTable extends PendingNoteAttachments
+    with TableInfo<$PendingNoteAttachmentsTable, PendingNoteAttachment> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $PendingNoteAttachmentsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _placeholderMeta = const VerificationMeta(
+    'placeholder',
+  );
+  @override
+  late final GeneratedColumn<String> placeholder = GeneratedColumn<String>(
+    'placeholder',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _noteIdMeta = const VerificationMeta('noteId');
+  @override
+  late final GeneratedColumn<String> noteId = GeneratedColumn<String>(
+    'note_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _ownerUserIdMeta = const VerificationMeta(
+    'ownerUserId',
+  );
+  @override
+  late final GeneratedColumn<String> ownerUserId = GeneratedColumn<String>(
+    'owner_user_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _fileNameMeta = const VerificationMeta(
+    'fileName',
+  );
+  @override
+  late final GeneratedColumn<String> fileName = GeneratedColumn<String>(
+    'file_name',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _mimeMeta = const VerificationMeta('mime');
+  @override
+  late final GeneratedColumn<String> mime = GeneratedColumn<String>(
+    'mime',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _bytesMeta = const VerificationMeta('bytes');
+  @override
+  late final GeneratedColumn<Uint8List> bytes = GeneratedColumn<Uint8List>(
+    'bytes',
+    aliasedName,
+    false,
+    type: DriftSqlType.blob,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _uploadedIdMeta = const VerificationMeta(
+    'uploadedId',
+  );
+  @override
+  late final GeneratedColumn<String> uploadedId = GeneratedColumn<String>(
+    'uploaded_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    placeholder,
+    noteId,
+    ownerUserId,
+    fileName,
+    mime,
+    bytes,
+    uploadedId,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'pending_note_attachments';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<PendingNoteAttachment> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('placeholder')) {
+      context.handle(
+        _placeholderMeta,
+        placeholder.isAcceptableOrUnknown(
+          data['placeholder']!,
+          _placeholderMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_placeholderMeta);
+    }
+    if (data.containsKey('note_id')) {
+      context.handle(
+        _noteIdMeta,
+        noteId.isAcceptableOrUnknown(data['note_id']!, _noteIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_noteIdMeta);
+    }
+    if (data.containsKey('owner_user_id')) {
+      context.handle(
+        _ownerUserIdMeta,
+        ownerUserId.isAcceptableOrUnknown(
+          data['owner_user_id']!,
+          _ownerUserIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('file_name')) {
+      context.handle(
+        _fileNameMeta,
+        fileName.isAcceptableOrUnknown(data['file_name']!, _fileNameMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_fileNameMeta);
+    }
+    if (data.containsKey('mime')) {
+      context.handle(
+        _mimeMeta,
+        mime.isAcceptableOrUnknown(data['mime']!, _mimeMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_mimeMeta);
+    }
+    if (data.containsKey('bytes')) {
+      context.handle(
+        _bytesMeta,
+        bytes.isAcceptableOrUnknown(data['bytes']!, _bytesMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_bytesMeta);
+    }
+    if (data.containsKey('uploaded_id')) {
+      context.handle(
+        _uploadedIdMeta,
+        uploadedId.isAcceptableOrUnknown(data['uploaded_id']!, _uploadedIdMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {placeholder};
+  @override
+  PendingNoteAttachment map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return PendingNoteAttachment(
+      placeholder: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}placeholder'],
+      )!,
+      noteId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}note_id'],
+      )!,
+      ownerUserId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}owner_user_id'],
+      ),
+      fileName: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}file_name'],
+      )!,
+      mime: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}mime'],
+      )!,
+      bytes: attachedDatabase.typeMapping.read(
+        DriftSqlType.blob,
+        data['${effectivePrefix}bytes'],
+      )!,
+      uploadedId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}uploaded_id'],
+      ),
+    );
+  }
+
+  @override
+  $PendingNoteAttachmentsTable createAlias(String alias) {
+    return $PendingNoteAttachmentsTable(attachedDatabase, alias);
+  }
+}
+
+class PendingNoteAttachment extends DataClass
+    implements Insertable<PendingNoteAttachment> {
+  final String placeholder;
+  final String noteId;
+  final String? ownerUserId;
+  final String fileName;
+  final String mime;
+  final Uint8List bytes;
+  final String? uploadedId;
+  const PendingNoteAttachment({
+    required this.placeholder,
+    required this.noteId,
+    this.ownerUserId,
+    required this.fileName,
+    required this.mime,
+    required this.bytes,
+    this.uploadedId,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['placeholder'] = Variable<String>(placeholder);
+    map['note_id'] = Variable<String>(noteId);
+    if (!nullToAbsent || ownerUserId != null) {
+      map['owner_user_id'] = Variable<String>(ownerUserId);
+    }
+    map['file_name'] = Variable<String>(fileName);
+    map['mime'] = Variable<String>(mime);
+    map['bytes'] = Variable<Uint8List>(bytes);
+    if (!nullToAbsent || uploadedId != null) {
+      map['uploaded_id'] = Variable<String>(uploadedId);
+    }
+    return map;
+  }
+
+  PendingNoteAttachmentsCompanion toCompanion(bool nullToAbsent) {
+    return PendingNoteAttachmentsCompanion(
+      placeholder: Value(placeholder),
+      noteId: Value(noteId),
+      ownerUserId: ownerUserId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(ownerUserId),
+      fileName: Value(fileName),
+      mime: Value(mime),
+      bytes: Value(bytes),
+      uploadedId: uploadedId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(uploadedId),
+    );
+  }
+
+  factory PendingNoteAttachment.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return PendingNoteAttachment(
+      placeholder: serializer.fromJson<String>(json['placeholder']),
+      noteId: serializer.fromJson<String>(json['noteId']),
+      ownerUserId: serializer.fromJson<String?>(json['ownerUserId']),
+      fileName: serializer.fromJson<String>(json['fileName']),
+      mime: serializer.fromJson<String>(json['mime']),
+      bytes: serializer.fromJson<Uint8List>(json['bytes']),
+      uploadedId: serializer.fromJson<String?>(json['uploadedId']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'placeholder': serializer.toJson<String>(placeholder),
+      'noteId': serializer.toJson<String>(noteId),
+      'ownerUserId': serializer.toJson<String?>(ownerUserId),
+      'fileName': serializer.toJson<String>(fileName),
+      'mime': serializer.toJson<String>(mime),
+      'bytes': serializer.toJson<Uint8List>(bytes),
+      'uploadedId': serializer.toJson<String?>(uploadedId),
+    };
+  }
+
+  PendingNoteAttachment copyWith({
+    String? placeholder,
+    String? noteId,
+    Value<String?> ownerUserId = const Value.absent(),
+    String? fileName,
+    String? mime,
+    Uint8List? bytes,
+    Value<String?> uploadedId = const Value.absent(),
+  }) => PendingNoteAttachment(
+    placeholder: placeholder ?? this.placeholder,
+    noteId: noteId ?? this.noteId,
+    ownerUserId: ownerUserId.present ? ownerUserId.value : this.ownerUserId,
+    fileName: fileName ?? this.fileName,
+    mime: mime ?? this.mime,
+    bytes: bytes ?? this.bytes,
+    uploadedId: uploadedId.present ? uploadedId.value : this.uploadedId,
+  );
+  PendingNoteAttachment copyWithCompanion(
+    PendingNoteAttachmentsCompanion data,
+  ) {
+    return PendingNoteAttachment(
+      placeholder: data.placeholder.present
+          ? data.placeholder.value
+          : this.placeholder,
+      noteId: data.noteId.present ? data.noteId.value : this.noteId,
+      ownerUserId: data.ownerUserId.present
+          ? data.ownerUserId.value
+          : this.ownerUserId,
+      fileName: data.fileName.present ? data.fileName.value : this.fileName,
+      mime: data.mime.present ? data.mime.value : this.mime,
+      bytes: data.bytes.present ? data.bytes.value : this.bytes,
+      uploadedId: data.uploadedId.present
+          ? data.uploadedId.value
+          : this.uploadedId,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('PendingNoteAttachment(')
+          ..write('placeholder: $placeholder, ')
+          ..write('noteId: $noteId, ')
+          ..write('ownerUserId: $ownerUserId, ')
+          ..write('fileName: $fileName, ')
+          ..write('mime: $mime, ')
+          ..write('bytes: $bytes, ')
+          ..write('uploadedId: $uploadedId')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    placeholder,
+    noteId,
+    ownerUserId,
+    fileName,
+    mime,
+    $driftBlobEquality.hash(bytes),
+    uploadedId,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is PendingNoteAttachment &&
+          other.placeholder == this.placeholder &&
+          other.noteId == this.noteId &&
+          other.ownerUserId == this.ownerUserId &&
+          other.fileName == this.fileName &&
+          other.mime == this.mime &&
+          $driftBlobEquality.equals(other.bytes, this.bytes) &&
+          other.uploadedId == this.uploadedId);
+}
+
+class PendingNoteAttachmentsCompanion
+    extends UpdateCompanion<PendingNoteAttachment> {
+  final Value<String> placeholder;
+  final Value<String> noteId;
+  final Value<String?> ownerUserId;
+  final Value<String> fileName;
+  final Value<String> mime;
+  final Value<Uint8List> bytes;
+  final Value<String?> uploadedId;
+  final Value<int> rowid;
+  const PendingNoteAttachmentsCompanion({
+    this.placeholder = const Value.absent(),
+    this.noteId = const Value.absent(),
+    this.ownerUserId = const Value.absent(),
+    this.fileName = const Value.absent(),
+    this.mime = const Value.absent(),
+    this.bytes = const Value.absent(),
+    this.uploadedId = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  PendingNoteAttachmentsCompanion.insert({
+    required String placeholder,
+    required String noteId,
+    this.ownerUserId = const Value.absent(),
+    required String fileName,
+    required String mime,
+    required Uint8List bytes,
+    this.uploadedId = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : placeholder = Value(placeholder),
+       noteId = Value(noteId),
+       fileName = Value(fileName),
+       mime = Value(mime),
+       bytes = Value(bytes);
+  static Insertable<PendingNoteAttachment> custom({
+    Expression<String>? placeholder,
+    Expression<String>? noteId,
+    Expression<String>? ownerUserId,
+    Expression<String>? fileName,
+    Expression<String>? mime,
+    Expression<Uint8List>? bytes,
+    Expression<String>? uploadedId,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (placeholder != null) 'placeholder': placeholder,
+      if (noteId != null) 'note_id': noteId,
+      if (ownerUserId != null) 'owner_user_id': ownerUserId,
+      if (fileName != null) 'file_name': fileName,
+      if (mime != null) 'mime': mime,
+      if (bytes != null) 'bytes': bytes,
+      if (uploadedId != null) 'uploaded_id': uploadedId,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  PendingNoteAttachmentsCompanion copyWith({
+    Value<String>? placeholder,
+    Value<String>? noteId,
+    Value<String?>? ownerUserId,
+    Value<String>? fileName,
+    Value<String>? mime,
+    Value<Uint8List>? bytes,
+    Value<String?>? uploadedId,
+    Value<int>? rowid,
+  }) {
+    return PendingNoteAttachmentsCompanion(
+      placeholder: placeholder ?? this.placeholder,
+      noteId: noteId ?? this.noteId,
+      ownerUserId: ownerUserId ?? this.ownerUserId,
+      fileName: fileName ?? this.fileName,
+      mime: mime ?? this.mime,
+      bytes: bytes ?? this.bytes,
+      uploadedId: uploadedId ?? this.uploadedId,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (placeholder.present) {
+      map['placeholder'] = Variable<String>(placeholder.value);
+    }
+    if (noteId.present) {
+      map['note_id'] = Variable<String>(noteId.value);
+    }
+    if (ownerUserId.present) {
+      map['owner_user_id'] = Variable<String>(ownerUserId.value);
+    }
+    if (fileName.present) {
+      map['file_name'] = Variable<String>(fileName.value);
+    }
+    if (mime.present) {
+      map['mime'] = Variable<String>(mime.value);
+    }
+    if (bytes.present) {
+      map['bytes'] = Variable<Uint8List>(bytes.value);
+    }
+    if (uploadedId.present) {
+      map['uploaded_id'] = Variable<String>(uploadedId.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('PendingNoteAttachmentsCompanion(')
+          ..write('placeholder: $placeholder, ')
+          ..write('noteId: $noteId, ')
+          ..write('ownerUserId: $ownerUserId, ')
+          ..write('fileName: $fileName, ')
+          ..write('mime: $mime, ')
+          ..write('bytes: $bytes, ')
+          ..write('uploadedId: $uploadedId, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
   late final $LocalNotesTable localNotes = $LocalNotesTable(this);
   late final $LocalNotesFtsTable localNotesFts = $LocalNotesFtsTable(this);
   late final $NoteTombstonesTable noteTombstones = $NoteTombstonesTable(this);
+  late final $PendingNoteAttachmentsTable pendingNoteAttachments =
+      $PendingNoteAttachmentsTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -1190,6 +1722,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     localNotes,
     localNotesFts,
     noteTombstones,
+    pendingNoteAttachments,
   ];
 }
 
@@ -1204,6 +1737,7 @@ typedef $$LocalNotesTableCreateCompanionBuilder =
       Value<String?> ownerUserId,
       Value<String?> createKey,
       Value<String?> createSnapshot,
+      Value<bool> needsSync,
       Value<int> rowid,
     });
 typedef $$LocalNotesTableUpdateCompanionBuilder =
@@ -1217,6 +1751,7 @@ typedef $$LocalNotesTableUpdateCompanionBuilder =
       Value<String?> ownerUserId,
       Value<String?> createKey,
       Value<String?> createSnapshot,
+      Value<bool> needsSync,
       Value<int> rowid,
     });
 
@@ -1271,6 +1806,11 @@ class $$LocalNotesTableFilterComposer
 
   ColumnFilters<String> get createSnapshot => $composableBuilder(
     column: $table.createSnapshot,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get needsSync => $composableBuilder(
+    column: $table.needsSync,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -1328,6 +1868,11 @@ class $$LocalNotesTableOrderingComposer
     column: $table.createSnapshot,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<bool> get needsSync => $composableBuilder(
+    column: $table.needsSync,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$LocalNotesTableAnnotationComposer
@@ -1371,6 +1916,9 @@ class $$LocalNotesTableAnnotationComposer
     column: $table.createSnapshot,
     builder: (column) => column,
   );
+
+  GeneratedColumn<bool> get needsSync =>
+      $composableBuilder(column: $table.needsSync, builder: (column) => column);
 }
 
 class $$LocalNotesTableTableManager
@@ -1413,6 +1961,7 @@ class $$LocalNotesTableTableManager
                 Value<String?> ownerUserId = const Value.absent(),
                 Value<String?> createKey = const Value.absent(),
                 Value<String?> createSnapshot = const Value.absent(),
+                Value<bool> needsSync = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => LocalNotesCompanion(
                 id: id,
@@ -1424,6 +1973,7 @@ class $$LocalNotesTableTableManager
                 ownerUserId: ownerUserId,
                 createKey: createKey,
                 createSnapshot: createSnapshot,
+                needsSync: needsSync,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -1437,6 +1987,7 @@ class $$LocalNotesTableTableManager
                 Value<String?> ownerUserId = const Value.absent(),
                 Value<String?> createKey = const Value.absent(),
                 Value<String?> createSnapshot = const Value.absent(),
+                Value<bool> needsSync = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => LocalNotesCompanion.insert(
                 id: id,
@@ -1448,6 +1999,7 @@ class $$LocalNotesTableTableManager
                 ownerUserId: ownerUserId,
                 createKey: createKey,
                 createSnapshot: createSnapshot,
+                needsSync: needsSync,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
@@ -1829,6 +2381,269 @@ typedef $$NoteTombstonesTableProcessedTableManager =
       NoteTombstoneEntry,
       PrefetchHooks Function()
     >;
+typedef $$PendingNoteAttachmentsTableCreateCompanionBuilder =
+    PendingNoteAttachmentsCompanion Function({
+      required String placeholder,
+      required String noteId,
+      Value<String?> ownerUserId,
+      required String fileName,
+      required String mime,
+      required Uint8List bytes,
+      Value<String?> uploadedId,
+      Value<int> rowid,
+    });
+typedef $$PendingNoteAttachmentsTableUpdateCompanionBuilder =
+    PendingNoteAttachmentsCompanion Function({
+      Value<String> placeholder,
+      Value<String> noteId,
+      Value<String?> ownerUserId,
+      Value<String> fileName,
+      Value<String> mime,
+      Value<Uint8List> bytes,
+      Value<String?> uploadedId,
+      Value<int> rowid,
+    });
+
+class $$PendingNoteAttachmentsTableFilterComposer
+    extends Composer<_$AppDatabase, $PendingNoteAttachmentsTable> {
+  $$PendingNoteAttachmentsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get placeholder => $composableBuilder(
+    column: $table.placeholder,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get noteId => $composableBuilder(
+    column: $table.noteId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get ownerUserId => $composableBuilder(
+    column: $table.ownerUserId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get fileName => $composableBuilder(
+    column: $table.fileName,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get mime => $composableBuilder(
+    column: $table.mime,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<Uint8List> get bytes => $composableBuilder(
+    column: $table.bytes,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get uploadedId => $composableBuilder(
+    column: $table.uploadedId,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$PendingNoteAttachmentsTableOrderingComposer
+    extends Composer<_$AppDatabase, $PendingNoteAttachmentsTable> {
+  $$PendingNoteAttachmentsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get placeholder => $composableBuilder(
+    column: $table.placeholder,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get noteId => $composableBuilder(
+    column: $table.noteId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get ownerUserId => $composableBuilder(
+    column: $table.ownerUserId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get fileName => $composableBuilder(
+    column: $table.fileName,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get mime => $composableBuilder(
+    column: $table.mime,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<Uint8List> get bytes => $composableBuilder(
+    column: $table.bytes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get uploadedId => $composableBuilder(
+    column: $table.uploadedId,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$PendingNoteAttachmentsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $PendingNoteAttachmentsTable> {
+  $$PendingNoteAttachmentsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get placeholder => $composableBuilder(
+    column: $table.placeholder,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get noteId =>
+      $composableBuilder(column: $table.noteId, builder: (column) => column);
+
+  GeneratedColumn<String> get ownerUserId => $composableBuilder(
+    column: $table.ownerUserId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get fileName =>
+      $composableBuilder(column: $table.fileName, builder: (column) => column);
+
+  GeneratedColumn<String> get mime =>
+      $composableBuilder(column: $table.mime, builder: (column) => column);
+
+  GeneratedColumn<Uint8List> get bytes =>
+      $composableBuilder(column: $table.bytes, builder: (column) => column);
+
+  GeneratedColumn<String> get uploadedId => $composableBuilder(
+    column: $table.uploadedId,
+    builder: (column) => column,
+  );
+}
+
+class $$PendingNoteAttachmentsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $PendingNoteAttachmentsTable,
+          PendingNoteAttachment,
+          $$PendingNoteAttachmentsTableFilterComposer,
+          $$PendingNoteAttachmentsTableOrderingComposer,
+          $$PendingNoteAttachmentsTableAnnotationComposer,
+          $$PendingNoteAttachmentsTableCreateCompanionBuilder,
+          $$PendingNoteAttachmentsTableUpdateCompanionBuilder,
+          (
+            PendingNoteAttachment,
+            BaseReferences<
+              _$AppDatabase,
+              $PendingNoteAttachmentsTable,
+              PendingNoteAttachment
+            >,
+          ),
+          PendingNoteAttachment,
+          PrefetchHooks Function()
+        > {
+  $$PendingNoteAttachmentsTableTableManager(
+    _$AppDatabase db,
+    $PendingNoteAttachmentsTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$PendingNoteAttachmentsTableFilterComposer(
+                $db: db,
+                $table: table,
+              ),
+          createOrderingComposer: () =>
+              $$PendingNoteAttachmentsTableOrderingComposer(
+                $db: db,
+                $table: table,
+              ),
+          createComputedFieldComposer: () =>
+              $$PendingNoteAttachmentsTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<String> placeholder = const Value.absent(),
+                Value<String> noteId = const Value.absent(),
+                Value<String?> ownerUserId = const Value.absent(),
+                Value<String> fileName = const Value.absent(),
+                Value<String> mime = const Value.absent(),
+                Value<Uint8List> bytes = const Value.absent(),
+                Value<String?> uploadedId = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => PendingNoteAttachmentsCompanion(
+                placeholder: placeholder,
+                noteId: noteId,
+                ownerUserId: ownerUserId,
+                fileName: fileName,
+                mime: mime,
+                bytes: bytes,
+                uploadedId: uploadedId,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String placeholder,
+                required String noteId,
+                Value<String?> ownerUserId = const Value.absent(),
+                required String fileName,
+                required String mime,
+                required Uint8List bytes,
+                Value<String?> uploadedId = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => PendingNoteAttachmentsCompanion.insert(
+                placeholder: placeholder,
+                noteId: noteId,
+                ownerUserId: ownerUserId,
+                fileName: fileName,
+                mime: mime,
+                bytes: bytes,
+                uploadedId: uploadedId,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$PendingNoteAttachmentsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $PendingNoteAttachmentsTable,
+      PendingNoteAttachment,
+      $$PendingNoteAttachmentsTableFilterComposer,
+      $$PendingNoteAttachmentsTableOrderingComposer,
+      $$PendingNoteAttachmentsTableAnnotationComposer,
+      $$PendingNoteAttachmentsTableCreateCompanionBuilder,
+      $$PendingNoteAttachmentsTableUpdateCompanionBuilder,
+      (
+        PendingNoteAttachment,
+        BaseReferences<
+          _$AppDatabase,
+          $PendingNoteAttachmentsTable,
+          PendingNoteAttachment
+        >,
+      ),
+      PendingNoteAttachment,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -1839,4 +2654,9 @@ class $AppDatabaseManager {
       $$LocalNotesFtsTableTableManager(_db, _db.localNotesFts);
   $$NoteTombstonesTableTableManager get noteTombstones =>
       $$NoteTombstonesTableTableManager(_db, _db.noteTombstones);
+  $$PendingNoteAttachmentsTableTableManager get pendingNoteAttachments =>
+      $$PendingNoteAttachmentsTableTableManager(
+        _db,
+        _db.pendingNoteAttachments,
+      );
 }

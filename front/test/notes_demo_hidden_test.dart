@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/testing.dart';
@@ -35,7 +36,7 @@ void main() {
     (tester) async {
       SessionManager.saveSession('jwt-notes-fail', {'id': 'u-notes'});
       notesHttpClientOverride = MockClient((request) async {
-        if (request.method == 'GET' && request.url.path == '/notes/me') {
+        if (request.method == 'GET' && request.url.servicePath == '/notes/me') {
           return http.Response(
             '{"error":{"code":"internal"}}',
             500,

@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -80,7 +81,8 @@ void main() {
     final groups = _baseGroups();
     final service = SocialService(
       client: MockClient((request) async {
-        if (request.method == 'GET' && request.url.path == '/me/overview') {
+        if (request.method == 'GET' &&
+            request.url.servicePath == '/me/overview') {
           expect(request.headers['Authorization'], 'Bearer jwt-groups-test');
           return http.Response(
             jsonEncode(_overviewJson(groups)),
@@ -115,14 +117,15 @@ void main() {
     var groups = _baseGroups();
     final service = SocialService(
       client: MockClient((request) async {
-        if (request.method == 'GET' && request.url.path == '/me/overview') {
+        if (request.method == 'GET' &&
+            request.url.servicePath == '/me/overview') {
           return http.Response(
             jsonEncode(_overviewJson(groups)),
             200,
             headers: {'content-type': 'application/json'},
           );
         }
-        if (request.method == 'POST' && request.url.path == '/groups') {
+        if (request.method == 'POST' && request.url.servicePath == '/groups') {
           final body = jsonDecode(request.body) as Map<String, dynamic>;
           expect(body['name'], 'Equipo Física');
           groups = [

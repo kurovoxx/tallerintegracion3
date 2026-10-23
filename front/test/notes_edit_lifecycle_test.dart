@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -66,6 +67,7 @@ void main() {
       await t.runAsync(
         () => repo.upsertNote(
           LocalNote(
+            needsSync: false,
             id: noteId,
             title: title,
             content: content,
@@ -84,12 +86,13 @@ void main() {
       notesHttpClientOverride = MockClient((r) async {
         if (r.method == 'PATCH') {
           expect(local, isFalse, reason: 'Nunca enviar timestamp al backend');
-          expect(r.url.path, '/notes/$id');
+          expect(r.url.servicePath, '/notes/$id');
           attempts++;
-          if (attempts == 1)
+          if (attempts == 1) {
             return json({
               'error': {'code': 'unauthorized'},
             }, 401);
+          }
           expect(r.headers['Authorization'], 'Bearer ${jwt('renewed')}');
           final data = jsonDecode(r.body) as Map<String, dynamic>;
           expect(data['version'], version);
@@ -109,7 +112,7 @@ void main() {
           attachments.removeWhere((a) => a['id'] == r.url.pathSegments.last);
           return http.Response('', 204);
         }
-        if (r.url.path == '/notes/me')
+        if (r.url.servicePath == '/notes/me') {
           return json({
             'notes': local
                 ? []
@@ -117,7 +120,8 @@ void main() {
                     {'id': id, 'title': title, 'version': version},
                   ],
           });
-        if (r.url.path == '/notes/$id')
+        }
+        if (r.url.servicePath == '/notes/$id') {
           return json({
             'id': id,
             'user_id': 'owner',
@@ -126,7 +130,8 @@ void main() {
             'version': version,
             'attachments': attachments,
           });
-        if (r.url.path.endsWith('/content'))
+        }
+        if (r.url.servicePath.endsWith('/content')) {
           return http.Response.bytes(
             base64Decode(
               'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
@@ -134,6 +139,7 @@ void main() {
             200,
             headers: {'content-type': 'image/png'},
           );
+        }
         return json({}, 404);
       });
       AuthedHttp.refreshOverride = (_) async =>
@@ -261,14 +267,14 @@ void main() {
         attachments.removeWhere((a) => a['id'] == r.url.pathSegments.last);
         return http.Response('', 204);
       }
-      if (r.url.path == '/notes/me') {
+      if (r.url.servicePath == '/notes/me') {
         return json({
           'notes': [
             {'id': id, 'title': 'Nota de prueba', 'version': version},
           ],
         });
       }
-      if (r.url.path == '/notes/$id') {
+      if (r.url.servicePath == '/notes/$id') {
         return json({
           'id': id,
           'user_id': 'owner',
@@ -278,7 +284,7 @@ void main() {
           'attachments': attachments,
         });
       }
-      if (r.url.path.endsWith('/content')) {
+      if (r.url.servicePath.endsWith('/content')) {
         return http.Response.bytes(
           base64Decode(
             'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
@@ -299,6 +305,7 @@ void main() {
     await t.runAsync(
       () => repo.upsertNote(
         LocalNote(
+          needsSync: false,
           id: id,
           title: 'Nota de prueba',
           content: content,

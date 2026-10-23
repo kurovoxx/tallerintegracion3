@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 
 import 'package:drift/native.dart';
@@ -47,6 +48,7 @@ void main() {
         for (final note in notes) {
           await repo.upsertNote(
             LocalNote(
+              needsSync: false,
               id: note['id']!,
               title: note['title']!,
               content: note['content']!,
@@ -60,11 +62,11 @@ void main() {
       var deletes = 0;
       notesHttpClientOverride = MockClient((request) async {
         if (request.method == 'DELETE') {
-          expect(request.url.path, '/notes/$id');
+          expect(request.url.servicePath, '/notes/$id');
           deletes++;
           return http.Response('', status);
         }
-        if (request.url.path == '/notes/me') {
+        if (request.url.servicePath == '/notes/me') {
           return http.Response(jsonEncode({'notes': notes}), 200);
         }
         return http.Response(

@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -27,7 +28,7 @@ void main() {
       final svc = SocialService(
         client: MockClient((r) async {
           Object body = {};
-          if (r.url.path.endsWith('/workspace')) {
+          if (r.url.servicePath.endsWith('/workspace')) {
             body = {
               'group': {'id': gid},
               'sprint_sheet': {
@@ -44,7 +45,7 @@ void main() {
               },
             };
           }
-          if (r.url.path.endsWith('/members')) {
+          if (r.url.servicePath.endsWith('/members')) {
             body = [
               {
                 'id': 'm',
@@ -54,7 +55,7 @@ void main() {
               },
             ];
           }
-          if (r.url.path.endsWith('/hours')) {
+          if (r.url.servicePath.endsWith('/hours')) {
             body = {
               'data': [
                 {'task_id': 'taskA', 'log_date': '2026-10-05', 'hours': 2},
@@ -63,7 +64,8 @@ void main() {
               'total_hours': 5,
             };
           }
-          if (r.method == 'POST' && r.url.path.endsWith('/sprint-sheets')) {
+          if (r.method == 'POST' &&
+              r.url.servicePath.endsWith('/sprint-sheets')) {
             created = jsonDecode(r.body);
             sheets.add({'id': 'B', ...created!});
             return http.Response(jsonEncode({'data': sheets.last}), 201);
