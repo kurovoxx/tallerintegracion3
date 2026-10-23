@@ -38,7 +38,7 @@ type testUser struct{ id, token, email, name string }
 
 type stack struct {
 	pool                *pgxpool.Pool
-	auth, social, notes string
+	auth, social, notes, academic string
 	rpc                 socialv1.SocialServiceClient
 	client              *http.Client
 	processes           []*stackProcess
@@ -62,7 +62,18 @@ func (p *stackProcess) start(t *testing.T, client *http.Client) {
 	}
 	cmd := exec.Command(p.binary)
 	cmd.Dir = p.dir // impide cargar los .env del repositorio y sus credenciales
-	cmd.Env = append(append([]string{}, p.env...), "PORT="+p.port, strings.ToUpper(p.name)+"_GRPC_PORT="+p.grpcPort)
+	// Nombre de la variable de entorno para el puerto gRPC de cada servicio.
+	// academic lee GRPC_PORT genérico; los demás usan su variable propia.
+	grpcEnv := "GRPC_PORT"
+	switch p.name {
+	case "auth":
+		grpcEnv = "AUTH_GRPC_PORT"
+	case "notes":
+		grpcEnv = "NOTES_GRPC_PORT"
+	case "social":
+		grpcEnv = "SOCIAL_GRPC_PORT"
+	}
+	cmd.Env = append(append([]string{}, p.env...), "PORT="+p.port, grpcEnv+"="+p.grpcPort)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	p.cmd, p.logFile = cmd, logFile
 	p.logPaths = append(p.logPaths, logPath)
@@ -497,7 +508,7 @@ func startStackWithEnv(t *testing.T, extraEnv []string) *stack {
 		t.Fatal(err)
 	}
 
-	ports := make([]string, 6)
+	ports := make([]string, 8)
 	listeners := make([]net.Listener, 0, len(ports))
 	for i := range ports {
 		lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -510,7 +521,7 @@ func startStackWithEnv(t *testing.T, extraEnv []string) *stack {
 	for _, lis := range listeners {
 		lis.Close()
 	}
-	s := &stack{pool: pool, auth: "http://127.0.0.1:" + ports[0], notes: "http://127.0.0.1:" + ports[2], social: "http://127.0.0.1:" + ports[4], client: &http.Client{Timeout: 8 * time.Second}}
+	s := &stack{pool: pool, auth: "http://127.0.0.1:" + ports[0], notes: "http://127.0.0.1:" + ports[2], social: "http://127.0.0.1:" + ports[4], academic: "http://127.0.0.1:" + ports[6], client: &http.Client{Timeout: 8 * time.Second}}
 	env := []string{
 		"DATABASE_URL=" + databaseURL.String(), "JWT_SECRET=cross-service-test-jwt-secret",
 		"INTERNAL_API_KEY=" + internalKey, "GIN_MODE=release", "STORAGE_MODE=mock", "CALENDAR_MODE=mock", "STREAM_MODE=mock",
@@ -526,7 +537,14 @@ func startStackWithEnv(t *testing.T, extraEnv []string) *stack {
 			env = append(env, key+"="+value)
 		}
 	}
-	for i, name := range []string{"auth", "notes", "social"} {
+	// Mapea el nombre lógico del servicio al directorio del módulo Go.
+	buildDir := map[string]string{
+		"auth":     "auth",
+		"notes":    "notes",
+		"social":   "social",
+		"academic": "infacadem",
+	}
+	for i, name := range []string{"auth", "notes", "social", "academic"} {
 		dir := t.TempDir()
 		binary := filepath.Join(dir, name)
 		if runtime.GOOS == "windows" {
@@ -534,13 +552,13 @@ func startStackWithEnv(t *testing.T, extraEnv []string) *stack {
 		}
 		buildCtx, cancel := context.WithTimeout(ctx, 4*time.Minute)
 		build := exec.CommandContext(buildCtx, "go", "build", "-o", binary, "./cmd/server")
-		build.Dir = filepath.Join(root, "back", name)
+		build.Dir = filepath.Join(root, "back", buildDir[name])
 		output, buildErr := build.CombinedOutput()
 		cancel()
 		if buildErr != nil {
 			t.Fatalf("build %s: %v\n%s", name, buildErr, output)
 		}
-		base := []string{s.auth, s.notes, s.social}[i]
+		base := []string{s.auth, s.notes, s.social, s.academic}[i]
 		process := &stackProcess{
 			name: name, binary: binary, dir: dir, base: base,
 			port: ports[2*i], grpcPort: ports[2*i+1], env: append([]string{}, env...),
@@ -680,5 +698,99 @@ func (s *stack) awaitShares(t *testing.T, note, group string, want int) {
 			t.Fatalf("shares nota %s grupo %s: %d, esperado %d", note, group, count, want)
 		case <-time.After(25 * time.Millisecond):
 		}
+	}
+}
+
+func (s *stack) curriculum(t *testing.T, user testUser) string {
+	t.Helper()
+	var created struct {
+		ID string `json:"id"`
+	}
+	s.request(t, "POST", s.academic+"/curricula", user.token, map[string]string{"name": "Malla E2E"}, 201, &created)
+	if created.ID == "" {
+		t.Fatal("curriculum_id vacío")
+	}
+	return created.ID
+}
+
+func (s *stack) subject(t *testing.T, user testUser, curriculumID string) string {
+	t.Helper()
+	var created struct {
+		ID string `json:"id"`
+	}
+	s.request(t, "POST", s.academic+"/curricula/"+curriculumID+"/subjects", user.token,
+		map[string]any{"name": "Matemática E2E", "code": "MAT101"}, 201, &created)
+	if created.ID == "" {
+		t.Fatal("subject_id vacío")
+	}
+	return created.ID
+}
+
+func TestCrossService_FourServiceJourney(t *testing.T) {
+	s := startStack(t)
+
+	// 1) Auth: dos usuarios reales con JWT.
+	owner := s.register(t, "Propietario académico")
+	member := s.register(t, "Miembro del grupo")
+
+	// 2) Social: owner crea grupo y member se une.
+	groupID, invite := s.group(t, owner)
+	s.join(t, member, groupID, invite, http.StatusCreated)
+
+	// 3) Academic (infacadem): owner crea currículo y materia con el JWT de auth.
+	//    Esto valida que el mismo JWT de Identity se usa en Academic.
+	curriculumID := s.curriculum(t, owner)
+	subjectID := s.subject(t, owner, curriculumID)
+	var gotSubject struct{ ID string `json:"id"` }
+	s.request(t, "GET", s.academic+"/subjects/"+subjectID, owner.token, nil, 200, &gotSubject)
+	if gotSubject.ID != subjectID {
+		t.Fatalf("materia no recuperada: %+v", gotSubject)
+	}
+
+	// 4) Notes: owner crea un apunte y lo comparte al grupo (restricted).
+	//    Notes valida membresía en Social antes de permitir el share.
+	noteID := s.note(t, owner)
+	s.share(t, owner, noteID, groupID, http.StatusCreated)
+
+	// 5) El miembro del grupo puede ver la nota compartida.
+	var shared struct {
+		Notes []struct {
+			ID string `json:"id"`
+		} `json:"notes"`
+	}
+	s.request(t, "GET", s.notes+"/groups/"+groupID+"/notes", member.token, nil, 200, &shared)
+	found := false
+	for _, n := range shared.Notes {
+		if n.ID == noteID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("miembro no ve la nota compartida %s en el grupo: %+v", noteID, shared.Notes)
+	}
+
+	// 6) Un extraño (no miembro) no puede ver las notas del grupo.
+	outsider := s.register(t, "Externo")
+	s.request(t, "GET", s.notes+"/groups/"+groupID+"/notes", outsider.token, nil, 403, nil)
+}
+
+func TestCrossService_AcademicHealth(t *testing.T) {
+	s := startStack(t)
+	var health struct {
+		Status  string `json:"status"`
+		Service string `json:"service"`
+	}
+	s.request(t, "GET", s.academic+"/health", "", nil, 200, &health)
+	if health.Status != "UP" || health.Service != "academic-service" {
+		t.Fatalf("academic /health: %+v", health)
+	}
+	var db struct {
+		Status   string `json:"status"`
+		Database string `json:"database"`
+		User     string `json:"user"`
+	}
+	s.request(t, "GET", s.academic+"/health/db", "", nil, 200, &db)
+	if db.Status != "UP" || !strings.HasPrefix(db.Database, "social_cross_e2e_") {
+		t.Fatalf("academic /health/db: %+v", db)
 	}
 }
