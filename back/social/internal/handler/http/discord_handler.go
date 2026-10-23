@@ -68,7 +68,7 @@ func (h *DiscordHandler) GetConfig(c *gin.Context) {
 		return
 	}
 
-	logOp(c, "PutDiscordConfig", http.StatusOK, "group_id="+groupID)
+	logOp(c, "GetDiscordConfig", http.StatusOK, "group_id="+groupID)
 	c.JSON(http.StatusOK, gin.H{
 		"server_name": pgTextToString(cfg.ServerName),
 		"invite_url":  pgTextToString(cfg.InviteUrl),
@@ -136,7 +136,7 @@ func (h *DiscordHandler) PutConfig(c *gin.Context) {
 		return
 	}
 
-	logOp(c, "GetDiscordConfig", http.StatusOK, "group_id="+groupID)
+	logOp(c, "PutDiscordConfig", http.StatusOK, "group_id="+groupID)
 	c.JSON(http.StatusOK, gin.H{
 		"message":     "discord config saved successfully",
 		"server_name": pgTextToString(cfg.ServerName),

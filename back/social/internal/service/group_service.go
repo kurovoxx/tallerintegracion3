@@ -109,6 +109,37 @@ type GroupService struct {
 	// users es opcional: directorio Identity para enriquecer miembros.
 	// Nil = respuesta sin nombres (comportamiento anterior).
 	users UserDirectory
+	// chat es opcional: quita del canal Stream a quien deja el grupo.
+	// Nil = sin limpieza del chat (tests que no la necesitan).
+	chat ChatMembership
+}
+
+// ChatMembership retira miembros del canal de chat del grupo (stream.Client
+// en producción). Interfaz mínima para no exigir el cliente completo.
+type ChatMembership interface {
+	RemoveMember(ctx context.Context, channelType, channelID, userID string) error
+}
+
+// SetChatMembership configura la limpieza del canal Stream al salir del grupo.
+func (s *GroupService) SetChatMembership(c ChatMembership) {
+	s.chat = c
+}
+
+// removeFromChat quita al usuario del canal Stream del grupo (best-effort, en
+// background). Sin membresía en el canal deja de leer y escribir aunque
+// conserve un token anterior (RN-SOCIAL-03). El canal siempre se crea con
+// ChannelIDForGroup, así que no hace falta leer social.stream_channels (que
+// además desaparece en cascada si el grupo se eliminó).
+func (s *GroupService) removeFromChat(userID, groupID string) {
+	if s.chat == nil {
+		return
+	}
+	GoBestEffort("chat-remove-member", func(ctx context.Context) {
+		channelID := ChannelIDForGroup(groupID)
+		if err := s.chat.RemoveMember(ctx, ChannelTypeStream, channelID, userID); err != nil {
+			logChannelSync("remove-member", channelID, err)
+		}
+	})
 }
 
 func NewGroupService(groups GroupStore, notifier GroupCreatedNotifier) *GroupService {
@@ -470,6 +501,7 @@ func (s *GroupService) KickMember(ctx context.Context, groupID, adminID, targetU
 	if err := mapStoreErr(s.groups.KickMember(ctx, groupID, adminID, targetUserID)); err != nil {
 		return err
 	}
+	s.removeFromChat(targetUserID, groupID)
 	if cleanupSharedNotes {
 		go s.unshareNotes(targetUserID, groupID, token)
 	}
@@ -485,6 +517,7 @@ func (s *GroupService) BanMember(ctx context.Context, groupID, adminID, targetUs
 	if err := mapStoreErr(s.groups.BanMember(ctx, groupID, adminID, targetUserID)); err != nil {
 		return err
 	}
+	s.removeFromChat(targetUserID, groupID)
 	if cleanupSharedNotes {
 		go s.unshareNotes(targetUserID, groupID, token)
 	}
@@ -516,6 +549,7 @@ func (s *GroupService) LeaveGroup(ctx context.Context, groupID string, userID st
 	if _, err := s.groups.LeaveGroup(ctx, groupID, userID); err != nil {
 		return mapStoreErr(err)
 	}
+	s.removeFromChat(userID, groupID)
 	if cleanupSharedNotes {
 		go s.unshareNotes(userID, groupID, token)
 	}
@@ -589,6 +623,7 @@ func (s *GroupService) HandleAccountDeletion(ctx context.Context, userID string,
 		case r.GroupDeleted:
 			log.Printf("social: grupo %s eliminado: %s era el último miembro", r.GroupID, userID)
 		}
+		s.removeFromChat(userID, r.GroupID)
 		if strings.TrimSpace(token) != "" {
 			go s.unshareNotes(userID, r.GroupID, token)
 		}

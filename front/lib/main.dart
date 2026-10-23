@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/material.dart';
 
 import 'core/database/app_database_manager.dart';
+import 'core/services/authed_client.dart';
 import 'core/services/insecure_http.dart';
 import 'core/services/session_manager.dart';
 import 'core/theme/app_theme.dart';
@@ -35,7 +37,7 @@ Future<void> main() async {
       );
     });
   };
-  final hasPersistedSession = await SessionManager.hasPersistedSession();
+  final hasPersistedSession = await AuthedHttp.restorePersistedSession();
   runApp(
     TallerIntegracionApp(
       home: hasPersistedSession
@@ -54,12 +56,14 @@ class TallerIntegracionApp extends StatefulWidget {
   State<TallerIntegracionApp> createState() => _TallerIntegracionAppState();
 }
 
-class _TallerIntegracionAppState extends State<TallerIntegracionApp> {
+class _TallerIntegracionAppState extends State<TallerIntegracionApp>
+    with WidgetsBindingObserver {
   late final AppLifecycleListener _lifecycle;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // Cierre controlado de SQLite: espera operaciones en vuelo antes de que
     // el proceso termine (evita "isolate channel connection was closed").
     _lifecycle = AppLifecycleListener(
@@ -71,8 +75,16 @@ class _TallerIntegracionAppState extends State<TallerIntegracionApp> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(AuthedHttp.refreshIfExpired());
+    }
+  }
+
+  @override
   void dispose() {
     _lifecycle.dispose();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 

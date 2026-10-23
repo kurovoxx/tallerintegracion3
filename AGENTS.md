@@ -40,7 +40,7 @@ go vet ./...
 go test ./... -count=1
 go test ./internal/service/ -run TestName -count=1     # single test
 ```
-Integration tests are opt-in via env and skip otherwise: `AUTH_TEST_DATABASE_URL`, `PASSWORD_RESET_TEST_DATABASE_URL`, `NOTES_TEST_DATABASE_URL`, `SOCIAL_TEST_DATABASE_URL`, `ACADEMIC_TEST_DATABASE_URL`. Auth integration/repo tests create/drop schema `identity` — use a dedicated DB (CI uses `auth_test`) and run with `-p 1`. CI (`test-auth.yml`) only covers `back/auth`: unit = `go test ./... -skip 'TestAuthIntegration_|TestE2E_|TestPasswordResetRepository'`, e2e = `-run 'TestE2E_'`.
+Integration tests are opt-in via env and skip otherwise: `AUTH_TEST_DATABASE_URL`, `PASSWORD_RESET_TEST_DATABASE_URL`, `NOTES_TEST_DATABASE_URL`, `SOCIAL_TEST_DATABASE_URL`, `ACADEMIC_TEST_DATABASE_URL`. Auth integration/repo tests create/drop schema `identity` — use a dedicated DB (CI uses `auth_test`) and run with `-p 1`. CI: `test-auth.yml` (auth; unit = `go test ./... -skip 'TestAuthIntegration_|TestE2E_|TestPasswordResetRepository'`, e2e = `-run 'TestE2E_'`), `test-social-groups.yml` (full social suite with Postgres, `-race -p 1`), `test-cross-services.yml` (`-tags=crossservice` E2E Auth+Notes+Social as processes, needs `CROSS_SERVICE_TEST_DATABASE_URL` ending in `_test`), `grpc-ci.yml` (buf generate + breaking check).
 
 sqlc (social): `cd back/social && sqlc generate`.
 
@@ -49,7 +49,7 @@ Protobuf (never run `buf` from `back/proto` root — nondeterministic across nes
 make tools && make generate             # common module; installs buf into ./bin (needs docker, curl; Linux buf binary)
 bash back/proto/infacadem/generate.sh   # infacadem module
 ```
-Generated code is committed. Stubs land in `back/proto/gen/go/<svc>/v<N>` (common) or `back/infacadem/internal/gen` (infacadem). Proto layout: `back/proto/<svc>/v<N>/<resource>.proto`, `package <svc>.v<N>;` (buf lint enforces dir match), `go_package = "github.com/kurovoxx/tallerintegracion3/back/proto/gen/go/<svc>/v<N>;<pkg>"`. `social/internal/interceptor` (gRPC internal-key auth + logging) exists but is not wired into a server yet.
+Generated code is committed. Stubs land in `back/proto/gen/go/<svc>/v<N>` (common) or `back/infacadem/internal/gen` (infacadem). Proto layout: `back/proto/<svc>/v<N>/<resource>.proto`, `package <svc>.v<N>;` (buf lint enforces dir match), `go_package = "github.com/kurovoxx/tallerintegracion3/back/proto/gen/go/<svc>/v<N>;<pkg>"`. `social/internal/interceptor` (gRPC internal-key auth + logging) is wired into Social's gRPC server (`:9083`, `startGRPC`).
 
 Flutter (from `front`):
 ```bash

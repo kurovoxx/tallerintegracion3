@@ -268,3 +268,263 @@ el E2E local de las 38 rutas con proveedores mock.
 Por indicación del usuario, Google Drive real queda pendiente. Tampoco se
 prueban Calendar real (el despliegue está en mock), mensajes reales de
 Stream/Discord ni el borrado de cuenta iniciado desde Identity.
+
+## 3_3_7 — Front: ajustes de grupos y permisos
+
+La pestaña MIEMBROS (`front/lib/features/groups/group_members_tab.dart`)
+mostraba EXPULSAR y BANEAR también sobre otros administradores. Social
+rechaza esas acciones con `400 target_is_admin` (RN-GRUPO-08), así que el
+botón solo producía un error. Tampoco existía UI para cambiar roles, aunque
+el backend ya tenía los endpoints.
+
+Cambios:
+
+- Sobre otro **miembro**, un admin ve: HACER ADMIN, TRANSFERIR ADMIN,
+  EXPULSAR y BANEAR.
+- Sobre otro **admin**, solo ve QUITAR ADMIN. Para expulsarlo hay que
+  degradarlo primero.
+- Cada acción pide confirmación. Transferir avisa que el usuario pasará a
+  miembro; después de transferir, la lista se recarga y desaparecen las
+  acciones de gestión.
+- `SocialService.transferAdmin` (`POST /groups/:id/transfer-admin`) es nuevo
+  y avisa a `groupsChanged` para que la lista de grupos muestre el rol nuevo.
+  `changeMemberRole` ya existía, pero no se usaba.
+- Las acciones comparten `_perform` (estado ocupado, recarga y snackbar).
+
+Pruebas en `front/test/group_members_tab_test.dart`: ascender y degradar
+(PATCH `role`), ocultar expulsar/banear sobre admins y transferir.
+`flutter test test/group_members_tab_test.dart`: **8/8 aprobados**.
+`flutter analyze` no reporta problemas nuevos (los 5 avisos de
+`social_service.dart` ya existían).
+
+La pestaña Discord carga el rol una sola vez al abrirse. Si el usuario
+transfiere la administración, el botón de configurar Discord sigue visible
+hasta reabrir el grupo (el backend responde `403`). No se modificó porque
+esa pantalla está en trabajo en la tarea 3_5_18.
+
+### Permiso corregido en Social: webhook de Discord
+
+`GET /groups/:id/discord-config` entregaba `webhook_url` a cualquier
+miembro. Quien tiene esa URL puede publicar en el canal de Discord, así que
+es un secreto (RN-TRANS-05). Ahora `DiscordService.GetConfig` lo envía solo
+a admins; los miembros reciben `null`. El formulario del front ya era solo
+para admins, así que no cambia. También se corrigieron los nombres
+invertidos de los logs `GetDiscordConfig`/`PutDiscordConfig`.
+
+`go build ./...`, `go vet ./...` y `go test ./... -count=1` en
+`back/social`: correctos. No había base PostgreSQL de pruebas configurada,
+por lo que las pruebas de integración se omitieron localmente.
+
+### Exmiembros en el chat Stream
+
+Social agregaba usuarios al canal Stream al emitir el token, pero nunca los
+quitaba al salir, ser expulsado, ser baneado o borrar la cuenta. Como el
+token firmado no tiene `exp`, un exmiembro con un token anterior podía
+seguir leyendo y escribiendo en el chat del grupo (contra RN-SOCIAL-03).
+
+Corrección:
+
+- `stream.Client.RemoveMember` (`POST /channels/{type}/{id}` con
+  `{"remove_members":[...]}`), implementado en el cliente REST y en el mock.
+- `GroupService.removeFromChat` se llama después de confirmar
+  `LeaveGroup`, `KickMember`, `BanMember` y, por cada grupo,
+  `HandleAccountDeletion`. Corre con `GoBestEffort` (en segundo plano,
+  timeout y recuperación de pánicos): un fallo de Stream solo se registra
+  (`stream sync: remove-member`) y no revierte la operación.
+- El canal se calcula con `ChannelIDForGroup`, el único id que Social usa al
+  crear canales. No se lee `social.stream_channels`, cuya fila desaparece en
+  cascada cuando se borra el grupo.
+- `main.go` conecta el mismo cliente que el resto de Stream
+  (`STREAM_MODE=mock` no usa red).
+
+Pruebas nuevas: `internal/service/group_chat_cleanup_test.go` (salida,
+expulsión, baneo, borrado de cuenta en varios grupos, fallo de Stream sin
+revertir la salida y ninguna limpieza si la operación falla) y
+`TestRESTClient_RemoveMember`. `go build`, `go vet` (incluidos los tags
+`crossservice` y `clustersmoke`) y `go test ./... -count=1`: correctos. El
+detector de carreras no se ejecutó localmente (requiere cgo); lo ejecuta el
+workflow de Social.
+
+Límites conocidos:
+
+- No hay reintento: si Stream falla en ese momento, el exmiembro sigue en
+  el canal. Si vuelve a unirse, el siguiente token lo agrega de nuevo, como
+  corresponde.
+- Si alguien sale y reingresa muy rápido, la remoción en segundo plano
+  podría ejecutarse después del reingreso. El siguiente `stream-token`
+  vuelve a agregarlo.
+- No se probó contra Stream real; el despliegue usa `STREAM_MODE=real`.
+
+## 3_3_8 — Lógica de negocio de Social
+
+Mapa de las reglas de `documentation/reglas_negocio.md` a su
+implementación en `back/social`:
+
+| Regla | Dónde se aplica | Comportamiento |
+|---|---|---|
+| RN-GRUPO-01/02 | `GroupRepository.CreateWithOwner` | El creador entra como `admin`; roles válidos: `admin`, `member` |
+| RN-GRUPO-03 | `requireAdminTx` (bajo lock de la fila del grupo) | Kick, ban, cambio de rol, transferencia y regenerar invitación |
+| RN-GRUPO-04/05 | `JoinWithInviteToken`, `RegenerateInviteToken` | El token debe coincidir con el vigente; regenerar invalida el anterior. Solo los admins ven el token en `GET /groups/:id` |
+| RN-GRUPO-06/07 | `BanMember` + `social.banned_users`; `JoinWithInviteToken` | El baneo borra la membresía y registra la prohibición; el ingreso la verifica bajo el mismo lock. La expulsión no deja registro |
+| RN-GRUPO-08 | `requireRemovableTargetTx` | Expulsar o banear a un admin, o a uno mismo, responde `400` |
+| RN-GRUPO-09 | `TransferAdmin` | En una transacción: destino `admin`, solicitante `member` |
+| RN-GRUPO-10 | `removeUserFromGroup` | Si sale el único admin, asciende el miembro más antiguo (`joined_at, user_id`); si no queda nadie, se borra el grupo. `owner_user_id` sigue al nuevo admin |
+| RN-GRUPO-11, RN-PROD-03 | `TodoService`, `SprintService` | El asignado debe ser miembro (`400` si no) |
+| RN-PROD-01/02/04 | `sheetAccess`, `resolveSheet`, consultas con `group_id` | Toda hoja o tarea se busca dentro del grupo de la ruta; un id de otro grupo da `404` |
+| RN-PROD-05 | `HoursService.requireTaskGroup` | Horas: tarea, hoja, grupo y membresía. Una fila por tarea y día (upsert) |
+| RN-SOCIAL-01/02/04/05/06 | `MeetingService` + `MultiMeetingNotifier` | Cualquier miembro crea reuniones; Calendar, Discord, Stream y correo corren después, en segundo plano, y sus fallos no revierten la reunión |
+| RN-SOCIAL-03 | `StreamTokenService`, `GroupService.removeFromChat` | Token solo para miembros; al dejar el grupo se quita al usuario del canal (best-effort) |
+| RN-TRANS-03 | `RequireInternalKey`, `interceptor.NewInternalAuth` | `/internal/*` y gRPC exigen `INTERNAL_API_KEY`; nginx bloquea `/api-*/internal/` |
+| RN-TRANS-04 | Servicios de Social | El `user_id` sale del JWT; la membresía se comprueba en el backend |
+| RN-TRANS-05 | `DiscordService.GetConfig`, `logChannelSync` | Webhook solo para admins; no se registran tokens ni secretos |
+| RN-TRANS-06 | `best_effort.go`, `unshareNotes` | La limpieza de apuntes en Notes es posterior y best-effort; la salida del grupo ya quedó confirmada |
+
+Otras reglas que aplica el código y que no tienen ID en el documento:
+
+- No se puede eliminar la única hoja de sprint de un grupo (`ErrLastSheet`).
+- Las horas por día admiten como máximo `99.99` (columna `numeric(4,2)`).
+  Valores mayores terminan en `500`; no hay validación de 24 h.
+- El borrado de cuenta (`AccountDeletionCleanup`) aplica la misma sucesión
+  grupo por grupo y es idempotente. Ningún servicio lo invoca todavía desde
+  Identity (tarea 3_4_4).
+
+## 3_3_13 — Documentación de endpoints de Social
+
+Se completó `endpointDoc/` con el formato existente (Req, Res, Flujo,
+Tests) para las rutas de Social que no tenían archivo. Grupos (3_4_13) y
+las tareas de sprint/kanban (3_5_17) ya estaban documentados.
+
+| Archivo | Ruta |
+|---|---|
+| `GET-groups-id-sprint-sheets.md` | `GET /groups/:id/sprint-sheets` |
+| `POST-groups-id-sprint-sheets.md` | `POST /groups/:id/sprint-sheets` |
+| `PATCH-groups-id-sprint-sheets-sheetId.md` | `PATCH /groups/:id/sprint-sheets/:sheetId` |
+| `DELETE-groups-id-sprint-sheets-sheetId.md` | `DELETE /groups/:id/sprint-sheets/:sheetId` |
+| `POST-sprint-sheet-taskId-hours.md` | `POST /sprint-sheet/:taskId/hours` |
+| `GET-sprint-sheet-taskId-hours.md` | `GET /sprint-sheet/:taskId/hours` |
+| `GET-groups-id-discord-config.md` | `GET /groups/:id/discord-config` |
+| `PUT-groups-id-discord-config.md` | `PUT /groups/:id/discord-config` |
+| `GET-groups-id-stream-token.md` | `GET /groups/:id/stream-token` |
+| `GET-me-overview.md` | `GET /me/overview` |
+| `GET-groups-id-workspace.md` | `GET /groups/:id/workspace` |
+| `GET-social-health.md` | `GET /health`, `GET /health/db` |
+| `GRPC-social-IsMember.md` | `social.v1.SocialService/IsMember` |
+| `GRPC-social-IsAdmin.md` | `social.v1.SocialService/IsAdmin` |
+| `GRPC-social-GetMembers.md` | `social.v1.SocialService/GetMembers` |
+| `GRPC-social-GetMemberEmails.md` | `social.v1.SocialService/GetMemberEmails` |
+
+Con estos archivos, las 38 rutas HTTP y los 5 RPC de Social tienen
+documentación.
+
+## 3_3_10 — Revisión de la documentación del proyecto
+
+Se compararon los contratos y las guías con el código actual de Social y se
+corrigieron las diferencias:
+
+- `agentApiContract.md` y `agentApiContract2.md`: las horas no están bajo
+  `/groups/{id}/...` sino en `/sprint-sheet/{taskId}/hours`, y no responden
+  `409`: repetir el día reemplaza el valor (`200`). Se agregaron el GET de
+  horas y el GET de Discord (con la regla del webhook), y `api_key` en la
+  respuesta de `stream-token`.
+- `AGENTS.md` (y la copia local `CLAUDE.md`, ignorada por git): el
+  interceptor gRPC de Social sí está conectado en `startGRPC`, y la CI ya no
+  cubre solo Auth. Ahora se listan los workflows de Social, E2E cruzado y
+  gRPC.
+
+## 3_3_14 — Investigación: IA para el microservicio de IA
+
+### Punto de partida
+
+- `agentMain.md` define un asistente en Python (FastAPI) sobre una API
+  externa (Claude u OpenAI), con contexto limitado a los apuntes propios
+  del usuario, leídos desde Drive.
+- `back/ai` solo tiene carpetas vacías y el front tiene
+  `features/ai_assistant/` vacío. Existen las tablas `ai.conversations` y
+  `ai.messages` (`docker/postgres/init.sql`).
+- RN-IA-01..03: la IA es WON'T en esta entrega, y antes de implementarla hay
+  que definir proveedor, contexto permitido y comportamiento. Esta sección
+  propone esas tres definiciones.
+
+### Propuesta
+
+**Proveedor:** API de Claude (Anthropic) con el SDK oficial de Python
+(`anthropic`). Encaja con FastAPI, permite streaming para mostrar la
+respuesta mientras se genera, y ofrece citas a documentos y caché de
+prompts, que cubren las dos necesidades principales del asistente.
+
+**Contexto permitido:** solo los apuntes Markdown del usuario autenticado.
+El servicio de IA no debe leer Drive por su cuenta: debe pedir los apuntes
+a Notes por gRPC (con `x-internal-key` y el `user_id` del JWT), igual que
+Social consulta a Identity. Así Notes sigue siendo el único servicio que lee
+Drive y aplica permisos.
+
+**Comportamiento:**
+
+1. FastAPI valida el JWT (HS256, mismo `JWT_SECRET`) y obtiene `user_id`.
+2. Pide a Notes la lista y el contenido de los apuntes del usuario.
+3. Envía cada apunte como un bloque `document` de texto, con
+   `citations: {enabled: true}` y el título del apunte. Claude responde
+   citando los fragmentos usados, y el front puede enlazar cada cita a su
+   apunte.
+4. Pone `cache_control` después de los apuntes. En una conversación, las
+   preguntas siguientes reutilizan ese prefijo y pagan el precio de lectura
+   de caché.
+5. Guarda la pregunta y la respuesta en `ai.messages`.
+6. Si el texto total supera un límite, avisa al usuario y le pide elegir
+   apuntes. No se debe truncar en silencio. Para medir antes de enviar se
+   usa `messages.count_tokens`.
+
+**Sin base vectorial al inicio.** Los modelos actuales aceptan 1M tokens
+de contexto; un estudiante con decenas de apuntes queda muy por debajo.
+Un RAG con embeddings solo hace falta si se mide que el volumen lo exige.
+
+### Modelos y costo (precio por millón de tokens, octubre de 2026)
+
+| Modelo | ID | Entrada | Salida |
+|---|---|---:|---:|
+| Claude Opus 5.5 | `claude-opus-5-5` | $4,00 | $20,00 |
+| Claude Sonnet 5.5 | `claude-sonnet-5-5` | $2,00 | $10,00 |
+| Claude Haiku 5.5 | `claude-haiku-5-5` | $0,10 | $0,50 |
+
+Haiku 5.5 tiene ese precio hasta 100K tokens de entrada ($0,50 / $2,50
+sobre ese tamaño). Opus 5.5 y Sonnet 5.5 cobran $0,20 por millón en
+lecturas de caché.
+
+Ejemplo: 50 apuntes de ~2.000 tokens (100K de entrada) y 1.000 tokens de
+respuesta, sin contar el recargo por escribir la caché:
+
+| Modelo | Primera pregunta | Siguientes (con caché) |
+|---|---:|---:|
+| Opus 5.5 | ~$0,42 | ~$0,04 |
+| Sonnet 5.5 | ~$0,21 | ~$0,03 |
+| Haiku 5.5 | ~$0,01 | ~$0,01 |
+
+Recomendación: empezar con `claude-opus-5-5` con `effort` bajo (`low`),
+suficiente para responder preguntas sobre texto propio, y medir la calidad
+con un conjunto pequeño de preguntas reales. Pasar a un modelo más barato
+(Sonnet 5.5 o Haiku 5.5) es una decisión de presupuesto del equipo y debe
+validarse con esas mismas preguntas.
+
+Notas técnicas para quien lo implemente:
+
+- En Opus 5.5 no se puede desactivar el razonamiento; se regula con
+  `output_config.effort`. Tampoco acepta `temperature`/`top_p` ni
+  respuestas precargadas del asistente.
+- Revisar siempre `stop_reason` (por ejemplo `refusal` o `max_tokens`)
+  antes de leer el contenido.
+- Las citas no se pueden combinar con salidas estructuradas
+  (`output_config.format`).
+- Para streaming: `client.messages.stream(...)`, reenviando los eventos al
+  front por SSE.
+
+### Privacidad y datos
+
+- Los apuntes son datos personales que se envían a un tercero. Hay que
+  informarlo en `docs/privacidad.html` y pedir consentimiento antes del
+  primer uso.
+- Antes de producción, revisar la política vigente de retención de datos
+  de Anthropic y los términos de la cuenta. No registrar en logs el
+  contenido de los apuntes ni las respuestas.
+- `ANTHROPIC_API_KEY` va en `ti3-secrets`, nunca en `.env.prod`.
+- Agregar al borrado de cuenta (3_4_4) la eliminación de
+  `ai.conversations` del usuario.

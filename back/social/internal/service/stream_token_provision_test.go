@@ -11,8 +11,8 @@ import (
 )
 
 // fakeRemoteStream simula el estado REMOTO de Stream: canales que existen o
-// no, miembros por canal y registro de operaciones. No tiene operación de
-// borrado a propósito: el código bajo prueba jamás debe borrar nada.
+// no, miembros por canal y registro de operaciones. No borra nada a
+// propósito: emitir tokens jamás debe borrar ni quitar miembros.
 type fakeRemoteStream struct {
 	mu       sync.Mutex
 	channels map[string]bool
@@ -51,6 +51,15 @@ func (f *fakeRemoteStream) EnsureMember(_ context.Context, _, channelID, userID 
 		f.members[channelID] = map[string]bool{}
 	}
 	f.members[channelID][userID] = true
+	return nil
+}
+
+// RemoveMember solo registra la operación: emitir tokens jamás debe quitar
+// miembros, y cualquier "remove:" en ops haría fallar las aserciones.
+func (f *fakeRemoteStream) RemoveMember(_ context.Context, _, channelID, userID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ops = append(f.ops, "remove:"+channelID+":"+userID)
 	return nil
 }
 

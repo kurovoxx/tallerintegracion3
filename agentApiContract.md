@@ -83,10 +83,12 @@ inexistente, eliminar la nota y sus `shared_notes`.
 | GET | `/groups/{id}/sprint-sheet` | — | `200 [...]` | — |
 | PATCH | `/groups/{id}/sprint-sheet/{taskId}` | campos parciales | `200` | — |
 | DELETE | `/groups/{id}/sprint-sheet/{taskId}` | — | `204` | — |
-| POST | `/groups/{id}/sprint-sheet/{taskId}/hours` | `{log_date, hours}` | `201` | `409` ya hay horas registradas ese día (usar PATCH) |
+| POST | `/sprint-sheet/{taskId}/hours` | `{log_date, hours}` | `201` día nuevo / `200` reemplaza las horas de ese día (upsert, sin `409`) | `403` no eres miembro; `404` tarea inexistente |
+| GET | `/sprint-sheet/{taskId}/hours?from&to` | — | `200 {data, total_hours}` | `403` no eres miembro |
 | POST | `/groups/{id}/meetings` | `{title, description?, scheduled_at}` | `201 {meeting_id}` — creación local síncrona; dispara Calendar/Discord/Stream en background | — |
 | PUT | `/groups/{id}/discord-config` | `{server_name, invite_url, webhook_url?}` | `200` | `403` no eres admin |
-| GET | `/groups/{id}/stream-token` *(añadido para completar el contrato)* | — | `200 {token, channel_id}` — token firmado con la API secret de Stream para que el cliente se conecte directo | `403` no eres miembro |
+| GET | `/groups/{id}/discord-config` | — | `200 {server_name, invite_url, webhook_url}` — `webhook_url` solo para admins (`null` para miembros) | `403` no eres miembro; `404` sin configurar |
+| GET | `/groups/{id}/stream-token` *(añadido para completar el contrato)* | — | `200 {token, channel_id, api_key}` — token firmado con la API secret de Stream para que el cliente se conecte directo | `403` no eres miembro |
 
 **Notas de implementación no expuestas como endpoint**: creación del canal de Stream
 (disparada internamente al crear el grupo, no por el cliente); sincronización con Google

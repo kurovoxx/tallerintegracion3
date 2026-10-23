@@ -78,18 +78,19 @@ func newMockRefreshHWithStore() *mockRefreshH {
 	return &mockRefreshH{tokens: make(map[string]*repository.RefreshToken)}
 }
 
-func (m *mockRefreshH) Create(ctx context.Context, userID, tokenHash string, expiresAt time.Time) (string, error) {
+func (m *mockRefreshH) Create(ctx context.Context, userID, tokenHash string, fingerprint []byte, expiresAt time.Time) (string, error) {
 	if m.tokens == nil {
 		m.tokens = make(map[string]*repository.RefreshToken)
 	}
 	id := fmt.Sprintf("mock-id-%d", len(m.tokens)+1)
 	m.tokens[id] = &repository.RefreshToken{
-		ID:        id,
-		UserID:    userID,
-		TokenHash: tokenHash,
-		ExpiresAt: expiresAt,
-		Revoked:   false,
-		CreatedAt: time.Now(),
+		ID:               id,
+		UserID:           userID,
+		TokenHash:        tokenHash,
+		TokenFingerprint: fingerprint,
+		ExpiresAt:        expiresAt,
+		Revoked:          false,
+		CreatedAt:        time.Now(),
 	}
 	return id, nil
 }
@@ -117,7 +118,7 @@ func (m *mockRefreshH) Revoke(ctx context.Context, id string) error {
 	}
 	return nil
 }
-func (m *mockRefreshH) Rotate(ctx context.Context, oldID, userID, newHash string, newExpires time.Time) (string, error) {
+func (m *mockRefreshH) Rotate(ctx context.Context, oldID, userID, newHash string, newFingerprint []byte, newExpires time.Time) (string, error) {
 	if old, ok := m.tokens[oldID]; ok {
 		if old.Revoked {
 			return "", fmt.Errorf("revoked")
@@ -129,12 +130,13 @@ func (m *mockRefreshH) Rotate(ctx context.Context, oldID, userID, newHash string
 	}
 	newID := fmt.Sprintf("mock-id-%d", len(m.tokens)+1)
 	m.tokens[newID] = &repository.RefreshToken{
-		ID:        newID,
-		UserID:    userID,
-		TokenHash: newHash,
-		ExpiresAt: newExpires,
-		Revoked:   false,
-		CreatedAt: time.Now(),
+		ID:               newID,
+		UserID:           userID,
+		TokenHash:        newHash,
+		TokenFingerprint: newFingerprint,
+		ExpiresAt:        newExpires,
+		Revoked:          false,
+		CreatedAt:        time.Now(),
 	}
 	return newID, nil
 }
@@ -152,8 +154,6 @@ func newJWTForHandler(t *testing.T) *service.JWTService {
 	}
 	return svc
 }
-
-
 
 // Test 1: Register exitoso sin role
 func TestAuthHandler_Register_SinRole_201(t *testing.T) {
@@ -711,7 +711,7 @@ func TestAuthHandler_Logout_Expirado_204(t *testing.T) {
 	// Para simplificar, insertamos token expirado directamente en mock
 	// Necesitamos userID del repo
 	user, _ := repo.GetByEmail(context.Background(), "logoutexp@test.invalid")
-	refreshRepo.Create(context.Background(), user.ID, hash, time.Now().Add(-1*time.Hour))
+	refreshRepo.Create(context.Background(), user.ID, hash, nil, time.Now().Add(-1*time.Hour))
 	body, _ := json.Marshal(map[string]string{"refresh_token": raw})
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
