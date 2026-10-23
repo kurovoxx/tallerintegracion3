@@ -240,7 +240,8 @@ class _NeobrutalistButtonState extends State<NeobrutalistButton> {
           onFocusChange: (bool value) => setState(() => _focused = value),
           onKeyEvent: (_, KeyEvent event) {
             if (!_enabled) return KeyEventResult.ignored;
-            final isActivation = event is KeyDownEvent &&
+            final isActivation =
+                event is KeyDownEvent &&
                 (event.logicalKey == LogicalKeyboardKey.enter ||
                     event.logicalKey == LogicalKeyboardKey.space);
             if (isActivation) {
@@ -287,8 +288,7 @@ class NeobrutalistIconButton extends StatefulWidget {
   final FocusNode? focusNode;
 
   @override
-  State<NeobrutalistIconButton> createState() =>
-      _NeobrutalistIconButtonState();
+  State<NeobrutalistIconButton> createState() => _NeobrutalistIconButtonState();
 }
 
 class _NeobrutalistIconButtonState extends State<NeobrutalistIconButton> {
@@ -350,8 +350,9 @@ class _NeobrutalistIconButtonState extends State<NeobrutalistIconButton> {
           width: widget.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
-        boxShadow:
-            pressed || !_enabled ? const <BoxShadow>[] : AppShadows.button,
+        boxShadow: pressed || !_enabled
+            ? const <BoxShadow>[]
+            : AppShadows.button,
       ),
       child: Icon(widget.icon, size: 20, color: _foreground),
     );
@@ -434,8 +435,7 @@ class _NeobrutalistFabState extends State<NeobrutalistFab> {
     );
 
     final interactive = MouseRegion(
-      cursor:
-          enabled ? SystemMouseCursors.click : SystemMouseCursors.forbidden,
+      cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.forbidden,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTapDown: enabled ? (_) => _setPressed(true) : null,
@@ -622,17 +622,20 @@ class NeobrutalistDialog extends StatelessWidget {
               ),
               Padding(
                 padding: const EdgeInsets.all(AppDimens.spaceLg),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
+                // Wrap alineado a la derecha: igual que el Row cuando caben,
+                // pero en pantallas angostas o con texto ampliado las acciones
+                // bajan de línea en vez de desbordar.
+                child: Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: AppDimens.spaceMd,
+                  runSpacing: AppDimens.spaceSm,
                   children: <Widget>[
-                    if (cancelLabel != null) ...<Widget>[
+                    if (cancelLabel != null)
                       NeobrutalistButton(
                         label: cancelLabel!,
                         variant: NeobrutalistButtonVariant.secondary,
                         onPressed: () => Navigator.of(context).pop(),
                       ),
-                      const SizedBox(width: AppDimens.spaceMd),
-                    ],
                     if (confirmLabel != null)
                       NeobrutalistButton(
                         label: confirmLabel!,

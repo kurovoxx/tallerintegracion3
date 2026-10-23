@@ -230,31 +230,55 @@ class _GroupNotesTabState extends State<GroupNotesTab> {
         horizontal: AppDimens.spaceLg,
         vertical: AppDimens.spaceSm,
       ),
-      child: Row(
-        children: [
-          const Icon(Icons.description_rounded, size: 16, color: AppColors.text),
-          const SizedBox(width: AppDimens.spaceSm),
-          const Expanded(
-            child: Text(
-              'NOTAS COMPARTIDAS',
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                fontSize: 12,
-                letterSpacing: 0.5,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // En pantallas angostas o con texto ampliado el botón con etiqueta
+          // dejaba al título ~13 px de ancho (una letra por línea). Ahí el
+          // refresco pasa a botón de ícono con tooltip.
+          final textScale = MediaQuery.textScalerOf(context).scale(1);
+          final compact = constraints.maxWidth < 420 || textScale > 1.3;
+          return Row(
+            children: [
+              const Icon(
+                Icons.description_rounded,
+                size: 16,
+                color: AppColors.text,
               ),
-            ),
-          ),
-          NeobrutalistButton(
-            label: 'Refrescar',
-            icon: Icons.refresh_rounded,
-            variant: NeobrutalistButtonVariant.secondary,
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppDimens.spaceMd,
-              vertical: AppDimens.spaceSm,
-            ),
-            onPressed: _loading ? null : _load,
-          ),
-        ],
+              const SizedBox(width: AppDimens.spaceSm),
+              const Expanded(
+                child: Text(
+                  'NOTAS COMPARTIDAS',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 12,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ),
+              const SizedBox(width: AppDimens.spaceSm),
+              if (compact)
+                NeobrutalistIconButton(
+                  icon: Icons.refresh_rounded,
+                  tooltip: 'Refrescar',
+                  size: 40,
+                  onPressed: _loading ? null : _load,
+                )
+              else
+                NeobrutalistButton(
+                  label: 'Refrescar',
+                  icon: Icons.refresh_rounded,
+                  variant: NeobrutalistButtonVariant.secondary,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppDimens.spaceMd,
+                    vertical: AppDimens.spaceSm,
+                  ),
+                  onPressed: _loading ? null : _load,
+                ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -264,8 +288,9 @@ class _GroupNotesTabState extends State<GroupNotesTab> {
       return const Center(child: CircularProgressIndicator());
     }
     if (_error != null) {
+      // Scroll: con texto ampliado (200 %) el estado no cabe en móviles.
       return Center(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(AppDimens.spaceXl),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -311,7 +336,7 @@ class _GroupNotesTabState extends State<GroupNotesTab> {
 
   Widget _empty() {
     return const Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: EdgeInsets.all(AppDimens.spaceXl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -492,14 +517,19 @@ class _NoteViewer extends StatelessWidget {
       );
     }
 
-    final icon = type == 'pdf' ? Icons.picture_as_pdf_rounded : Icons.attach_file_rounded;
+    final icon = type == 'pdf'
+        ? Icons.picture_as_pdf_rounded
+        : Icons.attach_file_rounded;
     return Padding(
       padding: const EdgeInsets.only(bottom: AppDimens.spaceSm),
       child: Container(
         padding: const EdgeInsets.all(AppDimens.spaceMd),
         decoration: BoxDecoration(
           color: AppColors.surface,
-          border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+          border: Border.all(
+            color: AppColors.border,
+            width: AppDimens.borderWidth,
+          ),
           borderRadius: BorderRadius.circular(AppDimens.radius),
           boxShadow: AppShadows.badge,
         ),
@@ -564,9 +594,8 @@ class _ShareNoteDialogState extends State<_ShareNoteDialog> {
       cancelLabel: 'Cancelar',
       confirmLabel: 'Compartir',
       closeOnConfirm: false,
-      onConfirm: () => Navigator.of(
-        context,
-      ).pop(_ShareChoice(_noteId, _accessMode)),
+      onConfirm: () =>
+          Navigator.of(context).pop(_ShareChoice(_noteId, _accessMode)),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -644,7 +673,11 @@ class _ShareNoteDialogState extends State<_ShareNoteDialog> {
             ),
           ),
           const SizedBox(height: AppDimens.spaceSm),
-          Row(
+          // Wrap: en 360 px o con texto al 200 % los dos modos no caben en una
+          // fila y el Row desbordaba por la derecha.
+          Wrap(
+            spacing: AppDimens.spaceSm,
+            runSpacing: AppDimens.spaceSm,
             children: [
               NeobrutalistButton(
                 label: 'Link',
@@ -660,12 +693,10 @@ class _ShareNoteDialogState extends State<_ShareNoteDialog> {
                   () => _accessMode = NotesSharingService.accessModeLink,
                 ),
               ),
-              const SizedBox(width: AppDimens.spaceSm),
               NeobrutalistButton(
                 label: 'Restricted',
                 icon: Icons.group_rounded,
-                variant:
-                    _accessMode == NotesSharingService.accessModeRestricted
+                variant: _accessMode == NotesSharingService.accessModeRestricted
                     ? NeobrutalistButtonVariant.accent
                     : NeobrutalistButtonVariant.secondary,
                 padding: const EdgeInsets.symmetric(

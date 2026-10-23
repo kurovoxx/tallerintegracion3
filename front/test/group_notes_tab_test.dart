@@ -1,3 +1,8 @@
+import 'dart:async';
+import 'dart:io';
+import 'dart:ui' as ui;
+import 'package:flutter/rendering.dart';
+import 'support/service_uri.dart';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -7,6 +12,7 @@ import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taller_integracion_front/core/services/notes_sharing_service.dart';
 import 'package:taller_integracion_front/core/services/session_manager.dart';
+import 'package:taller_integracion_front/core/widgets/neobrutalism.dart';
 import 'package:taller_integracion_front/features/groups/group_notes_tab.dart';
 
 const _gid = '11111111-1111-1111-1111-111111111111';
@@ -26,7 +32,7 @@ class _FakeNotesApi {
   );
 
   Future<http.Response> handle(http.Request req) async {
-    final p = req.url.path;
+    final p = req.url.servicePath;
     if (req.method == 'GET' && p.endsWith('/groups/$_gid/notes')) {
       if (failList) {
         return _json(403, {
@@ -78,7 +84,9 @@ class _FakeNotesApi {
 Future<void> _pumpTab(WidgetTester tester, NotesSharingService service) async {
   await tester.pumpWidget(
     MaterialApp(
-      home: Scaffold(body: GroupNotesTab(groupId: _gid, service: service)),
+      home: Scaffold(
+        body: GroupNotesTab(groupId: _gid, service: service),
+      ),
     ),
   );
   await tester.pumpAndSettle();
@@ -90,6 +98,117 @@ void main() {
     SessionManager.saveSession('jwt-test', {'id': 'u'});
   });
   tearDown(SessionManager.clear);
+
+  for (final size in [
+    const Size(360, 640),
+    const Size(768, 1024),
+    const Size(1440, 900),
+  ]) {
+    for (final scale in [1.0, 2.0]) {
+      testWidgets(
+        'notas compartidas ${size.width} escala $scale: estados y diálogo',
+        (tester) async {
+          tester.view.physicalSize = size;
+          tester.view.devicePixelRatio = 1;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+          final api = _FakeNotesApi(shared: true);
+          final gate = Completer<http.Response>();
+          var loading = true;
+          final service = NotesSharingService(
+            client: MockClient((r) async {
+              if (loading) return gate.future;
+              return api.handle(r);
+            }),
+          );
+          addTearDown(service.dispose);
+          final boundaryKey = GlobalKey();
+          Future<void> mount() => tester.pumpWidget(
+            MaterialApp(
+              builder: (context, child) => MediaQuery(
+                data: MediaQuery.of(
+                  context,
+                ).copyWith(textScaler: TextScaler.linear(scale)),
+                child: child!,
+              ),
+              home: RepaintBoundary(
+                key: boundaryKey,
+                child: Scaffold(
+                  body: GroupNotesTab(
+                    key: UniqueKey(),
+                    groupId: _gid,
+                    service: service,
+                  ),
+                ),
+              ),
+            ),
+          );
+          await mount();
+          await tester.pump();
+          expect(find.byType(CircularProgressIndicator), findsOneWidget);
+          expect(tester.takeException(), isNull);
+          loading = false;
+          gate.complete(
+            http.Response(
+              jsonEncode({'notes': [], 'next_cursor': ''}),
+              200,
+              headers: {'content-type': 'application/json'},
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(
+            find.text('Aún no hay notas compartidas con este grupo.'),
+            findsOneWidget,
+          );
+          expect(tester.takeException(), isNull);
+          await mount();
+          await tester.pumpAndSettle();
+          expect(find.text('Nota compartida'), findsOneWidget);
+          expect(tester.takeException(), isNull);
+          if (const bool.fromEnvironment('SPRINT3_CAPTURE') && scale == 1) {
+            final boundary =
+                boundaryKey.currentContext!.findRenderObject()
+                    as RenderRepaintBoundary;
+            await tester.runAsync(() async {
+              final image = await boundary.toImage(pixelRatio: 1);
+              final bytes = await image.toByteData(
+                format: ui.ImageByteFormat.png,
+              );
+              await File(
+                '../.git/sprint3-evidence/shared-${size.width.toInt()}.png',
+              ).writeAsBytes(bytes!.buffer.asUint8List());
+              image.dispose();
+            });
+          }
+          await tester.tap(find.text('ABRIR'));
+          await tester.pumpAndSettle();
+          expect(find.text('cuerpo markdown'), findsOneWidget);
+          expect(tester.takeException(), isNull);
+          await tester.tap(
+            find.widgetWithText(NeobrutalistButton, 'CERRAR').last,
+          );
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('COMPARTIR UNA NOTA'));
+          await tester.pumpAndSettle();
+          // A 200 % el botón queda bajo la barra de acciones: se desplaza
+          // el contenido como haría el usuario antes de tocarlo.
+          await tester.ensureVisible(find.text('RESTRICTED'));
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('RESTRICTED'));
+          await tester.pumpAndSettle();
+          expect(find.text('Mi nota'), findsOneWidget);
+          expect(tester.takeException(), isNull);
+          await tester.tap(find.text('CANCELAR'));
+          await tester.pumpAndSettle();
+          api.failList = true;
+          await mount();
+          await tester.pumpAndSettle();
+          expect(find.text('REINTENTAR'), findsOneWidget);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+  }
 
   testWidgets('lista las notas compartidas del grupo', (tester) async {
     final api = _FakeNotesApi(shared: true);
