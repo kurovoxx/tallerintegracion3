@@ -73,6 +73,8 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	groupRepo := repository.NewGroupRepository(pool)
 	streamRepo := repository.NewStreamRepository(pool)
 	groupSvc := service.NewGroupService(groupRepo, streamNotifierFor(cfg, streamRepo))
+	// Salir/expulsar/banear/borrar cuenta quita al usuario del canal Stream.
+	groupSvc.SetChatMembership(streamClientFor(cfg))
 	// Cliente Identity por gRPC con conexión compartida (directorio y
 	// Calendar). La conexión es perezosa: Auth caído no impide arrancar;
 	// cada operación falla controlada y se recupera solo al volver Auth.

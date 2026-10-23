@@ -129,8 +129,13 @@ func TestGetDiscordConfig_ContractAndMembership(t *testing.T) {
 			if got["server_name"] != "Servidor" || got["invite_url"] != "https://discord.gg/test" {
 				t.Fatalf("contrato Discord inválido: %s", w.Body)
 			}
-			if webhook == "" && got["webhook_url"] != nil || webhook != "" && got["webhook_url"] != webhook {
-				t.Fatalf("webhook_url esperado %q o null cuando vacío: %s", webhook, w.Body)
+			// El webhook es secreto: solo el admin lo recibe.
+			want := webhook
+			if user == member {
+				want = ""
+			}
+			if want == "" && got["webhook_url"] != nil || want != "" && got["webhook_url"] != want {
+				t.Fatalf("webhook_url esperado %q o null cuando vacío: %s", want, w.Body)
 			}
 		}
 	}

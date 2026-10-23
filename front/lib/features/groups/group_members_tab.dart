@@ -8,8 +8,9 @@ import '../../core/widgets/neobrutalism.dart';
 import 'cleanup_shared_notes_checkbox.dart';
 
 /// Pestaña "MIEMBROS" del grupo: lista integrantes con su rol, permite ver su
-/// información y, si el usuario actual es admin, expulsar o banear (endpoints
-/// de Social). Estilo Neo-Brutalism.
+/// información y, si el usuario actual es admin, gestionar roles (hacer/quitar
+/// admin, transferir) y expulsar o banear a miembros (endpoints de Social).
+/// Estilo Neo-Brutalism.
 class GroupMembersTab extends StatefulWidget {
   const GroupMembersTab({super.key, this.groupId, SocialService? service})
     : _serviceOverride = service;
@@ -207,24 +208,88 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
       ),
     );
     if (cleanup == null || !mounted) return;
+    await _perform(
+      m,
+      ban ? 'Integrante baneado.' : 'Integrante expulsado.',
+      () => ban
+          ? _service.banMember(
+              groupId: _groupId,
+              userId: m.userId,
+              cleanupSharedNotes: cleanup,
+            )
+          : _service.kickMember(
+              groupId: _groupId,
+              userId: m.userId,
+              cleanupSharedNotes: cleanup,
+            ),
+    );
+  }
+
+  // Ascender, degradar o transferir la administración (PATCH role /
+  // POST transfer-admin). Tras transferir, el usuario actual pasa a miembro.
+  Future<void> _confirmRole(GroupMember m, {required String action}) async {
+    final name = m.displayLabel;
+    final (title, message, success, call) = switch (action) {
+      'promote' => (
+        'Hacer admin',
+        '¿Dar permisos de administración a $name? Seguirás siendo admin.',
+        '$name ahora es admin.',
+        () => _service.changeMemberRole(
+          groupId: _groupId,
+          userId: m.userId,
+          role: 'admin',
+        ),
+      ),
+      'demote' => (
+        'Quitar admin',
+        '¿Quitar los permisos de administración a $name? Quedará como miembro.',
+        '$name ahora es miembro.',
+        () => _service.changeMemberRole(
+          groupId: _groupId,
+          userId: m.userId,
+          role: 'member',
+        ),
+      ),
+      _ => (
+        'Transferir admin',
+        '¿Transferir tu rol de admin a $name? Pasarás a ser miembro y perderás '
+            'los permisos de gestión.',
+        'Administración transferida a $name.',
+        () => _service.transferAdmin(
+          groupId: _groupId,
+          newAdminUserId: m.userId,
+        ),
+      ),
+    };
+    final ok = await showNeobrutalistDialog<bool>(
+      context: context,
+      dialog: NeobrutalistDialog(
+        title: title,
+        cancelLabel: 'Cancelar',
+        confirmLabel: 'Confirmar',
+        confirmVariant: action == 'transfer'
+            ? NeobrutalistButtonVariant.danger
+            : NeobrutalistButtonVariant.accent,
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop(true),
+        content: Text(message),
+      ),
+    );
+    if (ok != true || !mounted) return;
+    await _perform(m, success, call);
+  }
+
+  Future<void> _perform(
+    GroupMember m,
+    String success,
+    Future<void> Function() call,
+  ) async {
     setState(() => _busyUserId = m.userId);
     try {
-      if (ban) {
-        await _service.banMember(
-          groupId: _groupId,
-          userId: m.userId,
-          cleanupSharedNotes: cleanup,
-        );
-      } else {
-        await _service.kickMember(
-          groupId: _groupId,
-          userId: m.userId,
-          cleanupSharedNotes: cleanup,
-        );
-      }
+      await call();
       if (!mounted) return;
       await _load();
-      _snack(ban ? 'Integrante baneado.' : 'Integrante expulsado.');
+      _snack(success);
     } on SocialApiException catch (e) {
       _snack(e.message, error: true);
     } catch (_) {
@@ -393,40 +458,45 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
               spacing: AppDimens.spaceSm,
               runSpacing: AppDimens.spaceSm,
               children: [
-                NeobrutalistButton(
-                  label: 'Ver',
-                  icon: Icons.badge_rounded,
-                  variant: NeobrutalistButtonVariant.secondary,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: AppDimens.spaceMd,
-                    vertical: AppDimens.spaceSm,
-                  ),
-                  onPressed: () => _showInfo(m),
+                _action(
+                  'Ver',
+                  Icons.badge_rounded,
+                  NeobrutalistButtonVariant.secondary,
+                  () => _showInfo(m),
                 ),
-                if (_isAdmin && !isMe) ...[
-                  NeobrutalistButton(
-                    label: 'Expulsar',
-                    icon: Icons.person_remove_rounded,
-                    variant: NeobrutalistButtonVariant.secondary,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: AppDimens.spaceMd,
-                      vertical: AppDimens.spaceSm,
-                    ),
-                    onPressed: busy
-                        ? null
-                        : () => _confirmModeration(m, ban: false),
+                // Social rechaza (400 target_is_admin) expulsar o banear a
+                // otro admin: primero hay que quitarle el rol.
+                if (_isAdmin && !isMe && isAdmin)
+                  _action(
+                    'Quitar admin',
+                    Icons.remove_moderator_rounded,
+                    NeobrutalistButtonVariant.secondary,
+                    busy ? null : () => _confirmRole(m, action: 'demote'),
                   ),
-                  NeobrutalistButton(
-                    label: 'Banear',
-                    icon: Icons.block_rounded,
-                    variant: NeobrutalistButtonVariant.danger,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: AppDimens.spaceMd,
-                      vertical: AppDimens.spaceSm,
-                    ),
-                    onPressed: busy
-                        ? null
-                        : () => _confirmModeration(m, ban: true),
+                if (_isAdmin && !isMe && !isAdmin) ...[
+                  _action(
+                    'Hacer admin',
+                    Icons.add_moderator_rounded,
+                    NeobrutalistButtonVariant.info,
+                    busy ? null : () => _confirmRole(m, action: 'promote'),
+                  ),
+                  _action(
+                    'Transferir admin',
+                    Icons.swap_horiz_rounded,
+                    NeobrutalistButtonVariant.secondary,
+                    busy ? null : () => _confirmRole(m, action: 'transfer'),
+                  ),
+                  _action(
+                    'Expulsar',
+                    Icons.person_remove_rounded,
+                    NeobrutalistButtonVariant.secondary,
+                    busy ? null : () => _confirmModeration(m, ban: false),
+                  ),
+                  _action(
+                    'Banear',
+                    Icons.block_rounded,
+                    NeobrutalistButtonVariant.danger,
+                    busy ? null : () => _confirmModeration(m, ban: true),
                   ),
                 ],
               ],
@@ -434,6 +504,24 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _action(
+    String label,
+    IconData icon,
+    NeobrutalistButtonVariant variant,
+    VoidCallback? onPressed,
+  ) {
+    return NeobrutalistButton(
+      label: label,
+      icon: icon,
+      variant: variant,
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppDimens.spaceMd,
+        vertical: AppDimens.spaceSm,
+      ),
+      onPressed: onPressed,
     );
   }
 
