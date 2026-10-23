@@ -615,11 +615,17 @@ func (m *MemorySharedStore) ListByGroup(ctx context.Context, groupID string, lim
 			list = append(list, &cop)
 		}
 	}
+	// Orden total (admin, shared_at, id) igual que PostgreSQL: sin desempate por
+	// id, dos comparticiones del mismo instante cambiaban de posición entre
+	// páginas (iteración aleatoria del mapa) y el cursor perdía una.
 	sort.Slice(list, func(i, j int) bool {
 		if list[i].IsAdminNote != list[j].IsAdminNote {
 			return list[i].IsAdminNote && !list[j].IsAdminNote
 		}
-		return list[i].SharedAt.After(list[j].SharedAt)
+		if !list[i].SharedAt.Equal(list[j].SharedAt) {
+			return list[i].SharedAt.After(list[j].SharedAt)
+		}
+		return list[i].ID > list[j].ID
 	})
 	if cursor != "" {
 		idx := -1

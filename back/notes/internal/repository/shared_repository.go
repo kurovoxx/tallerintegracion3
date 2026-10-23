@@ -136,12 +136,19 @@ func (r *SharedRepository) ListByGroup(ctx context.Context, db DBTX, groupID str
 	if cursor == "" {
 		rows, err = db.Query(ctx, `
 			SELECT id, note_id, group_id, is_admin_note, access_mode, author_followers_snapshot, permission_sync_status, shared_at
-			FROM notes.shared_notes WHERE group_id=$1 ORDER BY is_admin_note DESC, shared_at DESC LIMIT $2`, groupID, limit+1)
+			FROM notes.shared_notes WHERE group_id=$1 ORDER BY is_admin_note DESC, shared_at DESC, id DESC LIMIT $2`, groupID, limit+1)
 	} else {
+		// Keyset sobre el orden TOTAL (is_admin_note, shared_at, id), todo DESC:
+		// la comparación de fila respeta el orden. Antes el cursor solo usaba
+		// shared_at: omitía comparticiones con el mismo instante e ignoraba
+		// is_admin_note (si el cursor era una nota de admin se saltaban las
+		// notas normales más recientes).
 		rows, err = db.Query(ctx, `
 			SELECT id, note_id, group_id, is_admin_note, access_mode, author_followers_snapshot, permission_sync_status, shared_at
-			FROM notes.shared_notes WHERE group_id=$1 AND shared_at < (SELECT shared_at FROM notes.shared_notes WHERE id=$2)
-			ORDER BY is_admin_note DESC, shared_at DESC LIMIT $3`, groupID, cursor, limit+1)
+			FROM notes.shared_notes
+			WHERE group_id=$1 AND (is_admin_note, shared_at, id) <
+			      (SELECT c.is_admin_note, c.shared_at, c.id FROM notes.shared_notes c WHERE c.id=$2::uuid)
+			ORDER BY is_admin_note DESC, shared_at DESC, id DESC LIMIT $3`, groupID, cursor, limit+1)
 	}
 	if err != nil {
 		return nil, "", err
