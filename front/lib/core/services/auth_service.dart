@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'api_config.dart';
@@ -135,8 +134,6 @@ class AuthService {
       'password': password,
     };
 
-    debugPrint('Payload login preparado para email: ${email.trim()}');
-
     try {
       final response = await _client
           .post(
@@ -169,10 +166,9 @@ class AuthService {
       return LoginResult.failure(
         'No se pudo conectar con el servidor. Revisa la URL ($baseUrl), el puerto y que Gin esté ejecutándose.',
       );
-    } catch (e) {
-      // Captura también Error (ej. file:///api-auth en nativo con relativo mal configurado)
+    } catch (_) {
       return LoginResult.failure(
-        'No se pudo conectar con el servidor. Revisa la URL ($baseUrl), el puerto y que Gin esté ejecutándose. ($e)',
+        'No se pudo conectar con el servidor. Revisa la URL configurada, el puerto y que el servicio esté disponible.',
       );
     }
   }
@@ -202,10 +198,6 @@ class AuthService {
         'description': description.trim(),
       if (visibility != null) 'visibility': visibility,
     };
-
-    debugPrint(
-      'Payload register: email=${email.trim()}, display_name=${displayName.trim()}, role=$role',
-    );
 
     try {
       final response = await _client
@@ -239,9 +231,9 @@ class AuthService {
       return RegisterResult.failure(
         'No se pudo conectar con el servidor. Revisa la URL ($baseUrl), el puerto y que Gin esté ejecutándose.',
       );
-    } catch (e) {
+    } catch (_) {
       return RegisterResult.failure(
-        'No se pudo conectar con el servidor. Revisa la URL ($baseUrl), el puerto y que Gin esté ejecutándose. ($e)',
+        'No se pudo conectar con el servidor. Revisa la URL configurada, el puerto y que el servicio esté disponible.',
       );
     }
   }

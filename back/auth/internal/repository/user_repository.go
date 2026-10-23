@@ -138,6 +138,21 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*model.U
 	return &u, nil
 }
 
+// DeleteByID elimina el usuario y deja que PostgreSQL aplique las cascadas
+// declaradas en Identity (perfil, refresh tokens, password resets y OAuth).
+// Es idempotente para que el coordinador pueda repetirlo si perdió la respuesta
+// local después de que el commit ya ocurrió.
+func (r *UserRepository) DeleteByID(ctx context.Context, userID string) error {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return fmt.Errorf("user_id vacío")
+	}
+	if _, err := r.pool.Exec(ctx, `DELETE FROM identity.users WHERE id = $1`, userID); err != nil {
+		return fmt.Errorf("delete user: %w", err)
+	}
+	return nil
+}
+
 // ExistsByEmail verifica unicidad sin traer todo el row.
 func (r *UserRepository) ExistsByEmail(ctx context.Context, email string) (bool, error) {
 	email = strings.ToLower(strings.TrimSpace(email))

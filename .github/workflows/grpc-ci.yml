@@ -57,7 +57,7 @@ jobs:
       - name: Install buf and protoc plugins
         run: make tools
       - name: Fetch base branch
-        run: git fetch origin Development
+        run: git fetch origin refs/heads/Development:refs/remotes/origin/Development
       - name: Check for breaking changes
         working-directory: back/proto/${{ matrix.module }}
-        run: PATH="${{ github.workspace }}/bin:$PATH" buf breaking --against remotes/origin/Development
+        run: PATH="${{ github.workspace }}/bin:$PATH" buf breaking --against "${{ github.workspace }}/.git#ref=refs/remotes/origin/Development,subdir=back/proto/${{ matrix.module }}"

@@ -166,10 +166,27 @@ func (s *NotesServer) GetNoteAccess(ctx context.Context, req *notesv1.GetNoteAcc
 // x-internal-key ya autenticó al llamante, así que aquí no hay user_id del JWT.
 // El user_id del request es el usuario objetivo de la limpieza.
 func (s *NotesServer) UnshareAll(ctx context.Context, req *notesv1.UnshareAllRequest) (*notesv1.UnshareAllResponse, error) {
-	if err := s.svc.UnshareAll(ctx, req.GetUserId(), req.GetGroupId()); err != nil {
-		return nil, mapError(err)
+	cleanupStatus := s.svc.UnshareAccountGroup(ctx, req.GetUserId(), req.GetGroupId(), req.GetGroupDeleted())
+	if cleanupStatus == notesv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_ERROR {
+		return nil, status.Error(codes.Internal, "group share cleanup failed")
 	}
-	return &notesv1.UnshareAllResponse{}, nil
+	return &notesv1.UnshareAllResponse{Status: cleanupStatus}, nil
+}
+
+func (s *NotesServer) BeginAccountDeletion(ctx context.Context, req *notesv1.BeginAccountDeletionRequest) (*notesv1.BeginAccountDeletionResponse, error) {
+	cleanupStatus := s.svc.BeginAccountDeletion(ctx, req.GetUserId())
+	if cleanupStatus == notesv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_ERROR {
+		return nil, status.Error(codes.Internal, "account deletion gate unavailable")
+	}
+	return &notesv1.BeginAccountDeletionResponse{Status: cleanupStatus}, nil
+}
+
+func (s *NotesServer) AccountDeletionCleanup(ctx context.Context, req *notesv1.AccountDeletionCleanupRequest) (*notesv1.AccountDeletionCleanupResponse, error) {
+	cleanupStatus := s.svc.AccountDeletionCleanup(ctx, req.GetUserId())
+	if cleanupStatus == notesv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_ERROR {
+		return nil, status.Error(codes.Internal, "account cleanup could not be verified")
+	}
+	return &notesv1.AccountDeletionCleanupResponse{Status: cleanupStatus}, nil
 }
 
 // --- mapeo modelo → proto ---

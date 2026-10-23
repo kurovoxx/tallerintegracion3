@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -8,15 +9,82 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taller_integracion_front/core/services/session_manager.dart';
 import 'package:taller_integracion_front/core/services/social_service.dart';
 import 'package:taller_integracion_front/core/widgets/neobrutalism.dart';
+import 'package:taller_integracion_front/features/auth/google_calendar_service.dart';
 import 'package:taller_integracion_front/features/workspace/schedule_meeting_screen.dart';
 
 void main() {
+  testWidgets(
+    'ignora respuesta tardía de Calendar de A y libera la vista para B',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      await SessionManager.saveSession('jwt-A', {'id': 'A'});
+      addTearDown(SessionManager.resetInMemory);
+
+      var requestAStarted = false;
+      final responseA = Completer<http.Response>();
+      var requestBStarted = false;
+      final client = MockClient((request) {
+        expect(
+          request.url.path.endsWith('/auth/google-calendar/status'),
+          isTrue,
+        );
+        final authorization = request.headers['authorization'];
+        if (authorization == 'Bearer jwt-A') {
+          requestAStarted = true;
+          return responseA.future;
+        }
+        if (authorization == 'Bearer jwt-B') {
+          requestBStarted = true;
+          return Future.value(http.Response('{"connected":false}', 200));
+        }
+        return Future.value(http.Response('', 401));
+      });
+      addTearDown(client.close);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ScheduleMeetingScreen(
+            calendarService: GoogleCalendarService(client: client),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(requestAStarted, isTrue, reason: 'la sesión A consulta Calendar');
+      expect(find.byType(LinearProgressIndicator), findsOneWidget);
+
+      await SessionManager.saveSession('jwt-B', {'id': 'B'});
+      await tester.pump();
+      await tester.pump();
+      expect(requestBStarted, isTrue, reason: 'la sesión B consulta Calendar');
+      await tester.pump(const Duration(milliseconds: 20));
+
+      expect(find.byType(LinearProgressIndicator), findsNothing);
+      expect(find.text('VINCULAR CON GOOGLE CALENDAR'), findsOneWidget);
+
+      responseA.complete(
+        http.Response(
+          '{"connected":true,"external_email":"calendar-a@example.test"}',
+          200,
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 20));
+
+      expect(find.text('calendar-a@example.test'), findsNothing);
+      expect(find.text('✓ Google Calendar vinculado'), findsNothing);
+      expect(find.text('VINCULAR CON GOOGLE CALENDAR'), findsOneWidget);
+      expect(find.byType(LinearProgressIndicator), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
   testWidgets(
     'agenda real conserva campos UI sin enviarlos y refresca reuniones',
     (tester) async {
       SharedPreferences.setMockInitialValues({});
       SessionManager.saveSession('jwt-test', {'id': 'u'});
-      addTearDown(SessionManager.clear);
+      addTearDown(SessionManager.resetInMemory);
       const groupId = '11111111-1111-1111-1111-111111111111';
       Map<String, dynamic>? payload;
       var loads = 0;
@@ -77,13 +145,22 @@ void main() {
         }),
       );
       addTearDown(service.dispose);
+      final calendarClient = MockClient(
+        (_) async => http.Response('{"connected":false}', 200),
+      );
+      addTearDown(calendarClient.close);
       tester.view.physicalSize = const Size(1280, 1200);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       await tester.pumpWidget(
         MaterialApp(
-          home: ScheduleMeetingScreen(groupId: groupId, service: service),
+          home: ScheduleMeetingScreen(
+            groupId: groupId,
+            service: service,
+            calendarService: FakeCalendarService(client: calendarClient),
+            calendarConfigLoader: (_) async {},
+          ),
         ),
       );
       await tester.pumpAndSettle();
@@ -114,10 +191,7 @@ void main() {
       await tester.tap(find.byType(NeobrutalistButton).first);
       await tester.pumpAndSettle();
       expect(find.textContaining('próximamente'), findsNothing);
-      expect(
-        find.textContaining('GOOGLE_CLIENT_ID'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('GOOGLE_CLIENT_ID'), findsOneWidget);
       FocusManager.instance.primaryFocus?.unfocus();
       await tester.ensureVisible(find.byType(NeobrutalistButton).last);
       await tester.tap(find.byType(NeobrutalistButton).last);
@@ -135,6 +209,7 @@ void main() {
       expect(loads, 2);
       expect(find.text('Repaso'), findsWidgets);
       expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
     },
   );
 
@@ -191,4 +266,15 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   });
+}
+
+class FakeCalendarService extends GoogleCalendarService {
+  FakeCalendarService({super.client});
+
+  @override
+  Future<({String code, String redirectUri})?> getCalendarAuthCode({
+    String? loginHint,
+  }) async {
+    throw StateError('GOOGLE_CLIENT_ID no configurado.');
+  }
 }

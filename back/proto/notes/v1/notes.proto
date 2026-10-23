@@ -97,6 +97,23 @@ service NotesService {
   // "x-internal-key", NO con JWT de usuario. El HTTP actual se mantiene como
   // fallback durante la migración.
   rpc UnshareAll(UnshareAllRequest) returns (UnshareAllResponse);
+
+  // Establece un tombstone durable y espera a que terminen las escrituras
+  // Notes ya iniciadas por el usuario. Tras confirmarlo, sus JWT no permiten
+  // operaciones normales en Notes.
+  rpc BeginAccountDeletion(BeginAccountDeletionRequest) returns (BeginAccountDeletionResponse);
+
+  // Retira los shares propios restantes y reconcilia permisos Drive. Los
+  // datos/contenidos de notas y adjuntos propios se conservan (política de
+  // borrado de contenido por cuenta pendiente de definición).
+  rpc AccountDeletionCleanup(AccountDeletionCleanupRequest) returns (AccountDeletionCleanupResponse);
+}
+
+enum AccountCleanupStatus {
+  ACCOUNT_CLEANUP_STATUS_UNSPECIFIED = 0;
+  ACCOUNT_CLEANUP_STATUS_COMPLETE = 1;
+  ACCOUNT_CLEANUP_STATUS_PENDING = 2;
+  ACCOUNT_CLEANUP_STATUS_ERROR = 3;
 }
 
 // Note es la metadata de un apunte (notes.notes). El contenido Markdown vive
@@ -308,6 +325,17 @@ message UnshareAllRequest {
   // Usuario objetivo de la limpieza (quien salió del grupo).
   string user_id = 1;
   string group_id = 2;
+  // true cuando Social eliminó el grupo: se retiran todos sus vínculos, sin
+  // tocar los shares de otros grupos/fuentes de acceso a cada nota.
+  bool group_deleted = 3;
 }
 
-message UnshareAllResponse {}
+message UnshareAllResponse {
+  // Solo COMPLETE confirma que las ACL afectadas convergieron en Drive.
+  AccountCleanupStatus status = 1;
+}
+
+message BeginAccountDeletionRequest { string user_id = 1; }
+message BeginAccountDeletionResponse { AccountCleanupStatus status = 1; }
+message AccountDeletionCleanupRequest { string user_id = 1; }
+message AccountDeletionCleanupResponse { AccountCleanupStatus status = 1; }

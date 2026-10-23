@@ -51,16 +51,18 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	NotesService_CreateNote_FullMethodName     = "/notes.v1.NotesService/CreateNote"
-	NotesService_GetNote_FullMethodName        = "/notes.v1.NotesService/GetNote"
-	NotesService_ListMyNotes_FullMethodName    = "/notes.v1.NotesService/ListMyNotes"
-	NotesService_UpdateNote_FullMethodName     = "/notes.v1.NotesService/UpdateNote"
-	NotesService_DeleteNote_FullMethodName     = "/notes.v1.NotesService/DeleteNote"
-	NotesService_ShareNote_FullMethodName      = "/notes.v1.NotesService/ShareNote"
-	NotesService_UnshareNote_FullMethodName    = "/notes.v1.NotesService/UnshareNote"
-	NotesService_ListGroupNotes_FullMethodName = "/notes.v1.NotesService/ListGroupNotes"
-	NotesService_GetNoteAccess_FullMethodName  = "/notes.v1.NotesService/GetNoteAccess"
-	NotesService_UnshareAll_FullMethodName     = "/notes.v1.NotesService/UnshareAll"
+	NotesService_CreateNote_FullMethodName             = "/notes.v1.NotesService/CreateNote"
+	NotesService_GetNote_FullMethodName                = "/notes.v1.NotesService/GetNote"
+	NotesService_ListMyNotes_FullMethodName            = "/notes.v1.NotesService/ListMyNotes"
+	NotesService_UpdateNote_FullMethodName             = "/notes.v1.NotesService/UpdateNote"
+	NotesService_DeleteNote_FullMethodName             = "/notes.v1.NotesService/DeleteNote"
+	NotesService_ShareNote_FullMethodName              = "/notes.v1.NotesService/ShareNote"
+	NotesService_UnshareNote_FullMethodName            = "/notes.v1.NotesService/UnshareNote"
+	NotesService_ListGroupNotes_FullMethodName         = "/notes.v1.NotesService/ListGroupNotes"
+	NotesService_GetNoteAccess_FullMethodName          = "/notes.v1.NotesService/GetNoteAccess"
+	NotesService_UnshareAll_FullMethodName             = "/notes.v1.NotesService/UnshareAll"
+	NotesService_BeginAccountDeletion_FullMethodName   = "/notes.v1.NotesService/BeginAccountDeletion"
+	NotesService_AccountDeletionCleanup_FullMethodName = "/notes.v1.NotesService/AccountDeletionCleanup"
 )
 
 // NotesServiceClient is the client API for NotesService service.
@@ -120,6 +122,14 @@ type NotesServiceClient interface {
 	// "x-internal-key", NO con JWT de usuario. El HTTP actual se mantiene como
 	// fallback durante la migración.
 	UnshareAll(ctx context.Context, in *UnshareAllRequest, opts ...grpc.CallOption) (*UnshareAllResponse, error)
+	// Establece un tombstone durable y espera a que terminen las escrituras
+	// Notes ya iniciadas por el usuario. Tras confirmarlo, sus JWT no permiten
+	// operaciones normales en Notes.
+	BeginAccountDeletion(ctx context.Context, in *BeginAccountDeletionRequest, opts ...grpc.CallOption) (*BeginAccountDeletionResponse, error)
+	// Retira los shares propios restantes y reconcilia permisos Drive. Los
+	// datos/contenidos de notas y adjuntos propios se conservan (política de
+	// borrado de contenido por cuenta pendiente de definición).
+	AccountDeletionCleanup(ctx context.Context, in *AccountDeletionCleanupRequest, opts ...grpc.CallOption) (*AccountDeletionCleanupResponse, error)
 }
 
 type notesServiceClient struct {
@@ -230,6 +240,26 @@ func (c *notesServiceClient) UnshareAll(ctx context.Context, in *UnshareAllReque
 	return out, nil
 }
 
+func (c *notesServiceClient) BeginAccountDeletion(ctx context.Context, in *BeginAccountDeletionRequest, opts ...grpc.CallOption) (*BeginAccountDeletionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BeginAccountDeletionResponse)
+	err := c.cc.Invoke(ctx, NotesService_BeginAccountDeletion_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *notesServiceClient) AccountDeletionCleanup(ctx context.Context, in *AccountDeletionCleanupRequest, opts ...grpc.CallOption) (*AccountDeletionCleanupResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AccountDeletionCleanupResponse)
+	err := c.cc.Invoke(ctx, NotesService_AccountDeletionCleanup_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NotesServiceServer is the server API for NotesService service.
 // All implementations must embed UnimplementedNotesServiceServer
 // for forward compatibility.
@@ -287,6 +317,14 @@ type NotesServiceServer interface {
 	// "x-internal-key", NO con JWT de usuario. El HTTP actual se mantiene como
 	// fallback durante la migración.
 	UnshareAll(context.Context, *UnshareAllRequest) (*UnshareAllResponse, error)
+	// Establece un tombstone durable y espera a que terminen las escrituras
+	// Notes ya iniciadas por el usuario. Tras confirmarlo, sus JWT no permiten
+	// operaciones normales en Notes.
+	BeginAccountDeletion(context.Context, *BeginAccountDeletionRequest) (*BeginAccountDeletionResponse, error)
+	// Retira los shares propios restantes y reconcilia permisos Drive. Los
+	// datos/contenidos de notas y adjuntos propios se conservan (política de
+	// borrado de contenido por cuenta pendiente de definición).
+	AccountDeletionCleanup(context.Context, *AccountDeletionCleanupRequest) (*AccountDeletionCleanupResponse, error)
 	mustEmbedUnimplementedNotesServiceServer()
 }
 
@@ -326,6 +364,12 @@ func (UnimplementedNotesServiceServer) GetNoteAccess(context.Context, *GetNoteAc
 }
 func (UnimplementedNotesServiceServer) UnshareAll(context.Context, *UnshareAllRequest) (*UnshareAllResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UnshareAll not implemented")
+}
+func (UnimplementedNotesServiceServer) BeginAccountDeletion(context.Context, *BeginAccountDeletionRequest) (*BeginAccountDeletionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method BeginAccountDeletion not implemented")
+}
+func (UnimplementedNotesServiceServer) AccountDeletionCleanup(context.Context, *AccountDeletionCleanupRequest) (*AccountDeletionCleanupResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AccountDeletionCleanup not implemented")
 }
 func (UnimplementedNotesServiceServer) mustEmbedUnimplementedNotesServiceServer() {}
 func (UnimplementedNotesServiceServer) testEmbeddedByValue()                      {}
@@ -528,6 +572,42 @@ func _NotesService_UnshareAll_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NotesService_BeginAccountDeletion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BeginAccountDeletionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NotesServiceServer).BeginAccountDeletion(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NotesService_BeginAccountDeletion_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NotesServiceServer).BeginAccountDeletion(ctx, req.(*BeginAccountDeletionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NotesService_AccountDeletionCleanup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AccountDeletionCleanupRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NotesServiceServer).AccountDeletionCleanup(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NotesService_AccountDeletionCleanup_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NotesServiceServer).AccountDeletionCleanup(ctx, req.(*AccountDeletionCleanupRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NotesService_ServiceDesc is the grpc.ServiceDesc for NotesService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -574,6 +654,14 @@ var NotesService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UnshareAll",
 			Handler:    _NotesService_UnshareAll_Handler,
+		},
+		{
+			MethodName: "BeginAccountDeletion",
+			Handler:    _NotesService_BeginAccountDeletion_Handler,
+		},
+		{
+			MethodName: "AccountDeletionCleanup",
+			Handler:    _NotesService_AccountDeletionCleanup_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
