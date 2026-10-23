@@ -288,6 +288,31 @@ class SocialService {
     if (res.statusCode != 200) throw _toError(res);
   }
 
+  // POST /groups/:id/transfer-admin {new_admin_user_id} -> 200. Solo admin.
+  // El destino pasa a admin y el solicitante a member en una transacción.
+  // Ver back/social/internal/handler/http/group_handler.go:263 TransferAdmin.
+  Future<void> transferAdmin({
+    required String groupId,
+    required String newAdminUserId,
+  }) async {
+    final gid = groupId.trim();
+    final uid = newAdminUserId.trim();
+    if (gid.isEmpty || uid.isEmpty) {
+      throw SocialApiException('groupId/userId vacíos.', code: 'invalid_args');
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .post(
+            Uri.parse('$baseUrl/groups/$gid/transfer-admin'),
+            headers: _headers(json: true),
+            body: jsonEncode(<String, dynamic>{'new_admin_user_id': uid}),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) throw _toError(res);
+    notifyGroupsChanged(); // Tu rol cambia en la lista de grupos.
+  }
+
   // GET /groups/:id/stream-token -> 200 {token, channel_id}.
   // Ver back/social/internal/handler/http/stream_handler.go:26 Token.
   // 401 sesión inválida, 403 no miembro, 404 grupo inexistente,

@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import 'core/services/authed_client.dart';
 import 'core/services/insecure_http.dart';
 import 'core/services/session_manager.dart';
 import 'core/theme/app_theme.dart';
@@ -32,7 +35,7 @@ Future<void> main() async {
       );
     });
   };
-  final hasPersistedSession = await SessionManager.hasPersistedSession();
+  final hasPersistedSession = await AuthedHttp.restorePersistedSession();
   runApp(
     TallerIntegracionApp(
       home: hasPersistedSession
@@ -42,10 +45,35 @@ Future<void> main() async {
   );
 }
 
-class TallerIntegracionApp extends StatelessWidget {
+class TallerIntegracionApp extends StatefulWidget {
   const TallerIntegracionApp({super.key, this.home});
 
   final Widget? home;
+
+  @override
+  State<TallerIntegracionApp> createState() => _TallerIntegracionAppState();
+}
+
+class _TallerIntegracionAppState extends State<TallerIntegracionApp>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(AuthedHttp.refreshIfExpired());
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -54,7 +82,7 @@ class TallerIntegracionApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
       navigatorKey: appNavigatorKey,
-      home: home ?? const LoginScreen(),
+      home: widget.home ?? const LoginScreen(),
     );
   }
 }

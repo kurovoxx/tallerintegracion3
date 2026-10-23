@@ -9,22 +9,23 @@ import (
 )
 
 type Config struct {
-	DatabaseURL  string
-	DirectURL    string
-	SupabaseURL  string
-	SupabaseKey  string
-	JWTSecret    string
-	Port         string
-	GRPCPort     string // servidor gRPC servicio-a-servicio (SocialService)
-	AuthBaseURL  string // base del servicio Auth para el gateway interno de Calendar
-	InternalKey  string // secreto X-Internal-Key compartido con Auth
-	CalendarMode string // "mock" (default, sin Google) o "real"
-	StreamAPIKey string // API key de Stream (solo backend, jamás al front)
-	SMTPHost     string // SMTP para avisos por mail (tarea 3_5_15)
-	SMTPPort     string
-	SMTPUsername string // remitente noreply
-	SMTPPassword string
+	DatabaseURL      string
+	DirectURL        string
+	SupabaseURL      string
+	SupabaseKey      string
+	JWTSecret        string
+	Port             string
+	GRPCPort         string // servidor gRPC servicio-a-servicio (SocialService)
+	AuthBaseURL      string // base del servicio Auth para el gateway interno de Calendar
+	InternalKey      string // secreto X-Internal-Key compartido con Auth
+	CalendarMode     string // "mock" (default, sin Google) o "real"
+	StreamAPIKey     string // API key de Stream (solo backend, jamás al front)
+	SMTPHost         string // SMTP para avisos por mail (tarea 3_5_15)
+	SMTPPort         string
+	SMTPUsername     string // remitente noreply
+	SMTPPassword     string
 	IdentityGRPCAddr string // dirección gRPC de Identity (tarea 3_4_3), ej. "auth:9080"
+	NotesGRPCAddr    string // limpieza durable de shares durante borrado de cuenta
 	StreamSecret     string // API secret de Stream para firmar tokens server-side
 	StreamMode       string // "mock" (default, sin Stream) o "real"
 }
@@ -60,6 +61,7 @@ func Load() *Config {
 		Port:             os.Getenv("SOCIAL_PORT"),
 		AuthBaseURL:      os.Getenv("AUTH_BASE_URL"),
 		IdentityGRPCAddr: os.Getenv("IDENTITY_GRPC_ADDR"),
+		NotesGRPCAddr:    os.Getenv("NOTES_GRPC_ADDR"),
 		InternalKey:      os.Getenv("INTERNAL_API_KEY"),
 		CalendarMode:     os.Getenv("CALENDAR_MODE"),
 		StreamAPIKey:     os.Getenv("STREAM_API_KEY"),
@@ -91,6 +93,9 @@ func Load() *Config {
 	}
 	if cfg.IdentityGRPCAddr == "" {
 		cfg.IdentityGRPCAddr = "auth:9080"
+	}
+	if cfg.NotesGRPCAddr == "" {
+		cfg.NotesGRPCAddr = "notes:9082"
 	}
 	if cfg.CalendarMode == "" {
 		cfg.CalendarMode = "mock"

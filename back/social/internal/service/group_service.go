@@ -105,10 +105,50 @@ type GroupService struct {
 	notesBaseURL string
 	// unsharer es el transporte de limpieza de apuntes (gRPC por defecto, con
 	// fallback HTTP interno). Inyectable para tests.
-	unsharer NotesUnsharer
-	// users es opcional: directorio Identity para enriquecer miembros.
-	// Nil = respuesta sin nombres (comportamiento anterior).
-	users UserDirectory
+	unsharer          NotesUnsharer
+	users             UserDirectory
+	accountTargetGate AccountTargetGate
+	// chat es opcional: quita del canal Stream a quien deja el grupo.
+	// Nil = sin limpieza del chat (tests que no la necesitan).
+	chat ChatMembership
+}
+
+// AccountTargetGate serializes third-party membership/admin changes against an
+// account deletion. The actor is protected separately by HTTP auth middleware.
+type AccountTargetGate interface {
+	AcquireTargetRequest(context.Context, string) (release func(), active bool, err error)
+}
+
+// ChatMembership retira miembros del canal de chat del grupo (stream.Client
+// en producción). Interfaz mínima para no exigir el cliente completo.
+type ChatMembership interface {
+	RemoveMember(ctx context.Context, channelType, channelID, userID string) error
+}
+
+// SetChatMembership configura la limpieza del canal Stream al salir del grupo.
+func (s *GroupService) SetChatMembership(c ChatMembership) {
+	s.chat = c
+}
+
+// removeFromChat quita al usuario del canal Stream del grupo (best-effort, en
+// background). Sin membresía en el canal deja de leer y escribir aunque
+// conserve un token anterior (RN-SOCIAL-03). El canal siempre se crea con
+// ChannelIDForGroup, así que no hace falta leer social.stream_channels (que
+// además desaparece en cascada si el grupo se eliminó).
+func (s *GroupService) removeFromChat(userID, groupID string) {
+	removeChatMember(s.chat, userID, groupID)
+}
+
+func removeChatMember(chat ChatMembership, userID, groupID string) {
+	if chat == nil {
+		return
+	}
+	GoBestEffort("chat-remove-member", func(ctx context.Context) {
+		channelID := ChannelIDForGroup(groupID)
+		if err := chat.RemoveMember(ctx, ChannelTypeStream, channelID, userID); err != nil {
+			logChannelSync("remove-member", channelID, err)
+		}
+	})
 }
 
 func NewGroupService(groups GroupStore, notifier GroupCreatedNotifier) *GroupService {
@@ -141,6 +181,25 @@ func (s *GroupService) SetNotesUnsharer(u NotesUnsharer) {
 // SetUserDirectory inyecta el directorio Identity (usado por tests y main).
 func (s *GroupService) SetUserDirectory(d UserDirectory) {
 	s.users = d
+}
+
+func (s *GroupService) SetAccountTargetGate(gate AccountTargetGate) {
+	s.accountTargetGate = gate
+}
+
+func (s *GroupService) withTargetAccount(ctx context.Context, userID string, operation func() error) error {
+	if s.accountTargetGate == nil {
+		return operation()
+	}
+	release, active, err := s.accountTargetGate.AcquireTargetRequest(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if !active {
+		return ErrForbidden
+	}
+	defer release()
+	return operation()
 }
 
 func validateName(name string) error {
@@ -467,9 +526,12 @@ func (s *GroupService) KickMember(ctx context.Context, groupID, adminID, targetU
 	if err := checkAdminAction(groupID, adminID, targetUserID); err != nil {
 		return err
 	}
-	if err := mapStoreErr(s.groups.KickMember(ctx, groupID, adminID, targetUserID)); err != nil {
+	if err := s.withTargetAccount(ctx, targetUserID, func() error {
+		return mapStoreErr(s.groups.KickMember(ctx, groupID, adminID, targetUserID))
+	}); err != nil {
 		return err
 	}
+	s.removeFromChat(targetUserID, groupID)
 	if cleanupSharedNotes {
 		go s.unshareNotes(targetUserID, groupID, token)
 	}
@@ -482,9 +544,12 @@ func (s *GroupService) BanMember(ctx context.Context, groupID, adminID, targetUs
 	if err := checkAdminAction(groupID, adminID, targetUserID); err != nil {
 		return err
 	}
-	if err := mapStoreErr(s.groups.BanMember(ctx, groupID, adminID, targetUserID)); err != nil {
+	if err := s.withTargetAccount(ctx, targetUserID, func() error {
+		return mapStoreErr(s.groups.BanMember(ctx, groupID, adminID, targetUserID))
+	}); err != nil {
 		return err
 	}
+	s.removeFromChat(targetUserID, groupID)
 	if cleanupSharedNotes {
 		go s.unshareNotes(targetUserID, groupID, token)
 	}
@@ -495,14 +560,18 @@ func (s *GroupService) ChangeRole(ctx context.Context, groupID, adminID, targetU
 	if err := checkAdminAction(groupID, adminID, targetUserID); err != nil {
 		return err
 	}
-	return mapStoreErr(s.groups.ChangeMemberRole(ctx, groupID, adminID, targetUserID, newRole))
+	return s.withTargetAccount(ctx, targetUserID, func() error {
+		return mapStoreErr(s.groups.ChangeMemberRole(ctx, groupID, adminID, targetUserID, newRole))
+	})
 }
 
 func (s *GroupService) TransferAdmin(ctx context.Context, groupID, currentAdminID, newAdminID string) error {
 	if err := checkAdminAction(groupID, currentAdminID, newAdminID); err != nil {
 		return err
 	}
-	return mapStoreErr(s.groups.TransferAdmin(ctx, groupID, currentAdminID, newAdminID))
+	return s.withTargetAccount(ctx, newAdminID, func() error {
+		return mapStoreErr(s.groups.TransferAdmin(ctx, groupID, currentAdminID, newAdminID))
+	})
 }
 
 // LeaveGroup realiza la salida y sucesión atómicas antes del cleanup best-effort.
@@ -516,6 +585,7 @@ func (s *GroupService) LeaveGroup(ctx context.Context, groupID string, userID st
 	if _, err := s.groups.LeaveGroup(ctx, groupID, userID); err != nil {
 		return mapStoreErr(err)
 	}
+	s.removeFromChat(userID, groupID)
 	if cleanupSharedNotes {
 		go s.unshareNotes(userID, groupID, token)
 	}
@@ -589,6 +659,7 @@ func (s *GroupService) HandleAccountDeletion(ctx context.Context, userID string,
 		case r.GroupDeleted:
 			log.Printf("social: grupo %s eliminado: %s era el último miembro", r.GroupID, userID)
 		}
+		s.removeFromChat(userID, r.GroupID)
 		if strings.TrimSpace(token) != "" {
 			go s.unshareNotes(userID, r.GroupID, token)
 		}

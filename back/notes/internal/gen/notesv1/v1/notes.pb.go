@@ -53,6 +53,58 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type AccountCleanupStatus int32
+
+const (
+	AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_UNSPECIFIED AccountCleanupStatus = 0
+	AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_COMPLETE    AccountCleanupStatus = 1
+	AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_PENDING     AccountCleanupStatus = 2
+	AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_ERROR       AccountCleanupStatus = 3
+)
+
+// Enum value maps for AccountCleanupStatus.
+var (
+	AccountCleanupStatus_name = map[int32]string{
+		0: "ACCOUNT_CLEANUP_STATUS_UNSPECIFIED",
+		1: "ACCOUNT_CLEANUP_STATUS_COMPLETE",
+		2: "ACCOUNT_CLEANUP_STATUS_PENDING",
+		3: "ACCOUNT_CLEANUP_STATUS_ERROR",
+	}
+	AccountCleanupStatus_value = map[string]int32{
+		"ACCOUNT_CLEANUP_STATUS_UNSPECIFIED": 0,
+		"ACCOUNT_CLEANUP_STATUS_COMPLETE":    1,
+		"ACCOUNT_CLEANUP_STATUS_PENDING":     2,
+		"ACCOUNT_CLEANUP_STATUS_ERROR":       3,
+	}
+)
+
+func (x AccountCleanupStatus) Enum() *AccountCleanupStatus {
+	p := new(AccountCleanupStatus)
+	*p = x
+	return p
+}
+
+func (x AccountCleanupStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AccountCleanupStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_v1_notes_proto_enumTypes[0].Descriptor()
+}
+
+func (AccountCleanupStatus) Type() protoreflect.EnumType {
+	return &file_v1_notes_proto_enumTypes[0]
+}
+
+func (x AccountCleanupStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AccountCleanupStatus.Descriptor instead.
+func (AccountCleanupStatus) EnumDescriptor() ([]byte, []int) {
+	return file_v1_notes_proto_rawDescGZIP(), []int{0}
+}
+
 // Note es la metadata de un apunte (notes.notes). El contenido Markdown vive
 // en el Drive del autor (external_file_id) y solo viaja en GetNote.
 type Note struct {
@@ -1510,8 +1562,11 @@ func (x *GetNoteAccessResponse) GetAccess() *NoteAccess {
 type UnshareAllRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Usuario objetivo de la limpieza (quien salió del grupo).
-	UserId        string `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	GroupId       string `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	UserId  string `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	GroupId string `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	// true cuando Social eliminó el grupo: se retiran todos sus vínculos, sin
+	// tocar los shares de otros grupos/fuentes de acceso a cada nota.
+	GroupDeleted  bool `protobuf:"varint,3,opt,name=group_deleted,json=groupDeleted,proto3" json:"group_deleted,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1560,8 +1615,17 @@ func (x *UnshareAllRequest) GetGroupId() string {
 	return ""
 }
 
+func (x *UnshareAllRequest) GetGroupDeleted() bool {
+	if x != nil {
+		return x.GroupDeleted
+	}
+	return false
+}
+
 type UnshareAllResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Solo COMPLETE confirma que las ACL afectadas convergieron en Drive.
+	Status        AccountCleanupStatus `protobuf:"varint,1,opt,name=status,proto3,enum=notes.v1.AccountCleanupStatus" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1594,6 +1658,189 @@ func (x *UnshareAllResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use UnshareAllResponse.ProtoReflect.Descriptor instead.
 func (*UnshareAllResponse) Descriptor() ([]byte, []int) {
 	return file_v1_notes_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *UnshareAllResponse) GetStatus() AccountCleanupStatus {
+	if x != nil {
+		return x.Status
+	}
+	return AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_UNSPECIFIED
+}
+
+type BeginAccountDeletionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BeginAccountDeletionRequest) Reset() {
+	*x = BeginAccountDeletionRequest{}
+	mi := &file_v1_notes_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BeginAccountDeletionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BeginAccountDeletionRequest) ProtoMessage() {}
+
+func (x *BeginAccountDeletionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_notes_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BeginAccountDeletionRequest.ProtoReflect.Descriptor instead.
+func (*BeginAccountDeletionRequest) Descriptor() ([]byte, []int) {
+	return file_v1_notes_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *BeginAccountDeletionRequest) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+type BeginAccountDeletionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status        AccountCleanupStatus   `protobuf:"varint,1,opt,name=status,proto3,enum=notes.v1.AccountCleanupStatus" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BeginAccountDeletionResponse) Reset() {
+	*x = BeginAccountDeletionResponse{}
+	mi := &file_v1_notes_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BeginAccountDeletionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BeginAccountDeletionResponse) ProtoMessage() {}
+
+func (x *BeginAccountDeletionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_notes_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BeginAccountDeletionResponse.ProtoReflect.Descriptor instead.
+func (*BeginAccountDeletionResponse) Descriptor() ([]byte, []int) {
+	return file_v1_notes_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *BeginAccountDeletionResponse) GetStatus() AccountCleanupStatus {
+	if x != nil {
+		return x.Status
+	}
+	return AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_UNSPECIFIED
+}
+
+type AccountDeletionCleanupRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AccountDeletionCleanupRequest) Reset() {
+	*x = AccountDeletionCleanupRequest{}
+	mi := &file_v1_notes_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AccountDeletionCleanupRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AccountDeletionCleanupRequest) ProtoMessage() {}
+
+func (x *AccountDeletionCleanupRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_notes_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AccountDeletionCleanupRequest.ProtoReflect.Descriptor instead.
+func (*AccountDeletionCleanupRequest) Descriptor() ([]byte, []int) {
+	return file_v1_notes_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *AccountDeletionCleanupRequest) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+type AccountDeletionCleanupResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status        AccountCleanupStatus   `protobuf:"varint,1,opt,name=status,proto3,enum=notes.v1.AccountCleanupStatus" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AccountDeletionCleanupResponse) Reset() {
+	*x = AccountDeletionCleanupResponse{}
+	mi := &file_v1_notes_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AccountDeletionCleanupResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AccountDeletionCleanupResponse) ProtoMessage() {}
+
+func (x *AccountDeletionCleanupResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_notes_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AccountDeletionCleanupResponse.ProtoReflect.Descriptor instead.
+func (*AccountDeletionCleanupResponse) Descriptor() ([]byte, []int) {
+	return file_v1_notes_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *AccountDeletionCleanupResponse) GetStatus() AccountCleanupStatus {
+	if x != nil {
+		return x.Status
+	}
+	return AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_UNSPECIFIED
 }
 
 var File_v1_notes_proto protoreflect.FileDescriptor
@@ -1728,11 +1975,26 @@ const file_v1_notes_proto_rawDesc = "" +
 	"\x14GetNoteAccessRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"E\n" +
 	"\x15GetNoteAccessResponse\x12,\n" +
-	"\x06access\x18\x01 \x01(\v2\x14.notes.v1.NoteAccessR\x06access\"G\n" +
+	"\x06access\x18\x01 \x01(\v2\x14.notes.v1.NoteAccessR\x06access\"l\n" +
 	"\x11UnshareAllRequest\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x19\n" +
-	"\bgroup_id\x18\x02 \x01(\tR\agroupId\"\x14\n" +
-	"\x12UnshareAllResponse2\xf7\x05\n" +
+	"\bgroup_id\x18\x02 \x01(\tR\agroupId\x12#\n" +
+	"\rgroup_deleted\x18\x03 \x01(\bR\fgroupDeleted\"L\n" +
+	"\x12UnshareAllResponse\x126\n" +
+	"\x06status\x18\x01 \x01(\x0e2\x1e.notes.v1.AccountCleanupStatusR\x06status\"6\n" +
+	"\x1bBeginAccountDeletionRequest\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\"V\n" +
+	"\x1cBeginAccountDeletionResponse\x126\n" +
+	"\x06status\x18\x01 \x01(\x0e2\x1e.notes.v1.AccountCleanupStatusR\x06status\"8\n" +
+	"\x1dAccountDeletionCleanupRequest\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\"X\n" +
+	"\x1eAccountDeletionCleanupResponse\x126\n" +
+	"\x06status\x18\x01 \x01(\x0e2\x1e.notes.v1.AccountCleanupStatusR\x06status*\xa9\x01\n" +
+	"\x14AccountCleanupStatus\x12&\n" +
+	"\"ACCOUNT_CLEANUP_STATUS_UNSPECIFIED\x10\x00\x12#\n" +
+	"\x1fACCOUNT_CLEANUP_STATUS_COMPLETE\x10\x01\x12\"\n" +
+	"\x1eACCOUNT_CLEANUP_STATUS_PENDING\x10\x02\x12 \n" +
+	"\x1cACCOUNT_CLEANUP_STATUS_ERROR\x10\x032\xcb\a\n" +
 	"\fNotesService\x12G\n" +
 	"\n" +
 	"CreateNote\x12\x1b.notes.v1.CreateNoteRequest\x1a\x1c.notes.v1.CreateNoteResponse\x12>\n" +
@@ -1747,7 +2009,9 @@ const file_v1_notes_proto_rawDesc = "" +
 	"\x0eListGroupNotes\x12\x1f.notes.v1.ListGroupNotesRequest\x1a .notes.v1.ListGroupNotesResponse\x12P\n" +
 	"\rGetNoteAccess\x12\x1e.notes.v1.GetNoteAccessRequest\x1a\x1f.notes.v1.GetNoteAccessResponse\x12G\n" +
 	"\n" +
-	"UnshareAll\x12\x1b.notes.v1.UnshareAllRequest\x1a\x1c.notes.v1.UnshareAllResponseBHZFgithub.com/kurovoxx/tallerintegracion3/back/notes/internal/gen/notesv1b\x06proto3"
+	"UnshareAll\x12\x1b.notes.v1.UnshareAllRequest\x1a\x1c.notes.v1.UnshareAllResponse\x12e\n" +
+	"\x14BeginAccountDeletion\x12%.notes.v1.BeginAccountDeletionRequest\x1a&.notes.v1.BeginAccountDeletionResponse\x12k\n" +
+	"\x16AccountDeletionCleanup\x12'.notes.v1.AccountDeletionCleanupRequest\x1a(.notes.v1.AccountDeletionCleanupResponseBHZFgithub.com/kurovoxx/tallerintegracion3/back/notes/internal/gen/notesv1b\x06proto3"
 
 var (
 	file_v1_notes_proto_rawDescOnce sync.Once
@@ -1761,72 +2025,85 @@ func file_v1_notes_proto_rawDescGZIP() []byte {
 	return file_v1_notes_proto_rawDescData
 }
 
-var file_v1_notes_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
+var file_v1_notes_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_v1_notes_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_v1_notes_proto_goTypes = []any{
-	(*Note)(nil),                   // 0: notes.v1.Note
-	(*SharedNote)(nil),             // 1: notes.v1.SharedNote
-	(*NoteWithShare)(nil),          // 2: notes.v1.NoteWithShare
-	(*NoteAccess)(nil),             // 3: notes.v1.NoteAccess
-	(*PageRequest)(nil),            // 4: notes.v1.PageRequest
-	(*PageResponse)(nil),           // 5: notes.v1.PageResponse
-	(*CreateNoteRequest)(nil),      // 6: notes.v1.CreateNoteRequest
-	(*CreateNoteResponse)(nil),     // 7: notes.v1.CreateNoteResponse
-	(*GetNoteRequest)(nil),         // 8: notes.v1.GetNoteRequest
-	(*GetNoteResponse)(nil),        // 9: notes.v1.GetNoteResponse
-	(*ListMyNotesRequest)(nil),     // 10: notes.v1.ListMyNotesRequest
-	(*ListMyNotesResponse)(nil),    // 11: notes.v1.ListMyNotesResponse
-	(*UpdateNoteRequest)(nil),      // 12: notes.v1.UpdateNoteRequest
-	(*UpdateNoteResponse)(nil),     // 13: notes.v1.UpdateNoteResponse
-	(*DeleteNoteRequest)(nil),      // 14: notes.v1.DeleteNoteRequest
-	(*DeleteNoteResponse)(nil),     // 15: notes.v1.DeleteNoteResponse
-	(*ShareNoteRequest)(nil),       // 16: notes.v1.ShareNoteRequest
-	(*ShareNoteResponse)(nil),      // 17: notes.v1.ShareNoteResponse
-	(*UnshareNoteRequest)(nil),     // 18: notes.v1.UnshareNoteRequest
-	(*UnshareNoteResponse)(nil),    // 19: notes.v1.UnshareNoteResponse
-	(*ListGroupNotesRequest)(nil),  // 20: notes.v1.ListGroupNotesRequest
-	(*ListGroupNotesResponse)(nil), // 21: notes.v1.ListGroupNotesResponse
-	(*GetNoteAccessRequest)(nil),   // 22: notes.v1.GetNoteAccessRequest
-	(*GetNoteAccessResponse)(nil),  // 23: notes.v1.GetNoteAccessResponse
-	(*UnshareAllRequest)(nil),      // 24: notes.v1.UnshareAllRequest
-	(*UnshareAllResponse)(nil),     // 25: notes.v1.UnshareAllResponse
+	(AccountCleanupStatus)(0),              // 0: notes.v1.AccountCleanupStatus
+	(*Note)(nil),                           // 1: notes.v1.Note
+	(*SharedNote)(nil),                     // 2: notes.v1.SharedNote
+	(*NoteWithShare)(nil),                  // 3: notes.v1.NoteWithShare
+	(*NoteAccess)(nil),                     // 4: notes.v1.NoteAccess
+	(*PageRequest)(nil),                    // 5: notes.v1.PageRequest
+	(*PageResponse)(nil),                   // 6: notes.v1.PageResponse
+	(*CreateNoteRequest)(nil),              // 7: notes.v1.CreateNoteRequest
+	(*CreateNoteResponse)(nil),             // 8: notes.v1.CreateNoteResponse
+	(*GetNoteRequest)(nil),                 // 9: notes.v1.GetNoteRequest
+	(*GetNoteResponse)(nil),                // 10: notes.v1.GetNoteResponse
+	(*ListMyNotesRequest)(nil),             // 11: notes.v1.ListMyNotesRequest
+	(*ListMyNotesResponse)(nil),            // 12: notes.v1.ListMyNotesResponse
+	(*UpdateNoteRequest)(nil),              // 13: notes.v1.UpdateNoteRequest
+	(*UpdateNoteResponse)(nil),             // 14: notes.v1.UpdateNoteResponse
+	(*DeleteNoteRequest)(nil),              // 15: notes.v1.DeleteNoteRequest
+	(*DeleteNoteResponse)(nil),             // 16: notes.v1.DeleteNoteResponse
+	(*ShareNoteRequest)(nil),               // 17: notes.v1.ShareNoteRequest
+	(*ShareNoteResponse)(nil),              // 18: notes.v1.ShareNoteResponse
+	(*UnshareNoteRequest)(nil),             // 19: notes.v1.UnshareNoteRequest
+	(*UnshareNoteResponse)(nil),            // 20: notes.v1.UnshareNoteResponse
+	(*ListGroupNotesRequest)(nil),          // 21: notes.v1.ListGroupNotesRequest
+	(*ListGroupNotesResponse)(nil),         // 22: notes.v1.ListGroupNotesResponse
+	(*GetNoteAccessRequest)(nil),           // 23: notes.v1.GetNoteAccessRequest
+	(*GetNoteAccessResponse)(nil),          // 24: notes.v1.GetNoteAccessResponse
+	(*UnshareAllRequest)(nil),              // 25: notes.v1.UnshareAllRequest
+	(*UnshareAllResponse)(nil),             // 26: notes.v1.UnshareAllResponse
+	(*BeginAccountDeletionRequest)(nil),    // 27: notes.v1.BeginAccountDeletionRequest
+	(*BeginAccountDeletionResponse)(nil),   // 28: notes.v1.BeginAccountDeletionResponse
+	(*AccountDeletionCleanupRequest)(nil),  // 29: notes.v1.AccountDeletionCleanupRequest
+	(*AccountDeletionCleanupResponse)(nil), // 30: notes.v1.AccountDeletionCleanupResponse
 }
 var file_v1_notes_proto_depIdxs = []int32{
-	0,  // 0: notes.v1.NoteWithShare.note:type_name -> notes.v1.Note
-	1,  // 1: notes.v1.NoteWithShare.share:type_name -> notes.v1.SharedNote
-	0,  // 2: notes.v1.GetNoteResponse.note:type_name -> notes.v1.Note
-	4,  // 3: notes.v1.ListMyNotesRequest.page:type_name -> notes.v1.PageRequest
-	0,  // 4: notes.v1.ListMyNotesResponse.notes:type_name -> notes.v1.Note
-	5,  // 5: notes.v1.ListMyNotesResponse.page:type_name -> notes.v1.PageResponse
-	0,  // 6: notes.v1.UpdateNoteResponse.note:type_name -> notes.v1.Note
-	4,  // 7: notes.v1.ListGroupNotesRequest.page:type_name -> notes.v1.PageRequest
-	2,  // 8: notes.v1.ListGroupNotesResponse.notes:type_name -> notes.v1.NoteWithShare
-	5,  // 9: notes.v1.ListGroupNotesResponse.page:type_name -> notes.v1.PageResponse
-	3,  // 10: notes.v1.GetNoteAccessResponse.access:type_name -> notes.v1.NoteAccess
-	6,  // 11: notes.v1.NotesService.CreateNote:input_type -> notes.v1.CreateNoteRequest
-	8,  // 12: notes.v1.NotesService.GetNote:input_type -> notes.v1.GetNoteRequest
-	10, // 13: notes.v1.NotesService.ListMyNotes:input_type -> notes.v1.ListMyNotesRequest
-	12, // 14: notes.v1.NotesService.UpdateNote:input_type -> notes.v1.UpdateNoteRequest
-	14, // 15: notes.v1.NotesService.DeleteNote:input_type -> notes.v1.DeleteNoteRequest
-	16, // 16: notes.v1.NotesService.ShareNote:input_type -> notes.v1.ShareNoteRequest
-	18, // 17: notes.v1.NotesService.UnshareNote:input_type -> notes.v1.UnshareNoteRequest
-	20, // 18: notes.v1.NotesService.ListGroupNotes:input_type -> notes.v1.ListGroupNotesRequest
-	22, // 19: notes.v1.NotesService.GetNoteAccess:input_type -> notes.v1.GetNoteAccessRequest
-	24, // 20: notes.v1.NotesService.UnshareAll:input_type -> notes.v1.UnshareAllRequest
-	7,  // 21: notes.v1.NotesService.CreateNote:output_type -> notes.v1.CreateNoteResponse
-	9,  // 22: notes.v1.NotesService.GetNote:output_type -> notes.v1.GetNoteResponse
-	11, // 23: notes.v1.NotesService.ListMyNotes:output_type -> notes.v1.ListMyNotesResponse
-	13, // 24: notes.v1.NotesService.UpdateNote:output_type -> notes.v1.UpdateNoteResponse
-	15, // 25: notes.v1.NotesService.DeleteNote:output_type -> notes.v1.DeleteNoteResponse
-	17, // 26: notes.v1.NotesService.ShareNote:output_type -> notes.v1.ShareNoteResponse
-	19, // 27: notes.v1.NotesService.UnshareNote:output_type -> notes.v1.UnshareNoteResponse
-	21, // 28: notes.v1.NotesService.ListGroupNotes:output_type -> notes.v1.ListGroupNotesResponse
-	23, // 29: notes.v1.NotesService.GetNoteAccess:output_type -> notes.v1.GetNoteAccessResponse
-	25, // 30: notes.v1.NotesService.UnshareAll:output_type -> notes.v1.UnshareAllResponse
-	21, // [21:31] is the sub-list for method output_type
-	11, // [11:21] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	1,  // 0: notes.v1.NoteWithShare.note:type_name -> notes.v1.Note
+	2,  // 1: notes.v1.NoteWithShare.share:type_name -> notes.v1.SharedNote
+	1,  // 2: notes.v1.GetNoteResponse.note:type_name -> notes.v1.Note
+	5,  // 3: notes.v1.ListMyNotesRequest.page:type_name -> notes.v1.PageRequest
+	1,  // 4: notes.v1.ListMyNotesResponse.notes:type_name -> notes.v1.Note
+	6,  // 5: notes.v1.ListMyNotesResponse.page:type_name -> notes.v1.PageResponse
+	1,  // 6: notes.v1.UpdateNoteResponse.note:type_name -> notes.v1.Note
+	5,  // 7: notes.v1.ListGroupNotesRequest.page:type_name -> notes.v1.PageRequest
+	3,  // 8: notes.v1.ListGroupNotesResponse.notes:type_name -> notes.v1.NoteWithShare
+	6,  // 9: notes.v1.ListGroupNotesResponse.page:type_name -> notes.v1.PageResponse
+	4,  // 10: notes.v1.GetNoteAccessResponse.access:type_name -> notes.v1.NoteAccess
+	0,  // 11: notes.v1.UnshareAllResponse.status:type_name -> notes.v1.AccountCleanupStatus
+	0,  // 12: notes.v1.BeginAccountDeletionResponse.status:type_name -> notes.v1.AccountCleanupStatus
+	0,  // 13: notes.v1.AccountDeletionCleanupResponse.status:type_name -> notes.v1.AccountCleanupStatus
+	7,  // 14: notes.v1.NotesService.CreateNote:input_type -> notes.v1.CreateNoteRequest
+	9,  // 15: notes.v1.NotesService.GetNote:input_type -> notes.v1.GetNoteRequest
+	11, // 16: notes.v1.NotesService.ListMyNotes:input_type -> notes.v1.ListMyNotesRequest
+	13, // 17: notes.v1.NotesService.UpdateNote:input_type -> notes.v1.UpdateNoteRequest
+	15, // 18: notes.v1.NotesService.DeleteNote:input_type -> notes.v1.DeleteNoteRequest
+	17, // 19: notes.v1.NotesService.ShareNote:input_type -> notes.v1.ShareNoteRequest
+	19, // 20: notes.v1.NotesService.UnshareNote:input_type -> notes.v1.UnshareNoteRequest
+	21, // 21: notes.v1.NotesService.ListGroupNotes:input_type -> notes.v1.ListGroupNotesRequest
+	23, // 22: notes.v1.NotesService.GetNoteAccess:input_type -> notes.v1.GetNoteAccessRequest
+	25, // 23: notes.v1.NotesService.UnshareAll:input_type -> notes.v1.UnshareAllRequest
+	27, // 24: notes.v1.NotesService.BeginAccountDeletion:input_type -> notes.v1.BeginAccountDeletionRequest
+	29, // 25: notes.v1.NotesService.AccountDeletionCleanup:input_type -> notes.v1.AccountDeletionCleanupRequest
+	8,  // 26: notes.v1.NotesService.CreateNote:output_type -> notes.v1.CreateNoteResponse
+	10, // 27: notes.v1.NotesService.GetNote:output_type -> notes.v1.GetNoteResponse
+	12, // 28: notes.v1.NotesService.ListMyNotes:output_type -> notes.v1.ListMyNotesResponse
+	14, // 29: notes.v1.NotesService.UpdateNote:output_type -> notes.v1.UpdateNoteResponse
+	16, // 30: notes.v1.NotesService.DeleteNote:output_type -> notes.v1.DeleteNoteResponse
+	18, // 31: notes.v1.NotesService.ShareNote:output_type -> notes.v1.ShareNoteResponse
+	20, // 32: notes.v1.NotesService.UnshareNote:output_type -> notes.v1.UnshareNoteResponse
+	22, // 33: notes.v1.NotesService.ListGroupNotes:output_type -> notes.v1.ListGroupNotesResponse
+	24, // 34: notes.v1.NotesService.GetNoteAccess:output_type -> notes.v1.GetNoteAccessResponse
+	26, // 35: notes.v1.NotesService.UnshareAll:output_type -> notes.v1.UnshareAllResponse
+	28, // 36: notes.v1.NotesService.BeginAccountDeletion:output_type -> notes.v1.BeginAccountDeletionResponse
+	30, // 37: notes.v1.NotesService.AccountDeletionCleanup:output_type -> notes.v1.AccountDeletionCleanupResponse
+	26, // [26:38] is the sub-list for method output_type
+	14, // [14:26] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_v1_notes_proto_init() }
@@ -1843,13 +2120,14 @@ func file_v1_notes_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_v1_notes_proto_rawDesc), len(file_v1_notes_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   26,
+			NumEnums:      1,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_v1_notes_proto_goTypes,
 		DependencyIndexes: file_v1_notes_proto_depIdxs,
+		EnumInfos:         file_v1_notes_proto_enumTypes,
 		MessageInfos:      file_v1_notes_proto_msgTypes,
 	}.Build()
 	File_v1_notes_proto = out.File

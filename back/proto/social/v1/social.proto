@@ -41,11 +41,15 @@ service SocialService {
   rpc GetMemberEmails(GetMemberEmailsRequest) returns (GetMemberEmailsResponse);
 
   // Saca al usuario de todos sus grupos con sucesión automática de admin
-  // (miembro más antiguo) y borra sus baneos. Si era el último miembro, el
-  // grupo se elimina. Idempotente: reintentar tras un fallo a medias es seguro
-  // y una segunda llamada devuelve groups vacío.
+  // (miembro más antiguo) y borra sus baneos. Conserva una tarea durable por
+  // grupo hasta que Notes confirme la revocación requerida. Si era el último
+  // miembro, se recuerda el id del grupo aunque el grupo se elimine.
+  rpc PrepareAccountDeletion(PrepareAccountDeletionRequest) returns (PrepareAccountDeletionResponse);
   rpc AccountDeletionCleanup(AccountDeletionCleanupRequest) returns (AccountDeletionCleanupResponse);
 }
+
+message PrepareAccountDeletionRequest { string user_id = 1; }
+message PrepareAccountDeletionResponse { AccountCleanupStatus status = 1; }
 
 // Rol de un usuario dentro de un grupo (social.group_memberships.role).
 enum Role {
@@ -111,6 +115,16 @@ message AccountDeletionCleanupRequest {
 message AccountDeletionCleanupResponse {
   // Un resultado por grupo del que se sacó al usuario.
   repeated GroupSuccession groups = 1;
+  // COMPLETE solo cuando no quedan membresías ni limpiezas de grupo pendientes.
+  // UNSPECIFIED (incluido un servidor antiguo) nunca autoriza a Identity.
+  AccountCleanupStatus status = 2;
+}
+
+enum AccountCleanupStatus {
+  ACCOUNT_CLEANUP_STATUS_UNSPECIFIED = 0;
+  ACCOUNT_CLEANUP_STATUS_COMPLETE = 1;
+  ACCOUNT_CLEANUP_STATUS_PENDING = 2;
+  ACCOUNT_CLEANUP_STATUS_ERROR = 3;
 }
 
 // Qué pasó con un grupo al sacar al usuario (model.SuccessionResult).

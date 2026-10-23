@@ -102,6 +102,14 @@ type DriveManagedPermission struct {
 	UpdatedAt         time.Time `json:"updated_at"`
 }
 
+// AccountDeletionGroupNote is a durable note-level unit of Social's group
+// cleanup. It intentionally has no foreign keys: the queue must survive a
+// deleted group or share row until Drive confirms the ACL change.
+type AccountDeletionGroupNote struct {
+	NoteID       string
+	GroupDeleted bool
+}
+
 // IdempotencyKey es una fila de notes.idempotency_keys: la intención durable de
 // una operación (create/copy/update). status='in_progress' representa el claim
 // vigente (expires_at actúa como lease para recuperación tras crash);

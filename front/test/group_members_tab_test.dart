@@ -62,6 +62,22 @@ class _FakeMembersApi {
       members.removeWhere((m) => p.contains(m['user_id'].toString()));
       return http.Response('', 204);
     }
+    if (req.method == 'PATCH' && p.endsWith('/role')) {
+      final role = (jsonDecode(req.body) as Map)['role'];
+      actions.add('role:$role');
+      for (final m in members) {
+        if (p.contains(m['user_id'].toString())) m['role'] = role;
+      }
+      return http.Response('', 200);
+    }
+    if (req.method == 'POST' && p.endsWith('/transfer-admin')) {
+      final target = (jsonDecode(req.body) as Map)['new_admin_user_id'];
+      actions.add('transfer:$target');
+      for (final m in members) {
+        m['role'] = m['user_id'] == target ? 'admin' : 'member';
+      }
+      return http.Response('', 200);
+    }
     return http.Response('not found', 404);
   }
 }
@@ -214,5 +230,54 @@ void main() {
     expect(api.actions, contains('ban'));
     expect(api.lastBanCleanup, isTrue);
     expect(find.text('Beto Miembro'), findsNothing);
+  });
+
+  testWidgets('hacer admin envía role=admin y oculta expulsar/banear', (
+    tester,
+  ) async {
+    SessionManager.saveSession(_jwtFor(_adminId), {'id': 'x'});
+    final api = _seed();
+    final service = SocialService(client: MockClient(api.handle));
+    addTearDown(service.dispose);
+
+    await _pump(tester, service);
+    await tester.tap(find.text('HACER ADMIN'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('CONFIRMAR'));
+    await tester.pumpAndSettle();
+
+    expect(api.actions, contains('role:admin'));
+    // Otro admin: Social rechaza expulsarlo; solo se ofrece quitar el rol.
+    expect(find.text('QUITAR ADMIN'), findsOneWidget);
+    expect(find.text('EXPULSAR'), findsNothing);
+    expect(find.text('BANEAR'), findsNothing);
+
+    await tester.tap(find.text('QUITAR ADMIN'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('CONFIRMAR'));
+    await tester.pumpAndSettle();
+
+    expect(api.actions, contains('role:member'));
+    expect(find.text('EXPULSAR'), findsOneWidget);
+  });
+
+  testWidgets('transferir admin deja al usuario actual sin gestión', (
+    tester,
+  ) async {
+    SessionManager.saveSession(_jwtFor(_adminId), {'id': 'x'});
+    final api = _seed();
+    final service = SocialService(client: MockClient(api.handle));
+    addTearDown(service.dispose);
+
+    await _pump(tester, service);
+    await tester.tap(find.text('TRANSFERIR ADMIN'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('CONFIRMAR'));
+    await tester.pumpAndSettle();
+
+    expect(api.actions, contains('transfer:$_memberId'));
+    expect(find.text('ERES ADMIN'), findsNothing);
+    expect(find.text('EXPULSAR'), findsNothing);
+    expect(find.text('HACER ADMIN'), findsNothing);
   });
 }

@@ -13,6 +13,7 @@ Saca al usuario de **todos** sus grupos con sucesión en cada uno. Es la parte S
 
 ## Flujo
 - `SocialServer.AccountDeletionCleanup` (`internal/handler/grpc/social_server.go:85`: valida uuid) → `GroupService.HandleAccountDeletion` (`internal/service/group_service.go:541`: recorre grupos, registra resultado) → `GroupRepository.HandleAccountDeletion` (lista membresías y aplica `removeUserFromGroup(strict=false)` por grupo + limpia `banned_users`; `internal/repository/group_repository.go:490,527`).
+- Después de confirmar la salida, `GroupService.removeFromChat` quita al usuario del canal Stream `group-<id>` (best-effort, en segundo plano; un fallo de Stream solo se registra y no cambia el status).
 
 ## Tests
 - `internal/handler/grpc/social_server_test.go`: `TestSocialServer/AccountDeletionCleanup promueve y es idempotente` (con memoria) + `TestAccountDeletionNotExposedOverHTTP` en `group_handler_test.go:314` (la ruta HTTP ya no existe).

@@ -14,6 +14,7 @@ Un admin expulsa a un miembro (no admin); puede volver con una invitación vigen
 
 ## Flujo
 - `GroupHandler.KickMember` (`internal/handler/http/group_handler.go:200`: flag opcional + token crudo) → `GroupService.KickMember` (`internal/service/group_service.go:453`: valida ids, borra y dispara limpieza en goroutine si se pidió) → `GroupRepository.KickMember` (lock `FOR UPDATE`, exige admin, prohíbe auto-kick y kick a admins, `DELETE social.group_memberships`; `internal/repository/group_repository.go:289`). No toca `banned_users`.
+- Después de confirmar la salida, `GroupService.removeFromChat` quita al usuario del canal Stream `group-<id>` (best-effort, en segundo plano; un fallo de Stream solo se registra y no cambia el status).
 
 ## Tests
 - `internal/handler/http/group_handler_test.go`: `TestKickAndBanContract` (permisos, self, inexistente).

@@ -136,6 +136,8 @@ type MockClient struct {
 	RevokeCalls    []GrantCall
 	RevokeIDCalls  []GrantCall
 	RevokeErr      error
+	RevokeFailures int
+	RevokeFailure  error
 	permissions    map[string]map[string]string // fileID -> permissionID -> email (empty for anyone)
 	// NoOAuth simula usuarios sin conexión OAuth (comportamiento RealDriveClient:
 	// serviceFor falla con "no oauth connection found"). Cuando un userID está
@@ -542,6 +544,13 @@ func (m *MockClient) RevokePermissionByID(ctx context.Context, ownerUserID, file
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.RevokeIDCalls = append(m.RevokeIDCalls, GrantCall{FileID: fileID, Email: permissionID, PermissionID: permissionID})
+	if m.RevokeFailures > 0 {
+		m.RevokeFailures--
+		if m.RevokeFailure != nil {
+			return m.RevokeFailure
+		}
+		return errors.New("synthetic Drive revoke failure")
+	}
 	if m.RevokeErr != nil {
 		return m.RevokeErr
 	}
@@ -552,7 +561,11 @@ func (m *MockClient) RevokePermissionByID(ctx context.Context, ownerUserID, file
 			}
 		}
 	} else {
-		delete(m.permissions[fileID], permissionID)
+		for principal, id := range m.permissions[fileID] {
+			if principal == permissionID || id == permissionID {
+				delete(m.permissions[fileID], principal)
+			}
+		}
 	}
 	return nil
 }
@@ -564,6 +577,13 @@ func (m *MockClient) RevokePermission(ctx context.Context, ownerUserID string, f
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.RevokeCalls = append(m.RevokeCalls, GrantCall{FileID: fileID, Email: granteeEmail, PermissionID: m.permissions[fileID][granteeEmail]})
+	if m.RevokeFailures > 0 {
+		m.RevokeFailures--
+		if m.RevokeFailure != nil {
+			return m.RevokeFailure
+		}
+		return errors.New("synthetic Drive revoke failure")
+	}
 	if m.RevokeErr != nil {
 		return m.RevokeErr
 	}
@@ -576,11 +596,43 @@ func (m *MockClient) RevokeAllPermissions(ctx context.Context, ownerUserID strin
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.RevokeFailures > 0 {
+		m.RevokeFailures--
+		if m.RevokeFailure != nil {
+			return m.RevokeFailure
+		}
+		return errors.New("synthetic Drive revoke failure")
+	}
 	if m.RevokeErr != nil {
 		return m.RevokeErr
 	}
 	delete(m.permissions, fileID)
 	return nil
+}
+
+// InjectRevokeFailures deterministically fails the next n revoke attempts.
+// It is used by account-deletion tests with the mock Drive client.
+func (m *MockClient) InjectRevokeFailures(n int, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if n < 0 {
+		n = 0
+	}
+	m.RevokeFailures = n
+	m.RevokeFailure = err
+}
+
+// HasPermission reports a mock ACL entry for tests without exposing tokens or
+// requiring an additional test-only HTTP endpoint.
+func (m *MockClient) HasPermission(fileID, principal string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for email := range m.permissions[fileID] {
+		if strings.EqualFold(strings.TrimSpace(email), strings.TrimSpace(principal)) {
+			return true
+		}
+	}
+	return false
 }
 
 // InjectGrantError inyecta un fallo de GrantPermission para un email dado.

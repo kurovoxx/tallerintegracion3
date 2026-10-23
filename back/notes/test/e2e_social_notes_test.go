@@ -33,6 +33,7 @@ import (
 	grpcHandler "github.com/kurovoxx/tallerintegracion3/back/notes/internal/handler/grpc"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/interceptor"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/middleware"
+	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/service"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -129,6 +130,63 @@ type e2e struct {
 	client notesv1.NotesServiceClient
 }
 
+type accountDeletionMemoryStore struct {
+	mu       sync.Mutex
+	complete map[string]bool
+	work     map[string]map[string]model.AccountDeletionGroupNote
+}
+
+func newAccountDeletionMemoryStore() *accountDeletionMemoryStore {
+	return &accountDeletionMemoryStore{
+		complete: make(map[string]bool),
+		work:     make(map[string]map[string]model.AccountDeletionGroupNote),
+	}
+}
+
+func (s *accountDeletionMemoryStore) Begin(_ context.Context, userID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.complete[userID], nil
+}
+
+func (s *accountDeletionMemoryStore) Complete(_ context.Context, userID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.complete[userID] = true
+	return nil
+}
+
+func (s *accountDeletionMemoryStore) SaveGroupWork(_ context.Context, userID, groupID string, items []model.AccountDeletionGroupNote, groupDeleted bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := userID + ":" + groupID
+	if s.work[key] == nil {
+		s.work[key] = make(map[string]model.AccountDeletionGroupNote)
+	}
+	for _, item := range items {
+		item.GroupDeleted = item.GroupDeleted || groupDeleted
+		s.work[key][item.NoteID] = item
+	}
+	return nil
+}
+
+func (s *accountDeletionMemoryStore) PendingGroupWork(_ context.Context, userID, groupID string) ([]model.AccountDeletionGroupNote, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var items []model.AccountDeletionGroupNote
+	for _, item := range s.work[userID+":"+groupID] {
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func (s *accountDeletionMemoryStore) CompleteGroupWork(_ context.Context, userID, groupID, noteID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.work[userID+":"+groupID], noteID)
+	return nil
+}
+
 func newE2E(t *testing.T) *e2e {
 	t.Helper()
 
@@ -148,6 +206,7 @@ func newE2E(t *testing.T) *e2e {
 
 	svc := service.NewNoteService(noteStore, attStore, savedStore, likeStore, sharedStore, driveMock, adapter)
 	svc.SetMemberDirectory(adapter)
+	svc.SetAccountDeletionRepository(newAccountDeletionMemoryStore())
 
 	validator := &middleware.SimpleHS256Validator{
 		Secret:   []byte(e2eSecret),

@@ -37,6 +37,50 @@ func newTestSvc() (*GroupService, *MemoryGroupStore) {
 	return NewGroupService(store, nil), store
 }
 
+type targetGateFake struct {
+	active  bool
+	userIDs []string
+}
+
+func (g *targetGateFake) AcquireTargetRequest(_ context.Context, userID string) (func(), bool, error) {
+	g.userIDs = append(g.userIDs, userID)
+	return func() {}, g.active, nil
+}
+
+func TestThirdPartyMembershipAndAdminChangesRejectDeletingTarget(t *testing.T) {
+	actions := []struct {
+		name string
+		run  func(*GroupService, string) error
+	}{
+		{name: "kick", run: func(s *GroupService, groupID string) error {
+			return s.KickMember(ctx, groupID, uAdmin, uMember, false, "")
+		}},
+		{name: "ban", run: func(s *GroupService, groupID string) error {
+			return s.BanMember(ctx, groupID, uAdmin, uMember, false, "")
+		}},
+		{name: "change role", run: func(s *GroupService, groupID string) error {
+			return s.ChangeRole(ctx, groupID, uAdmin, uMember, model.RoleAdmin)
+		}},
+		{name: "transfer admin", run: func(s *GroupService, groupID string) error { return s.TransferAdmin(ctx, groupID, uAdmin, uMember) }},
+	}
+	for _, action := range actions {
+		t.Run(action.name, func(t *testing.T) {
+			svc, store := newTestSvc()
+			group := newGroup(t, svc, uAdmin)
+			joinAs(t, svc, store, group.ID, uMember)
+			gate := &targetGateFake{active: false}
+			svc.SetAccountTargetGate(gate)
+			wantErr(t, action.run(svc, group.ID), ErrForbidden)
+			if role := roleOf(t, store, group.ID, uMember); role != model.RoleMember {
+				t.Fatalf("operation changed deleting target membership: role=%q", role)
+			}
+			if len(gate.userIDs) != 1 || gate.userIDs[0] != uMember {
+				t.Fatalf("target gate calls=%v", gate.userIDs)
+			}
+		})
+	}
+}
+
 // newGroup crea un grupo con owner como admin.
 func newGroup(t *testing.T, svc *GroupService, owner string) *model.Group {
 	t.Helper()

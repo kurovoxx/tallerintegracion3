@@ -14,6 +14,7 @@ Un admin expulsa y prohíbe el reingreso (kick + registro en `banned_users`) (mi
 
 ## Flujo
 - `GroupHandler.BanMember` (`internal/handler/http/group_handler.go:219`) → `GroupService.BanMember` (`internal/service/group_service.go:468`) → `GroupRepository.BanMember` (mismas reglas y lock que kick + `INSERT INTO social.banned_users (group_id, user_id, banned_by_user_id)` con `ON CONFLICT DO NOTHING`; `internal/repository/group_repository.go:315`).
+- Después de confirmar la salida, `GroupService.removeFromChat` quita al usuario del canal Stream `group-<id>` (best-effort, en segundo plano; un fallo de Stream solo se registra y no cambia el status).
 
 ## Tests
 - `internal/handler/http/group_handler_test.go`: `TestKickAndBanContract`, `TestBannedUserIsolationEndToEnd`.

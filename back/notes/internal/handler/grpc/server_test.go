@@ -12,6 +12,7 @@ import (
 	notesv1 "github.com/kurovoxx/tallerintegracion3/back/notes/internal/gen/notesv1/v1"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/interceptor"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/middleware"
+	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/service"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -22,10 +23,10 @@ import (
 )
 
 const (
-	testSecret     = "grpc-test-secret"
+	testSecret      = "grpc-test-secret"
 	testInternalKey = "grpc-test-internal-key"
-	testIssuer     = "apuntes-auth"
-	testAudience   = "apuntes-client"
+	testIssuer      = "apuntes-auth"
+	testAudience    = "apuntes-client"
 )
 
 // harness levanta un NotesService gRPC real sobre bufconn con stores en memoria
@@ -51,6 +52,7 @@ func newHarness(t *testing.T) *harness {
 	svc := service.NewNoteService(noteStore, attStore, savedStore, likeStore, sharedStore, driveMock, social)
 	md := service.NewMemoryMemberDirectory()
 	svc.SetMemberDirectory(md)
+	svc.SetAccountDeletionRepository(&testAccountDeletionStore{})
 
 	validator := &middleware.SimpleHS256Validator{
 		Secret:   []byte(testSecret),
@@ -87,6 +89,20 @@ func newHarness(t *testing.T) *harness {
 		social: social,
 		md:     md,
 	}
+}
+
+type testAccountDeletionStore struct{}
+
+func (*testAccountDeletionStore) Begin(context.Context, string) (bool, error) { return false, nil }
+func (*testAccountDeletionStore) Complete(context.Context, string) error      { return nil }
+func (*testAccountDeletionStore) SaveGroupWork(context.Context, string, string, []model.AccountDeletionGroupNote, bool) error {
+	return nil
+}
+func (*testAccountDeletionStore) PendingGroupWork(context.Context, string, string) ([]model.AccountDeletionGroupNote, error) {
+	return nil, nil
+}
+func (*testAccountDeletionStore) CompleteGroupWork(context.Context, string, string, string) error {
+	return nil
 }
 
 func mintToken(t *testing.T, userID string) string {

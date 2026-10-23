@@ -26,6 +26,8 @@ type Config struct {
 	GoogleRedirectURI  string
 	InternalAPIKey     string // secreto compartido para endpoints servicio-a-servicio (X-Internal-Key)
 	GRPCPort           string // servidor gRPC Identity (IdentityService)
+	SocialGRPCAddr     string // cliente SocialService para el borrado de cuenta
+	NotesGRPCAddr      string // cliente NotesService para el borrado de cuenta
 }
 
 func Load() *Config {
@@ -62,12 +64,20 @@ func Load() *Config {
 		GoogleRedirectURI:  os.Getenv("GOOGLE_REDIRECT_URI"),
 		InternalAPIKey:     os.Getenv("INTERNAL_API_KEY"),
 		GRPCPort:           os.Getenv("AUTH_GRPC_PORT"),
+		SocialGRPCAddr:     os.Getenv("SOCIAL_GRPC_ADDR"),
+		NotesGRPCAddr:      os.Getenv("NOTES_GRPC_ADDR"),
 	}
 	if cfg.GRPCPort == "" {
 		cfg.GRPCPort = os.Getenv("GRPC_PORT")
 	}
 	if cfg.GRPCPort == "" {
 		cfg.GRPCPort = "9080"
+	}
+	if cfg.SocialGRPCAddr == "" {
+		cfg.SocialGRPCAddr = "social:9083"
+	}
+	if cfg.NotesGRPCAddr == "" {
+		cfg.NotesGRPCAddr = "notes:9082"
 	}
 	if cfg.SMTPHost == "" {
 		cfg.SMTPHost = "smtp.gmail.com"
