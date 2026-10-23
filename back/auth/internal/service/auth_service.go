@@ -55,6 +55,11 @@ type AuthService struct {
 	jwt           *JWTService
 	cfgAccessExp  int // segundos
 	cfgRefreshExp int // segundos
+	accountGate   AccountAccessGate
+}
+
+type AccountAccessGate interface {
+	AcquireRequest(context.Context, string) (release func(), active bool, err error)
 }
 
 func NewAuthService(users UserRepository, refreshTokens RefreshTokenRepository, jwtService *JWTService, accessExp, refreshExp int) *AuthService {
@@ -67,18 +72,22 @@ func NewAuthService(users UserRepository, refreshTokens RefreshTokenRepository, 
 	}
 }
 
+func (s *AuthService) SetAccountAccessGate(gate AccountAccessGate) {
+	s.accountGate = gate
+}
+
 // Constructor legacy para compatibilidad con tests que solo usan register sin JWT
 func NewAuthServiceLegacy(users UserRepository) *AuthService {
 	return &AuthService{users: users}
 }
 
 // Register implementa POST /auth/register según contrato vigente {email,password} (agentApiContract.md:13).
-// - Valida email y password.
-// - display_name es NOT NULL en identity.profiles (agentSql.md:40) pero el contrato ya no lo recibe.
-//   Para mantener la creación transaccional sin inventar un flujo nuevo, se deriva del email si no viene:
-//   local-part del email, trim, fallback "Usuario", truncado a 100. Si el cliente lo envía (compatibilidad), se valida 1..100.
-// - Hashea con bcrypt antes de persistir.
-// - Inserta en identity.users + identity.profiles (visibility private por defecto, opcionales null).
+//   - Valida email y password.
+//   - display_name es NOT NULL en identity.profiles (agentSql.md:40) pero el contrato ya no lo recibe.
+//     Para mantener la creación transaccional sin inventar un flujo nuevo, se deriva del email si no viene:
+//     local-part del email, trim, fallback "Usuario", truncado a 100. Si el cliente lo envía (compatibilidad), se valida 1..100.
+//   - Hashea con bcrypt antes de persistir.
+//   - Inserta en identity.users + identity.profiles (visibility private por defecto, opcionales null).
 func (s *AuthService) Register(ctx context.Context, email, password string, displayName *string, photoURL, phone, institution, description, visibility *string) (*model.User, error) {
 	email = strings.TrimSpace(email)
 	// Validar email
@@ -164,6 +173,16 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*Login
 	if user == nil {
 		return nil, NewServiceError(utils.ErrInvalidCredentials)
 	}
+	if s.accountGate != nil {
+		release, active, err := s.accountGate.AcquireRequest(ctx, user.ID)
+		if err != nil {
+			return nil, &ServiceError{Code: "internal_error", Message: "no se pudo comprobar el estado de la cuenta"}
+		}
+		if !active {
+			return nil, NewServiceError(utils.ErrInvalidCredentials)
+		}
+		defer release()
+	}
 	// Comparar bcrypt (constant time)
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return nil, NewServiceError(utils.ErrInvalidCredentials)
@@ -221,6 +240,16 @@ func (s *AuthService) Refresh(ctx context.Context, rawToken string) (*RefreshRes
 	}
 	if rt == nil {
 		return nil, NewServiceError(utils.ErrInvalidToken)
+	}
+	if s.accountGate != nil {
+		release, active, err := s.accountGate.AcquireRequest(ctx, rt.UserID)
+		if err != nil {
+			return nil, &ServiceError{Code: "internal_error", Message: "no se pudo comprobar el estado de la cuenta"}
+		}
+		if !active {
+			return nil, NewServiceError(utils.ErrInvalidToken)
+		}
+		defer release()
 	}
 	if rt.Revoked {
 		return nil, NewServiceError(utils.ErrInvalidToken)

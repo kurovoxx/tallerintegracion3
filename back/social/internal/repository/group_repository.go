@@ -545,7 +545,8 @@ func (r *GroupRepository) removeUserFromGroup(ctx context.Context, groupID, user
 			if strict {
 				return res, errors.New("group_not_found")
 			}
-			return res, nil // el grupo ya no existe
+			res.GroupDeleted = true
+			return res, nil // el grupo ya no existe; la tarea aún debe limpiar Notes
 		}
 		return res, err
 	}

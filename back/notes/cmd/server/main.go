@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -68,7 +69,11 @@ func main() {
 func selectDriveClient(p *pgxpool.Pool, cfg *config.Config) drive.Client {
 	if !strings.EqualFold(strings.TrimSpace(cfg.StorageMode), "drive") {
 		log.Printf("notes: Drive mock activado (STORAGE_MODE=%s)", cfg.StorageMode)
-		return drive.NewMockClient()
+		mock := drive.NewMockClient()
+		if failures, err := strconv.Atoi(strings.TrimSpace(os.Getenv("NOTES_TEST_DRIVE_REVOKE_FAILURES"))); err == nil && failures > 0 {
+			mock.InjectRevokeFailures(failures, nil)
+		}
+		return mock
 	}
 	return newGRPCDriveClient(cfg)
 }
@@ -112,8 +117,11 @@ func runServer(pool *pgxpool.Pool, driveClient drive.Client, cfg *config.Config)
 	savedStore := service.NewPGSavedStore(pool)
 	likeStore := service.NewPGLikeStore(pool)
 	sharedStore := service.NewPGSharedStore(pool)
+	deletionRepo := repository.NewAccountDeletionRepository(pool)
+	defer deletionRepo.Close()
 	social, members := newSocialAdapters(cfg)
 	svc := service.NewNoteService(noteStore, attStore, savedStore, likeStore, sharedStore, driveClient, social)
+	svc.SetAccountDeletionRepository(deletionRepo)
 	// Directorio de correos para share restricted: adaptador HTTP real a Social
 	// (o memoria solo con DEV_SEED_SOCIAL explícito).
 	svc.SetMemberDirectory(members)
@@ -123,7 +131,7 @@ func runServer(pool *pgxpool.Pool, driveClient drive.Client, cfg *config.Config)
 	if memberIDs, ok := members.(service.MemberUserIDs); ok && pool != nil {
 		svc.SetDriveEmailDirectory(service.NewDriveEmailDirectory(memberIDs, service.NewPGDriveEmailStore(pool)))
 	}
-	startServers(svc, cfg)
+	startServers(svc, cfg, deletionRepo)
 }
 
 func runServerMemory(driveClient drive.Client, cfg *config.Config) {
@@ -137,7 +145,7 @@ func runServerMemory(driveClient drive.Client, cfg *config.Config) {
 
 	svc := service.NewNoteService(noteStore, attStore, savedStore, likeStore, sharedStore, driveClient, social)
 	svc.SetMemberDirectory(members)
-	startServers(svc, cfg)
+	startServers(svc, cfg, nil)
 }
 
 // newSocialAdapters inyecta los adaptadores de Social: clientes HTTP reales
@@ -205,14 +213,14 @@ func newHTTPRouter(svc *service.NoteService, cfg *config.Config, authMw *middlew
 // (NotesService, :NOTES_GRPC_PORT) con un apagado gracioso coordinado por
 // SIGINT/SIGTERM. Ambos comparten el mismo *service.NoteService y validador
 // HS256, de modo que la semántica HTTP y gRPC es idéntica (dual-serve).
-func startServers(svc *service.NoteService, cfg *config.Config) {
+func startServers(svc *service.NoteService, cfg *config.Config, deletionGate middleware.AccountAccessGate) {
 	// JWT validator HS256 (compartido HTTP + gRPC).
 	validator := &middleware.SimpleHS256Validator{
 		Secret:   []byte(cfg.JWTSecret),
 		Issuer:   "apuntes-auth",
 		Audience: "apuntes-client",
 	}
-	authMw := middleware.NewAuthMiddleware(validator)
+	authMw := middleware.NewAuthMiddleware(validator, deletionGate)
 	router := newHTTPRouter(svc, cfg, authMw)
 
 	// gRPC: logging afuera para auditar también los rechazos de auth; el
@@ -220,7 +228,7 @@ func startServers(svc *service.NoteService, cfg *config.Config) {
 	grpcSrv := grpc.NewServer(grpc.ChainUnaryInterceptor(
 		interceptor.NewLogging(log.Default()),
 		interceptor.NewAuthRouter(
-			interceptor.NewJWTAuth(validator),
+			interceptor.NewJWTAuth(validator, deletionGate),
 			interceptor.NewInternalAuth(cfg.InternalAPIKey),
 		),
 	))

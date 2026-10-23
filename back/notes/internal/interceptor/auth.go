@@ -55,7 +55,7 @@ func NewInternalAuth(expectedSecret string) grpc.UnaryServerInterceptor {
 // mismo canal que el middleware HTTP (middleware.WithUserID), de modo que los
 // handlers gRPC y HTTP resuelven la identidad igual. Sin token, malformado,
 // expirado o inválido -> Unauthenticated.
-func NewJWTAuth(validator middleware.JWTValidator) grpc.UnaryServerInterceptor {
+func NewJWTAuth(validator middleware.JWTValidator, gates ...middleware.AccountAccessGate) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		md, ok := metadata.FromIncomingContext(ctx)
 		if !ok {
@@ -79,6 +79,16 @@ func NewJWTAuth(validator middleware.JWTValidator) grpc.UnaryServerInterceptor {
 		}
 		ctx = middleware.WithUserID(ctx, userID)
 		ctx = middleware.WithRole(ctx, role)
+		if len(gates) > 0 && gates[0] != nil {
+			release, active, gateErr := gates[0].AcquireRequest(ctx, userID)
+			if gateErr != nil {
+				return nil, status.Error(codes.Unavailable, "account state unavailable")
+			}
+			if !active {
+				return nil, status.Error(codes.PermissionDenied, "account deletion in progress")
+			}
+			defer release()
+		}
 		return handler(ctx, req)
 	}
 }
@@ -88,7 +98,9 @@ func NewJWTAuth(validator middleware.JWTValidator) grpc.UnaryServerInterceptor {
 // servidor monta un solo interceptor de auth encadenado tras el logging.
 func NewAuthRouter(jwt, internal grpc.UnaryServerInterceptor) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		if info.FullMethod == notesv1.NotesService_UnshareAll_FullMethodName {
+		if info.FullMethod == notesv1.NotesService_UnshareAll_FullMethodName ||
+			info.FullMethod == notesv1.NotesService_BeginAccountDeletion_FullMethodName ||
+			info.FullMethod == notesv1.NotesService_AccountDeletionCleanup_FullMethodName {
 			return internal(ctx, req, info, handler)
 		}
 		return jwt(ctx, req, info, handler)

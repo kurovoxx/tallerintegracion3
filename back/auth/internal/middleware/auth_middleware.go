@@ -26,17 +26,38 @@ const (
 // AuthMiddleware valida firma + expiración del access token en cada request protegida.
 // Inyecta solo user_id en el contexto. 401 token inválido/expirado.
 type AuthMiddleware struct {
-	jwt *service.JWTService
+	jwt  *service.JWTService
+	gate AccountAccessGate
 }
 
-func NewAuthMiddleware(jwtSvc *service.JWTService) *AuthMiddleware {
-	return &AuthMiddleware{jwt: jwtSvc}
+// AccountAccessGate serializa el request completo con el inicio de borrado y
+// rechaza el sujeto mientras exista un tombstone o la fila local haya sido borrada.
+type AccountAccessGate interface {
+	AcquireRequest(ctx context.Context, userID string) (release func(), active bool, err error)
+}
+
+func NewAuthMiddleware(jwtSvc *service.JWTService, gates ...AccountAccessGate) *AuthMiddleware {
+	m := &AuthMiddleware{jwt: jwtSvc}
+	if len(gates) > 0 {
+		m.gate = gates[0]
+	}
+	return m
 }
 
 // RequireAuth valida Authorization: Bearer {access_token}.
 // 401 si falta header, malformado, firma inválida o expirado.
 // Inyecta user_id en gin.Context y en request.Context.
 func (m *AuthMiddleware) RequireAuth() gin.HandlerFunc {
+	return m.require(true)
+}
+
+// RequireIdentity valida el JWT y extrae su identidad sin exigir que la cuenta
+// siga activa. Se reserva para consultar/reanudar el borrado idempotente.
+func (m *AuthMiddleware) RequireIdentity() gin.HandlerFunc {
+	return m.require(false)
+}
+
+func (m *AuthMiddleware) require(checkAccountState bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		auth := c.GetHeader("Authorization")
 		if strings.TrimSpace(auth) == "" {
@@ -71,6 +92,20 @@ func (m *AuthMiddleware) RequireAuth() gin.HandlerFunc {
 			}
 			c.Abort()
 			return
+		}
+		if checkAccountState && m.gate != nil {
+			release, active, gateErr := m.gate.AcquireRequest(c.Request.Context(), user.ID)
+			if gateErr != nil {
+				utils.RespondError(c, http.StatusServiceUnavailable, "account_status_unavailable", "No se pudo comprobar el estado de la cuenta")
+				c.Abort()
+				return
+			}
+			if !active {
+				utils.RespondError(c, http.StatusLocked, "account_deletion_in_progress", "La cuenta está en proceso de eliminación")
+				c.Abort()
+				return
+			}
+			defer release()
 		}
 
 		// Inyectar solo user_id

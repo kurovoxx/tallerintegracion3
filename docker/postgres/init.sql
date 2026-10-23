@@ -26,6 +26,18 @@ CREATE TABLE identity.users (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- Tombstones are not FK-linked to users: completed deletions invalidate old JWTs.
+CREATE TABLE identity.account_deletions (
+    user_id uuid PRIMARY KEY,
+    status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'complete')),
+    last_error text,
+    started_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    completed_at timestamptz
+);
+CREATE INDEX idx_account_deletions_pending
+    ON identity.account_deletions (updated_at) WHERE status = 'pending';
+
 CREATE TABLE identity.refresh_tokens (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id uuid NOT NULL REFERENCES identity.users(id) ON DELETE CASCADE,
@@ -270,7 +282,33 @@ CREATE TABLE notes.shared_notes (
     shared_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- Tombstones block old JWTs after Notes finishes access cleanup. Note content
+-- is intentionally retained pending a product decision about account erasure.
+CREATE TABLE notes.account_deletion_users (
+    user_id uuid PRIMARY KEY,
+    status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'complete')),
+    started_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    completed_at timestamptz
+);
+
+-- Note-level cleanup intent survives deletion of the group share rows until
+-- Drive confirms the desired ACL after restart/retry.
+CREATE TABLE notes.account_deletion_group_notes (
+    user_id uuid NOT NULL,
+    group_id uuid NOT NULL,
+    note_id uuid NOT NULL,
+    group_deleted boolean NOT NULL DEFAULT false,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, group_id, note_id)
+);
+
+CREATE INDEX idx_account_deletion_group_notes_group
+    ON notes.account_deletion_group_notes (group_id, user_id);
+
 CREATE INDEX idx_shared_notes_group_id ON notes.shared_notes(group_id);
+CREATE INDEX idx_shared_notes_note_id ON notes.shared_notes(note_id);
 
 -- Cubre el filtro de mayor impacto (group_id + admin primero). El resto del
 -- orden (likes, seguidores, fecha) se resuelve con un sort en memoria tras el
@@ -359,6 +397,29 @@ CREATE INDEX idx_group_memberships_user_id ON social.group_memberships(user_id);
 -- Soporta la query de sucesión automática de admin al borrar una cuenta
 -- (filtra por group_id + role, ordena por joined_at)
 CREATE INDEX idx_group_memberships_succession ON social.group_memberships(group_id, role, joined_at);
+
+-- Durable Social deletion tombstones and per-group retries. These deliberately
+-- have no FK to groups; the last-member path deletes the group before Notes' ACL
+-- revocations necessarily finish.
+CREATE TABLE social.account_deletion_users (
+    user_id uuid PRIMARY KEY,
+    status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'complete')),
+    started_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    completed_at timestamptz
+);
+CREATE TABLE social.account_deletion_groups (
+    user_id uuid NOT NULL,
+    group_id uuid NOT NULL,
+    membership_removed boolean NOT NULL DEFAULT false,
+    group_deleted boolean NOT NULL DEFAULT false,
+    status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'complete')),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    completed_at timestamptz,
+    PRIMARY KEY (user_id, group_id)
+);
+CREATE INDEX idx_account_deletion_groups_pending
+    ON social.account_deletion_groups (user_id, group_id) WHERE status = 'pending';
 
 -- Bloquea reingreso aunque el usuario tenga un invite_token/link válido
 CREATE TABLE social.banned_users (

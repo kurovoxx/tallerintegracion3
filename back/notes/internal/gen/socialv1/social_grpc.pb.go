@@ -23,6 +23,7 @@ const (
 	SocialService_IsAdmin_FullMethodName                = "/social.v1.SocialService/IsAdmin"
 	SocialService_GetMembers_FullMethodName             = "/social.v1.SocialService/GetMembers"
 	SocialService_GetMemberEmails_FullMethodName        = "/social.v1.SocialService/GetMemberEmails"
+	SocialService_PrepareAccountDeletion_FullMethodName = "/social.v1.SocialService/PrepareAccountDeletion"
 	SocialService_AccountDeletionCleanup_FullMethodName = "/social.v1.SocialService/AccountDeletionCleanup"
 )
 
@@ -57,9 +58,10 @@ type SocialServiceClient interface {
 	// Unavailable en vez de una lista incompleta.
 	GetMemberEmails(ctx context.Context, in *GetMemberEmailsRequest, opts ...grpc.CallOption) (*GetMemberEmailsResponse, error)
 	// Saca al usuario de todos sus grupos con sucesión automática de admin
-	// (miembro más antiguo) y borra sus baneos. Si era el último miembro, el
-	// grupo se elimina. Idempotente: reintentar tras un fallo a medias es seguro
-	// y una segunda llamada devuelve groups vacío.
+	// (miembro más antiguo) y borra sus baneos. Conserva una tarea durable por
+	// grupo hasta que Notes confirme la revocación requerida. Si era el último
+	// miembro, se recuerda el id del grupo aunque el grupo se elimine.
+	PrepareAccountDeletion(ctx context.Context, in *PrepareAccountDeletionRequest, opts ...grpc.CallOption) (*PrepareAccountDeletionResponse, error)
 	AccountDeletionCleanup(ctx context.Context, in *AccountDeletionCleanupRequest, opts ...grpc.CallOption) (*AccountDeletionCleanupResponse, error)
 }
 
@@ -111,6 +113,16 @@ func (c *socialServiceClient) GetMemberEmails(ctx context.Context, in *GetMember
 	return out, nil
 }
 
+func (c *socialServiceClient) PrepareAccountDeletion(ctx context.Context, in *PrepareAccountDeletionRequest, opts ...grpc.CallOption) (*PrepareAccountDeletionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PrepareAccountDeletionResponse)
+	err := c.cc.Invoke(ctx, SocialService_PrepareAccountDeletion_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *socialServiceClient) AccountDeletionCleanup(ctx context.Context, in *AccountDeletionCleanupRequest, opts ...grpc.CallOption) (*AccountDeletionCleanupResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AccountDeletionCleanupResponse)
@@ -152,9 +164,10 @@ type SocialServiceServer interface {
 	// Unavailable en vez de una lista incompleta.
 	GetMemberEmails(context.Context, *GetMemberEmailsRequest) (*GetMemberEmailsResponse, error)
 	// Saca al usuario de todos sus grupos con sucesión automática de admin
-	// (miembro más antiguo) y borra sus baneos. Si era el último miembro, el
-	// grupo se elimina. Idempotente: reintentar tras un fallo a medias es seguro
-	// y una segunda llamada devuelve groups vacío.
+	// (miembro más antiguo) y borra sus baneos. Conserva una tarea durable por
+	// grupo hasta que Notes confirme la revocación requerida. Si era el último
+	// miembro, se recuerda el id del grupo aunque el grupo se elimine.
+	PrepareAccountDeletion(context.Context, *PrepareAccountDeletionRequest) (*PrepareAccountDeletionResponse, error)
 	AccountDeletionCleanup(context.Context, *AccountDeletionCleanupRequest) (*AccountDeletionCleanupResponse, error)
 	mustEmbedUnimplementedSocialServiceServer()
 }
@@ -177,6 +190,9 @@ func (UnimplementedSocialServiceServer) GetMembers(context.Context, *GetMembersR
 }
 func (UnimplementedSocialServiceServer) GetMemberEmails(context.Context, *GetMemberEmailsRequest) (*GetMemberEmailsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetMemberEmails not implemented")
+}
+func (UnimplementedSocialServiceServer) PrepareAccountDeletion(context.Context, *PrepareAccountDeletionRequest) (*PrepareAccountDeletionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PrepareAccountDeletion not implemented")
 }
 func (UnimplementedSocialServiceServer) AccountDeletionCleanup(context.Context, *AccountDeletionCleanupRequest) (*AccountDeletionCleanupResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AccountDeletionCleanup not implemented")
@@ -274,6 +290,24 @@ func _SocialService_GetMemberEmails_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SocialService_PrepareAccountDeletion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PrepareAccountDeletionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SocialServiceServer).PrepareAccountDeletion(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SocialService_PrepareAccountDeletion_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SocialServiceServer).PrepareAccountDeletion(ctx, req.(*PrepareAccountDeletionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SocialService_AccountDeletionCleanup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AccountDeletionCleanupRequest)
 	if err := dec(in); err != nil {
@@ -314,6 +348,10 @@ var SocialService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetMemberEmails",
 			Handler:    _SocialService_GetMemberEmails_Handler,
+		},
+		{
+			MethodName: "PrepareAccountDeletion",
+			Handler:    _SocialService_PrepareAccountDeletion_Handler,
 		},
 		{
 			MethodName: "AccountDeletionCleanup",
