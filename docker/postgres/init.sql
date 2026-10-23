@@ -413,6 +413,7 @@ CREATE TABLE social.account_deletion_groups (
     group_id uuid NOT NULL,
     membership_removed boolean NOT NULL DEFAULT false,
     group_deleted boolean NOT NULL DEFAULT false,
+    stream_removed boolean NOT NULL DEFAULT false,
     status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'complete')),
     updated_at timestamptz NOT NULL DEFAULT now(),
     completed_at timestamptz,

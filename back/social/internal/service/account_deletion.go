@@ -24,6 +24,7 @@ type accountDeletionStore interface {
 	PendingGroups(context.Context, string) ([]repository.AccountDeletionGroup, error)
 	RemoveMembership(context.Context, string, string) (model.SuccessionResult, error)
 	MarkMembershipRemoved(context.Context, string, string, bool) error
+	MarkStreamRemoved(context.Context, string, string) error
 	CompleteGroup(context.Context, string, string) error
 	Complete(context.Context, string) error
 	AcquireRequest(context.Context, string) (func(), bool, error)
@@ -97,10 +98,6 @@ func (s *AccountDeletionService) Cleanup(ctx context.Context, userID string) ([]
 			}
 			results = append(results, result)
 		}
-		// Stream is best-effort; it must not turn a committed membership change
-		// into a failed Notes cleanup. Removal is idempotent and is scheduled
-		// again on retries while this group remains pending.
-		removeChatMember(s.chat, userID, item.GroupID)
 		rpcCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		rpcCtx = metadata.AppendToOutgoingContext(rpcCtx, "x-internal-key", s.key)
 		response, callErr := s.notes.UnshareAll(rpcCtx, &notesv1.UnshareAllRequest{
@@ -117,6 +114,20 @@ func (s *AccountDeletionService) Cleanup(ctx context.Context, userID string) ([]
 				return results, socialv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_ERROR, fmt.Errorf("notes reported account cleanup error")
 			}
 			return results, socialv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_PENDING, nil
+		}
+		// Unlike leave/kick/ban, account deletion cannot complete the durable
+		// group job until Stream confirms removal (or confirms the channel is
+		// already absent). A failure leaves the group pending for a later call.
+		if !item.StreamRemoved {
+			if s.chat == nil {
+				return results, socialv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_PENDING, fmt.Errorf("Stream cleanup client unavailable")
+			}
+			if err := s.chat.RemoveMember(ctx, ChannelTypeStream, ChannelIDForGroup(item.GroupID), userID); err != nil {
+				return results, socialv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_PENDING, fmt.Errorf("remove account from Stream: %w", err)
+			}
+			if err := s.store.MarkStreamRemoved(ctx, userID, item.GroupID); err != nil {
+				return results, socialv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_PENDING, err
+			}
 		}
 		if err := s.store.CompleteGroup(ctx, userID, item.GroupID); err != nil {
 			return results, socialv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_PENDING, err

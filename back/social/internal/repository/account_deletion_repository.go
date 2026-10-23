@@ -18,6 +18,7 @@ type AccountDeletionGroup struct {
 	GroupID           string
 	MembershipRemoved bool
 	GroupDeleted      bool
+	StreamRemoved     bool
 }
 
 type AccountDeletionRepository struct {
@@ -152,7 +153,7 @@ func discardSocialGateConn(conn *pgxpool.Conn) {
 }
 
 func (r *AccountDeletionRepository) PendingGroups(ctx context.Context, userID string) ([]AccountDeletionGroup, error) {
-	rows, err := r.pool.Query(ctx, `SELECT group_id::text,membership_removed,group_deleted FROM social.account_deletion_groups WHERE user_id=$1::uuid AND status='pending' ORDER BY group_id`, userID)
+	rows, err := r.pool.Query(ctx, `SELECT group_id::text,membership_removed,group_deleted,stream_removed FROM social.account_deletion_groups WHERE user_id=$1::uuid AND status='pending' ORDER BY group_id`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +161,7 @@ func (r *AccountDeletionRepository) PendingGroups(ctx context.Context, userID st
 	var out []AccountDeletionGroup
 	for rows.Next() {
 		var item AccountDeletionGroup
-		if err := rows.Scan(&item.GroupID, &item.MembershipRemoved, &item.GroupDeleted); err != nil {
+		if err := rows.Scan(&item.GroupID, &item.MembershipRemoved, &item.GroupDeleted, &item.StreamRemoved); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -177,9 +178,26 @@ func (r *AccountDeletionRepository) MarkMembershipRemoved(ctx context.Context, u
 	return err
 }
 
+func (r *AccountDeletionRepository) MarkStreamRemoved(ctx context.Context, userID, groupID string) error {
+	tag, err := r.pool.Exec(ctx, `UPDATE social.account_deletion_groups SET stream_removed=true,updated_at=now() WHERE user_id=$1::uuid AND group_id=$2::uuid AND membership_removed=true AND status='pending'`, userID, groupID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("account deletion Stream job not pending for group %s", groupID)
+	}
+	return nil
+}
+
 func (r *AccountDeletionRepository) CompleteGroup(ctx context.Context, userID, groupID string) error {
-	_, err := r.pool.Exec(ctx, `UPDATE social.account_deletion_groups SET status='complete',updated_at=now(),completed_at=now() WHERE user_id=$1::uuid AND group_id=$2::uuid AND membership_removed=true AND status='pending'`, userID, groupID)
-	return err
+	tag, err := r.pool.Exec(ctx, `UPDATE social.account_deletion_groups SET status='complete',updated_at=now(),completed_at=now() WHERE user_id=$1::uuid AND group_id=$2::uuid AND membership_removed=true AND stream_removed=true AND status='pending'`, userID, groupID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("account deletion group %s still has required cleanup pending", groupID)
+	}
+	return nil
 }
 
 func (r *AccountDeletionRepository) Complete(ctx context.Context, userID string) error {

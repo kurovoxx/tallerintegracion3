@@ -65,6 +65,14 @@ func TestIntegrationAccountDeletionKeepsDurableGroupWorkAndSuccession(t *testing
 	if membershipCount != 0 || groupCount != 2 {
 		t.Fatalf("memberships=%d durable pending groups=%d; want 0 and 2", membershipCount, groupCount)
 	}
+	if err := recoverable.CompleteGroup(ctx, owner, sharedGroup.ID); err == nil {
+		t.Fatal("group must remain pending until Stream confirms removal")
+	}
+	for _, groupID := range []string{sharedGroup.ID, lastMemberGroup.ID} {
+		if err := recoverable.MarkStreamRemoved(ctx, owner, groupID); err != nil {
+			t.Fatalf("mark Stream removal for %s: %v", groupID, err)
+		}
+	}
 	if err := recoverable.CompleteGroup(ctx, owner, sharedGroup.ID); err != nil {
 		t.Fatal(err)
 	}
