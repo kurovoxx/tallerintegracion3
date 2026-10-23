@@ -36,6 +36,9 @@ type Client interface {
 	// Idempotente: si ya es miembro, no es error. Solo llamarla después de
 	// verificar en nuestra BD que el usuario pertenece al grupo Sigma.
 	EnsureMember(ctx context.Context, channelType, channelID, userID string) error
+	// RemoveMember quita al usuario del canal (server-side). Se llama cuando
+	// deja el grupo Sigma: salida, expulsión, baneo o borrado de cuenta.
+	RemoveMember(ctx context.Context, channelType, channelID, userID string) error
 	// SendMessage publica un mensaje de texto en el canal como el usuario indicado.
 	// En modo server-side el sender no necesita existir previamente en Stream.
 	SendMessage(ctx context.Context, channelType, channelID, senderID, text string) error
@@ -50,12 +53,16 @@ type MockClient struct {
 	EnsureErr error
 	// SendErr, si no es nil, lo retorna SendMessage (para simular fallos).
 	SendErr error
+	// RemoveErr, si no es nil, lo retorna RemoveMember (para simular fallos).
+	RemoveErr error
 	// Calls registra los canales creados (para aserciones).
 	Calls []CreateCall
 	// Ensured registra las membresías garantizadas (para aserciones).
 	Ensured []EnsureCall
 	// Messages registra los mensajes enviados (para aserciones).
 	Messages []SendCall
+	// Removed registra las membresías retiradas (para aserciones).
+	Removed []EnsureCall
 }
 
 type CreateCall struct {
@@ -110,6 +117,24 @@ func (m *MockClient) SendMessage(ctx context.Context, channelType, channelID, se
 	}
 	m.Messages = append(m.Messages, SendCall{ChannelType: channelType, ChannelID: channelID, SenderID: senderID, Text: text})
 	return nil
+}
+
+func (m *MockClient) RemoveMember(ctx context.Context, channelType, channelID, userID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.RemoveErr != nil {
+		return m.RemoveErr
+	}
+	m.Removed = append(m.Removed, EnsureCall{ChannelType: channelType, ChannelID: channelID, UserID: userID})
+	return nil
+}
+
+// RemovedCalls devuelve una copia de Removed bajo el lock (lectura segura
+// mientras una goroutine best-effort todavía puede escribir).
+func (m *MockClient) RemovedCalls() []EnsureCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]EnsureCall(nil), m.Removed...)
 }
 
 var _ Client = (*MockClient)(nil)
@@ -271,6 +296,27 @@ func (c *RESTClient) EnsureMember(ctx context.Context, channelType, channelID, u
 		return errors.Join(err, uerr)
 	}
 	return c.postJSON(ctx, path, "", updateChannelRequest{AddMembers: []string{userID}})
+}
+
+type removeMembersRequest struct {
+	RemoveMembers []string `json:"remove_members"`
+}
+
+// RemoveMember quita al usuario del canal vía update server-side
+// (POST /channels/{type}/{id} {"remove_members":[...]}). Sin membresía en el
+// canal, el usuario deja de poder leer o escribir aunque conserve su token.
+func (c *RESTClient) RemoveMember(ctx context.Context, channelType, channelID, userID string) error {
+	channelType = strings.TrimSpace(channelType)
+	channelID = strings.TrimSpace(channelID)
+	userID = strings.TrimSpace(userID)
+	if channelType == "" || channelID == "" {
+		return errors.New("channel type/id vacíos")
+	}
+	if userID == "" {
+		return errors.New("user vacío")
+	}
+	path := "/channels/" + url.PathEscape(channelType) + "/" + url.PathEscape(channelID)
+	return c.postJSON(ctx, path, "", removeMembersRequest{RemoveMembers: []string{userID}})
 }
 
 type streamUser struct {

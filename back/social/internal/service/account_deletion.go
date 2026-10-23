@@ -18,11 +18,23 @@ type NotesAccountCleanup interface {
 	UnshareAll(context.Context, *notesv1.UnshareAllRequest, ...grpc.CallOption) (*notesv1.UnshareAllResponse, error)
 }
 
+type accountDeletionStore interface {
+	Begin(context.Context, string) error
+	IsComplete(context.Context, string) (bool, error)
+	PendingGroups(context.Context, string) ([]repository.AccountDeletionGroup, error)
+	RemoveMembership(context.Context, string, string) (model.SuccessionResult, error)
+	MarkMembershipRemoved(context.Context, string, string, bool) error
+	CompleteGroup(context.Context, string, string) error
+	Complete(context.Context, string) error
+	AcquireRequest(context.Context, string) (func(), bool, error)
+}
+
 type AccountDeletionService struct {
-	store *repository.AccountDeletionRepository
+	store accountDeletionStore
 	notes NotesAccountCleanup
 	key   string
 	conn  *grpc.ClientConn
+	chat  ChatMembership
 }
 
 func NewAccountDeletionService(store *repository.AccountDeletionRepository, notesAddr, internalKey string) (*AccountDeletionService, error) {
@@ -40,6 +52,10 @@ func (s *AccountDeletionService) Close() {
 	if s.conn != nil {
 		_ = s.conn.Close()
 	}
+}
+
+func (s *AccountDeletionService) SetChatMembership(chat ChatMembership) {
+	s.chat = chat
 }
 
 func (s *AccountDeletionService) Prepare(ctx context.Context, userID string) (socialv1.AccountCleanupStatus, error) {
@@ -81,6 +97,10 @@ func (s *AccountDeletionService) Cleanup(ctx context.Context, userID string) ([]
 			}
 			results = append(results, result)
 		}
+		// Stream is best-effort; it must not turn a committed membership change
+		// into a failed Notes cleanup. Removal is idempotent and is scheduled
+		// again on retries while this group remains pending.
+		removeChatMember(s.chat, userID, item.GroupID)
 		rpcCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		rpcCtx = metadata.AppendToOutgoingContext(rpcCtx, "x-internal-key", s.key)
 		response, callErr := s.notes.UnshareAll(rpcCtx, &notesv1.UnshareAllRequest{

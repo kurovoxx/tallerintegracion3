@@ -63,6 +63,13 @@ func TestDiscordGetConfig_MiembroLeeYExtranoNo(t *testing.T) {
 	if !cfg.InviteUrl.Valid || cfg.InviteUrl.String != testInviteURL {
 		t.Fatalf("invite inesperada: %+v", cfg.InviteUrl)
 	}
+	if cfg.WebhookUrl.Valid {
+		t.Fatalf("un miembro no debe recibir el webhook: %+v", cfg.WebhookUrl)
+	}
+	adminCfg, err := svc.GetConfig(context.Background(), gid, admin)
+	if err != nil || adminCfg.WebhookUrl.String != testWebhookURL {
+		t.Fatalf("admin debe leer el webhook: %+v, %v", adminCfg.WebhookUrl, err)
+	}
 	if _, err := svc.GetConfig(context.Background(), gid, stranger); err != ErrForbidden {
 		t.Fatalf("extraño debe dar ErrForbidden, got %v", err)
 	}

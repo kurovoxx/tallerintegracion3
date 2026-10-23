@@ -151,6 +151,8 @@ func (s *DiscordService) PutConfig(ctx context.Context, groupID, userID, serverN
 
 // GetConfig devuelve la integración de Discord del grupo para cualquier
 // miembro (lectura). 404 discord_not_configured si nunca se configuró.
+// webhook_url es un secreto (permite publicar en el canal): solo lo recibe
+// un admin; para el resto viaja vacío (null en JSON).
 func (s *DiscordService) GetConfig(ctx context.Context, groupID, userID string) (sqlc.SocialDiscordIntegration, error) {
 	gid, err := parseGroupUUID(groupID)
 	if err != nil {
@@ -166,7 +168,8 @@ func (s *DiscordService) GetConfig(ctx context.Context, groupID, userID string) 
 		}
 		return sqlc.SocialDiscordIntegration{}, err
 	}
-	if _, err := s.repo.GetMemberRole(ctx, gid, uid); err != nil {
+	role, err := s.repo.GetMemberRole(ctx, gid, uid)
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return sqlc.SocialDiscordIntegration{}, ErrForbidden
 		}
@@ -178,6 +181,9 @@ func (s *DiscordService) GetConfig(ctx context.Context, groupID, userID string) 
 			return sqlc.SocialDiscordIntegration{}, ErrDiscordNotConfigured
 		}
 		return sqlc.SocialDiscordIntegration{}, err
+	}
+	if role != "admin" {
+		cfg.WebhookUrl = pgtype.Text{}
 	}
 	return cfg, nil
 }

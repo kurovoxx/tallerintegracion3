@@ -78,9 +78,13 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 		log.Fatalf("notes account deletion gRPC: %v", err)
 	}
 	defer deletionSvc.Close()
+	chatClient := streamClientFor(cfg)
+	deletionSvc.SetChatMembership(chatClient)
 	streamRepo := repository.NewStreamRepository(pool)
 	groupSvc := service.NewGroupService(groupRepo, streamNotifierFor(cfg, streamRepo))
 	groupSvc.SetAccountTargetGate(deletionRepo)
+	// Salir/expulsar/banear/borrar cuenta quita al usuario del canal Stream.
+	groupSvc.SetChatMembership(chatClient)
 	// Cliente Identity por gRPC con conexión compartida (directorio y
 	// Calendar). La conexión es perezosa: Auth caído no impide arrancar;
 	// cada operación falla controlada y se recupera solo al volver Auth.
