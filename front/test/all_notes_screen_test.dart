@@ -537,8 +537,11 @@ void main() {
           'id': 'u-new',
         }, refreshToken: 'refresh-test');
         var attachmentAttempts = 0;
-        AuthedHttp.refreshOverride = (_) async =>
-            RefreshResult.success(accessToken: 'jwt-renovado');
+        AuthedHttp.refreshOverride = (_) async => RefreshResult.success(
+          accessToken: 'jwt-renovado',
+          // 3_4_14: el backend siempre rota el refresh token.
+          refreshToken: 'refresh-rotado',
+        );
         const id = '12345678-1234-4234-8234-123456789abc';
         final paths = <String>[];
         var created = false;

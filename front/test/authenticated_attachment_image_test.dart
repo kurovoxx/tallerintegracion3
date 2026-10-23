@@ -33,7 +33,11 @@ void main() {
     var refreshes = 0;
     AuthedHttp.refreshOverride = (_) async {
       refreshes++;
-      return RefreshResult.success(accessToken: 'renewed');
+      // 3_4_14: el backend siempre rota el refresh token.
+      return RefreshResult.success(
+        accessToken: 'renewed',
+        refreshToken: 'refresh-rotado',
+      );
     };
     final client = MockClient((request) async {
       expect(request.url.servicePath, '/notes/n/attachments/a/content');

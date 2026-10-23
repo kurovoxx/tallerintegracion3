@@ -142,8 +142,10 @@ void main() {
         }
         return json({}, 404);
       });
-      AuthedHttp.refreshOverride = (_) async =>
-          RefreshResult.success(accessToken: jwt('renewed'));
+      AuthedHttp.refreshOverride = (_) async => RefreshResult.success(
+        accessToken: jwt('renewed'),
+        refreshToken: 'refresh-rotado',
+      );
       addTearDown(() async {
         notesHttpClientOverride = null;
         AuthedHttp.refreshOverride = null;
@@ -295,8 +297,10 @@ void main() {
       }
       return json({}, 404);
     });
-    AuthedHttp.refreshOverride = (_) async =>
-        RefreshResult.success(accessToken: jwt('renewed'));
+    AuthedHttp.refreshOverride = (_) async => RefreshResult.success(
+      accessToken: jwt('renewed'),
+      refreshToken: 'refresh-rotado',
+    );
     addTearDown(() async {
       notesHttpClientOverride = null;
       AuthedHttp.refreshOverride = null;
