@@ -94,11 +94,12 @@ class ProfileService {
   // GET /profile/me -> 200 {display_name, photo_url, phone, institution, description, visibility}
   Future<UserProfile> getProfile() async {
     final revision = SessionManager.revision.value;
-    final res = await AuthedHttp.run(
-      () => _client
+    final res = await AuthedHttp.run(() {
+      _checkSession(revision);
+      return _client
           .get(Uri.parse('$baseUrl/profile/me'), headers: _headers())
-          .timeout(const Duration(seconds: 10)),
-    );
+          .timeout(const Duration(seconds: 10));
+    });
     _checkSession(revision);
     if (res.statusCode != 200) throw _toError(res);
     final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
@@ -111,15 +112,17 @@ class ProfileService {
   // Body vacío -> 400. user_id prohibido -> 400.
   Future<UserProfile> patchProfile(Map<String, dynamic> patch) async {
     final revision = SessionManager.revision.value;
-    final res = await AuthedHttp.run(
-      () => _client
+    final res = await AuthedHttp.run(() {
+      _checkSession(revision);
+      return _client
           .patch(
             Uri.parse('$baseUrl/profile/me'),
             headers: _headers(json: true),
             body: jsonEncode(patch),
           )
-          .timeout(const Duration(seconds: 10)),
-    );
+          .timeout(const Duration(seconds: 10));
+    });
+    _checkSession(revision);
     if (res.statusCode != 200) throw _toError(res);
     final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
     _checkSession(revision);
