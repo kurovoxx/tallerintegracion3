@@ -22,6 +22,10 @@ class SessionManager {
   static const _tokensKey = 'auth_tokens_v1';
   static const _userKey = 'auth_user';
   static const _rememberMeKey = 'auth_remember_me';
+
+  /// Correo recordado por la pantalla de login (Recordarme). Es público para
+  /// que el borrado de cuenta lo olvide si pertenece a la cuenta eliminada.
+  static const rememberedEmailKey = 'auth_remembered_email';
   static String? _token;
   static String? _refreshToken;
   static Map<String, dynamic>? _user;

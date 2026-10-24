@@ -526,13 +526,17 @@ class NeobrutalistBadge extends StatelessWidget {
             Icon(icon, size: 12, color: foreground),
             const SizedBox(width: AppDimens.spaceXs),
           ],
-          Text(
-            label.toUpperCase(),
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 0.6,
-              color: foreground,
+          // Flexible: en anchos angostos o con texto al 200 % la etiqueta
+          // baja de línea en vez de desbordar la calcomanía.
+          Flexible(
+            child: Text(
+              label.toUpperCase(),
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 0.6,
+                color: foreground,
+              ),
             ),
           ),
         ],
@@ -558,6 +562,7 @@ class NeobrutalistDialog extends StatelessWidget {
     this.confirmVariant = NeobrutalistButtonVariant.accent,
     this.closeOnConfirm = true,
     this.maxWidth = 480,
+    this.actions,
   });
 
   final String title;
@@ -572,6 +577,11 @@ class NeobrutalistDialog extends StatelessWidget {
 
   /// Ancho máximo del marco (480 formularios; visor de imagen usa ~960).
   final double maxWidth;
+
+  /// Acciones propias del pie (reemplazan a cancelar/confirmar). Sirve cuando
+  /// el diálogo cambia de estado y debe bloquear o variar sus botones, p. ej.
+  /// mientras procesa una acción irreversible.
+  final List<Widget>? actions;
 
   @override
   Widget build(BuildContext context) {
@@ -614,7 +624,22 @@ class NeobrutalistDialog extends StatelessWidget {
                 child: content,
               ),
             ),
-            if (confirmLabel != null || cancelLabel != null) ...<Widget>[
+            if (actions != null && actions!.isNotEmpty) ...<Widget>[
+              const Divider(
+                color: AppColors.border,
+                thickness: AppDimens.borderWidth,
+                height: 1,
+              ),
+              Padding(
+                padding: const EdgeInsets.all(AppDimens.spaceLg),
+                child: Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: AppDimens.spaceMd,
+                  runSpacing: AppDimens.spaceSm,
+                  children: actions!,
+                ),
+              ),
+            ] else if (confirmLabel != null || cancelLabel != null) ...<Widget>[
               const Divider(
                 color: AppColors.border,
                 thickness: AppDimens.borderWidth,
