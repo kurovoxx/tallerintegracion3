@@ -1,7 +1,54 @@
 # Cierre Sprint 3 — Héctor Lepio (Notes)
 
-Fecha de cierre: 2026-10-23. Rama de trabajo: `integration/notes-front-dev` (local, sin push).
-Este informe solo contiene resultados ejecutados en esta sesión sobre el código final, salvo donde se indica.
+Fecha de cierre: 2026-10-23 (actualizado la misma noche con 3_2_16). Rama de trabajo: `integration/notes-front-dev` (local, sin push).
+Este informe solo contiene resultados ejecutados sobre el código final, salvo donde se indica. La §0 resume la última sesión; las §1–§5 describen el cierre anterior del mismo día y siguen vigentes.
+
+## 0. Cierre definitivo: borrado de cuenta (3_2_16) e integración con Development
+
+### Development integrado
+- `git fetch`: `origin/Development` avanzó de `dc7667d` a `05d63a3` (PR #94 `feat/account-deletion-grpc`, autor `sonickiller39`): `b1a148c` orquestación Identity → Notes → Social, `c3f95c2` limpieza durable de Stream, `8ec43d7` aislamiento por sesión de perfil/calendario, `7a47a39` CI de protos contra Development.
+- Respaldo previo: rama `backup/notes-front-dev-pre-account-deletion-merge-20261023` y parche del árbol en `.git/sprint3-evidence/worktree-pre-account-deletion-merge.patch`. Stashes intactos.
+- Merge normal `20cf0ef` (sin rebase, reset ni push). Conflictos solo en pruebas:
+  - `front/test/profile_drive_session_test.dart`: Development movió dos pruebas a `profile_drive_late_session_test.dart` y `profile_late_response_session_test.dart`; se conservó esa división (sin duplicados) con `servicePath` de la rama.
+  - `front/test/schedule_meeting_screen_test.dart`: se conservaron ambos imports.
+- `back/notes/internal/service/note_service.go` y `front/lib/features/academic/profile_screen.dart` se fusionaron sin conflicto; `go build`/`go vet` de auth, notes y social limpios.
+- Fallo preexistente de Development detectado: `front/test/auth_service_test.dart` comparaba `url.path` con `/auth/login` y solo pasaba con `--dart-define` local. Corregido con `servicePath` en `aeb29b0` (no se desactivó).
+
+### Contrato encontrado (verificado en el router y handlers)
+| | `DELETE /auth/account` | `GET /auth/account-deletion` |
+| --- | --- | --- |
+| Ubicación | `back/auth/cmd/server/main.go:120`, `account_deletion_handler.go` | `main.go:121` |
+| Auth | JWT Bearer con `RequireIdentity` (sirve aunque la cuenta ya esté bloqueada) | igual |
+| Petición | sin body; sin contraseña; el usuario sale del JWT | — |
+| Éxito | `200 {"status":"complete"}` (idempotente) / `202 {"status":"pending"}` | `200 {"status":"pending" o "complete","updated_at"}` |
+| Errores | `404 {"error":"account_not_found"}`, `503 {"error":"account_deletion_unavailable"}`, `401` | `404 {"status":"not_started"}`, `503`, `401` |
+| No usa | `403`, `409` | — |
+
+Flujo síncrono con continuación asíncrona: Identity escribe un tombstone durable, llama por gRPC a Notes `BeginAccountDeletion`, Social `PrepareAccountDeletion` y `AccountDeletionCleanup` (sale de grupos con sucesión, borra el grupo si era el último miembro, baneos, Stream y `UnshareAll` en Notes), Notes `AccountDeletionCleanup` (shares y ACL de Drive) y al final borra `identity.users` (cascada de perfil, refresh tokens, resets y OAuth). Si una etapa no confirma devuelve `202` y un worker reintenta cada 15 s sin JWT. Desde el tombstone: rutas `RequireAuth` → `423 account_deletion_in_progress`, refresh y login → `401`. Notes **conserva** las notas y archivos Drive del autor. Detalle: `endpointDoc/DELETE-auth-account.md`, `endpointDoc/GET-auth-account-deletion.md`, `documentation/docHector.md#borrado-de-cuenta-3_2_16`.
+
+### Frontend implementado (`817f64d`)
+- `front/lib/core/services/account_deletion_service.dart`: cliente del contrato; single-flight por cuenta; timeout 45 s; respuestas ambiguas (red, timeout, `503`, `403/409/5xx`, cuerpo inesperado) → `GET` de estado antes de decidir; `finalizeLocal` (sesión de esa cuenta, purga SQLite por dueño en una transacción, correo recordado propio).
+- `front/lib/features/auth/account_deletion_dialog.dart`: confirmación escrita `ELIMINAR`, fases confirmación / procesando / pendiente (sondeo 4 s × 15 y «Consultar estado») / no comenzó (reintentar) / sin confirmar (solo consultar) / sesión expirada; atrás y toque fuera bloqueados.
+- `front/lib/features/academic/profile_screen.dart`: tarjeta «Cuenta» con badge «Zona de peligro» al final de Mi Perfil (no existe pantalla de ajustes); navegación al login con mensaje distinto para eliminada, inexistente y «sigue en curso».
+- Componentes compartidos: `NeobrutalistDialog(actions:)`, `NeobrutalistBadge` con texto flexible; encabezado de `_ProfileCard` con `trailing` flexible (el badge de Drive desbordaba 14 px a 360 px / 200 %, defecto previo). `SessionManager.rememberedEmailKey` compartido con `login_screen`.
+- Skill neobrutalista aplicada (`.skills/flutter_neobrutalism_ui.md`; la copia `.agents/skills/…/SKILL.md` solo añade frontmatter): tokens `AppColors`/`AppDimens`/`AppShadows`, `danger` con borde de 3 px, sin colores ni sombras sueltas (verificado con los `grep` del checklist), sin animación indefinida, semántica y área táctil ≥ 44 dp.
+
+### Pruebas de esta sesión
+| Suite | Resultado |
+| --- | --- |
+| `flutter test` sin defines | **384/384** (335 tras el merge + 49 nuevas) |
+| `flutter test` con `API_BASE_URL`, `NOTES_BASE_URL`, `SOCIAL_BASE_URL`, `ACADEMIC_BASE_URL` locales | **384/384** |
+| `account_deletion_service_test` + `account_deletion_flow_test` | 49/49, tres ejecuciones seguidas |
+| `flutter analyze` | 0 errores; 28 observaciones, todas preexistentes (29 antes del merge) |
+| Go Auth unitarias (filtro de CI) | todos los paquetes OK, incluye `account_deletion_contract_test.go` (`31c0fe5`) |
+| Go con PostgreSQL aislado (bases `auth_test`, `notes_test`, `social_test` en `ti3-e2e-postgres`) | Auth 315 PASS / 0 FAIL / 1 SKIP preexistente (`TestIdentityServerPG`, usa otra variable); Notes 503/503; Social 373/373 con `-race -p 1` |
+| `go test -tags=crossservice ./test` (Social; procesos reales) | 3/3, incluye `TestCrossServiceAccountDeletion*`. Log: `.git/sprint3-evidence/cross-service-e2e-20261023.log` |
+| `scripts/test-account-deletion-e2e.py` (stack ti3-e2e reconstruido, volumen E2E recreado) | completo `200`, repetición `200`, JWT viejo `423` en Auth/Notes/Social, refresh/login `401`, sucesión de admin, grupo vacío borrado, share retirado, cascada Identity, cuenta ajena intacta; Social detenido → `202 pending` sin borrar filas → worker → `complete`. 44 respuestas. Log: `.git/sprint3-evidence/account-deletion-e2e-20261023.log` |
+| `scripts/test-notes-e2e.py` | 21/21 rutas, 233 respuestas (`notes-e2e-post-account-deletion-20261023.log`) |
+
+Solo se usaron cuentas sintéticas `@test.invalid` en el stack aislado `ti3-e2e` (puertos 1xxxx). No se tocó el stack `ti3-*` normal (arrancó solo al iniciar Docker Desktop) ni el clúster.
+
+Fallos preexistentes no corregidos (fuera del alcance): `LoginScreen` desborda con texto al 200 % (`login_screen.dart:609`, `common_widgets.dart:75`); por eso las pruebas responsive del diálogo usan un host aislado y las de Mi Perfil cubren la tarjeta.
 
 ## 1. Estado inicial recuperado
 
@@ -103,11 +150,23 @@ Documentados en `endpointDoc/` y verificados en E2E: `GET /health`, `GET /health
 | 3_2_13 Flujos Notes | Completada y verificada | `docHector.md` (secciones de sincronización, SQLite, ACL) |
 | 3_2_14 Ventana de miembros | Completada y verificada | `group_members_tab_test.dart` (incluye cambios de roles de Development) |
 | 3_2_15 Ventana de notas compartidas | Completada y verificada | Paginación corregida y probada en PG/E2E; pruebas de la pestaña |
-| 3_2_16 Borrado de cuenta (frontend) | **Bloqueada** | Identity no expone endpoint de borrado (solo `GET /auth/me`) en `origin/Development` al 2026-10-23. No se simuló. Contrato pendiente en `documentation/sprint3_dependencias.md` |
+| 3_2_16 Borrado de cuenta (frontend) | **Completada y verificada** | `DELETE /auth/account` + `GET /auth/account-deletion` (PR #94) conectados desde Mi Perfil; confirmación escrita, pendiente/ambigüedad sin éxito falso, limpieza local por dueño; 49 pruebas Flutter, contrato Go y E2E real (§0) |
 | 3_2_17 Estilos de botones | Completada y verificada | `iteracion_vistas_reales_test.dart`, `NeobrutalistDialog` responsive |
 | 3_2_18 SQLite y notificaciones | Completada y verificada | §4; `notifications_bell_state_test.dart`; `app_database_manager_test.dart` |
 
 ## 9. Git
+
+### Commits de la sesión final (sobre `dab7f2e`)
+- `20cf0ef` Merge origin/Development into integration/notes-front-dev (borrado de cuenta 3_x, PR #94)
+- `aeb29b0` test(front): auth_service_test independiente de la base configurada
+- `817f64d` feat(front): eliminacion de cuenta desde Mi Perfil (3_2_16)
+- `22ea614` test(front): contrato HTTP y flujo de eliminacion de cuenta
+- `31c0fe5` test(auth): contrato HTTP del borrado de cuenta y E2E ti3-e2e
+- commit de documentación (este informe, `docHector.md`, `sprint3_dependencias.md`, `endpointDoc/DELETE-auth-account.md`, `endpointDoc/GET-auth-account-deletion.md`)
+
+`origin/Development` (`05d63a3`) es ancestro de la rama; sin push. Sin trailers de coautoría (regla `.agents/rules/no-coauthor-trailer-in-commits.md`). Respaldo nuevo: `backup/notes-front-dev-pre-account-deletion-merge-20261023`.
+
+### Cierre anterior del mismo día
 
 Commits locales de `integration/notes-front-dev` que no están en `origin/Development` (18 + este informe), en orden:
 
@@ -140,7 +199,7 @@ Commits locales de `integration/notes-front-dev` que no están en `origin/Develo
 
 ## 10. Dependencias bloqueadas y pendientes
 
-1. **3_2_16**: Identity debe exponer un borrado de cuenta autenticado e idempotente que coordine Social (`AccountDeletionCleanup`) y Notes. El frontend no debe simularlo.
+1. **3_2_16** (resuelto): queda como decisión de producto si se borran las notas y archivos Drive del autor (hoy se conservan); `endpointDoc/GRPC-social-AccountDeletionCleanup.md` (Social) está desactualizado respecto a `PrepareAccountDeletion`/`status`; no hay cancelación del borrado. Ver `documentation/sprint3_dependencias.md`.
 2. **Social (otro responsable)**: `social.meeting_notifications` sin `UNIQUE(meeting_id, user_id)`; el frontend deduplica por id pero no puede resolver duplicados con ids distintos.
 3. Permisos Drive restricted contra Google real no se probaron (solo mock), por diseño del entorno aislado.
 
@@ -149,4 +208,5 @@ Commits locales de `integration/notes-front-dev` que no están en `origin/Develo
 1. Revisar el diff `origin/Development...integration/notes-front-dev` y abrir PR hacia `Development` (no hacer push forzado).
 2. En el PR, ejecutar `flutter test` (sin defines) y `go test ./...` en `back/notes`; opcionalmente las pruebas PG con `NOTES_TEST_DATABASE_URL` sobre una base desechable.
 3. Al desplegar, la app migrará SQLite v4→v5 automáticamente; no requiere acción del usuario.
-4. Coordinar con Identity el contrato de 3_2_16 y con Social la unicidad de notificaciones.
+4. Coordinar con Social la unicidad de notificaciones y con Notes/Identity la política de contenido de cuentas borradas.
+5. En el PR, `scripts/test-account-deletion-e2e.py` sirve como verificación manual contra el stack `ti3-e2e`; no se ejecutó contra Pillán.

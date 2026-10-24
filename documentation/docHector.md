@@ -1,6 +1,7 @@
 # Héctor Lepio — Notes y frontend, Sprint 3
 
-Contrato contrastado con código del repositorio, revisión 2026-10-22. Reemplaza
+Contrato contrastado con código del repositorio, revisión 2026-10-23 (borrado de
+cuenta 3_2_16 integrado tras el PR #94 de Identity). Reemplaza
 la auditoría anterior que describía Notes sin gRPC. Resultados y estados por
 tarea: [SPRINT3_HECTOR_CIERRE](../SPRINT3_HECTOR_CIERRE.md).
 
@@ -17,11 +18,13 @@ Fuentes: `back/notes/cmd/server/main.go`, `internal/handler/http/`,
 `internal/repository/` y `back/proto/notes/v1/notes.proto`. Schema inicial:
 `docker/postgres/init.sql`; migraciones: `back/notes/db/migrations/`.
 Frontend: `front/lib/core/database/`, `features/notes/all_notes_screen.dart`,
-`features/groups/group_detail_screen.dart` y `notifications_bell.dart`.
+`features/groups/group_detail_screen.dart`, `notifications_bell.dart` y, para el
+borrado de cuenta, `core/services/account_deletion_service.dart` y
+`features/auth/account_deletion_dialog.dart`.
 
 Los contratos maestros agentApiContract*.md son contexto histórico. Esta revisión
-describe el código ejecutable: no existe HTTP Unsave ni endpoint Identity de
-eliminación de cuenta. Social AccountDeletionCleanup solo limpia su dominio.
+describe el código ejecutable: no existe HTTP Unsave. El borrado de cuenta lo
+orquesta Identity (`DELETE /auth/account`); ver la sección final.
 
 ## Arquitectura y persistencia
 
@@ -204,6 +207,64 @@ de cargas superpuestas/doble marcado y lectura optimista. Tests:
 notifications_bell_state_test.dart. Social carece de UNIQUE(meeting_id,user_id):
 dedupe por ID no elimina registros duplicados con IDs diferentes.
 
-Eliminación de cuenta requiere contrato Identity que coordine sesión/revocación/
-dominios. [Dependencias](sprint3_dependencias.md) deja integración y criterios
-preparados sin botón engañoso ni cascada unilateral sobre servicios ajenos.
+## Borrado de cuenta (3_2_16)
+
+Backend (Agustín Vega, PR #94 en Development, commit `b1a148c`). Contratos:
+[DELETE /auth/account](../endpointDoc/DELETE-auth-account.md) y
+[GET /auth/account-deletion](../endpointDoc/GET-auth-account-deletion.md).
+
+```mermaid
+sequenceDiagram
+  participant UI as Flutter (Mi Perfil)
+  participant ID as Identity
+  participant NO as Notes gRPC
+  participant SO as Social gRPC
+  UI->>ID: DELETE /auth/account (JWT, sin body)
+  ID->>ID: tombstone pending (bloquea login/refresh/RequireAuth=423)
+  ID->>NO: BeginAccountDeletion
+  ID->>SO: PrepareAccountDeletion
+  ID->>SO: AccountDeletionCleanup (sale de grupos, Stream)
+  SO->>NO: UnshareAll por grupo
+  ID->>NO: AccountDeletionCleanup (shares y ACL Drive)
+  ID->>ID: complete + DELETE identity.users (cascada)
+  ID-->>UI: 200 complete | 202 pending | 404 | 503 | 401
+```
+
+- Sin contraseña: el usuario sale solo del JWT. El cliente exige escribir
+  `ELIMINAR`; el botón queda deshabilitado mientras no coincida.
+- **Solicitud vs. borrado efectivo.** `200 complete`: los tres servicios
+  confirmaron. `202 pending`: la solicitud quedó registrada y la cuenta ya está
+  bloqueada, pero Social/Notes no confirmaron; el worker de Identity reintenta cada
+  15 s sin JWT. El frontend lo muestra como «Eliminación en curso», nunca como
+  éxito, y consulta `GET /auth/account-deletion` cada 4 s (15 veces) o a pedido.
+- Notes conserva notas, adjuntos y archivos en el Drive del autor; solo retira
+  comparticiones y permisos. El diálogo lo advierte.
+- Ambigüedad: red, timeout (45 s), `503`, `403/409/5xx` o cuerpo inesperado →
+  se consulta el estado antes de decidir. `not_started` habilita «Reintentar»;
+  estado inconsultable deja solo «Consultar estado» (sin repetir a ciegas). El
+  `503` puede llegar con el borrado ya iniciado (falla el commit final), por eso
+  no se interpreta como «no comenzó».
+- Un solo `DELETE` en vuelo por cuenta (futuro compartido estático) y acciones
+  deshabilitadas mientras procesa; atrás/fuera del diálogo no lo cierran.
+- `401`: `AuthedHttp` intenta un refresh (si sirve, reintenta una vez el DELETE,
+  que es idempotente); si se rechaza, la sesión expira y el diálogo explica
+  «Sesión expirada» sin borrar datos.
+- Limpieza local solo tras `200 complete`, `404 account_not_found`, o cuando el
+  usuario elige salir con el borrado pendiente (la cuenta ya es irrecuperable). Se
+  cierra la sesión solo si sigue siendo la de esa cuenta (sin `/auth/logout`:
+  Identity ya revocó los refresh tokens), se purgan en una transacción las notas,
+  adjuntos pendientes y tombstones SQLite **de ese dueño** (otras cuentas y filas
+  legacy intactas) y se olvida el correo de Recordarme si es el suyo. Si la sesión
+  expira con el borrado pendiente (Identity rechaza el refresh), igual se purga.
+- Las cachés en memoria (`ProfileService.current`, perfil, Drive, calendario)
+  ya se reinician con el cambio de `SessionManager.revision`.
+- UI: tarjeta «Cuenta» con badge «Zona de peligro» al final de Mi Perfil (no hay
+  pantalla de ajustes) y diálogo con `NeobrutalistDialog` (nuevo parámetro
+  `actions`), `NeobrutalistButton` danger con borde de 3 px y `NeobrutalistBadge`.
+  Probado a 360×640, 768×1024 y 1440×900 con texto al 100 % y 200 %.
+
+Pruebas: `front/test/account_deletion_service_test.dart` (contrato HTTP, estados,
+single-flight, limpieza y purga SQLite real en memoria),
+`front/test/account_deletion_flow_test.dart` (flujo desde Mi Perfil y responsive),
+`back/auth/internal/handler/http/account_deletion_contract_test.go` y
+`scripts/test-account-deletion-e2e.py` (stack ti3-e2e, cuentas sintéticas).
