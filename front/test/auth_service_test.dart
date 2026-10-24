@@ -5,12 +5,14 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:taller_integracion_front/core/services/auth_service.dart';
 
+import 'support/service_uri.dart';
+
 void main() {
   test('login usa el endpoint público y el payload vigente', () async {
     final service = AuthService(
       client: MockClient((request) async {
         expect(request.method, 'POST');
-        expect(request.url.path, '/auth/login');
+        expect(request.url.servicePath, '/auth/login');
         expect(request.headers['content-type'], 'application/json');
         expect(jsonDecode(request.body), {
           'email': 'qa@example.test',
@@ -37,7 +39,7 @@ void main() {
     final service = AuthService(
       client: MockClient((request) async {
         expect(request.method, 'POST');
-        expect(request.url.path, '/auth/logout');
+        expect(request.url.servicePath, '/auth/logout');
         expect(jsonDecode(request.body), {'refresh_token': 'refresh-test'});
         return http.Response('', 204);
       }),
