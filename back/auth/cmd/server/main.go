@@ -60,7 +60,18 @@ func main() {
 		log.Print("password recovery disabled: configure SMTP_PASSWORD")
 	}
 	resetH := httpHandler.NewPasswordResetHandler(service.NewPasswordResetService(userRepo, repository.NewPasswordResetRepository(pool), resetMailer))
-	authMw := middleware.NewAuthMiddleware(jwtSvc)
+	deletionRepo := repository.NewAccountDeletionRepository(pool)
+	defer deletionRepo.Close()
+	authSvc.SetAccountAccessGate(deletionRepo)
+	cleanupRPC, err := service.NewGRPCAccountCleanup(cfg.SocialGRPCAddr, cfg.NotesGRPCAddr, cfg.InternalAPIKey)
+	if err != nil {
+		log.Fatalf("config account deletion gRPC: %v", err)
+	}
+	defer cleanupRPC.Close()
+	deletionCoordinator := service.NewAccountDeletionCoordinator(cleanupRPC, deletionRepo)
+	go deletionCoordinator.RunWorker(context.Background(), 15*time.Second)
+	deletionH := httpHandler.NewAccountDeletionHandler(deletionCoordinator)
+	authMw := middleware.NewAuthMiddleware(jwtSvc, deletionRepo)
 
 	// Profile: Handler → Service → Repository (Sprint 1)
 	// Con email de identity.users (fuente de verdad, best-effort).
@@ -106,6 +117,8 @@ func main() {
 	r.POST("/auth/logout", authH.Logout)
 	r.POST("/auth/forgot-password", resetH.Forgot)
 	r.POST("/auth/reset-password", resetH.Reset)
+	r.DELETE("/auth/account", authMw.RequireIdentity(), deletionH.Delete)
+	r.GET("/auth/account-deletion", authMw.RequireIdentity(), deletionH.Status)
 	r.POST("/auth/google-drive/connect", authMw.RequireAuth(), driveH.Connect)
 	r.GET("/auth/google-drive/status", authMw.RequireAuth(), driveH.Status)
 	r.DELETE("/auth/google-drive/connection", authMw.RequireAuth(), driveH.Disconnect)

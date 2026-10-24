@@ -74,13 +74,25 @@ CREATE TABLE identity.oauth_connections (
 `
 
 func setupIntegrationPool(t *testing.T) *pgxpool.Pool {
+	return setupIntegrationPoolWithMaxConns(t, 0)
+}
+
+func setupIntegrationPoolWithMaxConns(t *testing.T, maxConns int32) *pgxpool.Pool {
 	t.Helper()
 	url := os.Getenv("AUTH_TEST_DATABASE_URL")
 	if url == "" {
 		t.Skip("AUTH_TEST_DATABASE_URL not configured")
 	}
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, url)
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		t.Fatalf("parse test db config: %v", err)
+	}
+	if maxConns > 0 {
+		cfg.MaxConns = maxConns
+		cfg.MinConns = 0
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		t.Fatalf("connect test db: %v", err)
 	}

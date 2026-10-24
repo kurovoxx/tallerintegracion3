@@ -142,6 +142,34 @@ func TestRESTClient_RemoveMember(t *testing.T) {
 	}
 }
 
+func TestRESTClient_RemoveMember_OnlyConfirmedMissingResourceIsSuccess(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+		wantError  bool
+	}{
+		{name: "canal ya ausente", statusCode: http.StatusNotFound, body: `{"code":16,"message":"resource not found"}`},
+		{name: "otro 404", statusCode: http.StatusNotFound, body: `{"code":4,"message":"invalid request"}`, wantError: true},
+		{name: "error transitorio", statusCode: http.StatusInternalServerError, body: `{"code":-1,"message":"temporary failure"}`, wantError: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.statusCode)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+
+			c := &RESTClient{httpClient: srv.Client(), baseURL: srv.URL, apiKey: "key123", apiSecret: "secret123"}
+			err := c.RemoveMember(t.Context(), "messaging", "group-abc", "u1")
+			if (err != nil) != tt.wantError {
+				t.Fatalf("RemoveMember error=%v, wantError=%v", err, tt.wantError)
+			}
+		})
+	}
+}
+
 // Usuario nuevo: Stream responde 400 al add_members porque el usuario aún no
 // existe; el cliente lo crea vía POST /users y reintenta.
 func TestRESTClient_EnsureMember_CreaUsuarioInexistente(t *testing.T) {

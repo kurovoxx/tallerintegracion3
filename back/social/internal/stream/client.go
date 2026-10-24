@@ -19,8 +19,9 @@ import (
 
 // StreamError representa un error de la API de Stream con código HTTP semántico.
 type StreamError struct {
-	Code    int
-	Message string
+	Code         int
+	APIErrorCode int
+	Message      string
 }
 
 func (e *StreamError) Error() string { return fmt.Sprintf("stream %d: %s", e.Code, e.Message) }
@@ -199,8 +200,8 @@ func SignUserToken(apiSecret, userID string) (string, error) {
 // POST /channels/{type}/{id}/query. OJO: POST /channels a secas es
 // QueryChannels (búsqueda), NO crea nada aunque responda 200.
 type queryChannelRequest struct {
-	State bool                 `json:"state"`
-	Data  map[string]string    `json:"data,omitempty"`
+	State bool              `json:"state"`
+	Data  map[string]string `json:"data,omitempty"`
 }
 
 // authHeaders valida credenciales, firma el server token y arma headers comunes.
@@ -241,7 +242,15 @@ func (c *RESTClient) postJSON(ctx context.Context, path string, query string, pa
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &StreamError{Code: resp.StatusCode, Message: strings.TrimSpace(string(respBody))}
+		var apiError struct {
+			Code int `json:"code"`
+		}
+		_ = json.Unmarshal(respBody, &apiError)
+		return &StreamError{
+			Code:         resp.StatusCode,
+			APIErrorCode: apiError.Code,
+			Message:      strings.TrimSpace(string(respBody)),
+		}
 	}
 	return nil
 }
@@ -316,7 +325,15 @@ func (c *RESTClient) RemoveMember(ctx context.Context, channelType, channelID, u
 		return errors.New("user vacío")
 	}
 	path := "/channels/" + url.PathEscape(channelType) + "/" + url.PathEscape(channelID)
-	return c.postJSON(ctx, path, "", removeMembersRequest{RemoveMembers: []string{userID}})
+	err := c.postJSON(ctx, path, "", removeMembersRequest{RemoveMembers: []string{userID}})
+	var streamErr *StreamError
+	if errors.As(err, &streamErr) && streamErr.Code == http.StatusNotFound && streamErr.APIErrorCode == 16 {
+		// Stream confirma que el recurso ya no existe: no puede conservar la
+		// membresía solicitada. Los demás errores (incluidos otros 404) siguen
+		// siendo pendientes para permitir reintento.
+		return nil
+	}
+	return err
 }
 
 type streamUser struct {

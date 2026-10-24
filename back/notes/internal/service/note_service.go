@@ -525,14 +525,15 @@ func (n *noopSocialResolver) GetFollowersCount(ctx context.Context, userID strin
 }
 
 type NoteService struct {
-	notes       NoteStore
-	attachments AttachmentStore
-	saved       SavedStore
-	likes       LikeStore
-	shared      SharedStore
-	drive       drive.Client
-	social      SocialResolver
-	members     GroupMemberDirectory
+	notes           NoteStore
+	attachments     AttachmentStore
+	saved           SavedStore
+	likes           LikeStore
+	shared          SharedStore
+	accountDeletion AccountDeletionStore
+	drive           drive.Client
+	social          SocialResolver
+	members         GroupMemberDirectory
 	// driveEmails resuelve el correo de la cuenta Google Drive de cada miembro
 	// (restricted). Si es nil, se usa members.ListMemberEmails (fallback previo).
 	driveEmails DriveEmailDirectory
@@ -551,6 +552,10 @@ type NoteService struct {
 	// distribuido por nota (pg_advisory_xact_lock en PG) que serializa también
 	// entre réplicas.
 	reconcileMu sync.Mutex
+}
+
+func (s *NoteService) SetAccountDeletionRepository(repo AccountDeletionStore) {
+	s.accountDeletion = repo
 }
 
 func NewNoteService(notes NoteStore, attachments AttachmentStore, saved SavedStore, likes LikeStore, shared SharedStore, d drive.Client, social SocialResolver) *NoteService {

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -5,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../../core/common_widgets.dart';
 import '../../core/models/profile_models.dart';
 import '../../core/services/api_config.dart';
+import '../../core/services/auth_service.dart';
 import '../../core/services/profile_service.dart';
 import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
@@ -342,10 +345,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
             : _DriveStatus.error,
       );
       messenger.showSnackBar(SnackBar(content: Text(result.message)));
-    } catch (e) {
-      // Traza para diagnóstico (visible en terminal de `flutter run`).
-      // ignore: avoid_print
-      print('[DRIVE] fallo conectar: $e');
+      if (!result.ok) await _restoreDriveStatus();
+    } catch (_) {
       if (!mounted || !_sameSession(revision)) return;
       setState(() => _driveStatus = _DriveStatus.error);
       messenger.showSnackBar(
@@ -355,6 +356,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
         ),
       );
+      await _restoreDriveStatus();
     }
   }
 
@@ -419,26 +421,34 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _driveStatus == _DriveStatus.disconnecting) {
       return;
     }
+    final revision = SessionManager.revision.value;
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _driveStatus = _DriveStatus.disconnecting);
+    var confirmed = false;
     try {
       final token = SessionManager.token;
-      String message = 'Drive desconectado.';
-      if (token != null) {
-        message = await GoogleDriveService().disconnectDrive(
+      if (token != null && token.isNotEmpty) {
+        final result = await GoogleDriveService().disconnectDrive(
           backendBaseUrl: authApiBaseUrl,
           appAccessToken: token,
         );
+        confirmed = result.confirmed;
       }
-      if (!mounted) return;
-      messenger.showSnackBar(SnackBar(content: Text(message)));
     } catch (_) {
-      if (!mounted) return;
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Drive desconectado localmente.')),
-      );
+      // Se relee el estado remoto abajo; el fallo no confirma desconexión.
     }
-    // Relee el estado real desde el backend (ya no hay pref local).
+    if (!mounted || !_sameSession(revision)) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          confirmed
+              ? 'Drive desconectado.'
+              : 'No se pudo confirmar la desconexión de Drive.',
+        ),
+      ),
+    );
+    // Relee el estado del backend incluso si falló la petición. Un error de
+    // red no se presenta como desconexión de la autorización remota.
     await _restoreDriveStatus();
   }
 
@@ -449,7 +459,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _handleLogout() async {
+    final refreshToken = SessionManager.refreshToken;
     await SessionManager.clear();
+    final auth = AuthService();
+    unawaited(auth.logout(refreshToken).whenComplete(auth.dispose));
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginScreen()),

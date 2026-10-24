@@ -71,10 +71,20 @@ func main() {
 
 func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	groupRepo := repository.NewGroupRepository(pool)
+	deletionRepo := repository.NewAccountDeletionRepository(pool)
+	defer deletionRepo.Close()
+	deletionSvc, err := service.NewAccountDeletionService(deletionRepo, cfg.NotesGRPCAddr, cfg.InternalKey)
+	if err != nil {
+		log.Fatalf("notes account deletion gRPC: %v", err)
+	}
+	defer deletionSvc.Close()
+	chatClient := streamClientFor(cfg)
+	deletionSvc.SetChatMembership(chatClient)
 	streamRepo := repository.NewStreamRepository(pool)
 	groupSvc := service.NewGroupService(groupRepo, streamNotifierFor(cfg, streamRepo))
+	groupSvc.SetAccountTargetGate(deletionRepo)
 	// Salir/expulsar/banear/borrar cuenta quita al usuario del canal Stream.
-	groupSvc.SetChatMembership(streamClientFor(cfg))
+	groupSvc.SetChatMembership(chatClient)
 	// Cliente Identity por gRPC con conexión compartida (directorio y
 	// Calendar). La conexión es perezosa: Auth caído no impide arrancar;
 	// cada operación falla controlada y se recupera solo al volver Auth.
@@ -120,17 +130,17 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	streamTokenSvc.SetClient(streamClientFor(cfg))
 	streamH := httpHandler.NewStreamHandler(streamTokenSvc)
 
-	startGRPC(groupSvc, cfg)
+	startGRPC(groupSvc, deletionSvc, cfg)
 
 	viewSvc := service.NewViewService(groupSvc, todoSvc, sprintSvc, meetingSvc)
 	viewH := httpHandler.NewViewHandler(groupSvc, viewSvc)
 
-	startGin(groupSvc, todoH, sprintH, hoursH, meetingH, notifH, discordH, viewH, streamH, pool, cfg)
+	startGin(groupSvc, todoH, sprintH, hoursH, meetingH, notifH, discordH, viewH, streamH, deletionRepo, pool, cfg)
 }
 
 // startGRPC sirve SocialService (membresía/admin/limpieza) para Notes e
 // Identity. Logging va afuera para auditar también los rechazos de clave.
-func startGRPC(groupSvc *service.GroupService, cfg *config.Config) {
+func startGRPC(groupSvc *service.GroupService, deletionSvc *service.AccountDeletionService, cfg *config.Config) {
 	if cfg.InternalKey == "" {
 		log.Printf("gRPC social: INTERNAL_API_KEY vacía, todas las llamadas fallarán (fail-closed)")
 	}
@@ -142,7 +152,7 @@ func startGRPC(groupSvc *service.GroupService, cfg *config.Config) {
 		interceptor.NewLogging(log.Default()),
 		interceptor.NewInternalAuth(cfg.InternalKey),
 	))
-	socialv1.RegisterSocialServiceServer(s, grpcHandler.NewSocialServer(groupSvc))
+	socialv1.RegisterSocialServiceServer(s, grpcHandler.NewSocialServer(groupSvc, deletionSvc))
 	go func() {
 		log.Printf("Servidor gRPC de Social en :%s", cfg.GRPCPort)
 		if err := s.Serve(lis); err != nil {
@@ -213,13 +223,13 @@ func streamNotifierFor(cfg *config.Config, streamRepo *repository.StreamReposito
 	)
 }
 
-func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, meetingH *httpHandler.MeetingHandler, notifH *httpHandler.NotificationHandler, discordH *httpHandler.DiscordHandler, viewH *httpHandler.ViewHandler, streamH *httpHandler.StreamHandler, pool *pgxpool.Pool, cfg *config.Config) {
+func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, meetingH *httpHandler.MeetingHandler, notifH *httpHandler.NotificationHandler, discordH *httpHandler.DiscordHandler, viewH *httpHandler.ViewHandler, streamH *httpHandler.StreamHandler, deletionGate middleware.AccountAccessGate, pool *pgxpool.Pool, cfg *config.Config) {
 	validator := &middleware.SimpleHS256Validator{
 		Secret:   []byte(cfg.JWTSecret),
 		Issuer:   "apuntes-auth",
 		Audience: "apuntes-client",
 	}
-	authMw := middleware.NewAuthMiddleware(validator)
+	authMw := middleware.NewAuthMiddleware(validator, deletionGate)
 	groupHandler := httpHandler.NewGroupHandler(groupSvc)
 
 	r := gin.Default()

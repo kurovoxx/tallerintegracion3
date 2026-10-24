@@ -19,11 +19,16 @@ import (
 
 type SocialServer struct {
 	socialv1.UnimplementedSocialServiceServer
-	groups *service.GroupService
+	groups   *service.GroupService
+	deletion *service.AccountDeletionService
 }
 
-func NewSocialServer(groups *service.GroupService) *SocialServer {
-	return &SocialServer{groups: groups}
+func NewSocialServer(groups *service.GroupService, deletion ...*service.AccountDeletionService) *SocialServer {
+	s := &SocialServer{groups: groups}
+	if len(deletion) > 0 {
+		s.deletion = deletion[0]
+	}
+	return s
 }
 
 func (s *SocialServer) IsMember(ctx context.Context, req *socialv1.IsMemberRequest) (*socialv1.IsMemberResponse, error) {
@@ -86,6 +91,20 @@ func (s *SocialServer) AccountDeletionCleanup(ctx context.Context, req *socialv1
 	if !utils.ValidateUUID(req.GetUserId()) {
 		return nil, status.Error(codes.InvalidArgument, "user_id inválido (UUID esperado)")
 	}
+	if s.deletion != nil {
+		results, cleanupStatus, err := s.deletion.Cleanup(ctx, req.GetUserId())
+		if err != nil && cleanupStatus == socialv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_ERROR {
+			return nil, toStatus(err)
+		}
+		groups := make([]*socialv1.GroupSuccession, 0, len(results))
+		for _, r := range results {
+			groups = append(groups, &socialv1.GroupSuccession{GroupId: r.GroupID, PromotedUserId: r.PromotedUserID, GroupDeleted: r.GroupDeleted})
+		}
+		return &socialv1.AccountDeletionCleanupResponse{Groups: groups, Status: cleanupStatus}, nil
+	}
+	// Legacy construction used by older tests/consumers may still perform the
+	// membership half, but its old Notes side effect is not authoritative. The
+	// response intentionally keeps status UNSPECIFIED, so Identity cannot delete.
 	results, err := s.groups.HandleAccountDeletion(ctx, req.GetUserId(), req.GetUserToken())
 	if err != nil {
 		return nil, toStatus(err)
@@ -99,6 +118,20 @@ func (s *SocialServer) AccountDeletionCleanup(ctx context.Context, req *socialv1
 		})
 	}
 	return &socialv1.AccountDeletionCleanupResponse{Groups: groups}, nil
+}
+
+func (s *SocialServer) PrepareAccountDeletion(ctx context.Context, req *socialv1.PrepareAccountDeletionRequest) (*socialv1.PrepareAccountDeletionResponse, error) {
+	if !utils.ValidateUUID(req.GetUserId()) {
+		return nil, status.Error(codes.InvalidArgument, "user_id inválido (UUID esperado)")
+	}
+	if s.deletion == nil {
+		return nil, status.Error(codes.Unimplemented, "durable account deletion is not configured")
+	}
+	cleanupStatus, err := s.deletion.Prepare(ctx, req.GetUserId())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return &socialv1.PrepareAccountDeletionResponse{Status: cleanupStatus}, nil
 }
 
 // role valida los ids y devuelve el rol del usuario ("" si no es miembro).
