@@ -142,7 +142,16 @@ class _AccountDeletionDialogState extends State<AccountDeletionDialog> {
 
   void _close(AccountDeletionExit exit) {
     _pollTimer?.cancel();
+    _popIfCurrent(exit);
+  }
+
+  /// Cierra el diálogo solo si sigue siendo la ruta superior. Si el manejador
+  /// global de sesión expirada ya reemplazó la pila por el login, este diálogo
+  /// sigue montado durante la transición pero ya fue retirado: un pop aquí
+  /// quitaría el login y dejaría el navegador vacío (pantalla negra).
+  void _popIfCurrent(AccountDeletionExit exit) {
     if (!mounted) return;
+    if (ModalRoute.of(context)?.isCurrent != true) return;
     Navigator.of(context).pop(exit);
   }
 
@@ -232,12 +241,12 @@ class _AccountDeletionDialogState extends State<AccountDeletionDialog> {
     if (_finalizing) return;
     _pollTimer?.cancel();
     _finalizing = true;
+    // La purga corre aunque otro flujo ya haya navegado al login.
     await widget.service.finalizeLocal(
       userId: widget.userId,
       email: widget.email,
     );
-    if (!mounted) return;
-    Navigator.of(context).pop(exit);
+    _popIfCurrent(exit);
   }
 
   Future<void> _leaveWhilePending() async {

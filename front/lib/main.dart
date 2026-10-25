@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'core/database/app_database_manager.dart';
 import 'core/services/authed_client.dart';
 import 'core/services/insecure_http.dart';
+import 'core/services/session_expiry_navigation.dart';
 import 'core/services/session_manager.dart';
 import 'core/theme/app_theme.dart';
 import 'core/widgets/main_shell.dart';
@@ -19,24 +20,7 @@ Future<void> main() async {
   // En web el navegador valida TLS. Debe ir antes de cualquier http.Client.
   configurePillanCertificateTrust();
   WidgetsFlutterBinding.ensureInitialized();
-  SessionManager.onSessionExpired = () async {
-    final nav = appNavigatorKey.currentState;
-    if (nav == null) return;
-    nav.pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-      (route) => false,
-    );
-    // Mensaje humano tras navegar (el contexto ya es Login).
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final ctx = appNavigatorKey.currentContext;
-      if (ctx == null) return;
-      ScaffoldMessenger.of(ctx).showSnackBar(
-        const SnackBar(
-          content: Text('Tu sesión expiró. Inicia sesión nuevamente.'),
-        ),
-      );
-    });
-  };
+  SessionManager.onSessionExpired = sessionExpiredNavigator(appNavigatorKey);
   final hasPersistedSession = await AuthedHttp.restorePersistedSession();
   runApp(
     TallerIntegracionApp(

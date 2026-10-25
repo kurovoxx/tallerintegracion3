@@ -10,6 +10,7 @@ import 'package:taller_integracion_front/core/services/account_deletion_service.
 import 'package:taller_integracion_front/core/services/auth_service.dart';
 import 'package:taller_integracion_front/core/services/authed_client.dart';
 import 'package:taller_integracion_front/core/services/profile_service.dart';
+import 'package:taller_integracion_front/core/services/session_expiry_navigation.dart';
 import 'package:taller_integracion_front/core/services/session_manager.dart';
 import 'package:taller_integracion_front/core/theme/app_theme.dart';
 import 'package:taller_integracion_front/core/widgets/neobrutalism.dart';
@@ -68,10 +69,14 @@ class _FakeIdentity {
 }
 
 class _Harness {
-  _Harness() {
+  /// [purgeDelay] imita una purga SQLite real, más lenta que limpiar la sesión.
+  _Harness({Duration purgeDelay = Duration.zero}) {
     deletion = AccountDeletionService(
       client: identity.client,
-      purgeLocalData: (userId) async => purged.add(userId),
+      purgeLocalData: (userId) async {
+        if (purgeDelay > Duration.zero) await Future<void>.delayed(purgeDelay);
+        purged.add(userId);
+      },
     );
   }
 
@@ -135,6 +140,18 @@ Future<void> _confirm(WidgetTester tester) async {
   await tester.pump();
   await tester.ensureVisible(find.byKey(_submit));
   await tester.tap(find.byKey(_submit));
+}
+
+/// Cuenta las páginas empujadas (no diálogos) desde el último [reset].
+class _PageRouteCounter extends NavigatorObserver {
+  int pushesAfterReset = 0;
+
+  void reset() => pushesAfterReset = 0;
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    if (route is PageRoute) pushesAfterReset++;
+  }
 }
 
 bool _enabled(WidgetTester tester, Finder target) {
@@ -475,6 +492,165 @@ void main() {
       expect(SessionManager.currentUserId, 'user-b');
     },
   );
+
+  // Regresión (prueba manual en Docker local, 2026-10-24): con el borrado
+  // pendiente, Identity rechaza el refresh; al vencer el access el manejador
+  // global de main.dart reemplaza la pila por el login y el diálogo, aún
+  // montado durante la transición, hacía pop sobre ese login: navegador vacío
+  // y pantalla negra.
+  group('con el manejador global de sesión expirada de main.dart', () {
+    late GlobalKey<NavigatorState> navigatorKey;
+    late _PageRouteCounter pages;
+
+    setUp(() {
+      navigatorKey = GlobalKey<NavigatorState>();
+      pages = _PageRouteCounter();
+      SessionManager.onSessionExpired = sessionExpiredNavigator(navigatorKey);
+    });
+
+    tearDown(() => SessionManager.onSessionExpired = null);
+
+    Future<void> pumpApp(WidgetTester tester, _Harness h) async {
+      final profile = _profileService();
+      addTearDown(profile.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          navigatorKey: navigatorKey,
+          navigatorObservers: [pages],
+          home: ProfileScreen(
+            service: profile,
+            accountDeletionService: h.deletion,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    void expectSingleLogin(WidgetTester tester) {
+      expect(find.byType(LoginScreen), findsOneWidget);
+      expect(find.byType(ProfileScreen), findsNothing);
+      expect(find.byKey(_confirmField), findsNothing);
+      expect(navigatorKey.currentState!.canPop(), isFalse);
+      // Una sola navegación al login (sin duplicados ni pops de más).
+      expect(pages.pushesAfterReset, 1);
+    }
+
+    for (final purgeDelay in const [
+      Duration.zero,
+      Duration(milliseconds: 100),
+    ]) {
+      final speed = purgeDelay == Duration.zero ? 'rápida' : 'lenta';
+      testWidgets(
+        'pendiente y el sondeo recibe 401 sin refresh (purga $speed): login, '
+        'no pantalla negra',
+        (tester) async {
+          AuthedHttp.refreshOverride = (_) async => RefreshResult.failure(
+            'rechazado',
+            kind: RefreshFailureKind.rejected,
+          );
+          final h = _Harness(purgeDelay: purgeDelay);
+          h.identity.deleteResponses.add(
+            () => _json(202, {'status': 'pending'}),
+          );
+          h.identity.statusResponses.add(
+            () => _json(401, {
+              'error': {'code': 'token_expired', 'message': 'expirado'},
+            }),
+          );
+          await pumpApp(tester, h);
+          await _openDialog(tester);
+          await _confirm(tester);
+          await tester.pumpAndSettle();
+          expect(find.text('ELIMINACIÓN EN CURSO'), findsOneWidget);
+          pages.reset();
+
+          await tester.pump(const Duration(seconds: 4));
+          await tester.pumpAndSettle();
+
+          expectSingleLogin(tester);
+          expect(h.purged, ['user-a']);
+          expect(SessionManager.isLoggedIn, isFalse);
+          expect(h.identity.deletes, 1);
+        },
+      );
+
+      testWidgets('pendiente y la sesión expira desde otra pantalla (purga '
+          '$speed): login', (tester) async {
+        final h = _Harness(purgeDelay: purgeDelay);
+        h.identity.deleteResponses.add(() => _json(202, {'status': 'pending'}));
+        await pumpApp(tester, h);
+        await _openDialog(tester);
+        await _confirm(tester);
+        await tester.pumpAndSettle();
+        pages.reset();
+
+        await SessionManager.expireSession();
+        await tester.pumpAndSettle();
+
+        expectSingleLogin(tester);
+        expect(h.purged, ['user-a']);
+      });
+    }
+
+    testWidgets('401 en el DELETE: login sin purgar datos', (tester) async {
+      AuthedHttp.refreshOverride = (_) async =>
+          RefreshResult.failure('rechazado', kind: RefreshFailureKind.rejected);
+      final h = _Harness();
+      h.identity.deleteResponses.add(
+        () => _json(401, {
+          'error': {'code': 'token_expired', 'message': 'expirado'},
+        }),
+      );
+      await pumpApp(tester, h);
+      await _openDialog(tester);
+      pages.reset();
+      await _confirm(tester);
+      await tester.pumpAndSettle();
+
+      expectSingleLogin(tester);
+      expect(h.purged, isEmpty);
+      expect(h.identity.statusChecks, 0);
+    });
+
+    testWidgets('pendiente y salir de este dispositivo: un solo login', (
+      tester,
+    ) async {
+      final h = _Harness();
+      h.identity.deleteResponses.add(() => _json(202, {'status': 'pending'}));
+      await pumpApp(tester, h);
+      await _openDialog(tester);
+      await _confirm(tester);
+      await tester.pumpAndSettle();
+      pages.reset();
+
+      await tester.tap(find.text('SALIR DE ESTE DISPOSITIVO'));
+      await tester.pumpAndSettle();
+
+      expectSingleLogin(tester);
+      expect(
+        find.textContaining('sigue en curso en el servidor'),
+        findsOneWidget,
+      );
+      expect(h.purged, ['user-a']);
+    });
+
+    testWidgets('200 complete: un solo login con el aviso de eliminación', (
+      tester,
+    ) async {
+      final h = _Harness();
+      h.identity.deleteResponses.add(() => _json(200, {'status': 'complete'}));
+      await pumpApp(tester, h);
+      await _openDialog(tester);
+      pages.reset();
+      await _confirm(tester);
+      await tester.pumpAndSettle();
+
+      expectSingleLogin(tester);
+      expect(find.text('Tu cuenta fue eliminada.'), findsOneWidget);
+      expect(h.purged, ['user-a']);
+    });
+  });
 
   group('responsive y texto ampliado', () {
     const sizes = [Size(360, 640), Size(768, 1024), Size(1440, 900)];

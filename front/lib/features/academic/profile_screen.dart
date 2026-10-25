@@ -10,12 +10,12 @@ import '../../core/services/account_deletion_service.dart';
 import '../../core/services/api_config.dart';
 import '../../core/services/auth_service.dart';
 import '../../core/services/profile_service.dart';
+import '../../core/services/session_expiry_navigation.dart';
 import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 import '../auth/account_deletion_dialog.dart';
 import '../auth/google_drive_service.dart';
-import '../auth/login_screen.dart';
 
 const String kSubjectApproved = 'approved';
 const String kSubjectInProgress = 'in_progress';
@@ -475,10 +475,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final auth = AuthService();
     unawaited(auth.logout(refreshToken).whenComplete(auth.dispose));
     if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-      (route) => false,
-    );
+    replaceStackWithLogin(Navigator.of(context));
   }
 
   AccountDeletionService get _deletionService =>
@@ -522,10 +519,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
             'cerró la sesión en este dispositivo.';
     }
     if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-      (route) => false,
-    );
+    // Idempotente: si la sesión expiró a la vez, el manejador global pudo
+    // abrir ya el login.
+    replaceStackWithLogin(Navigator.of(context));
     messenger.showSnackBar(SnackBar(content: Text(message)));
   }
 
