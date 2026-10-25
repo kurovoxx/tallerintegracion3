@@ -31,6 +31,9 @@ Borrado de la cuenta propia, orquestado por Identity (Auth) hacia Notes y Social
 
 Llamadas gRPC con `x-internal-key` y 30 s de timeout cada una (`account_deletion_grpc.go`). Solo `COMPLETE` autoriza avanzar.
 
+## Requisito de esquema
+Necesita `identity.account_deletions` (Auth `004_account_deletion.sql`), `notes.account_deletion_users` y `notes.account_deletion_group_notes` (Notes `003_account_deletion.sql`), `social.account_deletion_users` y `social.account_deletion_groups` (Social `002_account_deletion.sql`) con `stream_removed` (Social `003_account_deletion_stream.sql`). `init.sql` solo corre con un volumen nuevo: en bases existentes hay que aplicar esas migraciones. Auth, Notes y Social verifican estas tablas al arrancar (`repository.VerifyAccountDeletionSchema`) y no arrancan si faltan. Síntoma si faltan las de Notes en un proceso ya iniciado: `202 pending` permanente con `last_error = notes_begin_incomplete` y, en Notes, `borrado de cuenta [begin] ... relation "notes.account_deletion_users" does not exist`.
+
 ## Tests
 - `back/auth/internal/handler/http/account_deletion_contract_test.go`: códigos/cuerpos 200 (idempotente), 202 por etapa pendiente/error/`UNSPECIFIED`, 404, 503 (incluido el 503 con borrado ya iniciado), 401 y 423 posterior en `RequireAuth`.
 - `back/auth/internal/service/account_deletion_test.go`: confirmación explícita en cada etapa, reintento tras fallo del commit local, compatibilidad con servidores antiguos.

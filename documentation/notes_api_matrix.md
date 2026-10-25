@@ -46,7 +46,7 @@ I: `TestPostgresConsecutiveNoteEdits` (crear/leer/editar/listar) y
 `TestIdempotencyClaimAfterExpiryPreservesResourceID` (claim, no endpoint HTTP).
 E: `scripts/test-notes-e2e.py`, contra el Compose aislado: HTTP real, JWT emitido
 por Auth real, repositorios PostgreSQL y llamadas gRPC reales; Drive mock.
-La ejecución y resultados finales se registran en `SPRINT3_HECTOR_CIERRE.md`.
+La ejecución y resultados finales se registran en el informe interno de cierre (no versionado).
 
 | Ruta | H | U | I | E |
 | --- | --- | --- | --- | --- |

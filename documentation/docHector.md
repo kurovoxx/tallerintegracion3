@@ -2,8 +2,8 @@
 
 Contrato contrastado con código del repositorio, revisión 2026-10-23 (borrado de
 cuenta 3_2_16 integrado tras el PR #94 de Identity). Reemplaza
-la auditoría anterior que describía Notes sin gRPC. Resultados y estados por
-tarea: [SPRINT3_HECTOR_CIERRE](../SPRINT3_HECTOR_CIERRE.md).
+la auditoría anterior que describía Notes sin gRPC. Los resultados de pruebas
+y estados por tarea se registran en el informe interno de cierre (no versionado).
 
 ## Alcance y fuentes
 
@@ -208,6 +208,8 @@ notifications_bell_state_test.dart. Social carece de UNIQUE(meeting_id,user_id):
 dedupe por ID no elimina registros duplicados con IDs diferentes.
 
 ## Borrado de cuenta (3_2_16)
+
+> Incidente 2026-10-24 (prueba manual en Docker local): un borrado quedó `pending` con `notes_begin_incomplete` porque la base local no tenía la migración 003 de Notes (ni 002/003 de Social). Se aplicaron las migraciones y el worker completó el mismo borrado. Desde entonces los servicios verifican su esquema al arrancar, Notes registra la causa de cada fallo del borrado, y la navegación al login es idempotente (antes, con la sesión expirada durante un borrado pendiente, quedaba una pantalla negra).
 
 Backend (Agustín Vega, PR #94 en Development, commit `b1a148c`). Contratos:
 [DELETE /auth/account](../endpointDoc/DELETE-auth-account.md) y
