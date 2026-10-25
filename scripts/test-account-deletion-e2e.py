@@ -151,6 +151,7 @@ def main():
     print("PASS cuenta B intacta", flush=True)
 
     pending_while_social_down()
+    pending_while_notes_table_missing()
     print(f"PASS {checks} respuestas verificadas; PostgreSQL real, Drive/Stream mock")
 
 
@@ -184,6 +185,78 @@ def pending_while_social_down():
     _, again = request("auth", "DELETE", "/auth/account", 200, token)
     assert again == {"status": "complete"}
     print("PASS worker reanudó sin JWT: pending -> complete; DELETE repetido 200", flush=True)
+
+
+def docker_logs(container, since):
+    out = subprocess.run(["docker", "logs", "--since", since, container], capture_output=True,
+                         text=True, encoding="utf-8", errors="replace")
+    return out.stdout + out.stderr
+
+
+def wait_health(service, timeout=60):
+    deadline = time.time() + timeout
+    while True:
+        try:
+            if request(service, "GET", "/health")[1]["status"] == "UP":
+                return
+        except Exception:  # noqa: BLE001 - el servicio aún no escucha
+            pass
+        assert time.time() < deadline, f"{service} no respondió /health"
+        time.sleep(1)
+
+
+def pending_while_notes_table_missing():
+    """Regresión de la prueba manual en Docker local (2026-10-24).
+
+    Una base anterior al PR #94 no tenía notes.account_deletion_users: Notes
+    BeginAccountDeletion fallaba con Internal y la cuenta quedaba pending con
+    notes_begin_incomplete. Se reproduce ocultando la tabla (solo en la base
+    aislada ti3-e2e), se comprueba el diagnóstico y que, al restaurarla, el
+    worker completa el mismo borrado sin tocar identity.account_deletions.
+    """
+    user = register("Borrado E2E sin tabla Notes")
+    token, uid = user["token"], user["id"]
+    hidden = "account_deletion_users_e2e_hidden"
+    since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 2))
+    sql(f"ALTER TABLE notes.account_deletion_users RENAME TO {hidden}")
+    try:
+        _, body = request("auth", "DELETE", "/auth/account", 202, token)
+        assert body == {"status": "pending"}, body
+        _, st = request("auth", "GET", "/auth/account-deletion", 200, token)
+        assert st["status"] == "pending"
+        row = sql(f"SELECT status||'|'||coalesce(last_error,'') FROM identity.account_deletions WHERE user_id='{uid}'")
+        assert row == "pending|notes_begin_incomplete", row
+        assert sql(f"SELECT count(*) FROM identity.users WHERE id='{uid}'") == "1"
+        logs = docker_logs("ti3-e2e-notes", since)
+        assert f"borrado de cuenta [begin] user_id={uid}" in logs, logs[-2000:]
+        assert 'relation "notes.account_deletion_users" does not exist' in logs, logs[-2000:]
+        print("PASS sin tabla en Notes: 202 pending, notes_begin_incomplete y causa en el log", flush=True)
+
+        # Con el esquema incompleto Notes se niega a arrancar y nombra la migración.
+        subprocess.check_call(["docker", "restart", "ti3-e2e-notes"], stdout=subprocess.DEVNULL)
+        deadline = time.time() + 30
+        while json.loads(subprocess.check_output(["docker", "inspect", "ti3-e2e-notes"]))[0]["State"]["Running"]:
+            assert time.time() < deadline, "Notes arrancó con el esquema incompleto"
+            time.sleep(1)
+        logs = docker_logs("ti3-e2e-notes", since)
+        assert "003_account_deletion.sql" in logs, logs[-2000:]
+        print("PASS Notes no arranca sin la migración 003 y lo explica en el log", flush=True)
+    finally:
+        sql(f"ALTER TABLE notes.{hidden} RENAME TO account_deletion_users")
+        subprocess.check_call(["docker", "start", "ti3-e2e-notes"], stdout=subprocess.DEVNULL)
+    wait_health("notes")
+    deadline = time.time() + 90
+    while True:
+        _, st = request("auth", "GET", "/auth/account-deletion", 200, token)
+        if st["status"] == "complete":
+            break
+        assert time.time() < deadline, "el worker no completó el borrado tras restaurar la tabla"
+        time.sleep(3)
+    assert sql(f"SELECT count(*) FROM identity.users WHERE id='{uid}'") == "0"
+    assert sql(f"SELECT status FROM notes.account_deletion_users WHERE user_id='{uid}'") == "complete"
+    _, again = request("auth", "DELETE", "/auth/account", 200, token)
+    assert again == {"status": "complete"}
+    print("PASS tabla restaurada: el worker completó el mismo borrado; DELETE repetido 200", flush=True)
 
 
 if __name__ == "__main__":
