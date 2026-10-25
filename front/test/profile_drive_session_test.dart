@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -22,7 +23,7 @@ void main() {
     final service = ProfileService(
       client: MockClient((request) async {
         final user = request.headers['Authorization']!.split(' ').last;
-        if (request.url.path.endsWith('/status')) {
+        if (request.url.servicePath.endsWith('/status')) {
           consulted.add(user);
           if (user == 'B') return pendingB.future;
           return http.Response('{"connected":true}', 200);

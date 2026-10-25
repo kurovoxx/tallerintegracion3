@@ -6,14 +6,16 @@ import 'package:flutter/services.dart';
 
 import '../../core/common_widgets.dart';
 import '../../core/models/profile_models.dart';
+import '../../core/services/account_deletion_service.dart';
 import '../../core/services/api_config.dart';
 import '../../core/services/auth_service.dart';
 import '../../core/services/profile_service.dart';
+import '../../core/services/session_expiry_navigation.dart';
 import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import '../auth/account_deletion_dialog.dart';
 import '../auth/google_drive_service.dart';
-import '../auth/login_screen.dart';
 
 const String kSubjectApproved = 'approved';
 const String kSubjectInProgress = 'in_progress';
@@ -56,10 +58,16 @@ enum _DriveStatus {
 class ProfileScreen extends StatefulWidget {
   final Map<String, dynamic>? userData;
 
-  const ProfileScreen({super.key, this.userData, ProfileService? service})
-    : _serviceOverride = service;
+  const ProfileScreen({
+    super.key,
+    this.userData,
+    ProfileService? service,
+    AccountDeletionService? accountDeletionService,
+  }) : _serviceOverride = service,
+       _accountDeletionOverride = accountDeletionService;
 
   final ProfileService? _serviceOverride;
+  final AccountDeletionService? _accountDeletionOverride;
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -74,6 +82,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   UserProfile? _profile;
   late final ProfileService _service;
+  AccountDeletionService? _ownedDeletionService;
+  bool _deletionDialogOpen = false;
 
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
@@ -144,6 +154,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _descriptionController.dispose();
     _googleEmailController.dispose();
     if (widget._serviceOverride == null) _service.dispose();
+    _ownedDeletionService?.dispose();
     super.dispose();
   }
 
@@ -464,10 +475,54 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final auth = AuthService();
     unawaited(auth.logout(refreshToken).whenComplete(auth.dispose));
     if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-      (route) => false,
-    );
+    replaceStackWithLogin(Navigator.of(context));
+  }
+
+  AccountDeletionService get _deletionService =>
+      widget._accountDeletionOverride ??
+      (_ownedDeletionService ??= AccountDeletionService());
+
+  /// 3_2_16: DELETE /auth/account con confirmación escrita. La sesión y los
+  /// datos locales solo se limpian cuando Identity confirma (ver diálogo).
+  Future<void> _handleDeleteAccount() async {
+    if (_deletionDialogOpen) return;
+    _deletionDialogOpen = true;
+    final messenger = ScaffoldMessenger.of(context);
+    final email = _profile?.email ?? SessionManager.user?['email'] as String?;
+    final AccountDeletionExit exit;
+    try {
+      exit = await showAccountDeletionDialog(
+        context,
+        service: _deletionService,
+        email: email,
+      );
+    } finally {
+      _deletionDialogOpen = false;
+    }
+    if (!mounted) return;
+    final String message;
+    switch (exit) {
+      case AccountDeletionExit.cancelled:
+        return;
+      case AccountDeletionExit.sessionExpired:
+        await _handleLogout();
+        return;
+      case AccountDeletionExit.deleted:
+        message = 'Tu cuenta fue eliminada.';
+      case AccountDeletionExit.accountNotFound:
+        message =
+            'La cuenta ya no existe en el servidor. Se cerró la sesión en '
+            'este dispositivo.';
+      case AccountDeletionExit.pendingSignedOut:
+        message =
+            'La eliminación de tu cuenta sigue en curso en el servidor. Se '
+            'cerró la sesión en este dispositivo.';
+    }
+    if (!mounted) return;
+    // Idempotente: si la sesión expiró a la vez, el manejador global pudo
+    // abrir ya el login.
+    replaceStackWithLogin(Navigator.of(context));
+    messenger.showSnackBar(SnackBar(content: Text(message)));
   }
 
   // ---------------------------------------------------------------------
@@ -594,24 +649,56 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _buildPersonalDataCard(isDesktop),
       const SizedBox(height: AppDimens.spaceLg),
       _buildDriveCard(isDesktop),
-      const SizedBox(height: AppDimens.spaceLg),
-      _buildSessionActions(isDesktop),
+      const SizedBox(height: AppDimens.spaceXl),
+      _buildAccountCard(isDesktop),
     ];
   }
 
-  Widget _buildSessionActions(bool isDesktop) {
-    final logoutButton = NeobrutalistButton(
-      label: 'CERRAR SESIÓN',
-      icon: Icons.logout_rounded,
-      variant: NeobrutalistButtonVariant.secondary,
+  /// Zona de peligro al final del perfil, separada de las acciones comunes.
+  Widget _buildAccountCard(bool isDesktop) {
+    final deleteButton = NeobrutalistButton(
+      key: const ValueKey('profile-delete-account'),
+      label: 'ELIMINAR CUENTA',
+      icon: Icons.delete_forever_rounded,
+      variant: NeobrutalistButtonVariant.danger,
+      borderWidth: AppDimens.borderWidthThick,
       expand: !isDesktop,
-      onPressed: _handleLogout,
+      semanticLabel: 'Eliminar cuenta de forma permanente',
+      onPressed: _isSaving ? null : _handleDeleteAccount,
     );
-
-    if (!isDesktop) return logoutButton;
-    return Align(
-      alignment: Alignment.centerRight,
-      child: SizedBox(width: 220, child: logoutButton),
+    return _ProfileCard(
+      title: 'Cuenta',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Align(
+            alignment: Alignment.centerLeft,
+            child: NeobrutalistBadge(
+              label: 'Zona de peligro',
+              tone: NeobrutalistTone.danger,
+              icon: Icons.warning_amber_rounded,
+            ),
+          ),
+          const SizedBox(height: AppDimens.spaceMd),
+          const Text(
+            'Eliminar tu cuenta borra tu perfil, tus sesiones y tu '
+            'participación en grupos. Es permanente.',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: AppColors.mutedStrong,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: AppDimens.spaceMd),
+          isDesktop
+              ? Align(
+                  alignment: Alignment.centerRight,
+                  child: SizedBox(width: 240, child: deleteButton),
+                )
+              : deleteButton,
+        ],
+      ),
     );
   }
 
@@ -1203,7 +1290,12 @@ class _ProfileCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                ?trailing,
+                // Flexible: con texto al 200 % en 360 px el badge (p. ej. el
+                // estado de Drive) se ajusta en vez de desbordar el encabezado.
+                if (trailing != null) ...[
+                  const SizedBox(width: AppDimens.spaceSm),
+                  Flexible(child: trailing!),
+                ],
               ],
             ),
           ),

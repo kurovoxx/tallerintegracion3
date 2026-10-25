@@ -2,15 +2,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taller_integracion_front/core/widgets/neobrutalism.dart';
+import 'package:taller_integracion_front/core/database/app_database_manager.dart';
 import 'package:taller_integracion_front/features/academic/academic_models.dart';
 import 'package:taller_integracion_front/features/academic/course_detail_tabs.dart';
 import 'package:taller_integracion_front/features/academic/course_windows.dart';
 import 'package:taller_integracion_front/features/academic/courses_screen.dart';
 import 'package:taller_integracion_front/features/academic/grade_calculator_screen.dart';
 import 'package:taller_integracion_front/features/notes/all_notes_screen.dart';
+
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+  });
+
+  tearDown(() async {
+    await AppDatabaseManager.instance.resetForTesting();
   });
 
   // Sin pumpAndSettle: indicadores indeterminados + I/O real (Drift) no
@@ -25,7 +31,9 @@ void main() {
     }
   }
 
-  testWidgets('UnitsWindow sin sesión: error visible con reintentar', (tester) async {
+  testWidgets('UnitsWindow sin sesión: error visible con reintentar', (
+    tester,
+  ) async {
     await pumpSettled(
       tester,
       const UnitsWindow(subjectId: 's1', subjectName: 'Redes'),
@@ -43,7 +51,10 @@ void main() {
               child: TextButton(
                 onPressed: () => Navigator.of(ctx).push(
                   MaterialPageRoute(
-                    builder: (_) => const UnitsWindow(subjectId: 's1', subjectName: 'Redes'),
+                    builder: (_) => const UnitsWindow(
+                      subjectId: 's1',
+                      subjectName: 'Redes',
+                    ),
                   ),
                 ),
                 child: const Text('ABRIR'),
@@ -64,7 +75,9 @@ void main() {
     expect(find.text('UNIDADES · REDES'), findsNothing);
   });
 
-  testWidgets('Ver Materiales abre apuntes directo con preset y back', (tester) async {
+  testWidgets('Ver Materiales abre apuntes directo con preset y back', (
+    tester,
+  ) async {
     // Contrato del botón Ver Materiales (courses_screen): AllNotesScreen
     // con preset de materia + back, sin ventana intermedia.
     await tester.pumpWidget(
@@ -82,7 +95,9 @@ void main() {
     expect(find.byTooltip('Volver'), findsOneWidget);
   });
 
-  testWidgets('EvaluationsWindow sin sesión: error visible con reintentar', (tester) async {
+  testWidgets('EvaluationsWindow sin sesión: error visible con reintentar', (
+    tester,
+  ) async {
     await pumpSettled(
       tester,
       const EvaluationsWindow(subjectId: 's1', subjectName: 'Redes'),
@@ -91,7 +106,9 @@ void main() {
     expect(find.text('REINTENTAR'), findsOneWidget);
   });
 
-  testWidgets('AllNotesScreen con back muestra volver; sin back no', (tester) async {
+  testWidgets('AllNotesScreen con back muestra volver; sin back no', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       const MaterialApp(home: AllNotesScreen(showBackButton: true)),
     );
@@ -103,12 +120,13 @@ void main() {
     expect(find.byTooltip('Volver'), findsNothing);
   });
 
-
-  testWidgets('Detalle muestra solo ventanas, sin tabs viejos', (tester) async {    await tester.pumpWidget(const MaterialApp(home: CoursesScreen()));
+  testWidgets('Detalle muestra solo ventanas, sin tabs viejos', (tester) async {
+    await tester.pumpWidget(const MaterialApp(home: CoursesScreen()));
     await tester.pump(const Duration(milliseconds: 700));
     await tester.pump(const Duration(milliseconds: 300));
     await tester.tap(find.text('CÁLCULO III').first);
-    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
     expect(find.text('VER UNIDADES'), findsOneWidget);
     expect(find.text('VER MATERIALES'), findsOneWidget);
     expect(find.text('VER EVALUACIONES'), findsOneWidget);
@@ -122,7 +140,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
     }
     expect(find.textContaining('UNIDADES'), findsWidgets);
-    await tester.tap(find.byType(BackButton));
+    await tester.tap(find.byType(BackButton).last);
     await tester.pumpAndSettle();
     expect(find.text('VER UNIDADES'), findsOneWidget);
   });
@@ -147,7 +165,10 @@ void main() {
     expect(find.text('CALCULAR PROMEDIO'), findsOneWidget);
   });
 
-  testWidgets('Apuntes titula NOTAS <materia>; por defecto TODAS', (tester) async {    await tester.pumpWidget(
+  testWidgets('Apuntes titula NOTAS <materia>; por defecto TODAS', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
       const MaterialApp(home: AllNotesScreen(initialSubjectName: 'Redes')),
     );
     await tester.pump(const Duration(milliseconds: 300));
@@ -160,12 +181,8 @@ void main() {
   });
 
   test('flattenRenameOptions aplana tops + hijas con compuesto', () {
-    AcademicGrade grade(String id, String name) => AcademicGrade(
-      id: id,
-      subjectId: 's1',
-      name: name,
-      weight: 0.5,
-    );
+    AcademicGrade grade(String id, String name) =>
+        AcademicGrade(id: id, subjectId: 's1', name: name, weight: 0.5);
     final nodes = [
       AcademicGradeNode(
         grade: grade('g1', 'Parcial'),
@@ -184,7 +201,9 @@ void main() {
     expect(flattenRenameOptions([]), isEmpty);
   });
 
-  testWidgets('Crear manual con filtro hereda preset y aparece', (tester) async {
+  testWidgets('Crear manual con filtro hereda preset y aparece', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(1440, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);

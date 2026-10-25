@@ -22,11 +22,16 @@ class SessionManager {
   static const _tokensKey = 'auth_tokens_v1';
   static const _userKey = 'auth_user';
   static const _rememberMeKey = 'auth_remember_me';
+
+  /// Correo recordado por la pantalla de login (Recordarme). Es público para
+  /// que el borrado de cuenta lo olvide si pertenece a la cuenta eliminada.
+  static const rememberedEmailKey = 'auth_remembered_email';
   static String? _token;
   static String? _refreshToken;
   static Map<String, dynamic>? _user;
   static bool _rememberMe = false;
   static Future<void> _persistenceQueue = Future<void>.value();
+  static bool _persistenceIdle = true;
 
   /// Cambia cuando cambia la identidad de sesión, no cuando rota un token.
   static final ValueNotifier<int> revision = ValueNotifier(0);
@@ -280,8 +285,8 @@ class SessionManager {
       if (payload is! Map<String, dynamic>) return false;
       final expiresAt = payload['exp'];
       final notBefore = payload['nbf'];
-      final now = (clockOverride?.call() ?? DateTime.now())
-              .millisecondsSinceEpoch /
+      final now =
+          (clockOverride?.call() ?? DateTime.now()).millisecondsSinceEpoch /
           1000;
       return expiresAt is num &&
           expiresAt.isFinite &&
@@ -300,9 +305,7 @@ class SessionManager {
       (expectedRevision == null || revision.value == expectedRevision) &&
       (!checkRefreshToken || _refreshToken == expectedRefreshToken);
 
-  static Future<void> _clearPersistence(
-    SharedPreferences preferences,
-  ) async {
+  static Future<void> _clearPersistence(SharedPreferences preferences) async {
     await preferences.remove(_rememberMeKey);
     await preferences.remove(_tokensKey);
     await preferences.remove(_tokenKey);
@@ -311,8 +314,21 @@ class SessionManager {
   }
 
   static Future<T> _serializePersistence<T>(Future<T> Function() action) {
-    final result = _persistenceQueue.then((_) => action());
-    _persistenceQueue = result.then<void>((_) {}).catchError((Object _) {});
+    // Con la cola ociosa se parte de un futuro nuevo en la zona actual en vez
+    // de encadenarse al último eslabón: ese eslabón pudo crearse en otra zona
+    // (p. ej. el reloj simulado de un testWidgets ya terminado) que ya no
+    // procesa microtareas, y la siguiente escritura esperaba para siempre.
+    // Con escrituras en curso se mantiene el orden estricto.
+    final previous = _persistenceIdle
+        ? Future<void>.value()
+        : _persistenceQueue;
+    _persistenceIdle = false;
+    final result = previous.then((_) => action());
+    late final Future<void> tail;
+    tail = result.then<void>((_) {}).catchError((Object _) {}).whenComplete(() {
+      if (identical(_persistenceQueue, tail)) _persistenceIdle = true;
+    });
+    _persistenceQueue = tail;
     return result;
   }
 

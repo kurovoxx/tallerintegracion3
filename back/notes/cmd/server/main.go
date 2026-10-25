@@ -57,6 +57,11 @@ func main() {
 	} else {
 		log.Printf("DB check: notes.notes count=%d", cnt)
 	}
+	// Sin estas tablas el gate rechaza toda petición autenticada (503) y el
+	// borrado de cuenta queda pending para siempre: mejor no arrancar.
+	if err := repository.VerifyAccountDeletionSchema(ctx, p); err != nil {
+		log.Fatalf("%v", err)
+	}
 	runServer(p, selectDriveClient(p, cfg), cfg)
 }
 

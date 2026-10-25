@@ -3,6 +3,10 @@ set -e
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
+if [ "${1:-}" = "--e2e" ]; then
+  exec "$PROJECT_ROOT/scripts/run-e2e-local.sh"
+fi
+
 # Detecta si necesita sudo para docker
 DOCKER="docker"
 if ! docker ps >/dev/null 2>&1; then
@@ -30,6 +34,9 @@ fi
 
 echo ">> Build front local (http://localhost:8085)..."
 $COMPOSE build --no-cache front
+
+echo ">> Rebuild backends (incluye las correcciones de Notes)..."
+$COMPOSE build notes auth social infacadem
 
 echo ">> Levanta postgres + auth + notes + social + infacadem + front..."
 $COMPOSE up -d

@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -19,7 +20,7 @@ void main() {
     final service = SocialService(
       client: MockClient((request) async {
         expect(request.method, 'GET');
-        expect(request.url.path, '/me/overview');
+        expect(request.url.servicePath, '/me/overview');
         expect(request.headers['Authorization'], 'Bearer jwt-test');
         return http.Response(
           jsonEncode(<String, dynamic>{
@@ -102,7 +103,7 @@ void main() {
     final service = SocialService(
       client: MockClient((request) async {
         expect(request.method, 'POST');
-        expect(request.url.path, '/groups/$gid/meetings');
+        expect(request.url.servicePath, '/groups/$gid/meetings');
         final body = jsonDecode(request.body) as Map<String, dynamic>;
         expect(body['title'], 'Daily');
         expect(body['scheduled_at'], contains('T'));
@@ -133,7 +134,7 @@ void main() {
     final service = SocialService(
       client: MockClient((request) async {
         expect(request.method, 'GET');
-        expect(request.url.path, '/groups/$gid');
+        expect(request.url.servicePath, '/groups/$gid');
         return http.Response(
           jsonEncode(<String, dynamic>{
             'id': gid,

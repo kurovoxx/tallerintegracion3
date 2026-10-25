@@ -17,7 +17,7 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  static const String _rememberedEmailKey = 'auth_remembered_email';
+  static const String _rememberedEmailKey = SessionManager.rememberedEmailKey;
 
   bool isLoginTab = true;
   final _authService = AuthService();

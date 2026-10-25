@@ -331,8 +331,8 @@ func (h *NoteHandler) Patch(c *gin.Context) {
 		return
 	}
 	// Idempotencia opcional: si el cliente envía X-Idempotency-Key, el servicio
-	// responde a los replays de red con el resultado cacheado (TTL 10 min) sin
-	// re-aplicar el cambio en PG/Drive.
+	// responde a los replays de red con el recurso ya actualizado (registro
+	// durable en notes.idempotency_keys, replay 24 h) sin re-aplicar el cambio.
 	idemKey := c.GetHeader("X-Idempotency-Key")
 	expectedVersion := int64(0)
 	if req.Version != nil {

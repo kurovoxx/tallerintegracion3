@@ -1,4 +1,4 @@
-import 'dart:async';
+import 'support/service_uri.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -74,8 +74,8 @@ void main() {
       headers: {'content-type': 'application/json; charset=utf-8'},
     );
     return MockClient((r) async {
-      calls.add('${r.method} ${r.url.path}');
-      if (r.method == 'POST' && r.url.path == '/notes') {
+      calls.add('${r.method} ${r.url.servicePath}');
+      if (r.method == 'POST' && r.url.servicePath == '/notes') {
         // Retraso VIRTUAL: da ventana determinista para tocar la nota con
         // el POST en vuelo sin que los .timeout del cliente (virtuales)
         // puedan dispararse (presupuesto total << 8s).
@@ -95,7 +95,8 @@ void main() {
       // Flujo canónico multipart (Development): el binario va directo a
       // POST /notes/{uuid}/attachments. No se accede al body (binario
       // multipart rompe la decodificación UTF-8 del test).
-      if (r.method == 'POST' && r.url.path == '/notes/$realId/attachments') {
+      if (r.method == 'POST' &&
+          r.url.servicePath == '/notes/$realId/attachments') {
         final note = remote[realId]!;
         (note['attachments'] as List).add({
           'id': attId,
@@ -115,7 +116,7 @@ void main() {
         note['version'] = getVersion();
         return json({'version': getVersion(), 'title': b['title']});
       }
-      if (r.url.path == '/notes/me') {
+      if (r.url.servicePath == '/notes/me') {
         return json({
           'notes': [
             for (final n in remote.values)
@@ -123,10 +124,10 @@ void main() {
           ],
         });
       }
-      if (r.url.path == '/notes/$realId') {
+      if (r.url.servicePath == '/notes/$realId') {
         return json(remote[realId]!);
       }
-      if (r.url.path.endsWith('/content')) {
+      if (r.url.servicePath.endsWith('/content')) {
         return http.Response.bytes(
           pngBytes,
           200,
@@ -201,10 +202,7 @@ void main() {
     await t.pumpAndSettle();
     expect(find.text('ADJUNTAR IMAGEN'), findsOneWidget);
     await t.tap(find.text('SELECCIONAR IMAGEN'));
-    await waitFor(
-      t,
-      () => find.textContaining('foto_').evaluate().isNotEmpty,
-    );
+    await waitFor(t, () => find.textContaining('foto_').evaluate().isNotEmpty);
     await t.tap(find.widgetWithText(NeobrutalistButton, 'SUBIR E INSERTAR'));
     await t.pumpAndSettle();
     expect(find.text('ADJUNTAR IMAGEN'), findsNothing);
@@ -248,8 +246,9 @@ void main() {
     await t.pumpWidget(const SizedBox());
   });
 
-  testWidgets('8/9/10/12/14. click durante sync con imagen: espera y muestra',
-      (t) async {
+  testWidgets('8/9/10/12/14. click durante sync con imagen: espera y muestra', (
+    t,
+  ) async {
     final db = AppDatabase.forTesting(NativeDatabase.memory());
     var version = 1;
     final remote = <String, Map<String, dynamic>>{};
@@ -299,10 +298,7 @@ void main() {
     await waitFrozen(t, () => find.text('foto.png').evaluate().isNotEmpty);
     // Multipart canónico: un solo flujo (sin /notes/upload para crear).
     expect(calls, contains('POST /notes/$realId/attachments'));
-    expect(
-      calls.where((c) => c == 'POST /notes/upload'),
-      isEmpty,
-    );
+    expect(calls.where((c) => c == 'POST /notes/upload'), isEmpty);
     // 12. Todo contra el UUID real; el tempId jamás toca la red.
     expect(
       calls.indexOf('POST /notes'),
@@ -319,8 +315,7 @@ void main() {
     expect(noteGets, isNotEmpty);
     expect(noteGets, everyElement('GET /notes/$realId'));
     // 14. Sin polling: puñado de GETs (pipeline final + carga del detalle).
-    final getCount =
-        calls.where((c) => c == 'GET /notes/$realId').length;
+    final getCount = calls.where((c) => c == 'GET /notes/$realId').length;
     expect(getCount, lessThanOrEqualTo(3));
     await t.pumpWidget(const SizedBox());
   });
@@ -344,10 +339,7 @@ void main() {
     await openCreate(t);
     await submitCreate(t, 'Solo Local', 'contenido local');
     await waitFor(t, () => find.text('Solo Local').evaluate().isNotEmpty);
-    await waitFor(
-      t,
-      () => find.text('SOLO LOCAL').evaluate().isNotEmpty,
-    );
+    await waitFor(t, () => find.text('SOLO LOCAL').evaluate().isNotEmpty);
     // Abre igual (sin espera): copia local usable, se puede editar.
     await t.tap(find.text('Solo Local'));
     await waitFor(t, () => find.text('Editar').evaluate().isNotEmpty);

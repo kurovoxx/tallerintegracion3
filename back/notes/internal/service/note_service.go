@@ -360,6 +360,39 @@ func isRetryableDriveError(err error) bool {
 	return true
 }
 
+// driveFailureIsDefinitive indica si un fallo de Drive GARANTIZA que no se creó
+// ningún archivo remoto: rechazo determinista del cliente (OAuth ausente/
+// revocado, 4xx de validación, 413) o cancelación local previa al envío. En
+// estos casos la fila 'pending_drive' recién insertada se convertiría en una
+// nota fantasma (sin archivo/contenido) y debe eliminarse.
+//
+// Es deliberadamente conservador: timeout, cancelación del contexto durante la
+// llamada, 5xx, 429 y errores no tipados de red son AMBIGUOS (el archivo pudo
+// haberse creado) y NO se limpian; la fila se conserva para la reconciliación
+// idempotente (FindFileByNoteID / cola de reconciliación).
+func driveFailureIsDefinitive(err error) bool {
+	if err == nil {
+		return false
+	}
+	if drive.IsOAuthError(err) {
+		return true
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var de *drive.DriveError
+	if errors.As(err, &de) {
+		switch de.Code {
+		case 400, 401, 403, 404, 409, 413, 422:
+			return true
+		default:
+			return false
+		}
+	}
+	// Error no tipado (red/IO): el archivo pudo crearse.
+	return false
+}
+
 // findOrphanDriveFile busca el archivo .md que un intento previo pudo dejar
 // huérfano en Drive, indexado con appProperties (notes_note_id). Devuelve ""
 // sin error cuando no existe; un error significa que no se pudo probar la
@@ -809,8 +842,35 @@ func (s *NoteService) Create(ctx context.Context, userID string, title string, s
 		})
 		cancelDrive()
 		if err != nil {
-			// Drive falló: marcar nota como failed_sync para reconciliación
-			_ = s.observedNotesUpdateSyncStatus(ctx, note.ID, "failed_sync")
+			// Drive falló. Distinguir rechazo determinista (el archivo NO existe,
+			// p. ej. OAuth ausente/revocado, 4xx de validación o 413) de fallo
+			// ambiguo (timeout/red/5xx: el archivo pudo crearse).
+			//
+			// En el caso determinista, conservar la fila 'failed_sync' deja una
+			// nota fantasma (sin archivo ni contenido legible) que el
+			// reconciliador preserva para siempre y que además impide reutilizar
+			// limpiamente la intención: se elimina SOLO la fila de ESTA intención
+			// (la recién creada o la preasociada por un intento previo de la
+			// misma clave que tampoco dejó archivo; su id nunca llegó al cliente)
+			// y se libera el claim, de modo que el retry con la misma clave
+			// vuelve a crear sin duplicar.
+			if driveFailureIsDefinitive(err) {
+				if delErr := s.notes.Delete(ctx, note.ID); delErr != nil {
+					log.Printf("notes: create nota %s: rechazo definitivo de Drive pero no se pudo limpiar la fila: %v", note.ID, delErr)
+					_ = s.observedNotesUpdateSyncStatus(ctx, note.ID, "failed_sync")
+				} else if pgInserted {
+					// La fila ya no existe: liberar el claim para que un retry
+					// obtenga una intención nueva (sin fila ni archivo que adopte).
+					pgInserted = false
+					if opKey != "" {
+						s.releaseIdempotentOperation(ctx, userID, "create", opKey)
+					}
+				}
+			} else {
+				// Fallo ambiguo: el archivo pudo quedar huérfano en Drive. La fila
+				// 'failed_sync' es la recuperación (reconciliador + FindFileByNoteID).
+				_ = s.observedNotesUpdateSyncStatus(ctx, note.ID, "failed_sync")
+			}
 			// OAuth ausente/revocado: 403 genérico sin filtrar texto interno.
 			if drive.IsOAuthError(err) {
 				return nil, newServiceErrorMsg(utils.ErrForbidden, "Conecte o renueve su Google Drive")

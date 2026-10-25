@@ -18,6 +18,7 @@ String _jwtFor(String userId) {
 }
 
 LocalNote _note(String id, String? owner) => LocalNote(
+  needsSync: false,
   id: id,
   title: 'Nota $id',
   content: 'contenido',

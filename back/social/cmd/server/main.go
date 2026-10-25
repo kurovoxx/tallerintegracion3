@@ -65,6 +65,11 @@ func main() {
 	} else {
 		log.Printf("DB check: social.groups count=%d", cnt)
 	}
+	// Sin estas tablas el gate rechaza toda petición autenticada (503) y el
+	// borrado de cuenta queda pending para siempre: mejor no arrancar.
+	if err := repository.VerifyAccountDeletionSchema(ctx, pool); err != nil {
+		log.Fatalf("%v", err)
+	}
 
 	runServer(pool, cfg)
 }

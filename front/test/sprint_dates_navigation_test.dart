@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -28,14 +29,14 @@ void main() {
         client: MockClient((r) async {
           Object body = {};
           if (r.method == 'PATCH') {
-            expect(r.url.path, '/groups/$group/sprint-sheets/legacy');
+            expect(r.url.servicePath, '/groups/$group/sprint-sheets/legacy');
             patches++;
             sheet = {
               'id': 'legacy',
               ...jsonDecode(r.body) as Map<String, dynamic>,
             };
             body = {'data': sheet};
-          } else if (r.url.path.endsWith('/workspace')) {
+          } else if (r.url.servicePath.endsWith('/workspace')) {
             body = {
               'group': {'id': group},
               'sprint_sheet': {
@@ -53,11 +54,11 @@ void main() {
                     : [],
               },
             };
-          } else if (r.url.path.endsWith('/members')) {
+          } else if (r.url.servicePath.endsWith('/members')) {
             body = [
               {'user_id': 'u', 'display_name': 'Persona'},
             ];
-          } else if (r.url.path.endsWith('/hours')) {
+          } else if (r.url.servicePath.endsWith('/hours')) {
             body = {'data': []};
           }
           return http.Response(
@@ -131,7 +132,9 @@ void main() {
     });
   }
 
-  testWidgets('Eliminar sprint con confirmación y reselección vecina', (t) async {
+  testWidgets('Eliminar sprint con confirmación y reselección vecina', (
+    t,
+  ) async {
     SharedPreferences.setMockInitialValues({});
     await SessionManager.saveSession('test', {'id': 'u'});
     const group = '11111111-1111-1111-1111-111111111111';
@@ -178,16 +181,16 @@ void main() {
           body = {
             'data': {'id': id, 'name': 'borrado'},
           };
-        } else if (r.url.path.endsWith('/workspace')) {
+        } else if (r.url.servicePath.endsWith('/workspace')) {
           body = {
             'group': {'id': group},
             'sprint_sheet': {'sheets': sheets, 'tasks': []},
           };
-        } else if (r.url.path.endsWith('/members')) {
+        } else if (r.url.servicePath.endsWith('/members')) {
           body = [
             {'user_id': 'u', 'display_name': 'Persona'},
           ];
-        } else if (r.url.path.endsWith('/hours')) {
+        } else if (r.url.servicePath.endsWith('/hours')) {
           body = {'data': []};
         }
         return http.Response(
@@ -263,7 +266,7 @@ void main() {
     final service = SocialService(
       client: MockClient((r) async {
         Object body = {};
-        if (r.url.path.endsWith('/workspace')) {
+        if (r.url.servicePath.endsWith('/workspace')) {
           body = {
             'group': {'id': group},
             'sprint_sheet': {
@@ -278,11 +281,11 @@ void main() {
               'tasks': [],
             },
           };
-        } else if (r.url.path.endsWith('/members')) {
+        } else if (r.url.servicePath.endsWith('/members')) {
           body = [
             {'user_id': 'u', 'display_name': 'Persona'},
           ];
-        } else if (r.url.path.endsWith('/hours')) {
+        } else if (r.url.servicePath.endsWith('/hours')) {
           body = {'data': []};
         }
         return http.Response(

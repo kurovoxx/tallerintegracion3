@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
 
 	notesv1 "github.com/kurovoxx/tallerintegracion3/back/notes/internal/gen/notesv1/v1"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/model"
@@ -18,11 +19,13 @@ type AccountDeletionStore interface {
 }
 
 func (s *NoteService) BeginAccountDeletion(ctx context.Context, userID string) notesv1.AccountCleanupStatus {
-	if !utils.ValidateUUID(userID) || s.accountDeletion == nil {
+	if err := s.accountDeletionPrecondition(userID); err != nil {
+		logAccountDeletionFailure("begin", userID, err)
 		return notesv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_ERROR
 	}
 	complete, err := s.accountDeletion.Begin(ctx, userID)
 	if err != nil {
+		logAccountDeletionFailure("begin", userID, err)
 		return notesv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_ERROR
 	}
 	if complete {
@@ -35,11 +38,13 @@ func (s *NoteService) BeginAccountDeletion(ctx context.Context, userID string) n
 // its own notes and attachments. No product rule authorizes deleting their
 // Drive content as part of account deletion.
 func (s *NoteService) AccountDeletionCleanup(ctx context.Context, userID string) notesv1.AccountCleanupStatus {
-	if !utils.ValidateUUID(userID) || s.accountDeletion == nil {
+	if err := s.accountDeletionPrecondition(userID); err != nil {
+		logAccountDeletionFailure("cleanup", userID, err)
 		return notesv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_ERROR
 	}
 	complete, err := s.accountDeletion.Begin(ctx, userID)
 	if err != nil {
+		logAccountDeletionFailure("cleanup begin", userID, err)
 		return notesv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_ERROR
 	}
 	if complete {
@@ -47,17 +52,21 @@ func (s *NoteService) AccountDeletionCleanup(ctx context.Context, userID string)
 	}
 	notes, err := s.listOwnedNotes(ctx, userID)
 	if err != nil {
+		logAccountDeletionFailure("cleanup list notes", userID, err)
 		return notesv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_ERROR
 	}
 	for _, note := range notes {
 		if err := ctx.Err(); err != nil {
+			logAccountDeletionFailure("cleanup", userID, err)
 			return notesv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_PENDING
 		}
 		if err := s.cleanNoteShares(ctx, userID, note.ID, "", false); err != nil {
+			logAccountDeletionFailure("cleanup note "+note.ID, userID, err)
 			return notesv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_PENDING
 		}
 	}
 	if err := s.accountDeletion.Complete(ctx, userID); err != nil {
+		logAccountDeletionFailure("cleanup complete", userID, err)
 		return notesv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_ERROR
 	}
 	return notesv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_COMPLETE
@@ -68,7 +77,12 @@ func (s *NoteService) AccountDeletionCleanup(ctx context.Context, userID string)
 // group, only shares owned by the departing user are removed. Other authors,
 // groups and public/link sources remain part of the desired Drive ACL.
 func (s *NoteService) UnshareAccountGroup(ctx context.Context, userID, groupID string, groupDeleted bool) notesv1.AccountCleanupStatus {
-	if !utils.ValidateUUID(userID) || !utils.ValidateUUID(groupID) || s.accountDeletion == nil {
+	stage := "unshare group " + groupID
+	if err := s.accountDeletionPrecondition(userID); err != nil || !utils.ValidateUUID(groupID) {
+		if err == nil {
+			err = fmt.Errorf("group_id inválido")
+		}
+		logAccountDeletionFailure(stage, userID, err)
 		return notesv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_ERROR
 	}
 	// Queue every note before deleting any share row. If a later Drive revoke
@@ -77,6 +91,7 @@ func (s *NoteService) UnshareAccountGroup(ctx context.Context, userID, groupID s
 	workByNote := make(map[string]model.AccountDeletionGroupNote)
 	pending, err := s.accountDeletion.PendingGroupWork(ctx, userID, groupID)
 	if err != nil {
+		logAccountDeletionFailure(stage, userID, err)
 		return notesv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_ERROR
 	}
 	for _, item := range pending {
@@ -87,6 +102,7 @@ func (s *NoteService) UnshareAccountGroup(ctx context.Context, userID, groupID s
 	for {
 		shares, next, err := s.shared.ListByGroup(ctx, groupID, 100, cursor)
 		if err != nil {
+			logAccountDeletionFailure(stage, userID, err)
 			return notesv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_ERROR
 		}
 		for _, share := range shares {
@@ -104,24 +120,47 @@ func (s *NoteService) UnshareAccountGroup(ctx context.Context, userID, groupID s
 		work = append(work, item)
 	}
 	if err := s.accountDeletion.SaveGroupWork(ctx, userID, groupID, work, groupDeleted); err != nil {
+		logAccountDeletionFailure(stage, userID, err)
 		return notesv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_ERROR
 	}
 	pending, err = s.accountDeletion.PendingGroupWork(ctx, userID, groupID)
 	if err != nil {
+		logAccountDeletionFailure(stage, userID, err)
 		return notesv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_ERROR
 	}
 	for _, item := range pending {
 		if err := ctx.Err(); err != nil {
+			logAccountDeletionFailure(stage, userID, err)
 			return notesv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_PENDING
 		}
 		if err := s.cleanNoteShares(ctx, userID, item.NoteID, groupID, item.GroupDeleted); err != nil {
+			logAccountDeletionFailure(stage+" note "+item.NoteID, userID, err)
 			return notesv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_PENDING
 		}
 		if err := s.accountDeletion.CompleteGroupWork(ctx, userID, groupID, item.NoteID); err != nil {
+			logAccountDeletionFailure(stage+" note "+item.NoteID, userID, err)
 			return notesv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_PENDING
 		}
 	}
 	return notesv1.AccountCleanupStatus_ACCOUNT_CLEANUP_STATUS_COMPLETE
+}
+
+func (s *NoteService) accountDeletionPrecondition(userID string) error {
+	if !utils.ValidateUUID(userID) {
+		return fmt.Errorf("user_id inválido")
+	}
+	if s.accountDeletion == nil {
+		return fmt.Errorf("repositorio de borrado de cuenta no configurado")
+	}
+	return nil
+}
+
+// logAccountDeletionFailure deja la causa en el log de Notes. El contrato gRPC
+// solo devuelve un estado (Identity ve code=Internal), así que sin este log un
+// fallo persistente (p. ej. la tabla del tombstone sin migrar) no se puede
+// diagnosticar desde Notes. Solo registra el UUID, nunca datos personales.
+func logAccountDeletionFailure(stage, userID string, err error) {
+	log.Printf("notes: borrado de cuenta [%s] user_id=%s: %v", stage, userID, err)
 }
 
 func (s *NoteService) listOwnedNotes(ctx context.Context, userID string) ([]*model.Note, error) {

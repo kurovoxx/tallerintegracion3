@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'support/service_uri.dart';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -91,7 +92,7 @@ void main() {
       final service = SocialService(
         client: MockClient((request) async {
           if (request.method == 'GET' &&
-              request.url.path.endsWith('/workspace')) {
+              request.url.servicePath.endsWith('/workspace')) {
             loads++;
             return http.Response(
               jsonEncode({
@@ -115,11 +116,11 @@ void main() {
             );
           }
           if (request.method == 'POST' &&
-              request.url.path.endsWith('/meetings')) {
+              request.url.servicePath.endsWith('/meetings')) {
             payload = jsonDecode(request.body) as Map<String, dynamic>;
             return http.Response('{"meeting_id":"created"}', 201);
           }
-          if (request.url.path.endsWith('/members')) {
+          if (request.url.servicePath.endsWith('/members')) {
             return http.Response(
               jsonEncode([
                 {

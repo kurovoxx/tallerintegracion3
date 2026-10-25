@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -101,7 +102,7 @@ void main() {
     final patched = <Map<String, dynamic>>[];
     final service = SocialService(
       client: MockClient((request) async {
-        final path = request.url.path;
+        final path = request.url.servicePath;
         if (request.method == 'GET' && path.endsWith('/workspace')) {
           return _ok(
             _workspace(gid: _groupA, todos: [_todo('todo')], sprintTasks: []),
@@ -150,7 +151,7 @@ void main() {
     addTearDown(SessionManager.clear);
     final service = SocialService(
       client: MockClient((request) async {
-        final path = request.url.path;
+        final path = request.url.servicePath;
         if (request.method == 'GET' && path.contains(_groupA)) {
           return _ok(
             _workspace(gid: _groupA, todos: [_todo('todo')], sprintTasks: []),
@@ -212,7 +213,7 @@ void main() {
     addTearDown(SessionManager.clear);
     final service = SocialService(
       client: MockClient((request) async {
-        final path = request.url.path;
+        final path = request.url.servicePath;
         if (request.method == 'GET' && path.endsWith('/workspace')) {
           return _ok(
             _workspace(
@@ -272,7 +273,7 @@ void main() {
     addTearDown(SessionManager.clear);
     final service = SocialService(
       client: MockClient((request) async {
-        final path = request.url.path;
+        final path = request.url.servicePath;
         if (request.method == 'GET' && path.contains(_groupA)) {
           return _ok(
             _workspace(

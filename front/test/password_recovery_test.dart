@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -15,7 +16,7 @@ void main() {
       final service = AuthService(
         client: MockClient((request) async {
           requests.add(request);
-          return request.url.path.endsWith('forgot-password')
+          return request.url.servicePath.endsWith('forgot-password')
               ? http.Response('{"message":"generic"}', 200)
               : http.Response(
                   '{"error":{"code":"invalid_reset_code","message":"Código inválido"}}',
@@ -66,7 +67,7 @@ void main() {
       final paths = <String>[];
       final service = AuthService(
         client: MockClient((request) async {
-          paths.add(request.url.path);
+          paths.add(request.url.servicePath);
           return http.Response('{"message":"ok"}', 200);
         }),
       );

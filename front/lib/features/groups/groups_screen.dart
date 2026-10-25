@@ -566,7 +566,8 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
 
   Future<void> _leave() async {
     if (_leaving) return;
-    var cleanupSharedNotes = true; // Marcada por defecto; el usuario puede quitarla.
+    var cleanupSharedNotes =
+        true; // Marcada por defecto; el usuario puede quitarla.
     final cleanup = await showNeobrutalistDialog<bool>(
       context: context,
       dialog: NeobrutalistDialog(
@@ -588,8 +589,7 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
               const SizedBox(height: AppDimens.spaceMd),
               CleanupSharedNotesCheckbox(
                 value: cleanupSharedNotes,
-                onChanged: (v) =>
-                    setDialogState(() => cleanupSharedNotes = v),
+                onChanged: (v) => setDialogState(() => cleanupSharedNotes = v),
               ),
             ],
           ),
@@ -627,6 +627,9 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
   Widget build(BuildContext context) {
     final group = widget.group;
     final members = group.memberCount;
+    final isAdmin = _detail?.role == 'admin';
+    final description = group.description?.trim() ?? '';
+
     return NeobrutalistDialog(
       title: group.name,
       cancelLabel: 'Cerrar',
@@ -634,29 +637,122 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (group.description != null &&
-              group.description!.trim().isNotEmpty)
-            Text(group.description!.trim()),
-          const SizedBox(height: 8),
-          Text('Tu rol: ${group.role}'),
-          Text('$members ${members == 1 ? 'integrante' : 'integrantes'}'),
-          const SizedBox(height: 12),
-          if (_loading)
-            const Center(child: CircularProgressIndicator(strokeWidth: 2))
-          else if (_error != null)
-            Text(_error!)
-          else if (_detail?.role == 'admin') ...[
+          // Metadatos: rol + integrantes.
+          Wrap(
+            spacing: AppDimens.spaceSm,
+            runSpacing: AppDimens.spaceXs,
+            children: [
+              NeobrutalistBadge(
+                label: 'Rol: ${group.role}',
+                tone: NeobrutalistTone.info,
+                icon: Icons.badge_rounded,
+              ),
+              NeobrutalistBadge(
+                label:
+                    '$members ${members == 1 ? 'integrante' : 'integrantes'}',
+                tone: NeobrutalistTone.neutral,
+                icon: Icons.group_rounded,
+              ),
+            ],
+          ),
+          const SizedBox(height: AppDimens.spaceMd),
+
+          // Descripción.
+          if (description.isEmpty)
             const Text(
-              'Gestiona el código de invitación desde el botón Invitar.',
-              style: TextStyle(fontSize: 12),
+              'Este grupo no tiene descripción.',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: AppColors.mutedStrong,
+              ),
+            )
+          else
+            Text(
+              description,
+              style: const TextStyle(fontSize: 13, height: 1.35),
             ),
-          ],
-          const SizedBox(height: 12),
-          const Divider(),
-          TextButton.icon(
-            onPressed: _leaving ? null : _leave,
-            icon: const Icon(Icons.exit_to_app_rounded, size: 16),
-            label: Text(_leaving ? 'Abandonando...' : 'Abandonar grupo'),
+
+          const SizedBox(height: AppDimens.spaceMd),
+
+          // Estado del detalle / pista para administradores.
+          if (_loading)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.symmetric(vertical: AppDimens.spaceSm),
+                child: SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2.5),
+                ),
+              ),
+            )
+          else if (_error != null)
+            Text(
+              _error!,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: AppColors.error,
+              ),
+            )
+          else if (isAdmin)
+            Container(
+              padding: const EdgeInsets.all(AppDimens.spaceMd),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceLow,
+                border: Border.all(
+                  color: AppColors.border,
+                  width: AppDimens.borderWidth,
+                ),
+                borderRadius: BorderRadius.circular(AppDimens.radius),
+              ),
+              child: const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.info_outline_rounded, size: 18),
+                  SizedBox(width: AppDimens.spaceSm),
+                  Expanded(
+                    child: Text(
+                      'Como administrador, gestiona el código de invitación desde el botón Invitar.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+          const SizedBox(height: AppDimens.spaceLg),
+          const Divider(
+            color: AppColors.border,
+            thickness: AppDimens.borderWidth,
+            height: 1,
+          ),
+          const SizedBox(height: AppDimens.spaceSm),
+
+          // Zona sensible: abandonar grupo.
+          const Text(
+            'ZONA DE RIESGO',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0.6,
+              color: AppColors.mutedStrong,
+            ),
+          ),
+          const SizedBox(height: AppDimens.spaceSm),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: NeobrutalistButton(
+              label: _leaving ? 'Abandonando…' : 'Abandonar grupo',
+              icon: Icons.exit_to_app_rounded,
+              variant: NeobrutalistButtonVariant.danger,
+              onPressed: _leaving ? null : _leave,
+            ),
           ),
         ],
       ),
@@ -763,19 +859,51 @@ class _InviteDialogState extends State<_InviteDialog> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          label,
-          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
+          label.toUpperCase(),
+          style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 0.4,
+            color: AppColors.mutedStrong,
+          ),
         ),
-        const SizedBox(height: 2),
-        Row(
-          children: [
-            Expanded(child: SelectableText(value)),
-            IconButton(
-              icon: const Icon(Icons.copy_rounded, size: 18),
-              tooltip: 'Copiar $label',
-              onPressed: () => _copy(label, value),
+        const SizedBox(height: AppDimens.spaceXs),
+        Container(
+          padding: const EdgeInsets.fromLTRB(
+            AppDimens.spaceMd,
+            AppDimens.spaceSm,
+            AppDimens.spaceXs,
+            AppDimens.spaceSm,
+          ),
+          decoration: BoxDecoration(
+            color: AppColors.surfaceLow,
+            border: Border.all(
+              color: AppColors.border,
+              width: AppDimens.borderWidth,
             ),
-          ],
+            borderRadius: BorderRadius.circular(AppDimens.radius),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: SelectableText(
+                  value,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.text,
+                  ),
+                ),
+              ),
+              const SizedBox(width: AppDimens.spaceXs),
+              NeobrutalistIconButton(
+                icon: Icons.copy_rounded,
+                tooltip: 'Copiar $label',
+                size: 36,
+                onPressed: () => _copy(label, value),
+              ),
+            ],
+          ),
         ),
       ],
     );
@@ -783,55 +911,83 @@ class _InviteDialogState extends State<_InviteDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final hasToken = _inviteToken != null && _inviteToken!.trim().isNotEmpty;
+
     return NeobrutalistDialog(
       title: 'Invitar a ${widget.group.name}',
       cancelLabel: 'Cerrar',
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text(
-            'Comparte estos datos con la persona que quieras invitar.',
-            style: TextStyle(fontSize: 12),
-          ),
-          const SizedBox(height: 12),
-          _copyableField(
-            label: 'Identificador del grupo',
-            value: widget.group.groupId,
-          ),
-          const SizedBox(height: 8),
-          if (_loading)
-            const Center(child: CircularProgressIndicator(strokeWidth: 2))
-          else if (_error != null)
-            Text(_error!)
-          else ...[
-            if (_inviteToken != null && _inviteToken!.isNotEmpty)
-              _copyableField(
-                label: 'Código de invitación',
-                value: _inviteToken!,
-              ),
-            const SizedBox(height: 8),
-            TextButton(
-              onPressed: _regenerating ? null : _regenerate,
-              child: Text(
-                _regenerating ? 'Actualizando...' : 'Generar nuevo código',
-              ),
-            ),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
             const Text(
-              'El código anterior dejará de funcionar.',
-              style: TextStyle(fontSize: 11),
+              'Comparte estos datos con la persona que quieras invitar.',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: AppColors.mutedStrong,
+              ),
             ),
-            const SizedBox(height: 4),
-            OutlinedButton.icon(
-              onPressed:
-                  (_inviteToken == null || _inviteToken!.trim().isEmpty)
-                  ? null
-                  : _copyAll,
-              icon: const Icon(Icons.copy_all_rounded, size: 16),
-              label: const Text('Copiar datos de invitación'),
+            const SizedBox(height: AppDimens.spaceMd),
+            _copyableField(
+              label: 'Identificador del grupo',
+              value: widget.group.groupId,
             ),
+            const SizedBox(height: AppDimens.spaceMd),
+            if (_loading)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: AppDimens.spaceSm),
+                  child: SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(strokeWidth: 2.5),
+                  ),
+                ),
+              )
+            else if (_error != null)
+              Text(
+                _error!,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.error,
+                ),
+              )
+            else ...[
+              if (hasToken)
+                _copyableField(
+                  label: 'Código de invitación',
+                  value: _inviteToken!,
+                ),
+              const SizedBox(height: AppDimens.spaceMd),
+              NeobrutalistButton(
+                label: _regenerating ? 'Actualizando…' : 'Generar nuevo código',
+                icon: Icons.autorenew_rounded,
+                variant: NeobrutalistButtonVariant.secondary,
+                onPressed: _regenerating ? null : _regenerate,
+              ),
+              const SizedBox(height: AppDimens.spaceXs),
+              const Text(
+                'El código anterior dejará de funcionar.',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.mutedStrong,
+                ),
+              ),
+              const SizedBox(height: AppDimens.spaceMd),
+              NeobrutalistButton(
+                label: 'Copiar datos de invitación',
+                icon: Icons.copy_all_rounded,
+                variant: NeobrutalistButtonVariant.accent,
+                expand: true,
+                onPressed: hasToken ? _copyAll : null,
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }

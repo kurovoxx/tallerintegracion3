@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -60,7 +61,7 @@ void main() {
         headers: {'content-type': 'application/json; charset=utf-8'},
       );
       notesHttpClientOverride = MockClient((r) async {
-        calls.add('${r.method} ${r.url.path}');
+        calls.add('${r.method} ${r.url.servicePath}');
         if (r.method == 'PATCH') {
           if (failure == 'patch') {
             return json({
@@ -74,7 +75,7 @@ void main() {
           return json({'version': version, 'title': 'Prueba borrado'});
         }
         if (r.method == 'DELETE') {
-          if (r.url.path == '/notes/$note') {
+          if (r.url.servicePath == '/notes/$note') {
             if (failure == 'note') return json({}, 500);
             exists = false;
             atts.clear();
@@ -86,7 +87,7 @@ void main() {
           atts.removeWhere((a) => a['id'] == id);
           return http.Response('', 204);
         }
-        if (r.url.path == '/notes/me') {
+        if (r.url.servicePath == '/notes/me') {
           return json({
             'notes': exists
                 ? [
@@ -95,7 +96,7 @@ void main() {
                 : [],
           });
         }
-        if (r.url.path == '/notes/$note') {
+        if (r.url.servicePath == '/notes/$note') {
           return json({
             'id': note,
             'title': 'Prueba borrado',
@@ -105,7 +106,7 @@ void main() {
             'attachments': atts,
           });
         }
-        if (r.url.path.endsWith('/content')) {
+        if (r.url.servicePath.endsWith('/content')) {
           return http.Response.bytes(
             base64Decode(
               'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
@@ -124,11 +125,7 @@ void main() {
       t.view.devicePixelRatio = 1;
       addTearDown(t.view.resetPhysicalSize);
       addTearDown(t.view.resetDevicePixelRatio);
-      await t.pumpWidget(
-        MaterialApp(
-          home: AllNotesScreen(database: db),
-        ),
-      );
+      await t.pumpWidget(MaterialApp(home: AllNotesScreen(database: db)));
       await waitFor(t, () => find.text('Prueba borrado').evaluate().isNotEmpty);
       await t.tap(find.text('Prueba borrado'));
       await waitFor(

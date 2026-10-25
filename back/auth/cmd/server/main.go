@@ -40,6 +40,9 @@ func main() {
 		log.Fatalf("query identity.users: %v", err)
 	}
 	log.Printf("DB check: identity.users count=%d", cnt)
+	if err := repository.VerifyAccountDeletionSchema(ctx, pool); err != nil {
+		log.Fatalf("%v", err)
+	}
 
 	// Wire Handler → Service → Repository (masterprompt 2) + JWT standalone integrado (3.1)
 	userRepo := repository.NewUserRepository(pool)
