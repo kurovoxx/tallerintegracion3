@@ -72,7 +72,7 @@ class NotesApi {
 
   void dispose() => _client.close();
 
-  Map<String, String> _headers() {
+  Map<String, String> _headers({bool json = false}) {
     final token = SessionManager.token;
     if (token == null || token.isEmpty) {
       throw NotesApiException(
@@ -81,7 +81,7 @@ class NotesApi {
       );
     }
     return <String, String>{
-      'Content-Type': 'application/json',
+      if (json) 'Content-Type': 'application/json',
       'Accept': 'application/json',
       'Authorization': 'Bearer $token',
     };
@@ -146,5 +146,69 @@ class NotesApi {
     final out = all.where((n) => n.subjectId == want).toList()
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     return out;
+  }
+
+  // POST /notes {title, content, visibility} -> 201 {note_id}.
+  Future<String> createNote({
+    required String title,
+    required String content,
+    required String visibility,
+  }) async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .post(
+            Uri.parse('$_baseUrl/notes'),
+            headers: _headers(json: true),
+            body: jsonEncode(<String, dynamic>{
+              'title': title.trim(),
+              'content': content.trim(),
+              'visibility': visibility.trim(),
+            }),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 201) throw _toError(res, 'No se pudo crear la nota.');
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    final id = (body['note_id'] as String?) ?? (body['id'] as String?) ?? '';
+    if (id.isEmpty) {
+      throw NotesApiException('El backend no devolvió note_id.', statusCode: res.statusCode, code: 'missing_note_id');
+    }
+    return id;
+  }
+
+  // POST /notes/:note_id/share {group_id, access_mode} -> 201 {shared_note_id}.
+  Future<String> shareNote({
+    required String noteId,
+    required String groupId,
+    required String accessMode,
+  }) async {
+    final nid = noteId.trim();
+    final gid = groupId.trim();
+    if (nid.isEmpty || gid.isEmpty) {
+      throw NotesApiException('noteId y groupId requeridos.', code: 'invalid_args');
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .post(
+            Uri.parse('$_baseUrl/notes/$nid/share'),
+            headers: _headers(json: true),
+            body: jsonEncode(<String, dynamic>{
+              'group_id': gid,
+              'access_mode': accessMode.trim(),
+            }),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 201) throw _toError(res, 'No se pudo compartir la nota.');
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    final id = (body['shared_note_id'] as String?) ?? (body['id'] as String?) ?? '';
+    if (id.isEmpty) {
+      throw NotesApiException(
+        'El backend no devolvió shared_note_id.',
+        statusCode: res.statusCode,
+        code: 'missing_shared_note_id',
+      );
+    }
+    return id;
   }
 }

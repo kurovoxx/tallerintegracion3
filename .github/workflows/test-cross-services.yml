@@ -2,16 +2,16 @@ name: test-cross-services
 
 on:
   push:
-    paths: ["back/auth/**", "back/notes/**", "back/social/**", "docker/postgres/init.sql", ".github/workflows/test-cross-services.yml"]
+    paths: ["back/auth/**", "back/notes/**", "back/social/**", "back/infacadem/**", "docker/postgres/init.sql", ".github/workflows/test-cross-services.yml"]
   pull_request:
-    paths: ["back/auth/**", "back/notes/**", "back/social/**", "docker/postgres/init.sql", ".github/workflows/test-cross-services.yml"]
+    paths: ["back/auth/**", "back/notes/**", "back/social/**", "back/infacadem/**", "docker/postgres/init.sql", ".github/workflows/test-cross-services.yml"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  membership-lifecycle:
+  four-service-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -41,7 +41,8 @@ jobs:
             back/auth/go.sum
             back/notes/go.sum
             back/social/go.sum
+            back/infacadem/go.sum
       - name: Formato del E2E
         run: test -z "$(gofmt -l test/*.go)"
-      - name: E2E Identity, Social y Notes (procesos y PostgreSQL reales)
+      - name: E2E Auth, Social, Academic y Notes (procesos y PostgreSQL reales)
         run: go test -tags=crossservice ./test -count=1 -timeout=12m -v

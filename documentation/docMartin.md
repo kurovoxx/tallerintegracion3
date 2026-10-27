@@ -328,6 +328,61 @@ Sin Services/containers gRPC para auth/notes hasta que existan sus servidores
 - **Nunca se corre `buf` en `back/proto` raíz**: siempre dentro de cada módulo (`back/proto/<modulo>`).
 - El workflow se dispara en `push` a `Development` y en `PR` contra `Development`, solo cuando cambian archivos bajo `back/proto/`, el `Makefile` o el propio workflow.
 
+## 3_5_10 — E2E cruzado todos los servicios (auth → social → academic → notes)
+
+### Objetivo
+
+Validar un viaje end-to-end real que recorra los **4 microservicios backend** en un solo flujo, usando binarios reales (no fakes ni mocks de servicios entre sí). Solo Drive, Calendar y Stream usan modo mock. El mismo usuario de Identity se autentica en auth, su JWT se reusa en academic para crear currículo y materia, social valida membresía al compartir una nota en notes, y notes aísla notas entre grupos.
+
+### Alcance
+
+- **auth**: register + login, emite JWT real.
+- **social**: crear grupo, unirse a grupo, consultar miembros (enriquecido con nombre/correo de Identity).
+- **academic (infacadem)**: crear currículo y materia con el JWT de auth, verificar que la materia se recupera.
+- **notes**: crear apunte, compartir al grupo (restricted), miembro ve la nota, extraño recibe 403.
+
+### Archivos
+
+| Archivo | Contenido |
+|---------|-----------|
+| `back/social/test/cross_service_e2e_test.go` | Harness `startStackWithEnv` que builda y levanta binarios reales de auth, notes, social e infacadem (puertos dinámicos, BD hija temporal desde `docker/postgres/init.sql`), más los tests `TestCrossService_FourServiceJourney` y `TestCrossService_AcademicHealth` |
+| `documentation/docMartin.md` | Esta sección (3_5_10) |
+
+### Cómo correr
+
+Desde la raíz del repo, con una Postgres accesible y una BD dedicada terminada en `_test`:
+
+```bash
+export CROSS_SERVICE_TEST_DATABASE_URL='postgres://usuario:pass@host:puerto/bd_test?sslmode=disable'
+cd back/social
+go test -tags crossservice -run 'TestCrossService_' ./test/ -count=1 -v
+```
+
+**Modo local (procesos en `127.0.0.1`):** el test builda y levanta binarios reales de auth, notes, social e infacadem. Es el modo por defecto cuando `CROSS_SERVICE_MODE` no está seteado.
+
+**Modo remoto contra Kubernetes (`CROSS_SERVICE_MODE=remote`):** el test NO builda ni ejecuta procesos locales. Se conecta a servicios ya desplegados en el cluster vía DNS interno. Variables requeridas:
+- `AUTH_BASE_URL`, `NOTES_BASE_URL`, `SOCIAL_BASE_URL`, `ACADEMIC_BASE_URL` (HTTP)
+- `SOCIAL_GRPC_ADDR` (gRPC de Social)
+- `CROSS_SERVICE_TEST_DATABASE_URL` (BD dedicada para crear la BD hija temporal)
+- `JWT_SECRET`, `INTERNAL_API_KEY`
+
+Véase `k8s/cross-service-e2e-job.yaml` para un Job de Kubernetes listo para ejecutar este modo contra Pillán.
+
+La suite crea una BD hija (`social_cross_e2e_<uuid>`), aplica `docker/postgres/init.sql` (schemas `identity`, `academic`, `notes`, `social`, `ai`) y la elimina al finalizar.
+
+### Verificación
+
+- `go vet -tags crossservice ./back/social/test/` → limpio.
+- `go test -tags crossservice -run TestCrossService_ ./test/` → todos los tests PASS (incluye el viaje de 4 servicios y el health de academic).
+- Los tests con build tag `crossservice` se saltan por defecto al correr `go test ./...` sin el tag.
+- CI: `.github/workflows/test-cross-services.yml` (job `four-service-e2e`) corre en push/PR que toquen `back/auth/**`, `back/notes/**`, `back/social/**`, `back/infacadem/**` o `docker/postgres/init.sql`, con Postgres service container y `CROSS_SERVICE_TEST_DATABASE_URL`.
+
+### No entra
+
+- Frontend Flutter (se valida por separado con `flutter test`).
+- Kubernetes: este E2E levanta procesos locales en `127.0.0.1`, no apunta a DNS de Services de k8s (ver nota de alcance al inicio de la tarea).
+- Servidores gRPC de auth/notes (no existen aún); solo social expone gRPC `:9083` y se usa para `GetMemberEmails` / `AccountDeletionCleanup` en otros tests del suite.
+
 ## 3_5_14 — Notificación de reunión en app
 
 ### Alcance (jefe: front hace la cajita + ventana "próximas reuniones")
