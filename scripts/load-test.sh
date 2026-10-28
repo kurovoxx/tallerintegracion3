@@ -25,6 +25,19 @@ MON_PID=""
 CLEANUP_FAILED=0
 METRICS_ABORT=0
 
+REPORT_PATH="${LOAD_TEST_REPORT:-}"
+REPORT_DIR="${LOAD_TEST_REPORT_DIR:-$SCRIPT_DIR/../reports}"
+REPORT_SCRIPT="$SCRIPT_DIR/loadtest-report.py"
+REPORT_TMP_DIR=""
+REPORT_START_UTC=""
+REPORT_START_EPOCH=0
+HPA_SNAPSHOT_FILE=""
+POD_SNAPSHOT_FILE=""
+REPORT_META_FILE=""
+REPORT_MONITOR_FILE=""
+LAST_CLUSTER_SAMPLE=0
+CLUSTER_SAMPLE_INTERVAL="${LOAD_TEST_SAMPLE_INTERVAL:-4}"
+
 usage() {
   cat <<'EOF'
 Uso: load-test.sh [--dry-run] [--namespace <ns>] [--parallel]
@@ -33,6 +46,9 @@ Genera 1 Job por caso elegido. Todos los prompts muestran un default y aceptan
 Enter; un Enter tras otro ejecuta la demo completa (all secuencial, 40 workers,
 60s). Con `all`, los casos se ejecutan de a uno por defecto para no exceder la
 cuota; `--parallel` los lanza todos juntos (solo si la cuota lo permite).
+
+Al terminar genera un reporte markdown (default reports/load-test-<fecha>.md,
+override con LOAD_TEST_REPORT) con timeline de pods, HPA, tráfico y recursos.
 
 Opciones:
   --dry-run            Valida la configuración sin tocar el cluster (pruebas)
@@ -572,6 +588,7 @@ wait_for_jobs() {
     done
 
     sample_hpa
+    maybe_sample_cluster
 
     [ "$pending" -eq 0 ] && break
     if [ "$metrics_checked" -eq 0 ] && [ "$((SECONDS - watch_start))" -ge 30 ]; then
@@ -603,9 +620,11 @@ post_job_sample() {
   local until=$((SECONDS + 20))
   while [ "$SECONDS" -lt "$until" ]; do
     sample_hpa
+    maybe_sample_cluster
     sleep 2
   done
   sample_hpa
+  sample_cluster
 }
 
 collect_job_result() {
@@ -651,9 +670,161 @@ cleanup_jobs() {
   return 0
 }
 
+init_report() {
+  [ -x "$REPORT_SCRIPT" ] || die "no encuentro $REPORT_SCRIPT"
+  REPORT_START_UTC=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  REPORT_START_EPOCH=$(date +%s)
+  REPORT_TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/load-test-report.XXXXXX")
+  HPA_SNAPSHOT_FILE="$REPORT_TMP_DIR/hpa.tsv"
+  POD_SNAPSHOT_FILE="$REPORT_TMP_DIR/pods.tsv"
+  REPORT_META_FILE="$REPORT_TMP_DIR/meta.txt"
+  REPORT_MONITOR_FILE="$REPORT_TMP_DIR/monitor.txt"
+  : > "$HPA_SNAPSHOT_FILE"
+  : > "$POD_SNAPSHOT_FILE"
+  : > "$REPORT_MONITOR_FILE"
+  if [ -z "$REPORT_PATH" ]; then
+    mkdir -p "$REPORT_DIR"
+    REPORT_PATH="$REPORT_DIR/load-test-$(date -u +%Y%m%d-%H%M%S).md"
+  fi
+}
+
+sample_cluster() {
+  [ -n "$REPORT_TMP_DIR" ] || return 0
+  local now
+  now=$(date -u +"%H:%M:%S")
+
+  kubectl get hpa -n "$NS" -o json 2>/dev/null | python3 -c '
+import json, sys
+now = sys.argv[1]
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for item in data.get("items", []):
+    name = (item.get("metadata") or {}).get("name", "")
+    if name not in ("notes", "social", "infacadem"):
+        continue
+    status = item.get("status") or {}
+    util = "-"
+    for metric in status.get("currentMetrics") or []:
+        current = (metric.get("resource") or {}).get("current") or {}
+        if "averageUtilization" in current:
+            util = str(current["averageUtilization"])
+        elif "averageValue" in current:
+            util = str(current["averageValue"])
+    print("\t".join([now, name, str(status.get("currentReplicas", 0)),
+                     str(status.get("desiredReplicas", 0)), util]))
+' "$now" >> "$HPA_SNAPSHOT_FILE" 2>/dev/null || true
+
+  kubectl get pods -n "$NS" -o json 2>/dev/null | python3 -c '
+import json, sys
+now = sys.argv[1]
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for item in data.get("items", []):
+    meta = item.get("metadata") or {}
+    app = (meta.get("labels") or {}).get("app", "")
+    if app not in ("notes", "social", "infacadem", "loadgen"):
+        continue
+    status = item.get("status") or {}
+    ready = "-"
+    ready_ts = "-"
+    for cond in status.get("conditions") or []:
+        if cond.get("type") == "Ready":
+            ready = cond.get("status", "-")
+            ready_ts = cond.get("lastTransitionTime", "-")
+    restarts = 0
+    for container in status.get("containerStatuses") or []:
+        restarts += int(container.get("restartCount") or 0)
+    print("\t".join([now, app, meta.get("name", ""),
+                     meta.get("creationTimestamp", "-"), ready, ready_ts,
+                     status.get("phase", "-"), (item.get("spec") or {}).get("nodeName", "-"),
+                     str(restarts)]))
+' "$now" >> "$POD_SNAPSHOT_FILE" 2>/dev/null || true
+}
+
+maybe_sample_cluster() {
+  if [ $((SECONDS - LAST_CLUSTER_SAMPLE)) -ge "$CLUSTER_SAMPLE_INTERVAL" ]; then
+    LAST_CLUSTER_SAMPLE=$SECONDS
+    sample_cluster
+  fi
+}
+
+write_report() {
+  [ -n "$REPORT_PATH" ] || return 0
+  local end_utc elapsed case_name svc hpa_spec min max target cur desired cpu peak top_status
+  end_utc=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  elapsed=$(( $(date +%s) - REPORT_START_EPOCH ))
+  [ "$elapsed" -gt 0 ] || elapsed=1
+
+  if kubectl top pods -n "$NS" >/dev/null 2>&1; then
+    top_status="disponible"
+  else
+    top_status="no disponible por RBAC (metrics.k8s.io); el CPU se toma de las métricas del HPA"
+  fi
+
+  if [ "$RUN_MONITOR" = "s" ]; then
+    timeout 90 "$MONITOR_SCRIPT" --namespace "$NS" --since-time "$REPORT_START_UTC" \
+      --interval "$elapsed" --once >"$REPORT_MONITOR_FILE" 2>&1 || true
+  fi
+
+  {
+    printf 'start=%s\n' "$REPORT_START_UTC"
+    printf 'end=%s\n' "$end_utc"
+    printf 'elapsed=%s\n' "$elapsed"
+    printf 'namespace=%s\n' "$NS"
+    printf 'context=%s\n' "$(kubectl config current-context 2>/dev/null || echo '-')"
+    printf 'mode=%s\n' "$([ "$PARALLEL" -eq 1 ] && echo paralelo || echo secuencial)"
+    printf 'top_status=%s\n' "$top_status"
+    printf 'sample_interval=%s\n' "$CLUSTER_SAMPLE_INTERVAL"
+    printf 'cleanup=%s\n' "$([ "$CLEANUP_FAILED" -eq 1 ] && echo fallido || echo ok)"
+    printf 'metrics_abort=%s\n' "$METRICS_ABORT"
+    for case_name in "${SELECTED[@]}"; do
+      printf 'case=%s|%s|%s|%s|%s|%s|%s\n' "$case_name" "${WORKERS[$case_name]}" \
+        "${DURATION_SEC[$case_name]}" "${REQ_CPU[$case_name]}" "${REQ_MEM[$case_name]}" \
+        "${LIM_CPU[$case_name]}" "${LIM_MEM[$case_name]}"
+      printf 'result=%s|%s|%s|%s\n' "$case_name" "${R_OK[$case_name]:--}" \
+        "${R_ERR[$case_name]:--}" "${R_UNAUTH[$case_name]:--}"
+    done
+    for svc in notes social infacadem; do
+      hpa_spec=$(kubectl get hpa "$svc" -n "$NS" \
+        -o jsonpath='{.spec.minReplicas}|{.spec.maxReplicas}|{.spec.metrics[0].resource.target.averageUtilization}' 2>/dev/null || true)
+      IFS='|' read -r min max target <<<"$hpa_spec"
+      cur=$(awk -F'\t' -v s="$svc" '$2 == s { c = $3; d = $4; u = $5 } END { printf "%s|%s|%s", c, d, u }' "$HPA_SNAPSHOT_FILE")
+      IFS='|' read -r cur desired cpu <<<"$cur"
+      peak=$(awk -F'\t' -v s="$svc" '
+        BEGIN { m = -1 }
+        $2 == s {
+          v = ($3 ~ /^[0-9]+$/) ? $3 + 0 : -1
+          w = ($4 ~ /^[0-9]+$/) ? $4 + 0 : -1
+          if (w > v) v = w
+          if (v > m) m = v
+        }
+        END { if (m < 0) printf "-"; else printf "%d", m }
+      ' "$HPA_SNAPSHOT_FILE")
+      printf 'hpa=%s|%s|%s|%s|%s|%s|%s|%s\n' "$svc" "${min:--}" "${max:--}" "${target:--}" \
+        "$peak" "${cur:--}" "${desired:--}" "${cpu:--}"
+      printf 'service=%s|%sm|%sMi|%sm|%sMi\n' "$svc" "${SVC_REQ_CPU[$svc]:--}" \
+        "${SVC_REQ_MEM[$svc]:--}" "${SVC_LIM_CPU[$svc]:--}" "${SVC_LIM_MEM[$svc]:--}"
+    done
+  } > "$REPORT_META_FILE"
+
+  if python3 "$REPORT_SCRIPT" --meta "$REPORT_META_FILE" --hpa "$HPA_SNAPSHOT_FILE" \
+      --pods "$POD_SNAPSHOT_FILE" --monitor "$REPORT_MONITOR_FILE" --output "$REPORT_PATH"; then
+    echo "Reporte: $REPORT_PATH"
+  else
+    echo "aviso: no pude generar el reporte markdown ($REPORT_PATH)" >&2
+  fi
+}
+
 on_exit() {
   stop_monitor
   cleanup_jobs || true
+  if [ -n "$REPORT_TMP_DIR" ] && [ -d "$REPORT_TMP_DIR" ]; then
+    rm -rf "$REPORT_TMP_DIR"
+  fi
 }
 trap on_exit EXIT
 trap 'exit 130' INT
@@ -749,6 +920,9 @@ command -v python3 >/dev/null 2>&1 || die "python3 es necesario para acuñar el 
 [ -x "$MINT_SCRIPT" ] || die "no encuentro $MINT_SCRIPT"
 [ -x "$MONITOR_SCRIPT" ] || die "no encuentro $MONITOR_SCRIPT"
 
+init_report
+sample_cluster
+
 echo
 verify_deployments || die "rollout de servicios incompleto; no se crean Jobs"
 echo
@@ -801,7 +975,9 @@ fi
 # ---------------------------------------------------------------------------
 # 4. Resumen antes de borrar los Jobs
 # ---------------------------------------------------------------------------
+sample_cluster
 stop_monitor
+write_report
 cleanup_jobs || true
 
 echo
