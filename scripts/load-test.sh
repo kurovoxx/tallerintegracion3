@@ -323,15 +323,29 @@ check_quota() {
 }
 
 verify_deployments() {
-  local svc
+  local svc attempt output
   echo "Verificando rollout de notes, social e infacadem..."
   for svc in notes social infacadem; do
-    if ! kubectl rollout status "deployment/$svc" -n "$NS" --timeout=30s >/dev/null 2>&1; then
-      echo "error: deployment/$svc no está listo (rollout fallido o pods no disponibles)." >&2
-      echo "       revisa k8s/manifests.yaml, el LimitRange (mín. 64Mi) y los eventos del namespace;" >&2
-      echo "       no se crean Jobs hasta que los 3 servicios estén sanos." >&2
-      return 1
-    fi
+    for attempt in 1 2; do
+      if output=$(kubectl rollout status "deployment/$svc" -n "$NS" --timeout=30s 2>&1); then
+        break
+      fi
+      if [ "$attempt" -eq 1 ]; then
+        echo "aviso: deployment/$svc aún no está listo; reintentando en 5s..." >&2
+        sleep 5
+      else
+        echo "error: deployment/$svc no está listo tras 2 intentos." >&2
+        printf '%s\n' "$output" | sed 's/^/       /' >&2
+        if printf '%s' "$output" | grep -qiE "unauthorized|forbidden|invalid character|exec plugin|credentials|token"; then
+          echo "       parece un problema de autenticación de kubectl/OIDC, no del rollout." >&2
+          echo "       reautentica kubectl y vuelve a ejecutar el script." >&2
+        else
+          echo "       revisa k8s/manifests.yaml, el LimitRange (mín. 64Mi) y los eventos del namespace;" >&2
+          echo "       no se crean Jobs hasta que los 3 servicios estén sanos." >&2
+        fi
+        return 1
+      fi
+    done
   done
   echo "  ✓ los 3 servicios están listos"
   return 0
