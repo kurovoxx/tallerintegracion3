@@ -8,3 +8,7 @@ CLAUDE.md
 
 # Base SQLite local del entorno E2E aislado
 .local-e2e/
+
+# Reportes generados por scripts/load-test.sh
+reports/
+__pycache__/
