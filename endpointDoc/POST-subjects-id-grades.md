@@ -12,6 +12,12 @@
 - `404`: `{"error":{"code":"not_found","message":"..."}}` (materia ajena/inexistente).
 - `409`: `{"error":{"code":"conflict","message":"..."}}` (segundo `is_final_exam` en la materia).
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart:398` (`createGrade`)
+  - Pantalla: `front/lib/features/academic/grade_calculator_screen.dart:310` (agregar evaluación)
+- **Otros Microservicios:** No se consume por otros microservicios.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/grades_handler.go` (`Create`) → `back/infacadem/internal/service/grade_service.go` (`Create`, valida rangos/enums/final único) → `back/infacadem/internal/repository/grade_repository.go` (`Create`, `INSERT..SELECT..WHERE EXISTS` atómico).
 

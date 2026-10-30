@@ -10,6 +10,11 @@
 - `401`: `{"error":{"code":"unauthorized|invalid_token|token_expired","message":"..."}}`.
 - `404`: `{"error":{"code":"not_found","message":"..."}}` (ajeno/inexistente).
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart` (`deleteRequirement`)
+- **Otros Microservicios:** No se consume por otros microservicios.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/requirements_handler.go` (`Delete`) → `back/infacadem/internal/service/requirement_service.go` (`Delete`) → `back/infacadem/internal/repository/requirement_repository.go` (`Delete`, `DELETE ... WHERE EXISTS` vía subjects→curricula).
 

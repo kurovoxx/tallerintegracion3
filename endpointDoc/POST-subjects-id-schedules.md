@@ -11,6 +11,12 @@
 - `401`: `{"error":{"code":"unauthorized|invalid_token|token_expired","message":"..."}}`.
 - `404`: `{"error":{"code":"not_found","message":"..."}}` (materia no existe o es ajena).
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart:293` (`createSchedule`) y `L328` (`createSchedulesFanOut`)
+  - Pantalla: `front/lib/features/academic/schedule_screen.dart:360` (crear horario)
+- **Otros Microservicios:** No se consume por otros microservicios.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/schedules_handler.go` (`Create`, exige `day_of_week` no nulo) → `back/infacadem/internal/service/schedule_service.go` (`Create`, parsea horas y valida rango) → `back/infacadem/internal/repository/schedule_repository.go` (`Create`, `INSERT..SELECT..WHERE EXISTS` atómico vía subjects→curricula).
 

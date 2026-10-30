@@ -10,6 +10,12 @@
 - `401`: `{"error":{"code":"unauthorized|invalid_token|token_expired","message":"..."}}`.
 - `404`: `{"error":{"code":"not_found","message":"..."}}` (ajena/inexistente).
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart`
+  - Pantalla: `front/lib/features/academic/courses_screen.dart:150` (vista completa de la materia)
+- **Otros Microservicios:** No se consume por otros microservicios.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/overview_handler.go` (`SubjectDetail`, DTOs de `present.go`) → `back/infacadem/internal/service/overview_service.go` (`DetailService.Get`: compone los 5 services existentes sin SQL nuevo, ~7 queries indexadas, mismo costo que las 5 llamadas individuales).
 

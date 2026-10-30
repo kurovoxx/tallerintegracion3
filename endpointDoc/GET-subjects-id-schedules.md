@@ -10,6 +10,12 @@
 - `401`: `{"error":{"code":"unauthorized|invalid_token|token_expired","message":"..."}}`.
 - `404`: `{"error":{"code":"not_found","message":"..."}}` (materia no existe o es ajena).
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart:280` (`listSchedules`)
+  - Pantalla: `front/lib/features/academic/schedule_screen.dart:210` (`_loadSchedules`)
+- **Otros Microservicios:** No se consume por otros microservicios.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/schedules_handler.go` (`ListBySubject`, mapea `time.Time` a `"15:04:05"`) → `back/infacadem/internal/service/schedule_service.go` (`List`) → `back/infacadem/internal/repository/schedule_repository.go` (`ListBySubject`, check `EXISTS` + `ORDER BY day_of_week, start_time, id`).
 

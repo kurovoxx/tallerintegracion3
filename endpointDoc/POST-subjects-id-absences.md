@@ -12,6 +12,12 @@
 - `404`: `{"error":{"code":"not_found","message":"..."}}` (materia ajena/inexistente).
 - `409`: `{"error":{"code":"conflict","message":"..."}}` (ya hay falta en esa materia+fecha).
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart:602` (`createAbsence`)
+  - Pantalla: `front/lib/features/academic/attendance_screen.dart:653` (`_createAbsence`)
+- **Otros Microservicios:** No se consume por otros microservicios.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/absences_handler.go` (`Create`) → `back/infacadem/internal/service/absence_service.go` (`Create`, valida fecha + `ExistsOnDate` → 409) → `back/infacadem/internal/repository/absence_repository.go` (`ExistsOnDate`, `Create` atómico con propiedad).
 

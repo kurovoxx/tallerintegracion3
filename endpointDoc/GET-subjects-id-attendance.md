@@ -11,6 +11,12 @@
   - `meets_minimum`: `percentage >= min/100`; `remaining`: `floor(total*(1-min/100)) - injustificadas` (negativo si se excedió, igual que el front).
 - `400/401/404`: `invalid_uuid` / auth / materia ajena.
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart:659` (`getAttendance`)
+  - Pantalla: `front/lib/features/academic/attendance_screen.dart:648` (`_loadData`)
+- **Otros Microservicios:** No se consume por otros microservicios.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/attendance_handler.go` (`Get`) → `back/infacadem/internal/service/attendance_service.go` (`Summary`: subject + `CountsBySubject`) → `repository` (`SubjectRepository.GetByID`, `AbsenceRepository.CountsBySubject` con `FILTER`).
 

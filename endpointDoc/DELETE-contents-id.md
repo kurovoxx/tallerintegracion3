@@ -8,6 +8,12 @@
 - `204`: sin body.
 - `400/401/404`: `invalid_uuid` / auth / ajeno-inexistente.
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart:734` (`deleteContent`)
+  - Pantalla: `front/lib/features/academic/courses_screen.dart:520` (eliminar unidad)
+- **Otros Microservicios:** No se consume por otros microservicios.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/contents_handler.go` (`Delete`) → `service` → `repository` (`Delete`, `DELETE ... WHERE EXISTS` propiedad).
 

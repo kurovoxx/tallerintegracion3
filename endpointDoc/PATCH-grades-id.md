@@ -12,6 +12,12 @@
 - `404`: `{"error":{"code":"not_found","message":"..."}}`.
 - `409`: `{"error":{"code":"conflict","message":"..."}}` (promover a final habiendo otro).
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart:454` (`patchGrade`) y `L749` (`renameGrade`)
+  - Pantalla: `front/lib/features/academic/grade_calculator_screen.dart:380`
+- **Otros Microservicios:** No se consume por otros microservicios.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/grades_handler.go` (`Update`, detecta `null` explícitos vía doble parseo) → `back/infacadem/internal/service/grade_service.go` (`Update`, lee actual para validar final único con `excludeID`) → `back/infacadem/internal/repository/grade_repository.go` (`Update`, `SET` dinámico + `Clear*`).
 

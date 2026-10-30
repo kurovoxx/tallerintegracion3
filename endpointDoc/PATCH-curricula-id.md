@@ -11,6 +11,12 @@
 - `401`: `{"error":{"code":"unauthorized|invalid_token|token_expired","message":"..."}}`.
 - `404`: `{"error":{"code":"not_found","message":"..."}}` (no existe o es ajena).
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart` (`patchCurriculum`)
+  - Pantalla: `front/lib/features/academic/curriculum_screen.dart:320` (renombrar malla)
+- **Otros Microservicios:** No se consume por otros microservicios.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/curricula_handler.go` (`Update`) → `back/infacadem/internal/service/curriculum_service.go` (`Update`) → `back/infacadem/internal/repository/curriculum_repository.go` (`UpdateName`, `UPDATE ... WHERE id=$1 AND user_id=$2 RETURNING ...`).
 

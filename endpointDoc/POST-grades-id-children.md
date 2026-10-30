@@ -9,6 +9,12 @@
 - `201`: `{"id":"<uuid>"}`.
 - `400/401/404/409`: mismos códigos que `POST /subjects/{id}/grades` (404 si el padre es ajeno/inexistente).
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart:427` (`createGradeChild`)
+  - Pantalla: `front/lib/features/academic/grade_calculator_screen.dart:340` (agregar sub-nota)
+- **Otros Microservicios:** No se consume por otros microservicios.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/grades_handler.go` (`CreateChild`) → `back/infacadem/internal/service/grade_service.go` (`CreateChild`, lee el padre propio y hereda `subject_id`) → `back/infacadem/internal/repository/grade_repository.go` (`Create` con `ParentGradeID`).
 

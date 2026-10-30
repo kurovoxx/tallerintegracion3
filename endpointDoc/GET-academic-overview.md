@@ -8,6 +8,12 @@
 - `200`: `{"curricula":[{"id":"...","name":"Malla A","subjects_count":2,"approved_count":1,"in_progress_count":1}],"stats":{"curricula_count":1,"subjects_count":2}}` (solo propias, orden creación desc heredado del listado; `curricula: []` y stats en cero si vacía).
 - `401`: `{"error":{"code":"unauthorized|invalid_token|token_expired","message":"..."}}`.
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart` / `overview_service.dart`
+  - Pantalla: `front/lib/features/academic/profile_screen.dart:180` (resumen académico del alumno)
+- **Otros Microservicios:** No se consume por otros microservicios.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/overview_handler.go` (`Overview`) → `back/infacadem/internal/service/overview_service.go` (`OverviewService.Get`: `CurriculumService.List` + `SubjectRepository.CountsByCurricula`, 1 query de mallas + 1 `GROUP BY` con `FILTER`, sin N+1).
 

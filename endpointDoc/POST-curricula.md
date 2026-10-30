@@ -11,6 +11,12 @@
 - `401`: `{"error":{"code":"unauthorized|invalid_token|token_expired","message":"..."}}` (sin token o inválido).
 - `503`: `{"error":{"code":"db_unconfigured","message":"..."}}` (arranque sin pool; no 404 para no confundir con recurso ajeno).
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart:192` (`createCurriculum`)
+  - Pantalla: `front/lib/features/academic/curriculum_screen.dart:290` (diálogo crear malla)
+- **Otros Microservicios:** No se consume por otros microservicios.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/curricula_handler.go` (`Create`) → `back/infacadem/internal/service/curriculum_service.go` (`Create`, valida `name`) → `back/infacadem/internal/repository/curriculum_repository.go` (`Create`, `INSERT ... RETURNING`); auth vía `back/infacadem/internal/middleware/auth_middleware.go`.
 
