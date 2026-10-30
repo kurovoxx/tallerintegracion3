@@ -10,6 +10,12 @@
 - `400`: `{"error":{"code":"bad_request|invalid_name|invalid_uuid","message":"..."}}`.
 - `401` / `404` (materia ajena/inexistente): códigos habituales.
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart:693` (`createContent`)
+  - Pantalla: `front/lib/features/academic/courses_screen.dart:495` (crear unidad)
+- **Otros Microservicios:** No se consume por otros microservicios.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/contents_handler.go` (`Create`) → `service` (valida `title`) → `repository` (`Create`, `INSERT..SELECT..WHERE EXISTS` propiedad).
 

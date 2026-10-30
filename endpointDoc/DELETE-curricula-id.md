@@ -10,6 +10,12 @@
 - `401`: `{"error":{"code":"unauthorized|invalid_token|token_expired","message":"..."}}`.
 - `404`: `{"error":{"code":"not_found","message":"..."}}` (no existe o es ajena).
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart` (`deleteCurriculum`)
+  - Pantalla: `front/lib/features/academic/curriculum_screen.dart:340` (eliminar malla)
+- **Otros Microservicios:** No se consume por otros microservicios.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/curricula_handler.go` (`Delete`) → `back/infacadem/internal/service/curriculum_service.go` (`Delete`) → `back/infacadem/internal/repository/curriculum_repository.go` (`Delete`, `DELETE ... WHERE id=$1 AND user_id=$2`; cascada por FK).
 

@@ -7,6 +7,11 @@
 ## Res
 - `200`: `{"status":"UP","service":"academic-service"}`.
 
+## Invocación (Front / Otros Servicios)
+- **Kubernetes / Monitoreo:**
+  - Invocado por Kubernetes Liveness/Readiness probes en el clúster Pillán.
+- **Frontend Flutter:** No se llama en el frontend.
+
 ## Flujo
 - `back/infacadem/cmd/server/main.go` (closure inline, sin service/repository; scaffold 3_1_1 sin handlers todavía).
 

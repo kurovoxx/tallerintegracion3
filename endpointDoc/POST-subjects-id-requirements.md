@@ -10,6 +10,11 @@
 - `400`: `{"error":{"code":"invalid_requirement|invalid_comparator|invalid_action|invalid_uuid","message":"..."}}` (XOR violado, fuente de otra materia/ajena, enum inválido, threshold ausente).
 - `401` / `404` (materia ajena): códigos habituales.
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart` (`createRequirement`)
+- **Otros Microservicios:** No se consume por otros microservicios.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/requirements_handler.go` (`Create`) → `back/infacadem/internal/service/requirement_service.go` (`Create`, XOR + `GradeSubjectOf` misma materia) → `back/infacadem/internal/repository/requirement_repository.go` (`Create` + `GradeSubjectOf`).
 

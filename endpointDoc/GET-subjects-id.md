@@ -10,6 +10,13 @@
 - `401`: `{"error":{"code":"unauthorized|invalid_token|token_expired","message":"..."}}`.
 - `404`: `{"error":{"code":"not_found","message":"..."}}` (no existe o su malla es ajena).
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart`
+  - Pantalla: `front/lib/features/academic/courses_screen.dart:120`
+- **Otros Microservicios (gRPC):**
+  - Consumido por el microservicio **`notes`** vía `AcademicService.GetSubject` (`back/notes/internal/service/note_service.go:210`) para validar que una asignatura pertenezca al usuario antes de asociarla a un apunte.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/subjects_handler.go` (`Get`) → `back/infacadem/internal/service/subject_service.go` (`Get`) → `back/infacadem/internal/repository/subject_repository.go` (`GetByID`, `JOIN academic.curricula` para propiedad).
 

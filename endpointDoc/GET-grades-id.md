@@ -10,6 +10,11 @@
 - `401`: `{"error":{"code":"unauthorized|invalid_token|token_expired","message":"..."}}`.
 - `404`: `{"error":{"code":"not_found","message":"..."}}` (ajena/inexistente).
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart` (vía listGrades)
+- **Otros Microservicios:** No se consume por otros microservicios.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/grades_handler.go` (`Get`) → `back/infacadem/internal/service/grade_service.go` (`Get`) → `back/infacadem/internal/repository/grade_repository.go` (`GetByID`, `JOIN` subjects→curricula).
 

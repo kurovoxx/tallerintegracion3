@@ -11,6 +11,12 @@
 - `401`: `{"error":{"code":"unauthorized|invalid_token|token_expired","message":"..."}}`.
 - `404`: `{"error":{"code":"not_found","message":"..."}}` (no existe o su malla es ajena).
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart:264` (`patchSubject`)
+  - Pantalla: `front/lib/features/academic/courses_screen.dart:390` (editar materia)
+- **Otros Microservicios:** No se consume por otros microservicios.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/subjects_handler.go` (`Update`) → `back/infacadem/internal/service/subject_service.go` (`Update`, PATCH parcial con `SubjectPatch`) → `back/infacadem/internal/repository/subject_repository.go` (`Update`, `SET` dinámico con placeholders numerados + check de propiedad en `WHERE EXISTS`).
 

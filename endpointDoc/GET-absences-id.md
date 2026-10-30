@@ -8,6 +8,11 @@
 - `200`: `{"id":"...","subject_id":"...","date":"...","justified":false,"source":null,"type":null,"created_at":"..."}`.
 - `400/401/404`: `invalid_uuid` / auth / ajena-inexistente.
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart` (consumido vía listAbsences o navegación directa)
+- **Otros Microservicios:** No se consume por otros microservicios.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/absences_handler.go` (`Get`) → `back/infacadem/internal/service/absence_service.go` (`Get`) → `back/infacadem/internal/repository/absence_repository.go` (`GetByID`, `JOIN` subjects→curricula).
 

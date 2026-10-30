@@ -8,6 +8,11 @@
 - `200`: `{"status":"UP","database":"...","user":"...","now":"..."}` (pool Ping OK).
 - `503`: `{"status":"DOWN","error":{"code":"db_unconfigured","message":"..."}}` (sin `DATABASE_URL` o pool no disponible al arrancar) o `{"status":"DOWN","error":{"code":"db_unreachable","message":"..."}}` (Ping fallido en runtime).
 
+## Invocación (Front / Otros Servicios)
+- **Kubernetes / Monitoreo:**
+  - Invocado por chequeos de salud de conectividad a la base de datos PostgreSQL.
+- **Frontend Flutter:** No se llama en el frontend.
+
 ## Flujo
 - `back/infacadem/cmd/server/main.go` (closure inline) → pool creado al arrancar vía `back/infacadem/internal/repository/db.go` (`NewPool`, `Ping`).
 

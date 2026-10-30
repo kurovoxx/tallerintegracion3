@@ -10,6 +10,12 @@
 - `400`: `{"error":{"code":"bad_request|invalid_uuid","message":"..."}}` (sin `justified` o UUID malo).
 - `401` / `404` (ajena/inexistente): códigos habituales.
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart:628` (`patchAbsence`)
+  - Pantalla: `front/lib/features/academic/attendance_screen.dart:676` (`_updateAbsence`)
+- **Otros Microservicios:** No se consume por otros microservicios.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/absences_handler.go` (`Update`) → `back/infacadem/internal/service/absence_service.go` (`SetJustified`, `justified` nil → 400) → `back/infacadem/internal/repository/absence_repository.go` (`UpdateJustified`).
 

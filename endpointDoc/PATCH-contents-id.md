@@ -10,6 +10,12 @@
 - `400`: `{"error":{"code":"bad_request|invalid_name|invalid_uuid","message":"..."}}` (body vacío, título inválido).
 - `401` / `404` (ajeno/inexistente): códigos habituales.
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart:718` (`patchContent`)
+  - Pantalla: `front/lib/features/academic/courses_screen.dart:505` (editar unidad)
+- **Otros Microservicios:** No se consume por otros microservicios.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/contents_handler.go` (`Update`) → `service` → `repository` (`Update` parcial con propiedad).
 

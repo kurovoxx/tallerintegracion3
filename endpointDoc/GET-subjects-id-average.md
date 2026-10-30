@@ -10,6 +10,12 @@
 - `400/401/404`: `invalid_uuid` / auth / materia ajena.
 - Orden de requisitos: `force_fail` > `force_exam` > `force_pass`; sin disparos, aprobado si `average >= 4.0`. Sin redistribución de pesos (Σ≠1 permitida, igual que el front).
 
+## Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/academic/academic_api.dart:552` (`getAverage`)
+  - Pantalla: `front/lib/features/academic/grade_calculator_screen.dart:250`
+- **Otros Microservicios:** No se consume por otros microservicios.
+
 ## Flujo
 - `back/infacadem/internal/handler/http/grades_handler.go` (`Average`) → `back/infacadem/internal/service/average_service.go` (`Average`: valores efectivos recursivos + requisitos) → `repository` (`SubjectRepository.GetByID`, `GradeRepository.ListBySubject`, `RequirementRepository.ListBySubject`).
 
