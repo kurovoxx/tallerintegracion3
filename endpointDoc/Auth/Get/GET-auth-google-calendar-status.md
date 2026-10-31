@@ -1,16 +1,19 @@
 # GET /auth/google-calendar/status
 
-## Req
-- Método: `GET`, ruta: `/auth/google-calendar/status` (protegida; `back/auth/cmd/server/main.go:99`).
-- Headers requeridos: `Authorization: Bearer <access_token>`.
+Verifica si el usuario tiene vinculada su cuenta de Google Calendar.
 
-## Res
-- `200`: `{"connected":true}` o `{"connected":true,"external_email":"cal@example.com"}` con header `Cache-Control: private, no-store` (nunca expone tokens).
-- `401`: `{"error":{"code":"unauthorized","message":"..."}}` (sin token).
+## 1. Req (Petición)
+- **Método y Ruta:** `GET /auth/google-calendar/status` (Protegida con JWT; `back/auth/cmd/server/main.go:114`).
+- **Headers:** `Authorization: Bearer <access_token>`.
 
-## Flujo
-- `back/auth/internal/handler/http/calendar_handler.go` (`Status`) → `back/auth/internal/service/calendar_oauth_service.go` (`GetCalendarConnectionStatus`) → `back/auth/internal/repository/oauth_repository.go`; auth vía `back/auth/internal/middleware/`.
+## 2. Res (Respuestas y Códigos HTTP)
+- **`200 OK`:** `{"connected": true, "provider": "google_calendar"}`.
 
-## Tests
-- `back/auth/internal/handler/http/auth_extra_coverage_test.go`: `TestCoverage_Protegidas_SinToken_401` (sin token 401).
-- `back/auth/internal/handler/http/e2e_full_flow_test.go`: `TestE2E_OAuthPerfilInternasHealth` (status conectado tras connect válido).
+## 3. Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/auth/google_calendar_service.dart:173` (`getCalendarStatus()`).
+  - Pantalla: `front/lib/features/workspace/schedule_meeting_screen.dart:45`.
+
+## 4. Flujo Técnico (Paso a Paso)
+1. Consulta `identity.oauth_connections` buscando `provider = 'google_calendar'`.
+2. Responde el estado booleano de conexión.

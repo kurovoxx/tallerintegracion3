@@ -1,16 +1,29 @@
 # GET /auth/google-drive/status
 
-## Req
-- Método: `GET`, ruta: `/auth/google-drive/status` (protegida; `back/auth/cmd/server/main.go:96`).
-- Headers requeridos: `Authorization: Bearer <access_token>`.
+Verifica si el usuario tiene una conexión activa y válida con Google Drive.
 
-## Res
-- `200`: `{"connected":true|false,"reconnect_required":false}` con header `Cache-Control: private, no-store` (nunca expone tokens).
-- `401`: `{"error":{"code":"unauthorized","message":"..."}}` (sin token / sin user_id en contexto).
+## 1. Req (Petición)
+- **Método y Ruta:** `GET /auth/google-drive/status` (Protegida con JWT; `back/auth/cmd/server/main.go:111`).
+- **Headers:** `Authorization: Bearer <access_token>`.
 
-## Flujo
-- `back/auth/internal/handler/http/drive_handler.go` (`Status`) → `back/auth/internal/service/drive_oauth_service.go` (`GetGoogleDriveConnectionStatus`) → `back/auth/internal/repository/oauth_repository.go`; auth vía `back/auth/internal/middleware/`.
+## 2. Res (Respuestas y Códigos HTTP)
+- **`200 OK`:**
+  ```json
+  {
+    "connected": true,
+    "provider": "google_drive",
+    "scope": "https://www.googleapis.com/auth/drive.file"
+  }
+  ```
 
-## Tests
-- `back/auth/internal/handler/http/auth_extra_coverage_test.go`: `TestCoverage_Protegidas_SinToken_401` (sin token 401), `TestCoverage_DriveStatus_Conectado_Desconectado` (conectado/desconectado 200, `Cache-Control`, no fuga de tokens, sin user 401).
-- `back/auth/internal/handler/http/e2e_full_flow_test.go`: `TestE2E_OAuthPerfilInternasHealth` (status conectado tras connect válido).
+## 3. Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/core/services/profile_service.dart:45` y `front/lib/features/auth/google_drive_service.dart`.
+  - Pantalla: `front/lib/features/academic/profile_screen.dart` (muestra el switch o badge de estado de Drive).
+
+## 4. Flujo Técnico (Paso a Paso)
+1. Consulta `identity.oauth_connections` buscando `provider = 'google_drive'` para el `user_id`.
+2. Si existe fila no revocada, retorna `connected: true`. De lo contrario, `connected: false`.
+
+## 5. Dependencias y Datos Afectados
+- **Tablas PostgreSQL:** `identity.oauth_connections` (lectura).

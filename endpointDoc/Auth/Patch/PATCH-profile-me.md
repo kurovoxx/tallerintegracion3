@@ -1,19 +1,38 @@
 # PATCH /profile/me
 
-## Req
-- Método: `PATCH`, ruta: `/profile/me` (protegida; `back/auth/cmd/server/main.go:120`).
-- Headers requeridos: `Authorization: Bearer <access_token>`, `Content-Type: application/json`.
-- Body (parcial): `{"display_name":"Nuevo"}` (cualquiera de `display_name`, `photo_url`, `phone`, `institution`, `description`, `visibility`; `user_id` prohibido).
+Actualiza parcialmente los campos del perfil personal del usuario autenticado.
 
-## Res
-- `200`: perfil actualizado (misma forma que `GET /profile/me`).
-- `400`: `{"error":{"code":"bad_request|invalid_visibility|invalid_display_name|...","message":"..."}}` (`visibility` inválida, body vacío, `user_id` enviado, JSON malformado).
-- `401`: `{"error":{"code":"unauthorized","message":"..."}}` (sin token / inválido).
-- `404`: `{"error":{"code":"profile_not_found","message":"..."}}` (rama del handler, no cubierta por tests nuevos).
+## 1. Req (Petición)
+- **Método y Ruta:** `PATCH /profile/me` (Protegida con JWT; `back/auth/cmd/server/main.go:108`).
+- **Headers Requeridos:** `Authorization: Bearer <access_token>`, `Content-Type: application/json`.
+- **Cuerpo (Body - campos opcionales):**
+  ```json
+  {
+    "display_name": "Juan P.",
+    "phone": "+56987654321",
+    "description": "Nueva descripción de perfil",
+    "visibility": "public"
+  }
+  ```
+- **Validaciones:** `display_name` 1-100 caracteres si está presente; `visibility` debe ser `public` o `private`.
 
-## Flujo
-- `back/auth/internal/handler/http/profile_handler.go` (`PatchProfile`) → `back/auth/internal/service/profile_service.go` (`UpdateProfile`) → `back/auth/internal/repository/profile_repository.go`; auth vía `back/auth/internal/middleware/`.
+## 2. Res (Respuestas y Códigos HTTP)
+- **`200 OK`:** Perfil completo actualizado.
+- **`400 Bad Request`:** `invalid_body` o visibilidad no permitida.
+- **`401 Unauthorized`:** Token ausente o expirado.
 
-## Tests
-- `back/auth/internal/handler/http/auth_extra_coverage_test.go`: `TestCoverage_Protegidas_SinToken_401` (sin token 401).
-- `back/auth/internal/handler/http/e2e_full_flow_test.go`: `TestE2E_OAuthPerfilInternasHealth` (`visibility:"invisible"` 400, patch válido 200 con `"Nuevo"` en body).
+## 3. Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/core/services/profile_service.dart:111` (`updateProfile(patch)`).
+  - Pantalla: `front/lib/features/academic/profile_screen.dart:222` (`_saveProfileChanges`).
+
+## 4. Flujo Técnico (Paso a Paso)
+1. `ProfileHandler.PatchProfile` (`profile_handler.go:80`) valida payload JSON.
+2. `ProfileService.UpdateProfile` sanitiza strings y valida rangos.
+3. `ProfileRepository.Update`: ejecuta `UPDATE identity.profiles SET ... WHERE user_id = $1 RETURNING ...`.
+
+## 5. Dependencias y Datos Afectados
+- **Tablas PostgreSQL:** `identity.profiles`.
+
+## 6. Tests Asociados
+- **Unitarios:** `back/auth/internal/handler/http/profile_handler_test.go` (`TestPatchProfile_Success`).

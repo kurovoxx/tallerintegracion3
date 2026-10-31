@@ -1,20 +1,20 @@
 # POST /internal/auth/verify
 
-Verifica un JWT de usuario para servicio-a-servicio (Identity, tarea 3_5_6).
+Verifica la validez de un JWT de usuario para servicios que no poseen la clave secreta o requieren verificación canónica centralizada.
 
-## Req
-- Método: `POST`, ruta: `/internal/auth/verify` (protegida con `X-Internal-Key`, NO con JWT; `back/auth/cmd/server/main.go:107`).
-- Headers: `Content-Type: application/json`, `X-Internal-Key: <secreto>`.
-- Body: `{"token":"<access_token>"}`.
+## 1. Req (Petición)
+- **Método y Ruta:** `POST /internal/auth/verify` (Servicio-a-servicio; `back/auth/cmd/server/main.go:120`).
+- **Headers:** `X-Internal-Key: <INTERNAL_API_KEY>`, `Content-Type: application/json`.
+- **Body:** `{"token": "<access_token>"}`.
 
-## Res
-- `200`: `{"valid":true,"user_id":"<uuid>"}`.
-- `400`: `{"error":{"code":"bad_request","message":"token requerido"}}` (body sin token).
-- `401`: `{"error":{"code":"invalid_token|token_expired","message":"..."}}` (token malo o expirado; también sin key o key mala, desde `RequireInternalKey`).
+## 2. Res (Respuestas y Códigos HTTP)
+- **`200 OK`:** `{"valid":true,"user_id":"uuid","email":"..."}`.
+- **`401 Unauthorized`:** `X-Internal-Key` inválida o JWT inválido/expirado (`{"valid":false}`).
 
-## Flujo
-- `InternalAuthHandler.Verify` (`back/auth/internal/handler/http/internal_auth_handler.go`) → `JWTService.ValidarAccessToken` (firma HS256 + `iss`/`aud` + `exp`, `back/auth/internal/service/jwt_service.go:105-133`). Sin DB: la verificación es solo criptográfica. Expirado se distingue por `jwt.ErrTokenExpired` o "expired" en el error (igual que el middleware HTTP).
+## 3. Invocación (Front / Otros Servicios)
+- **Microservicios Internos:** Usado como fallback de verificación de identidad o por servicios auxiliares.
 
-## Tests
-- `back/auth/internal/handler/http/internal_auth_test.go`: `TestInternalVerify_OK` (JWT real firmado en el test), `TestInternalVerify_Rechazos` (malo → 401, vacío → 400, expirado → 401 `token_expired`), `TestInternal356_SinKey_401`.
-- Consumidor: `back/social/internal/identity/client.go` (`VerifyToken`) + `client_test.go` (fail closed ante 401).
+## 4. Flujo Técnico (Paso a Paso)
+1. Valida `X-Internal-Key`.
+2. Parsea y valida claims del JWT (`jwt_service.ValidateAccessToken`).
+3. Comprueba que el usuario exista y no tenga bloqueo por borrado.

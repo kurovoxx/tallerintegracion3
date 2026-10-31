@@ -1,19 +1,23 @@
 # GET /internal/users/:id
 
-Resuelve un usuario por id para servicio-a-servicio — GetUser singular, complemento del batch `lookup` (Identity, tarea 3_5_6).
+Retorna información pública de un usuario por su ID para uso interno de otros microservicios.
 
-## Req
-- Método: `GET`, ruta: `/internal/users/:id` (protegida con `X-Internal-Key`, NO con JWT; `back/auth/cmd/server/main.go:106`).
-- Path: `id` (uuid del usuario).
+## 1. Req (Petición)
+- **Método y Ruta:** `GET /internal/users/:id` (Servicio-a-servicio; `back/auth/cmd/server/main.go:119`).
+- **Headers:** `X-Internal-Key: <INTERNAL_API_KEY>`.
+- **Path:** `:id` (UUID del usuario).
 
-## Res
-- `200`: `{"user_id":"<uuid>","email":"a@x.com","display_name":"..."}` (nunca hashes ni tokens).
-- `401`: sin key o key mala (desde `RequireInternalKey`).
-- `404`: `{"error":{"code":"user_not_found","message":"Usuario no encontrado"}}`.
+## 2. Res (Respuestas y Códigos HTTP)
+- **`200 OK`:** `{"id":"uuid","email":"usuario@estudiantes.uct.cl","display_name":"Nombre"}`.
+- **`401 Unauthorized`:** Falta clave interna.
+- **`404 Not Found`:** Usuario inexistente.
 
-## Flujo
-- `InternalUsersHandler.GetByID` (`back/auth/internal/handler/http/internal_users_handler.go`) → `UsersService.Lookup` con 1 id (`back/auth/internal/service/users_service.go:30-53`) → `UserRepository.GetPublicByIDs` (`identity.users` + perfil). Vacío → 404. Código `user_not_found` agregado en `back/auth/internal/utils/response.go` (mensaje + map a 404).
+## 3. Invocación (Front / Otros Servicios)
+- **Microservicio Social:**
+  - Cliente: `back/social/internal/service/user_directory.go:29` (`HTTPUserDirectory.GetUser`).
+  - Uso: Resolver nombres y correos de miembros de grupos.
 
-## Tests
-- `back/auth/internal/handler/http/internal_auth_test.go`: `TestInternalUsers_GetByID` (200 con email/display_name, inexistente → 404 `user_not_found`), `TestInternal356_SinKey_401`.
-- Consumidor: `back/social/internal/identity/client.go` (`GetUser` → `ErrUserNotFound` ante 404) + `client_test.go`.
+## 4. Flujo Técnico (Paso a Paso)
+1. Valida `X-Internal-Key`.
+2. Consulta `identity.users` e `identity.profiles` unificando datos públicos.
+3. Responde JSON sin hashes ni contraseñas.

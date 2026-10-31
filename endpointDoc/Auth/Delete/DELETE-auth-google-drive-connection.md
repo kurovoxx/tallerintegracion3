@@ -1,16 +1,25 @@
 # DELETE /auth/google-drive/connection
 
-## Req
-- Método: `DELETE`, ruta: `/auth/google-drive/connection` (protegida; `back/auth/cmd/server/main.go:97`).
-- Headers requeridos: `Authorization: Bearer <access_token>`. Sin body.
+Desconecta la cuenta de Google Drive del usuario y revoca los tokens almacenados.
 
-## Res
-- `204`: sin body (revoca en Google best-effort y borra la fila; idempotente sin conexión previa).
-- `401`: `{"error":{"code":"unauthorized","message":"..."}}` (sin token).
+## 1. Req (Petición)
+- **Método y Ruta:** `DELETE /auth/google-drive/connection` (Protegida con JWT; `back/auth/cmd/server/main.go:112`).
+- **Headers:** `Authorization: Bearer <access_token>`. Sin body.
 
-## Flujo
-- `back/auth/internal/handler/http/drive_handler.go` (`Disconnect`) → `back/auth/internal/service/drive_oauth_service.go` (`Disconnect`) → `back/auth/internal/repository/oauth_repository.go`; auth vía `back/auth/internal/middleware/`.
+## 2. Res (Respuestas y Códigos HTTP)
+- **`200 OK`:** `{"status":"disconnected"}`.
+- **`404 Not Found`:** No existía conexión activa.
 
-## Tests
-- `back/auth/internal/handler/http/auth_extra_coverage_test.go`: `TestCoverage_Protegidas_SinToken_401` (sin token 401).
-- `back/auth/internal/handler/http/e2e_full_flow_test.go`: `TestE2E_OAuthPerfilInternasHealth` (disconnect 204; vacía tokens antes del DELETE para evitar revoke HTTP real a Google).
+## 3. Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/auth/google_drive_service.dart:393` (`disconnectDrive()`).
+  - Pantalla: `front/lib/features/academic/profile_screen.dart`.
+
+## 4. Flujo Técnico (Paso a Paso)
+1. Obtiene los tokens cifrados de `identity.oauth_connections`.
+2. Intenta revocar el token en Google vía `https://oauth2.googleapis.com/revoke` (*best-effort*).
+3. Elimina la fila de `identity.oauth_connections` para ese usuario y proveedor.
+
+## 5. Dependencias y Datos Afectados
+- **Tablas PostgreSQL:** `identity.oauth_connections`.
+- **Servicios Externos:** Google OAuth Revocation Endpoint.

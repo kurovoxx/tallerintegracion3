@@ -1,18 +1,24 @@
 # POST /internal/oauth/calendar-revoked
 
-## Req
-- Método: `POST`, ruta: `/internal/oauth/calendar-revoked` (interna servicio-a-servicio; `back/auth/cmd/server/main.go:106`; grupo `/internal` con `RequireInternalKey`).
-- Headers requeridos: `X-Internal-Key: <clave-compartida>`, `Content-Type: application/json`. Sin JWT de usuario.
-- Body: `{"user_id":"u1"}` (lo llama Social al recibir 401/403 de Google Calendar).
+Permite a otros microservicios (como Social) notificar que un token de Calendar fue revocado por el usuario en Google para invalidar la conexión localmente.
 
-## Res
-- `204`: sin body (idempotente: sin fila también 204 para no filtrar existencia).
-- `400`: `{"error":{"code":"bad_request","message":"..."}}` (JSON inválido o `user_id` vacío).
-- `401`: `{"error":{"code":"unauthorized","message":"..."}}` (sin `X-Internal-Key` o clave errónea).
+## 1. Req (Petición)
+- **Método y Ruta:** `POST /internal/oauth/calendar-revoked` (Servicio-a-servicio; `back/auth/cmd/server/main.go:117`).
+- **Headers:** `X-Internal-Key: <INTERNAL_API_KEY>`.
+- **Body:** `{"user_id": "<UUID>"}`.
 
-## Flujo
-- `back/auth/internal/handler/http/internal_oauth_handler.go` (`ReportCalendarRevoked`) → `back/auth/internal/service/calendar_oauth_service.go` (`ReportCalendarPermissionDenied`) → `back/auth/internal/repository/oauth_repository.go`; auth vía `back/auth/internal/middleware/` (`RequireInternalKey`).
+## 2. Res (Respuestas y Códigos HTTP)
+- **`200 OK`:** `{"status":"marked_revoked"}`.
+- **`401 Unauthorized`:** `X-Internal-Key` incorrecta.
 
-## Tests
-- `back/auth/internal/handler/http/auth_extra_coverage_test.go`: `TestCoverage_Internas_SinKey_401` (sin key 401).
-- Sin test nuevo que ejerza el 204 con key válida en esta ruta (el e2e cubre el flujo OAuth por las rutas públicas; hueco menor, no bloqueante).
+## 3. Invocación (Front / Otros Servicios)
+- **Microservicio Social:**
+  - Cliente: `back/social/internal/service/calendar_gateway.go:100` (`ReportCalendarRevoked`).
+  - Se activa cuando la Google Calendar API responde 401/invalid_grant.
+
+## 4. Flujo Técnico (Paso a Paso)
+1. Valida `X-Internal-Key`.
+2. Actualiza `identity.oauth_connections` eliminando o marcando como revocada la conexión de Calendar del usuario.
+
+## 5. Dependencias y Datos Afectados
+- **Tablas PostgreSQL:** `identity.oauth_connections`.

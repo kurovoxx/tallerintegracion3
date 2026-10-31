@@ -1,17 +1,37 @@
 # GET /profile/me
 
-## Req
-- Método: `GET`, ruta: `/profile/me` (protegida; `back/auth/cmd/server/main.go:119`).
-- Headers requeridos: `Authorization: Bearer <access_token>`.
+Obtiene el perfil extendido y datos personales del usuario autenticado.
 
-## Res
-- `200`: `{"display_name":"...","photo_url":null,"phone":null,"institution":null,"description":null,"visibility":"private"}` (+ `email` si se resolvió desde `identity.users`).
-- `401`: `{"error":{"code":"unauthorized","message":"..."}}` (sin token / inválido).
-- `404`: `{"error":{"code":"profile_not_found","message":"..."}}` (no cubierto por los tests nuevos; existe como rama del handler).
+## 1. Req (Petición)
+- **Método y Ruta:** `GET /profile/me` (Protegida con JWT; `back/auth/cmd/server/main.go:107`).
+- **Headers Requeridos:** `Authorization: Bearer <access_token>`.
 
-## Flujo
-- `back/auth/internal/handler/http/profile_handler.go` (`GetProfile`) → `back/auth/internal/service/profile_service.go` (`GetProfile`) → `back/auth/internal/repository/profile_repository.go` (+ `user_repository.go` para el email best-effort); auth vía `back/auth/internal/middleware/`.
+## 2. Res (Respuestas y Códigos HTTP)
+- **`200 OK`:**
+  ```json
+  {
+    "display_name": "Juan Pérez",
+    "photo_url": "https://...",
+    "phone": "+56912345678",
+    "institution": "Universidad Católica de Temuco",
+    "description": "Estudiante de Ingeniería",
+    "visibility": "private"
+  }
+  ```
+- **Errores:** `401 Unauthorized` (sesión inválida), `404 Not Found` (perfil inexistente).
 
-## Tests
-- `back/auth/internal/handler/http/auth_extra_coverage_test.go`: `TestCoverage_Protegidas_SinToken_401` (sin token 401), `TestCoverage_Profile_ConMiddleware_TokenInvalido_401`.
-- `back/auth/internal/handler/http/e2e_full_flow_test.go`: `TestE2E_RegisterLoginMeRefreshLogout` (con token 200), `TestE2E_OAuthPerfilInternasHealth`.
+## 3. Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/core/services/profile_service.dart:94` (`getProfile()`).
+  - Pantalla: `front/lib/features/academic/profile_screen.dart:161` (`_loadProfileData`).
+
+## 4. Flujo Técnico (Paso a Paso)
+1. `ProfileHandler.GetProfile` (`internal/handler/http/profile_handler.go:46`) extrae `user_id` del JWT.
+2. `ProfileService.GetProfile` (`internal/service/profile_service.go:28`) invoca al repositorio.
+3. `ProfileRepository.GetByUserID`: `SELECT display_name, photo_url, phone, institution, description, visibility FROM identity.profiles WHERE user_id = $1`.
+
+## 5. Dependencias y Datos Afectados
+- **Tablas PostgreSQL:** `identity.profiles`.
+
+## 6. Tests Asociados
+- **Unitarios:** `back/auth/internal/handler/http/profile_handler_test.go` (`TestGetProfile_Success`).
