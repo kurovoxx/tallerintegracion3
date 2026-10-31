@@ -502,21 +502,74 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
   Future<void> _openInvite() async {
     final url = _config?.inviteUrl.trim() ?? '';
     if (url.isEmpty) return;
-    final uri = Uri.tryParse(url);
-    if (uri == null) return;
+
+    final inviteCode = _extractDiscordInviteCode(url);
+    if (inviteCode == null) {
+      // Si no se pudo extraer el código, abrir el enlace web directamente.
+      final webUri = Uri.tryParse(url);
+      if (webUri != null && mounted) {
+        await _launchUrlOrSnackbar(webUri);
+      }
+      return;
+    }
+
+    // Intentar abrir directamente en la app de Discord con varios deep links.
+    final candidates = <Uri>[
+      Uri.parse('discord://discord.com/invite/$inviteCode'), // URL completa
+      Uri.parse('discord://invite/$inviteCode'),             // formato corto
+    ];
+
+    for (final uri in candidates) {
+      try {
+        final opened = await launchUrl(uri, mode: LaunchMode.platformDefault);
+        if (opened) return; // Se abrió en la app
+      } catch (_) {
+        // Sigue al siguiente intento.
+      }
+      if (!mounted) return;
+    }
+
+    // Fallback: abrir en navegador web. El usuario puede usar el enlace
+    // para unirse manualmente si la app no se abrió.
+    final webUri = Uri.parse('https://discord.com/invite/$inviteCode');
+    await _launchUrlOrSnackbar(webUri);
+  }
+
+  /// Lanza una URL o muestra snackbar si falla. Retorna true si se lanzó.
+  Future<bool> _launchUrlOrSnackbar(Uri uri) async {
+    if (!mounted) return false;
     try {
-      final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
-      if (!opened && mounted) {
+      final opened = await launchUrl(uri, mode: LaunchMode.platformDefault);
+      if (!opened) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('No se pudo abrir la invitación.')),
         );
       }
+      return opened;
     } catch (_) {
-      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No se pudo abrir la invitación.')),
       );
+      return false;
     }
+  }
+
+  // Extrae el código de invitación de una URL de Discord.
+  // Soporta https://discord.com/invite/XXXX y https://discord.gg/XXXX.
+  String? _extractDiscordInviteCode(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return null;
+
+    final host = uri.host.toLowerCase();
+    final path = uri.path;
+
+    if (host == 'discord.com' && path.startsWith('/invite/')) {
+      return path.substring('/invite/'.length).split('/').first.split('?').first;
+    }
+    if (host == 'discord.gg' && path.isNotEmpty) {
+      return path.substring(1).split('/').first.split('?').first;
+    }
+    return null;
   }
 
   // Solo admin: abre diálogo "Configurar Discord" (invite_url + webhook
