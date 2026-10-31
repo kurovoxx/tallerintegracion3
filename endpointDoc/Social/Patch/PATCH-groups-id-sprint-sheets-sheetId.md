@@ -1,20 +1,32 @@
-# PATCH /groups/:id/sprint-sheets/:sheetId
+# `PATCH /groups/:id/sprint-sheets/:sheetId`
 
-Edita nombre y/o rango de una hoja de sprint (microservicio `social`).
 
 ## Req
-- Método: `PATCH`, ruta: `/groups/:id/sprint-sheets/:sheetId` (protegida con JWT `Bearer`; cualquier miembro; `back/social/cmd/server/main.go:266`).
-- Headers: `Content-Type: application/json`, `Authorization: Bearer <access_token>`.
-- Path: `id` (uuid del grupo), `sheetId` (uuid de la hoja; debe pertenecer al grupo).
-- Body parcial (`service.SheetPatch`): al menos uno de `name`, `period_start`, `period_end`. El rango resultante debe quedar completo (ambas fechas o ninguna) y ordenado.
+
+- `PATCH /groups/:id/sprint-sheets/:sheetId`, JWT y membresía requeridos; registro `back/social/cmd/server/main.go:283`.
+- JSON parcial con uno o más campos: name, period_start, period_end. Fecha YYYY-MM-DD; los campos no enviados conservan su valor.
+- El cliente identifica grupo y hoja por UUID.
 
 ## Res
-- `200`: `{"data":{"id","name","period_start","period_end"}}`.
-- `400` `invalid_body` (body vacío, nombre inválido, rango incompleto o invertido, uuid malo). `403` `forbidden`. `404` `not_found` (grupo u hoja de otro grupo). `401` sin body.
+
+- `200`: {"data":{"id":"<uuid>","name":"Sprint actualizado","period_start":"YYYY-MM-DD","period_end":"YYYY-MM-DD"}}.
+- 400 si no hay campos editables, fecha/nombre inválido; 401 sin JWT; 403 no miembro; 404 grupo/hoja ausente; 500 interno. sheetError usa {"error":{"code":"...","message":"..."}}.
+- Solo actualiza la hoja perteneciente a ese grupo.
+
+## Invocación (Front / Otros Servicios)
+
+- `front/lib/core/services/social_service.dart:459`, `saveSprintSheet` envía PATCH cuando sheetId tiene valor.
+- `_SprintSheetScreenState._manageSprint` abre `SprintEditorDialog`, llama a `saveSprintSheet` y recarga la hoja actualizada (`front/lib/features/workspace/sprint_sheet_screen.dart:230-253`).
+- No se encontró consumidor backend.
 
 ## Flujo
-- `SprintHandler.UpdateSheet` → `writeSheet(update=true)` (`internal/handler/http/sprint_sheets.go:72`) → `SprintService.UpdateSprintSheet` (`internal/service/sprint_sheets.go:67`: membresía, `resolveSheet` dentro del grupo, aplica el parche sobre el valor actual) → `UpdateSheet` (sqlc, filtra por `id` y `group_id`).
+
+1. `main()` registra la ruta PATCH (`back/social/cmd/server/main.go:283`).
+2. `SprintHandler.UpdateSheet` delega en `writeSheet(update=true)`, que toma el actor del JWT, valida el JSON y llama al servicio (`back/social/internal/handler/http/sprint_sheets.go:58,72-96`).
+3. `SprintService.UpdateSprintSheet` valida membresía, IDs y campos; `SprintRepository.UpdateSheet` delega a sqlc (`back/social/internal/service/sprint_sheets.go:67-89`; `back/social/internal/repository/sprint_repository.go:66-68`).
+4. `Queries.UpdateSheet` actualiza la fila por hoja y grupo (`back/social/internal/repository/sqlc/sprint.sql.go:295-300`). El handler responde `200` con `sheetJSON`; `_manageSprint` procesa el `data` y recarga la hoja (`back/social/internal/handler/http/sprint_sheets.go:12-22,83-96`; `front/lib/features/workspace/sprint_sheet_screen.dart:230-253`). No hay llamada externa.
 
 ## Tests
-- `internal/handler/http/sprint_sheets_test.go`: `TestSprintSheetRoutes`.
-- `internal/service/sprint_sheets_test.go`: `TestSprintSheetsLifecycleAndIsolation`, `TestLegacySprintAcceptsDatesWithoutReplacingSheet`.
+
+- `back/social/internal/handler/http/sprint_sheets_test.go:13`, `TestSprintSheetRoutes`.
+- `back/social/internal/service/sprint_sheets_test.go:10`, `TestSprintSheetsLifecycleAndIsolation`; :78 conserva hojas legacy sin rango.

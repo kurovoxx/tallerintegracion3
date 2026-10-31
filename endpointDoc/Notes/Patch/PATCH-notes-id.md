@@ -1,37 +1,39 @@
-# PATCH /notes/:id
+# `PATCH /notes/:id`
 
-Microservicio `notes`; ruta del router de producción.
 
 ## Req
 
-- JWT HS256 en `Authorization: Bearer <access_token>`; identidad extraída del token.
-- Permiso: Solo autor.
-- Entrada: JSON title?, visibility?, content?, version?; X-Idempotency-Key opcional.
-
-```json
-{"title":"Matrices revisadas","content":"# Versión corregida\n","version":1}
-```
+- `PATCH /notes/:id`, JWT requerido: `back/notes/cmd/server/main.go:208`.
+- JSON parcial: title (1–300 caracteres), visibility (public/private), content (opcional) y version opcional positiva. Debe venir al menos un campo editable; límite del body: 1 MiB.
+- Header opcional `X-Idempotency-Key` permite reintento seguro del mismo cambio. La identidad/autor procede del JWT.
 
 ## Res
 
-- 200 {id,title,visibility,version,updated_at}.
-- 400 vacío/validación; 404 ajena/ausente; 409 versión/clave; 413 tamaño; 403 OAuth; 502 Drive; 500 DB.
-- `401` por token ausente/inválido/expirado, antes del handler. Errores con forma `{"error":{"code":"not_found","message":"Nota no encontrada"}}`; ver [catálogo común](../documentation/docHector.md#autenticación-y-errores).
+- `200 OK`: `{"id":"<uuid>","title":"...","visibility":"private","version":3,"updated_at":"<RFC3339 UTC>"}`.
+- `400 Bad Request`: JSON inválido o nada que actualizar devuelve `bad_request` con `Request inválido` o `nada que actualizar`; título o visibilidad inválidos devuelven `invalid_title`/`Título requerido (1-255 caracteres)` o `invalid_visibility`/`Visibilidad debe ser public o private`.
+- `401 Unauthorized`: JWT ausente/inválido/expirado; `unauthorized` con `No autorizado: token ausente, inválido o expirado`.
+- `404 Not Found`: ID inválido, nota ausente o de otra cuenta devuelve `not_found` con `nota no encontrada`; archivo Drive no disponible devuelve `note_unavailable` con `Nota no disponible en almacenamiento remoto`.
+- `409 Conflict`: versión obsoleta, clave idempotente con otro payload o operación en curso; `conflict` con `Conflicto` o el mensaje específico `solicitud en progreso`.
+- `413 Content Too Large`: body supera 1 MiB o el contenido supera su límite; `file_too_large` con `Archivo muy grande`.
+- `403 Forbidden`: OAuth Drive requiere conexión/renovación; `forbidden` con `Conecte o renueve su Google Drive`.
+- `502 Bad Gateway`: Drive no disponible; `internal_error` con `Servicio de almacenamiento no disponible`. `500 Internal Server Error`: fallo DB u otro error no tipado; `internal_error` con `Error interno`.
+- Los errores usan `{"error":{"code":"...","message":"..."}}`. `handleServiceError` aplica el mapeo (`back/notes/internal/handler/http/note_handler.go:890-941`) y `StatusForCode` asigna status (`back/notes/internal/utils/response.go:88-105`). La versión enviada es precondición optimista; Drive puede quedar pendiente de reconciliación.
 
-Ejemplo de respuesta (IDs y fechas ilustrativos, campos del contrato real):
+## Invocación (Front / Otros Servicios)
 
-```json
-{"id":"11111111-1111-4111-8111-111111111111","title":"Matrices revisadas","visibility":"private","version":2,"updated_at":"2026-10-22T12:01:00Z"}
-```
+- `AllNotesScreen._patchNoteRemote` construye y envía PATCH con versión e `X-Idempotency-Key`, y guarda la versión devuelta (`front/lib/features/notes/all_notes_screen.dart:1678-1718`).
+- Las acciones de guardado llaman al método y usan su resultado para actualizar la nota o mantener el error (`front/lib/features/notes/all_notes_screen.dart:765-805,1933-1948`).
+- No se encontró consumidor backend de producción.
 
 ## Flujo
 
-`Patch` → `UpdateWithExpectedVersion`. Debe incluir al menos title, visibility o content; version por sí sola no actualiza. version >= 1 es una precondición optimista. Body máximo 1 MiB. Lock por nota, snapshot remoto y compensación/outbox coordinan Drive con PostgreSQL. El replay PATCH usa caché de proceso de 10 minutos; no ofrece la durabilidad entre reinicios de Create/Copy.
-
-Fuentes: `back/notes/cmd/server/main.go`, `internal/handler/http/` y `internal/service/` dentro de `back/notes`.
+1. `main()` registra `PATCH /notes/:id` bajo autenticación (`back/notes/cmd/server/main.go:208`).
+2. `NoteHandler.Patch` obtiene actor/ID, valida body y versión, lee `X-Idempotency-Key` y llama al servicio (`back/notes/internal/handler/http/note_handler.go:308-354`).
+3. `NoteService.UpdateWithExpectedVersion` aplica idempotencia y delega el cambio (`back/notes/internal/service/note_service.go:1052-1082`); `updateInnerLocked` verifica autor/versión y coordina Drive con el guardado PostgreSQL (`back/notes/internal/service/note_service.go:1106-1120,1265-1310`). `PGNoteStore.Update` delega a `NoteRepository.Update` (`back/notes/internal/service/store_pg.go:31-33`; `back/notes/internal/repository/note_repository.go:136-181`).
+4. El handler devuelve `200` con la nueva versión (`back/notes/internal/handler/http/note_handler.go:342-353`). `AllNotesScreen._patchNoteRemote` incorpora esa versión para evitar sobrescribir una edición posterior (`front/lib/features/notes/all_notes_screen.dart:1712-1718`).
 
 ## Tests
 
-- Handler/router: `TestHandlerPatchVersionConflict; TestHandlerPatchIdempotencyReplay`.
-- Dominio: `TestPermissionConcurrentUpdatesSingleWinner; TestUpdateIdempotencyReplayAndErrorCleanup`.
-- Alcance de integración y E2E: [matriz de cobertura](../documentation/notes_api_matrix.md).
+- `back/notes/internal/handler/http/note_handler_test.go:591`, `TestHandlerPatchVersionConflict`.
+- `back/notes/internal/handler/http/note_handler_spec95_test.go:31`, `replay` idempotente; :86, actualización sin key; :114, claves distintas y limpieza de errores.
+- `back/notes/internal/handler/http/note_postgres_edit_test.go` contiene la integración con versionado optimista y PostgreSQL.

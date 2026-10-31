@@ -1,23 +1,31 @@
-# GET /auth/account-deletion
+# `GET /auth/account-deletion`
 
-Estado del borrado de la cuenta propia. Público vía nginx como `/api-auth/auth/account-deletion`.
 
 ## Req
-- Método: `GET`, ruta: `/auth/account-deletion` (`back/auth/cmd/server/main.go:121`, middleware `RequireIdentity`).
-- Headers requeridos: `Authorization: Bearer <access_token>`. Funciona aunque la cuenta ya esté bloqueada o borrada (mientras el JWT no venza).
+
+- `GET /auth/account-deletion`, protegido por RequireIdentity: `back/auth/cmd/server/main.go:124`.
+- Requiere JWT Bearer de la cuenta en borrado; sin body ni query. La identidad solo viene del JWT.
+- No requiere persistir un JWT de larga duración en el servidor: el cliente consulta con su JWT vigente.
 
 ## Res
-- `200`: `{"status":"pending"|"complete","updated_at":"<RFC3339>"}` desde `identity.account_deletions`.
-- `404`: `{"status":"not_started"}`. Nunca se inició: reintentar el `DELETE` es seguro.
-- `503`: `{"error":"account_status_unavailable"}`.
-- `401`: `{"error":{"code":...,"message":"..."}}` (middleware).
 
-## Uso en el frontend
-`AccountDeletionService.checkStatus` (`front/lib/core/services/account_deletion_service.dart`): tras un `DELETE` ambiguo (red, timeout, `503`, `403/409/5xx` o cuerpo inesperado) y en el sondeo del estado `pending` (cada 4 s, hasta 15 veces, más el botón «Consultar estado»). Un `404` sin `{"status":"not_started"}` se trata como estado desconocido.
+- `200`: {"status":"pending|complete","updated_at":"<RFC3339>"} si existe operación durable.
+- `404`: {"status":"not_started"} si aún no comenzó; 401 si no hay identidad; 503 si no se pudo leer estado.
+- Esta ruta informa estado. No ejecuta la limpieza por sí sola; `DELETE /auth/account` vuelve a invocar la coordinación/reintento.
+
+## Invocación (Front / Otros Servicios)
+
+- `AccountDeletionService.checkStatus` consulta el estado tras un DELETE ambiguo o pendiente (`front/lib/core/services/account_deletion_service.dart:271-329`); `_resolveWithStatus` también la invoca tras respuestas ambiguas (`front/lib/core/services/account_deletion_service.dart:243-268`).
+- `AccountDeletionDialog._checkStatus` solicita la consulta desde el diálogo (`front/lib/features/auth/account_deletion_dialog.dart:170-175`) y `_apply` presenta el estado resultante (`front/lib/features/auth/account_deletion_dialog.dart:178-205`).
+- Sin consumidor de otro microservicio.
 
 ## Flujo
-`AccountDeletionHandler.Status` (`internal/handler/http/account_deletion_handler.go`) → `AccountDeletionCoordinator.State` → `AccountDeletionRepository.State`.
+
+1. `main()` registra `GET /auth/account-deletion` bajo `RequireIdentity` (`back/auth/cmd/server/main.go:124`).
+2. `AccountDeletionHandler.Status` obtiene el usuario del JWT y responde el estado o los errores HTTP (`back/auth/internal/handler/http/account_deletion_handler.go:43-59`).
+3. `AccountDeletionCoordinator.State` delega la lectura durable (`back/auth/internal/service/account_deletion.go:151-156`) a `AccountDeletionRepository.State`, que consulta `identity.account_deletions` (`back/auth/internal/repository/account_deletion_repository.go:147-157`).
+4. Flutter lee `status` y `updated_at` con `AccountDeletionService.checkStatus` (`front/lib/core/services/account_deletion_service.dart:271-329`) y `AccountDeletionDialog._apply` muestra pendiente o finalización (`front/lib/features/auth/account_deletion_dialog.dart:178-205`).
 
 ## Tests
-- `back/auth/internal/handler/http/account_deletion_contract_test.go` (not_started, pending, complete con `updated_at`, 503, 401).
-- `front/test/account_deletion_service_test.dart` (`GET /auth/account-deletion`).
+
+- `back/auth/internal/handler/http/account_deletion_contract_test.go:146` y :181 cubren estados complete y pending; :218 cubre no autorizado y errores.

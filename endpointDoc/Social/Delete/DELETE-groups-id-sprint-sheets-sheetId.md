@@ -1,20 +1,33 @@
-# DELETE /groups/:id/sprint-sheets/:sheetId
+# `DELETE /groups/:id/sprint-sheets/:sheetId`
 
-Elimina una hoja de sprint con sus tareas y horas (microservicio `social`). El grupo nunca queda sin hojas.
 
 ## Req
-- Método: `DELETE`, ruta: `/groups/:id/sprint-sheets/:sheetId` (protegida con JWT `Bearer`; cualquier miembro, misma regla que crear/editar; `back/social/cmd/server/main.go:267`).
-- Headers: `Authorization: Bearer <access_token>`.
-- Path: `id` (uuid del grupo), `sheetId` (uuid de la hoja).
+
+- `DELETE /groups/:id/sprint-sheets/:sheetId`, JWT y membresía requeridos; registro `back/social/cmd/server/main.go:284`.
+- :id y :sheetId identifican grupo y hoja. Sin body ni query.
+- La última hoja del grupo no se puede borrar.
 
 ## Res
-- `200`: `{"data":{"id","name","period_start","period_end"}}` (la hoja borrada).
-- `400` `invalid_body` con mensaje `"No puedes eliminar el único sprint del grupo."` si es la última hoja; también para uuid inválido. `403` `forbidden`. `404` `not_found`. `401` sin body.
+
+- `200`: {"data":{"id":"...","name":"...","period_start":"...","period_end":"..."}} con la hoja eliminada.
+- 400 con error invalid_body si es la única hoja; 401 sin sesión; 403 no miembro; 404 grupo/hoja ausente; 500 error interno. sheetError usa {"error":{"code":"...","message":"..."}}.
+- PostgreSQL elimina en cascada las tareas y horas vinculadas a la hoja. No hay borrado manual en handler.
+
+## Invocación (Front / Otros Servicios)
+
+- `front/lib/core/services/social_service.dart:494`, `deleteSprintSheet` envía DELETE y requiere éxito.
+- `_SprintSheetScreenState._confirmDeleteSheet` envía la eliminación y vuelve a cargar la hoja seleccionada (`front/lib/features/workspace/sprint_sheet_screen.dart:1380-1434`).
+- Sin consumidor de otro microservicio.
 
 ## Flujo
-- `SprintHandler.DeleteSheet` (`internal/handler/http/sprint_sheets.go:59`) → `SprintService.DeleteSprintSheet` (`internal/service/sprint_sheets.go:96`: membresía, hoja del grupo, cuenta hojas y rechaza la última) → `DeleteSheet` (sqlc). Tareas y `sprint_sheet_daily_hours` caen por `ON DELETE CASCADE`.
+
+1. `main()` registra `DELETE /groups/:id/sprint-sheets/:sheetId` (`back/social/cmd/server/main.go:284`).
+2. `SprintHandler.DeleteSheet` obtiene el usuario y los IDs y construye la respuesta (`back/social/internal/handler/http/sprint_sheets.go:59-70`).
+3. `SprintService.DeleteSprintSheet` valida acceso, confirma que hay más de una hoja y delega el borrado (`back/social/internal/service/sprint_sheets.go:96-119`).
+4. `SprintRepository.DeleteSheet` llama la consulta sqlc (`back/social/internal/repository/sprint_repository.go:70-72`); `Queries.DeleteSheet` elimina la fila (`back/social/internal/repository/sqlc/sprint.sql.go:302-318`) y PostgreSQL aplica las cascadas de tareas/horas.
+5. El handler serializa la fila eliminada con `200` (`back/social/internal/handler/http/sprint_sheets.go:59-70`). `_confirmDeleteSheet` recibe éxito y recarga seleccionando una hoja vecina (`front/lib/features/workspace/sprint_sheet_screen.dart:1380-1434`).
 
 ## Tests
-- `internal/service/sprint_sheets_test.go`: `TestDeleteSprintSheet`.
-- `internal/handler/http/sprint_sheets_test.go`: `TestSprintSheetRoutes`.
-- `test/social_routes_e2e_test.go`: subtest `todo_sprint_hours_and_workspace` (hoja eliminada deja de listarse).
+
+- `back/social/internal/handler/http/sprint_sheets_test.go:13`, `TestSprintSheetRoutes`.
+- `back/social/internal/service/sprint_sheets_test.go:108`, `TestDeleteSprintSheet` cubre hojas múltiples, última hoja y aislamiento.

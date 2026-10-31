@@ -1,20 +1,34 @@
-# POST /groups/:id/transfer-admin
+# `POST /groups/:id/transfer-admin`
 
-Un admin traspasa su rol a otro miembro en una sola transacción (microservicio `social`).
 
 ## Req
-- Método: `POST`, ruta: `/groups/:id/transfer-admin` (protegida con JWT `Bearer`; solo admin; `back/social/cmd/server/main.go:224`).
-- Headers: `Content-Type: application/json`, `Authorization: Bearer <access_token>`.
-- Path: `id` (uuid del grupo). Body (`transferAdminRequest`, `group_handler.go:258-260`): `{"new_admin_user_id":"<uuid>"}`.
+
+- `POST /groups/:id/transfer-admin` con JWT: `back/social/internal/handler/http/group_handler.go:25-36`.
+- :id UUID. JSON requerido {"new_admin_user_id":"<uuid>"}.
+- El actor debe ser admin; el usuario destino debe ser miembro elegible del grupo.
 
 ## Res
-- `200`: sin body (destinatario → `admin`, solicitante → `member`).
-- `400`: body malo o transferencia propia. `403`: solicitante no-admin. `404`: grupo inexistente o destino no-miembro. `401`: sin token.
+
+- 200 sin body.
+- El destino pasa a admin y el actor pasa a member, en una transacción.
+- 400 si falta id/body o la solicitud no es válida; 401 sesión inválida; 403 actor sin permisos; 404 target/grupo no encontrado; 500 error de storage. respondGroupError usa {"error":"mensaje"}; auth previo usa el envelope común.
+- Esta operación no cambia owner_user_id; la sucesión al salir/borrar cuenta es un flujo distinto.
+
+## Invocación (Front / Otros Servicios)
+
+- `_GroupMembersTabState._confirmRole` muestra confirmación y llama a `transferAdmin` (`front/lib/features/groups/group_members_tab.dart:230-280`).
+- `SocialService.transferAdmin` envía POST y notifica que el rol del usuario actual cambió (`front/lib/core/services/social_service.dart:291-314`).
+- No se encontró consumidor backend.
 
 ## Flujo
-- `GroupHandler.TransferAdmin` (`internal/handler/http/group_handler.go:263`) → `GroupService.TransferAdmin` (`internal/service/group_service.go:488`) → `GroupRepository.TransferAdmin` (lock del grupo, exige admin, destino debe pertenecer, actualiza ambos roles juntos; `internal/repository/group_repository.go:378`). No toca otros admins ni `owner_user_id`.
+
+1. `main()` monta `GroupHandler.RegisterRoutes` bajo JWT (`back/social/cmd/server/main.go:271-275`; `back/social/internal/handler/http/group_handler.go:23-38`).
+2. `GroupHandler.TransferAdmin` valida el nuevo administrador y toma al solicitante del JWT (`back/social/internal/handler/http/group_handler.go:262-278`).
+3. `GroupService.TransferAdmin` protege al usuario destino durante borrado; `GroupRepository.TransferAdmin` verifica que sea miembro y actualiza ambos roles dentro de una transacción (`back/social/internal/service/group_service.go:568-575`; `back/social/internal/repository/group_repository.go:383-421`).
+4. El handler devuelve `200` sin body, y `_confirmRole` recarga la lista tras `SocialService.transferAdmin` (`back/social/internal/handler/http/group_handler.go:273-278`; `front/lib/core/services/social_service.dart:291-314`; `front/lib/features/groups/group_members_tab.dart:230-280`).
 
 ## Tests
-- `internal/handler/http/group_handler_test.go`: `TestTransferAdminContract`.
-- `internal/service/group_service_test.go`: `TestTransferAdmin`.
-- `internal/handler/http/groups_postgres_e2e_test.go`: `TestGroupsPostgresE2E_MembershipLifecycle` (ambos roles verificados por SQL).
+
+- `back/social/internal/handler/http/group_handler_test.go:280`, `TestTransferAdminContract`.
+- `back/social/internal/service/group_service_test.go:872`, `TestLeaveSuccessionOrderAndOwner` documenta como contraste la sucesión por salida.
+- `back/social/internal/handler/http/groups_postgres_e2e_test.go:28` recorre el ciclo.
