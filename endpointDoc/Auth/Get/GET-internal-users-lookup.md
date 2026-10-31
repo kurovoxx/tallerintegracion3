@@ -1,17 +1,21 @@
 # GET /internal/users/lookup
 
-## Req
-- Método: `GET`, ruta: `/internal/users/lookup` (interna servicio-a-servicio; `back/auth/cmd/server/main.go:107`; grupo `/internal` con `RequireInternalKey`).
-- Headers requeridos: `X-Internal-Key: <clave-compartida>`. Sin JWT de usuario.
-- Query: `?ids=<uuid1>,<uuid2>` (opcional; sin ids responde `[]`; inexistentes se omiten, nunca 404 parcial).
+Permite consultar en lote (batch) la información pública de múltiples usuarios por sus IDs.
 
-## Res
-- `200`: `[{"user_id":"...","email":"..."}]` (siempre array, nunca `null`; `[]` si sin ids).
-- `401`: `{"error":{"code":"unauthorized","message":"..."}}` (sin `X-Internal-Key` o clave errónea).
+## 1. Req (Petición)
+- **Método y Ruta:** `GET /internal/users/lookup` (Servicio-a-servicio; `back/auth/cmd/server/main.go:118`).
+- **Headers:** `X-Internal-Key: <INTERNAL_API_KEY>`.
+- **Query Params:** `ids=uuid1,uuid2,uuid3` (hasta 200 IDs).
 
-## Flujo
-- `back/auth/internal/handler/http/internal_users_handler.go` (`Lookup`) → `back/auth/internal/service/users_service.go` (`Lookup`) → `back/auth/internal/repository/user_repository.go`; auth vía `back/auth/internal/middleware/` (`RequireInternalKey`).
+## 2. Res (Respuestas y Códigos HTTP)
+- **`200 OK`:** Lista de usuarios encontrados `[{"id":"uuid1",...},{"id":"uuid2",...}]`.
 
-## Tests
-- `back/auth/internal/handler/http/auth_extra_coverage_test.go`: `TestCoverage_Internas_SinKey_401` (sin key 401; con key válida lookup vacío 200 `[]`).
-- `back/auth/internal/handler/http/e2e_full_flow_test.go`: `TestE2E_OAuthPerfilInternasHealth` (sin key 401, con key 200).
+## 3. Invocación (Front / Otros Servicios)
+- **Microservicio Social:**
+  - Cliente: `back/social/internal/service/user_directory.go:70` (`LookupUsers`).
+  - Uso: Evitar N llamadas individuales al listar los miembros de un grupo o asistentes de una reunión.
+
+## 4. Flujo Técnico (Paso a Paso)
+1. Valida `X-Internal-Key`.
+2. Parsea la lista de UUIDs.
+3. Ejecuta `SELECT u.id, u.email, p.display_name, p.photo_url FROM identity.users u JOIN identity.profiles p ON u.id = p.user_id WHERE u.id = ANY($1)`.

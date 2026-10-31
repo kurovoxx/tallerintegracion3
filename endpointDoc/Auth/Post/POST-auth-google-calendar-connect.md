@@ -1,18 +1,25 @@
 # POST /auth/google-calendar/connect
 
-## Req
-- Método: `POST`, ruta: `/auth/google-calendar/connect` (protegida; `back/auth/cmd/server/main.go:98`).
-- Headers requeridos: `Authorization: Bearer <access_token>`, `Content-Type: application/json`.
-- Body: `{"oauth_code":"valid-cal-code"}` (opcional `redirect_uri` con allowlist).
+Conecta la cuenta de Google Calendar del usuario mediante OAuth para permitir la sincronización automática de reuniones de grupo.
 
-## Res
-- `200`: `{"connected":true}`.
-- `400`: `{"error":{"code":"bad_request|invalid_redirect_uri|invalid_oauth_code","message":"..."}}` (código inválido/expirado).
-- `401`: `{"error":{"code":"unauthorized","message":"..."}}` (sin token).
-- `502`: `{"error":{"code":"google_unavailable","message":"..."}}` (Google caído).
+## 1. Req (Petición)
+- **Método y Ruta:** `POST /auth/google-calendar/connect` (Protegida con JWT; `back/auth/cmd/server/main.go:113`).
+- **Headers:** `Authorization: Bearer <access_token>`, `Content-Type: application/json`.
+- **Body:** `{"code": "4/0Aean...", "redirect_uri": "..."}`.
 
-## Flujo
-- `back/auth/internal/handler/http/calendar_handler.go` (`Connect`) → `back/auth/internal/service/calendar_oauth_service.go` (`ConnectWithRedirect`) → `back/auth/internal/repository/oauth_repository.go`; provider OAuth real en prod, moqueado en tests.
+## 2. Res (Respuestas y Códigos HTTP)
+- **`200 OK`:** `{"status":"connected","provider":"google_calendar"}`.
+- **`400 Bad Request`:** `invalid_code`.
 
-## Tests
-- `back/auth/internal/handler/http/e2e_full_flow_test.go`: `TestE2E_OAuthPerfilInternasHealth` (`"google-down"` 502, `"valid-cal-code"` 200; provider `e2eCalendarProvider` moqueado, sin red).
+## 3. Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/features/auth/google_calendar_service.dart:110` (`connectCalendar()`).
+  - Pantalla: `front/lib/features/workspace/schedule_meeting_screen.dart`.
+
+## 4. Flujo Técnico (Paso a Paso)
+1. Canjea el código en Google OAuth API.
+2. Cifra los tokens recibidos con AES-256.
+3. Guarda o actualiza en `identity.oauth_connections` con `provider = 'google_calendar'`.
+
+## 5. Dependencias y Datos Afectados
+- **Tablas PostgreSQL:** `identity.oauth_connections`.
