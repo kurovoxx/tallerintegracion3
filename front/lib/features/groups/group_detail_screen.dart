@@ -503,37 +503,57 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
     final url = _config?.inviteUrl.trim() ?? '';
     if (url.isEmpty) return;
 
-    // Intentar abrir con la app nativa de Discord (deep link) primero.
     final inviteCode = _extractDiscordInviteCode(url);
-    final discordUri =
-        inviteCode != null ? Uri.parse('discord://invite/$inviteCode') : null;
-
-    final webUri = Uri.tryParse(url);
-    if (discordUri == null && webUri == null) return;
-
-    try {
-      final opened = await launchUrl(discordUri ?? webUri!,
-          mode: LaunchMode.externalApplication);
-      if (!opened && mounted) {
-        // Fallback: si la app no está instalada, abrir enlace web.
-        if (webUri != null) {
-          await launchUrl(webUri, mode: LaunchMode.externalApplication);
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('No se pudo abrir la invitación.')),
-          );
-        }
+    if (inviteCode == null) {
+      // Si no se pudo extraer el código, abrir el enlace web directamente.
+      final webUri = Uri.tryParse(url);
+      if (webUri != null && mounted) {
+        await _launchUrlOrSnackbar(webUri);
       }
-    } catch (_) {
+      return;
+    }
+
+    // Intentar deep links de Discord en orden de preferencia.
+    final deepLinks = <Uri>[
+      Uri.parse('discord://invite/$inviteCode'),
+      Uri.parse('discord://-invite/$inviteCode'), // variante legacy desktop
+    ];
+
+    final webUri = Uri.parse('https://discord.com/invite/$inviteCode');
+
+    bool opened = false;
+    for (final uri in deepLinks) {
+      try {
+        opened = await launchUrl(uri, mode: LaunchMode.platformDefault);
+        if (opened) break;
+      } catch (_) {
+        // Sigue al siguiente intento.
+      }
       if (!mounted) return;
-      // Fallback ante error: intentar abrir enlace web.
-      if (webUri != null) {
-        await launchUrl(webUri, mode: LaunchMode.externalApplication);
-      } else {
+    }
+
+    if (!opened) {
+      // Fallback: abrir enlace web en el navegador.
+      await _launchUrlOrSnackbar(webUri);
+    }
+  }
+
+  /// Lanza una URL o muestra snackbar si falla. Retorna true si se lanzó.
+  Future<bool> _launchUrlOrSnackbar(Uri uri) async {
+    if (!mounted) return false;
+    try {
+      final opened = await launchUrl(uri, mode: LaunchMode.platformDefault);
+      if (!opened) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('No se pudo abrir la invitación.')),
         );
       }
+      return opened;
+    } catch (_) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo abrir la invitación.')),
+      );
+      return false;
     }
   }
 
