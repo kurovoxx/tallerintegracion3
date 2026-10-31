@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -71,7 +72,7 @@ void main() {
     var currentEstimate = 2.0;
     final service = SocialService(
       client: MockClient((request) async {
-        final path = request.url.path;
+        final path = request.url.servicePath;
         if (request.method == 'GET' && path.endsWith('/workspace')) {
           return http.Response(
             jsonEncode({
@@ -156,7 +157,7 @@ void main() {
     var patchCalls = 0;
     final service = SocialService(
       client: MockClient((request) async {
-        final path = request.url.path;
+        final path = request.url.servicePath;
         if (request.method == 'GET' && path.endsWith('/workspace')) {
           return http.Response(
             jsonEncode({

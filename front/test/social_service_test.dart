@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -19,7 +20,7 @@ void main() {
     final service = SocialService(
       client: MockClient((request) async {
         expect(request.method, 'GET');
-        expect(request.url.path, '/me/overview');
+        expect(request.url.servicePath, '/me/overview');
         expect(request.headers['Authorization'], 'Bearer jwt-test');
         return http.Response(
           jsonEncode(<String, dynamic>{
@@ -57,6 +58,43 @@ void main() {
     expect(ov.adminGroupsCount, 1);
   });
 
+  test('kickMember/banMember/leaveGroup envían cleanup_shared_notes', () async {
+    SessionManager.saveSession('jwt-test', {'id': 'u'});
+    addTearDown(SessionManager.clear);
+    const gid = '11111111-1111-1111-1111-111111111111';
+    const uid = '22222222-2222-4222-8222-222222222222';
+    Map<String, dynamic>? lastBody;
+    final service = SocialService(
+      client: MockClient((request) async {
+        expect(request.method, 'POST');
+        lastBody = jsonDecode(request.body) as Map<String, dynamic>;
+        return http.Response('', 204);
+      }),
+    );
+    addTearDown(service.dispose);
+
+    await service.kickMember(
+      groupId: gid,
+      userId: uid,
+      cleanupSharedNotes: true,
+    );
+    expect(lastBody?['cleanup_shared_notes'], isTrue);
+    await service.kickMember(groupId: gid, userId: uid);
+    expect(lastBody?['cleanup_shared_notes'], isFalse);
+
+    await service.banMember(
+      groupId: gid,
+      userId: uid,
+      cleanupSharedNotes: true,
+    );
+    expect(lastBody?['cleanup_shared_notes'], isTrue);
+
+    await service.leaveGroup(gid, cleanupSharedNotes: true);
+    expect(lastBody?['cleanup_shared_notes'], isTrue);
+    await service.leaveGroup(gid);
+    expect(lastBody?['cleanup_shared_notes'], isFalse);
+  });
+
   test('createMeeting envía POST real con scheduled_at RFC3339', () async {
     SessionManager.saveSession('jwt-test', {'id': 'u'});
     addTearDown(SessionManager.clear);
@@ -65,7 +103,7 @@ void main() {
     final service = SocialService(
       client: MockClient((request) async {
         expect(request.method, 'POST');
-        expect(request.url.path, '/groups/$gid/meetings');
+        expect(request.url.servicePath, '/groups/$gid/meetings');
         final body = jsonDecode(request.body) as Map<String, dynamic>;
         expect(body['title'], 'Daily');
         expect(body['scheduled_at'], contains('T'));
@@ -96,7 +134,7 @@ void main() {
     final service = SocialService(
       client: MockClient((request) async {
         expect(request.method, 'GET');
-        expect(request.url.path, '/groups/$gid');
+        expect(request.url.servicePath, '/groups/$gid');
         return http.Response(
           jsonEncode(<String, dynamic>{
             'id': gid,

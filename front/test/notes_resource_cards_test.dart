@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -49,6 +50,7 @@ void main() {
     final repo = LocalNotesRepository(db);
     await repo.upsertNote(
       LocalNote(
+        needsSync: false,
         id: note,
         title: 'Recursos',
         content: content,
@@ -59,14 +61,14 @@ void main() {
       ),
     );
     notesHttpClientOverride = MockClient((r) async {
-      if (r.url.path == '/notes/me') {
+      if (r.url.servicePath == '/notes/me') {
         return json({
           'notes': [
             {'id': note, 'title': 'Recursos', 'version': 2},
           ],
         });
       }
-      if (r.url.path == '/notes/$note') {
+      if (r.url.servicePath == '/notes/$note') {
         return json({
           'id': note,
           'title': 'Recursos',
@@ -76,7 +78,7 @@ void main() {
           'attachments': atts,
         });
       }
-      if (r.url.path.endsWith('/content')) {
+      if (r.url.servicePath.endsWith('/content')) {
         return http.Response.bytes(
           base64Decode(
             'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',

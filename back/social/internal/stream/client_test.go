@@ -109,6 +109,101 @@ func TestRESTClient_EnsureMember(t *testing.T) {
 	}
 }
 
+func TestRESTClient_RemoveMember(t *testing.T) {
+	var gotPath string
+	var gotBody struct {
+		RemoveMembers []string `json:"remove_members"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if r.Method != http.MethodPost {
+			t.Errorf("método debe ser POST, got %s", r.Method)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("body JSON inválido: %v", err)
+		}
+		w.WriteHeader(200)
+		w.Write([]byte(`{"members":[]}`))
+	}))
+	defer srv.Close()
+
+	c := &RESTClient{httpClient: srv.Client(), baseURL: srv.URL, apiKey: "key123", apiSecret: "secret123"}
+	if err := c.RemoveMember(t.Context(), "messaging", "group-abc", "u1"); err != nil {
+		t.Fatalf("esperado éxito, got %v", err)
+	}
+	if gotPath != "/channels/messaging/group-abc" {
+		t.Fatalf("path inesperado: %q", gotPath)
+	}
+	if len(gotBody.RemoveMembers) != 1 || gotBody.RemoveMembers[0] != "u1" {
+		t.Fatalf("remove_members inesperado: %+v", gotBody)
+	}
+	if err := c.RemoveMember(t.Context(), "messaging", "group-abc", " "); err == nil {
+		t.Fatal("user vacío debe fallar sin HTTP")
+	}
+}
+
+func TestRESTClient_RemoveMember_OnlyConfirmedMissingResourceIsSuccess(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+		wantError  bool
+	}{
+		{name: "canal ya ausente", statusCode: http.StatusNotFound, body: `{"code":16,"message":"resource not found"}`},
+		{name: "otro 404", statusCode: http.StatusNotFound, body: `{"code":4,"message":"invalid request"}`, wantError: true},
+		{name: "error transitorio", statusCode: http.StatusInternalServerError, body: `{"code":-1,"message":"temporary failure"}`, wantError: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.statusCode)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+
+			c := &RESTClient{httpClient: srv.Client(), baseURL: srv.URL, apiKey: "key123", apiSecret: "secret123"}
+			err := c.RemoveMember(t.Context(), "messaging", "group-abc", "u1")
+			if (err != nil) != tt.wantError {
+				t.Fatalf("RemoveMember error=%v, wantError=%v", err, tt.wantError)
+			}
+		})
+	}
+}
+
+// Usuario nuevo: Stream responde 400 al add_members porque el usuario aún no
+// existe; el cliente lo crea vía POST /users y reintenta.
+func TestRESTClient_EnsureMember_CreaUsuarioInexistente(t *testing.T) {
+	var calls []string
+	exists := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		calls = append(calls, r.URL.Path)
+		switch {
+		case r.URL.Path == "/users":
+			if !strings.Contains(string(raw), `"u-nuevo":{"id":"u-nuevo"}`) {
+				t.Errorf("upsert body inesperado: %s", raw)
+			}
+			exists = true
+			w.WriteHeader(201)
+		case !exists:
+			w.WriteHeader(400)
+			w.Write([]byte(`{"message":"users don't exist: [u-nuevo]"}`))
+		default:
+			w.WriteHeader(201)
+		}
+	}))
+	defer srv.Close()
+
+	c := &RESTClient{httpClient: srv.Client(), baseURL: srv.URL, apiKey: "key123", apiSecret: "secret123"}
+	if err := c.EnsureMember(t.Context(), "messaging", "group-abc", "u-nuevo"); err != nil {
+		t.Fatalf("esperado éxito tras crear el usuario, got %v", err)
+	}
+	want := []string{"/channels/messaging/group-abc", "/users", "/channels/messaging/group-abc"}
+	if strings.Join(calls, ",") != strings.Join(want, ",") {
+		t.Fatalf("llamadas = %v, want %v", calls, want)
+	}
+}
+
 func TestRESTClient_ErrorStream(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(400)

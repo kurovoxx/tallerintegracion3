@@ -1,9 +1,11 @@
+import 'support/service_uri.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/testing.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taller_integracion_front/core/services/session_manager.dart';
+import 'package:taller_integracion_front/core/database/app_database_manager.dart';
 import 'package:taller_integracion_front/features/notes/all_notes_screen.dart';
 
 Future<void> _pumpNotes(WidgetTester tester) async {
@@ -25,12 +27,16 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
+  tearDown(() async {
+    await AppDatabaseManager.instance.resetForTesting();
+  });
+
   testWidgets(
     'con sesión y fallo GET /notes/me no se presentan demos como reales',
     (tester) async {
       SessionManager.saveSession('jwt-notes-fail', {'id': 'u-notes'});
       notesHttpClientOverride = MockClient((request) async {
-        if (request.method == 'GET' && request.url.path == '/notes/me') {
+        if (request.method == 'GET' && request.url.servicePath == '/notes/me') {
           return http.Response(
             '{"error":{"code":"internal"}}',
             500,

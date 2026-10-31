@@ -11,13 +11,18 @@ const pillanCertificateSha256 = String.fromEnvironment(
       'd68cbdf6646dc6e49c17d01d0282a6d214c6acd9d2845278ef89701a0200ec7e',
 );
 
-bool isTrustedPillanCertificate(X509Certificate cert, String host, int port) {
+bool isTrustedPillanCertificate(
+  X509Certificate cert,
+  String host,
+  int port, {
+  String fingerprints = pillanCertificateSha256,
+}) {
   final now = DateTime.now();
   return host == 'ti3-brojas.dev.censei.cl' &&
       port == 443 &&
       !now.isBefore(cert.startValidity) &&
       now.isBefore(cert.endValidity) &&
-      pillanCertificateSha256
+      fingerprints
           .toLowerCase()
           .split(',')
           .map((pin) => pin.trim())

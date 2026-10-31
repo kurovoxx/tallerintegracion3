@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:drift/native.dart';
@@ -37,10 +38,8 @@ void main() {
     expect(ready(), isTrue, reason: 'operación no terminó');
   }
 
-  Finder syncButton() => find.widgetWithText(
-    NeobrutalistButton,
-    'REFRESCAR / SINCRONIZAR DRIVE',
-  );
+  Finder syncButton() =>
+      find.widgetWithText(NeobrutalistButton, 'REFRESCAR / SINCRONIZAR DRIVE');
 
   http.Response json(Object b, [int status = 200]) => http.Response(
     jsonEncode(b),
@@ -56,6 +55,7 @@ void main() {
     for (final e in [('Uno', uuid1), ('Dos', uuid2)]) {
       await repo.upsertNote(
         LocalNote(
+          needsSync: false,
           id: e.$2,
           title: e.$1,
           content: 'contenido',
@@ -102,16 +102,18 @@ void main() {
   }) {
     final gone = <String>{};
     return MockClient((r) async {
-      calls.add('${r.method} ${r.url.path}');
-      if (r.method == 'POST' && r.url.path == '/notes/reconcile') {
+      calls.add('${r.method} ${r.url.servicePath}');
+      if (r.method == 'POST' && r.url.servicePath == '/notes/reconcile') {
         if (postGate != null) await postGate.future;
         final res = reconcile();
-        for (final id in (res['removed_note_ids'] as List?)?.whereType<String>() ?? const <String>[]) {
+        for (final id
+            in (res['removed_note_ids'] as List?)?.whereType<String>() ??
+                const <String>[]) {
           gone.add(id);
         }
         return json(res);
       }
-      if (r.url.path == '/notes/me') {
+      if (r.url.servicePath == '/notes/me') {
         return json({
           'notes': [
             if (!gone.contains(uuid1))
@@ -201,11 +203,11 @@ void main() {
     final calls = <String>[];
     final db = await seedDb();
     notesHttpClientOverride = MockClient((r) async {
-      calls.add('${r.method} ${r.url.path}');
-      if (r.method == 'POST' && r.url.path == '/notes/reconcile') {
+      calls.add('${r.method} ${r.url.servicePath}');
+      if (r.method == 'POST' && r.url.servicePath == '/notes/reconcile') {
         return json({}, 502);
       }
-      if (r.url.path == '/notes/me') {
+      if (r.url.servicePath == '/notes/me') {
         return json({
           'notes': [
             {'id': uuid1, 'title': 'Uno', 'version': 2},
@@ -257,10 +259,7 @@ void main() {
     await t.pump();
     gate.complete();
     await waitIdle(t);
-    expect(
-      calls.where((c) => c == 'POST /notes/reconcile').length,
-      1,
-    );
+    expect(calls.where((c) => c == 'POST /notes/reconcile').length, 1);
     await t.pumpWidget(const SizedBox());
   });
 }

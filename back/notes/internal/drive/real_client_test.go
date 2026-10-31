@@ -122,7 +122,7 @@ func TestMockLinkPermissionLifecycle(t *testing.T) {
 		t.Fatal("link remains")
 	}
 	_, _ = m.GrantLinkPermission(ctx, "owner", "file")
-	_ = m.GrantPermission(ctx, "owner", "file", "real@example.com", "reader")
+	_, _ = m.GrantPermission(ctx, "owner", "file", "real@example.com", "reader")
 	if err := m.RevokePermissionByID(ctx, "owner", "file", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestRevokeAllPermissionsRequiresOAuth(t *testing.T) {
 	if err := r.RevokePermission(context.Background(), "user-x", "file-x", "a@x.com"); err == nil {
 		t.Fatal("RevokePermission sin OAuth debe fallar")
 	}
-	if err := r.GrantPermission(context.Background(), "user-x", "file-x", "a@x.com", "reader"); err == nil {
+	if _, err := r.GrantPermission(context.Background(), "user-x", "file-x", "a@x.com", "reader"); err == nil {
 		t.Fatal("GrantPermission sin OAuth debe fallar")
 	}
 }

@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import '../../core/common_widgets.dart';
 import '../../core/theme/app_theme.dart';
+import 'academic_api.dart';
+import 'academic_mappers.dart';
+import 'academic_models.dart';
 
 /// RF-13, RF-14 / Regla 2.5
 /// Cálculo oficial: % asistencia = 1 - (COUNT(absences no justificadas) / subjects.total_classes)
@@ -74,6 +77,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   List<Map<String, dynamic>> _subjects = [];
   List<Map<String, dynamic>> _absences = [];
 
+  // Backend Academic: con sesión se cargan materias + faltas + resumen
+  // reales; sin sesión/red rige el mock local con error visible.
+  final AcademicApi _academicApi = AcademicApi();
+  bool _backendMode = false;
+  final Map<String, AcademicAttendance> _attendanceBySubject = {};
+
   // config editable por asignatura en vista específica
   final Map<String, Map<String, dynamic>> _subjectConfigs = {};
 
@@ -87,6 +96,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   @override
   void dispose() {
     _scrollController.dispose();
+    _academicApi.dispose();
     super.dispose();
   }
 
@@ -98,6 +108,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     try {
       await Future.delayed(const Duration(milliseconds: 650));
 
+      if (!await _loadFromBackend()) {
       _subjects = [
         {
           'id': 'arq-hw',
@@ -176,6 +187,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         {'id': 'abs-12', 'subject_id': 'taller-3', 'date': DateTime(2026, 3, 15), 'justified': true, 'source': 'teacher', 'type': 'Taller'},
         {'id': 'abs-13', 'subject_id': 'redes', 'date': DateTime(2026, 4, 8), 'justified': true, 'source': 'teacher', 'type': 'Teoría'},
       ];
+      } // fin mock local (sin sesión/backend)
 
       // configs por defecto sincronizados con subjects
       for (final s in _subjects) {
@@ -183,7 +195,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         _subjectConfigs[id] = {
           'daysPerWeek': s['days_per_week'] as int? ?? 2,
           'weeks': s['weeks'] as int? ?? 16,
-          'minPct': (s['min_attendance_pct'] as int?) ?? 75,
+          'minPct': (s['min_attendance_pct'] as num?)?.toInt() ?? 75,
         };
       }
 
@@ -209,12 +221,96 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     }
   }
 
+  /// Carga materias + faltas + resumen oficial desde el backend.
+  /// Retorna false si no hay sesión/red (se usa el mock local).
+  Future<bool> _loadFromBackend() async {
+    try {
+      final malla = await _academicApi.ensureCurriculum();
+      final backendSubjects = await _academicApi.listSubjects(malla.id);
+      final subjects = <Map<String, dynamic>>[];
+      final absences = <Map<String, dynamic>>[];
+      final summaries = <String, AcademicAttendance>{};
+      for (final s in backendSubjects) {
+        final list = await _academicApi.listAbsences(s.id);
+        summaries[s.id] = await _academicApi.getAttendance(s.id);
+        for (final a in list) {
+          final dt = a.dateTime;
+          if (dt == null) continue;
+          absences.add({
+            'id': a.id,
+            'subject_id': s.id,
+            'date': dt,
+            'justified': a.justified,
+            'source': a.source ?? 'self',
+            'type': a.type ?? 'Clase regular',
+          });
+        }
+        subjects.add({
+          'id': s.id,
+          'name': s.name,
+          'code': s.code ?? '',
+          'total_classes': s.totalClasses,
+          'min_attendance_pct': s.minAttendancePct ?? 75.0,
+          'professor': s.professor ?? 'Por asignar',
+          'credits': s.credits ?? 5,
+          'days_per_week': 2,
+          'weeks': 16,
+          'absences': <Map<String, dynamic>>[],
+        });
+      }
+      if (!mounted) return true;
+      setState(() {
+        _subjects = subjects;
+        _absences = absences;
+        _attendanceBySubject
+          ..clear()
+          ..addAll(summaries);
+        _backendMode = true;
+      });
+      return true;
+    } on AcademicApiException {
+      if (mounted) {
+        setState(() {
+          _backendMode = false;
+        });
+      }
+      return false;
+    }
+  }
+
   Map<String, dynamic>? _subjectById(String id) {
     try {
       return _subjects.firstWhere((s) => s['id'] == id);
     } catch (_) {
       return null;
     }
+  }
+
+  /// Línea de referencia con el resumen oficial del backend (fórmula
+  /// 1 - injustificadas/total). Solo visible en modo backend.
+  Widget _backendSummaryLine(String subjectId) {
+    final att = _attendanceBySubject[subjectId];
+    if (!_backendMode || att == null) return const SizedBox.shrink();
+    final pct = att.percentage;
+    final label = pct == null
+        ? 'BACKEND: SIN TOTAL CONFIGURADO'
+        : 'BACKEND: ${pct.toStringAsFixed(1)}% · JUSTIFICADAS ${att.justifiedCount}'
+            '${att.remaining != null ? ' · RESTAN ${att.remaining}' : ''}';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: AppColors.bg,
+          border: Border.all(color: AppColors.border, width: 2),
+          borderRadius: BorderRadius.circular(AppDimens.radius),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: AppColors.muted),
+        ),
+      ),
+    );
   }
 
   List<Map<String, dynamic>> _absencesFor(String subjectId) {
@@ -281,8 +377,30 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     });
   }
 
-  void _saveCourseConfig(String subjectId, int daysPerWeek, int weeks, double minPct) {
+  /// Guarda config local y, en modo backend, la persiste por PATCH en la
+  /// materia (total_classes/min_attendance_pct) para que sobreviva al
+  /// reentrar. Sin sesión/red: error visible y se relee del backend.
+  void _saveCourseConfig(String subjectId, int daysPerWeek, int weeks, double minPct) async {
     final totalClasses = daysPerWeek * weeks;
+    if (_backendMode) {
+      try {
+        await _academicApi.patchSubject(
+          subjectId,
+          attendanceConfigPatch(
+            totalClasses: totalClasses,
+            minAttendancePct: minPct,
+          ),
+        );
+      } on AcademicApiException catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No se pudo guardar: ${e.message}'), backgroundColor: AppColors.border),
+        );
+        await _loadData();
+        return;
+      }
+    }
+    if (!mounted) return;
     setState(() {
       final idx = _subjects.indexWhere((s) => s['id'] == subjectId);
       if (idx != -1) {
@@ -454,8 +572,35 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     if (result != null) {
       final date = result['date'] as DateTime;
       final just = result['justified'] as bool;
+      String entryId = 'abs-${DateTime.now().microsecondsSinceEpoch}';
+      if (_backendMode) {
+        try {
+          entryId = await _academicApi.createAbsence(
+            subjectId: subjectId,
+            date:
+                '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}',
+            justified: just,
+            source: 'self',
+            type: 'Clase regular',
+          );
+        } on AcademicApiException catch (e) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                e.code == 'conflict'
+                    ? 'Ya existe una inasistencia en esa fecha'
+                    : 'No se pudo registrar: ${e.message}',
+              ),
+              backgroundColor: AppColors.border,
+            ),
+          );
+          return;
+        }
+      }
+      if (!mounted) return;
       final newEntry = {
-        'id': 'abs-${DateTime.now().microsecondsSinceEpoch}',
+        'id': entryId,
         'subject_id': subjectId,
         'date': date,
         'justified': just,
@@ -486,9 +631,49 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     }
   }
 
-  void _deleteAbsence(String absenceId) {
+  /// Alterna justified por PATCH (modo backend) o local (mock).
+  Future<void> _toggleJustified(String absenceId, bool value) async {
+    if (_backendMode) {
+      try {
+        await _academicApi.patchAbsence(absenceId, {'justified': value});
+      } on AcademicApiException catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No se pudo actualizar: ${e.message}'), backgroundColor: AppColors.border),
+        );
+        return;
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      for (final a in _absences) {
+        if (a['id'] == absenceId) a['justified'] = value;
+      }
+      for (final s in _subjects) {
+        final list = s['absences'] as List?;
+        if (list == null) continue;
+        for (final a in list) {
+          if ((a as Map)['id'] == absenceId) a['justified'] = value;
+        }
+      }
+    });
+  }
+
+  void _deleteAbsence(String absenceId) async {
     final abs = _absences.firstWhere((a) => a['id'] == absenceId, orElse: () => <String, dynamic>{});
     if (abs.isEmpty) return;
+    if (_backendMode) {
+      try {
+        await _academicApi.deleteAbsence(absenceId);
+      } on AcademicApiException catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No se pudo eliminar: ${e.message}'), backgroundColor: AppColors.border),
+        );
+        return;
+      }
+    }
+    if (!mounted) return;
     final subjectId = abs['subject_id'] as String;
     final currentAbs = List<Map<String, dynamic>>.from(
       (_subjectById(subjectId)?['absences'] as List?)?.cast<Map<String, dynamic>>() ?? _absencesFor(subjectId),
@@ -913,7 +1098,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                       child: Align(
                         alignment: Alignment.centerRight,
                         child: TextButton(
-                          onPressed: () => _openSubjectDetail(subjectId),
+                          onPressed: () => isJustified
+                              ? _openSubjectDetail(subjectId)
+                              : _toggleJustified(item['id'] as String, true),
                           style: TextButton.styleFrom(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             minimumSize: Size.zero,
@@ -984,6 +1171,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         const SizedBox(height: 14),
         Text('CONTROL DE INASISTENCIAS · ${(subject['name'] as String).toUpperCase()}', style: TextStyle(fontWeight: FontWeight.w900, fontSize: isDesktop ? 18 : 15, color: AppColors.text, letterSpacing: -0.3)),
         const Divider(color: AppColors.border, thickness: 4, height: 20),
+        _backendSummaryLine(subjectId),
         // Configuración del curso — siempre arriba
         Container(
           padding: EdgeInsets.all(isDesktop ? 20 : 16),
@@ -1180,10 +1368,14 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                                       Text((a['type'] as String).toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 10, color: AppColors.muted)),
                                     ]),
                                   ),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                                    decoration: BoxDecoration(color: (a['justified'] as bool) ? const Color(0xFFD6E3FF) : const Color(0xFFFFDAD6), border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(4)),
-                                    child: Text((a['justified'] as bool) ? 'JUST.' : 'INJUST.', style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w900)),
+                                  InkWell(
+                                    onTap: () => _toggleJustified(a['id'] as String, !(a['justified'] as bool)),
+                                    borderRadius: BorderRadius.circular(4),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                      decoration: BoxDecoration(color: (a['justified'] as bool) ? const Color(0xFFD6E3FF) : const Color(0xFFFFDAD6), border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(4)),
+                                      child: Text((a['justified'] as bool) ? 'JUST.' : 'INJUST.', style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w900)),
+                                    ),
                                   ),
                                   const SizedBox(width: 8),
                                   _SquareIconButton(icon: Icons.delete_rounded, tooltip: 'Eliminar', onPressed: () => _deleteAbsence(a['id'] as String)),

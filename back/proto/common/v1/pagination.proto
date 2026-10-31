@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package common.v1;
+
+option go_package = "github.com/kurovoxx/tallerintegracion3/back/proto/gen/go/common/v1;commonv1";
+
+// Paginación por cursor (tarea 3_5_2). Sin total_size a propósito: barato
+// siempre (truco limit+1, como ya hace Notes); el cliente solo sabe si hay
+// más páginas. Si un listado futuro necesita total, se suma como campo
+// opcional sin romper compatibilidad.
+//
+// Mapeo con lo existente: page_token = cursor, page_size = limit,
+// next_page_token = next_cursor.
+message PageRequest {
+  // Máximo de elementos a devolver. 0 = default del servidor
+  // (20, tope 100, como Notes hoy).
+  int32 page_size = 1;
+
+  // Cursor opaco entregado por el servidor; vacío = primera página.
+  string page_token = 2;
+}
+
+message PageResponse {
+  // Cursor para la próxima página; vacío = no hay más.
+  string next_page_token = 1;
+}

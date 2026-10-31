@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -26,7 +27,7 @@ void main() {
     final service = SocialService(
       client: MockClient((request) async {
         expect(request.method, 'GET');
-        expect(request.url.path, '/groups/$_gid/stream-token');
+        expect(request.url.servicePath, '/groups/$_gid/stream-token');
         expect(request.headers['Authorization'], 'Bearer jwt-test');
         return http.Response(
           jsonEncode({'token': 'tok-abc', 'channel_id': 'group-canal-1'}),
@@ -78,7 +79,7 @@ void main() {
     final service = SocialService(
       client: MockClient((request) async {
         method = request.method;
-        path = request.url.path;
+        path = request.url.servicePath;
         return http.Response(
           jsonEncode({
             'message': 'todo updated successfully',
@@ -116,7 +117,7 @@ void main() {
     final service = SocialService(
       client: MockClient((request) async {
         method = request.method;
-        path = request.url.path;
+        path = request.url.servicePath;
         return http.Response(
           jsonEncode({'message': 'ok', 'data': {}}),
           200,
@@ -137,7 +138,7 @@ void main() {
     final service = SocialService(
       client: MockClient((request) async {
         methods.add(request.method);
-        paths.add('${request.method} ${request.url.path}');
+        paths.add('${request.method} ${request.url.servicePath}');
         return http.Response(
           jsonEncode({
             'message': 'ok',
@@ -177,7 +178,7 @@ void main() {
     () async {
       final service = SocialService(
         client: MockClient((request) async {
-          expect(request.url.path, '/groups/$_gid/members');
+          expect(request.url.servicePath, '/groups/$_gid/members');
           return http.Response(
             jsonEncode([
               {
@@ -238,7 +239,7 @@ void main() {
     final service = SocialService(
       client: MockClient((request) async {
         method = request.method;
-        path = request.url.path;
+        path = request.url.servicePath;
         return http.Response(
           jsonEncode({'new_invite_token': 'tok-nuevo'}),
           200,
@@ -258,7 +259,7 @@ void main() {
     final calls = <String>[];
     final service = SocialService(
       client: MockClient((request) async {
-        calls.add('${request.method} ${request.url.path}');
+        calls.add('${request.method} ${request.url.servicePath}');
         if (request.method == 'POST') {
           return http.Response(
             jsonEncode({
@@ -306,7 +307,7 @@ void main() {
     final service = SocialService(
       client: MockClient((request) async {
         method = request.method;
-        path = request.url.path;
+        path = request.url.servicePath;
         sent = jsonDecode(request.body) as Map<String, dynamic>;
         return http.Response(
           jsonEncode({'message': 'ok'}),

@@ -11,6 +11,9 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import 'academic_api.dart';
+import 'academic_mappers.dart';
+import 'academic_models.dart';
 
 enum _ViewMode { byDay, fullWeek }
 
@@ -215,6 +218,10 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   DateTime _now = DateTime.now();
   Timer? _clock;
 
+  // Backend Academic: con sesión agrega horarios por materia (GET por
+  // materia); sin sesión rige el mock local.
+  final AcademicApi _academicApi = AcademicApi();
+
   @override
   void initState() {
     super.initState();
@@ -236,6 +243,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   @override
   void dispose() {
     _clock?.cancel();
+    _academicApi.dispose();
     super.dispose();
   }
 
@@ -250,7 +258,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 
     try {
       await Future<void>.delayed(const Duration(milliseconds: 500));
-      final sessions = _buildMockSessions();
+      final sessions = await _loadFromBackend() ?? _buildMockSessions();
       final displayed = _displayedDaysFor(sessions);
       final today = _todayPostgres;
       if (!mounted) return;
@@ -265,6 +273,41 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         _isLoading = false;
         _hasError = true;
       });
+    }
+  }
+
+  /// Agregado backend: malla -> materias -> GET horarios por materia.
+  /// Retorna null si no hay sesión/backend (se usa el mock local).
+  Future<List<_ClassSession>?> _loadFromBackend() async {
+    try {
+      final malla = await _academicApi.ensureCurriculum();
+      final subjects = await _academicApi.listSubjects(malla.id);
+      final out = <_ClassSession>[];
+      for (final s in subjects) {
+        final slots = await _academicApi.listSchedules(s.id);
+        for (final slot in slots) {
+          final start = hhMmToMinutes(slot.startTime);
+          final end = hhMmToMinutes(slot.endTime);
+          if (start == null || end == null || end <= start) continue;
+          out.add(
+            _ClassSession(
+              id: slot.id,
+              subjectId: s.id,
+              subjectName: s.name,
+              code: s.code ?? '',
+              dayOfWeek: slot.dayOfWeek,
+              startMinutes: start,
+              endMinutes: end,
+              room: s.room ?? 'Por asignar',
+              professor: s.professor ?? 'Por asignar',
+              modality: slot.modality ?? 'Cátedra',
+            ),
+          );
+        }
+      }
+      return out;
+    } on AcademicApiException {
+      return null;
     }
   }
 

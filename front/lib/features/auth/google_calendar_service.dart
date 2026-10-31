@@ -7,8 +7,7 @@ import 'package:http/http.dart' as http;
 
 import '../../core/services/authed_client.dart';
 import '../../core/services/session_manager.dart';
-import 'google_drive_service.dart'
-    show GoogleDriveService, LocalPortBusyException;
+import 'google_drive_service.dart' show GoogleDriveService;
 
 /// Resultado de POST /auth/google-calendar/connect. Mensajes listos para UI.
 class CalendarConnectResult {
@@ -33,6 +32,10 @@ class CalendarStatus {
 /// google_sign_in móvil) parametrizando únicamente el scope real de
 /// Calendar. NO rompe Drive: su servicio conserva sus defaults.
 class GoogleCalendarService {
+  GoogleCalendarService({http.Client? client}) : _client = client;
+
+  final http.Client? _client;
+
   static Future<void> ensureConfigured({required String backendBaseUrl}) =>
       GoogleDriveService.ensureConfigured(backendBaseUrl: backendBaseUrl);
 
@@ -82,7 +85,9 @@ class GoogleCalendarService {
     required String backendBaseUrl,
     required String oauthCode,
     String? redirectUri,
+    int? expectedSessionRevision,
   }) async {
+    final revision = expectedSessionRevision ?? SessionManager.revision.value;
     final base = backendBaseUrl.trim().replaceFirst(RegExp(r'/+$'), '');
     if (base.isEmpty || oauthCode.trim().isEmpty) {
       return const CalendarConnectResult.error(
@@ -95,23 +100,44 @@ class GoogleCalendarService {
     http.Response resp;
     try {
       resp = await AuthedHttp.run(() {
-        return http
-            .post(
-              Uri.parse('$base/auth/google-calendar/connect'),
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ${SessionManager.token ?? ''}',
-              },
-              body: jsonEncode(payload),
-            )
-            .timeout(const Duration(seconds: 15));
+        if (revision != SessionManager.revision.value) {
+          throw StateError('La sesión cambió.');
+        }
+        final token = SessionManager.token;
+        if (token == null || token.isEmpty) {
+          throw StateError('No hay una sesión activa.');
+        }
+        final url = Uri.parse('$base/auth/google-calendar/connect');
+        final headers = {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        };
+        final request = _client == null
+            ? http.post(url, headers: headers, body: jsonEncode(payload))
+            : _client.post(url, headers: headers, body: jsonEncode(payload));
+        return request.timeout(const Duration(seconds: 15));
       });
     } catch (_) {
       return const CalendarConnectResult.error(
         'No se pudo conectar con Google Calendar. Inténtalo nuevamente más tarde.',
       );
     }
-    if (resp.statusCode == 200) return const CalendarConnectResult.ok();
+    if (revision != SessionManager.revision.value) {
+      return const CalendarConnectResult.error(
+        'La sesión cambió. Vuelve a iniciar la conexión con Calendar.',
+      );
+    }
+    if (resp.statusCode == 200) {
+      try {
+        final body = jsonDecode(utf8.decode(resp.bodyBytes));
+        if (body is Map && body['connected'] == true) {
+          return const CalendarConnectResult.ok();
+        }
+      } catch (_) {}
+      return const CalendarConnectResult.error(
+        'No se pudo confirmar la conexión con Google Calendar.',
+      );
+    }
     String? code;
     try {
       final body = jsonDecode(resp.body);
@@ -149,24 +175,31 @@ class GoogleCalendarService {
   /// El aislamiento es por cuenta: el backend resuelve por user_id del JWT,
   /// igual que Drive (verificación A/B pendiente en informe manual).
   Future<CalendarStatus?> fetchStatus({required String backendBaseUrl}) async {
-    final token = SessionManager.token;
-    if (token == null || token.isEmpty) return null;
+    final revision = SessionManager.revision.value;
+    if (SessionManager.token?.isNotEmpty != true) return null;
     final base = backendBaseUrl.trim().replaceFirst(RegExp(r'/+$'), '');
     if (base.isEmpty) return null;
     try {
       final resp = await AuthedHttp.run(() {
-        return http
-            .get(
-              Uri.parse('$base/auth/google-calendar/status'),
-              headers: {'Authorization': 'Bearer $token'},
-            )
-            .timeout(const Duration(seconds: 10));
+        if (revision != SessionManager.revision.value) {
+          throw StateError('La sesión cambió.');
+        }
+        final token = SessionManager.token;
+        if (token == null || token.isEmpty) {
+          throw StateError('No hay una sesión activa.');
+        }
+        final url = Uri.parse('$base/auth/google-calendar/status');
+        final headers = {'Authorization': 'Bearer $token'};
+        final request = _client == null
+            ? http.get(url, headers: headers)
+            : _client.get(url, headers: headers);
+        return request.timeout(const Duration(seconds: 10));
       });
-      if (resp.statusCode != 200) {
-        return const CalendarStatus(connected: false);
+      if (revision != SessionManager.revision.value || resp.statusCode != 200) {
+        return null;
       }
-      final body = jsonDecode(resp.body);
-      if (body is! Map) return const CalendarStatus(connected: false);
+      final body = jsonDecode(utf8.decode(resp.bodyBytes));
+      if (body is! Map || body['connected'] is! bool) return null;
       final email = (body['external_email'] ?? '').toString().trim();
       return CalendarStatus(
         connected: body['connected'] == true,

@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -17,7 +18,7 @@ void main() {
     addTearDown(SessionManager.clear);
     final service = ProfileService(
       client: MockClient((request) async {
-        expect(request.url.path, '/profile/me');
+        expect(request.url.servicePath, '/profile/me');
         return http.Response(
           jsonEncode(<String, dynamic>{
             'display_name': 'Ana',

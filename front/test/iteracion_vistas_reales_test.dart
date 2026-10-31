@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -89,11 +90,12 @@ void main() {
       ];
       final service = SocialService(
         client: MockClient((request) async {
-          if (request.method == 'GET' && request.url.path == '/me/overview') {
+          if (request.method == 'GET' &&
+              request.url.servicePath == '/me/overview') {
             return _ok(_overview(groups));
           }
           if (request.method == 'GET' &&
-              request.url.path.endsWith('/members')) {
+              request.url.servicePath.endsWith('/members')) {
             return _ok([
               {
                 'id': 'm1',
@@ -151,8 +153,10 @@ void main() {
       ];
       final service = SocialService(
         client: MockClient((request) async {
-          if (request.url.path == '/me/overview') return _ok(_overview(groups));
-          if (request.url.path.endsWith('/members')) return _ok([]);
+          if (request.url.servicePath == '/me/overview') {
+            return _ok(_overview(groups));
+          }
+          if (request.url.servicePath.endsWith('/members')) return _ok([]);
           return _ok({}, 404);
         }),
       );
@@ -173,7 +177,8 @@ void main() {
       final before = SocialService.groupsChanged.value;
       final service = SocialService(
         client: MockClient((request) async {
-          if (request.method == 'POST' && request.url.path == '/groups') {
+          if (request.method == 'POST' &&
+              request.url.servicePath == '/groups') {
             return _ok({'group_id': _gid}, 201);
           }
           return _ok({}, 404);
@@ -192,7 +197,7 @@ void main() {
       final service = SocialService(
         client: MockClient((request) async {
           if (request.method == 'POST' &&
-              request.url.path == '/groups/$_gid/leave') {
+              request.url.servicePath == '/groups/$_gid/leave') {
             called = true;
             return http.Response('', 204);
           }
@@ -220,9 +225,12 @@ void main() {
       ];
       final service = SocialService(
         client: MockClient((request) async {
-          if (request.url.path == '/me/overview') return _ok(_overview(groups));
-          if (request.url.path.endsWith('/members')) return _ok([]);
-          if (request.method == 'GET' && request.url.path == '/groups/$_gid') {
+          if (request.url.servicePath == '/me/overview') {
+            return _ok(_overview(groups));
+          }
+          if (request.url.servicePath.endsWith('/members')) return _ok([]);
+          if (request.method == 'GET' &&
+              request.url.servicePath == '/groups/$_gid') {
             return _ok({
               'id': _gid,
               'name': 'Grupo Real',
@@ -243,7 +251,7 @@ void main() {
       );
       await tester.tap(find.text('INFO').first);
       await tester.pumpAndSettle();
-      expect(find.text('Abandonar grupo'), findsOneWidget);
+      expect(find.text('ABANDONAR GRUPO'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   });
@@ -251,7 +259,7 @@ void main() {
   group('DISCORD — tarjeta histórica + config solo admin', () {
     MockClient discordClient({required String role, bool withConfig = true}) {
       return MockClient((request) async {
-        final path = request.url.path;
+        final path = request.url.servicePath;
         if (request.method == 'GET' && path == '/groups/$_gid') {
           return _ok({
             'id': _gid,
@@ -349,7 +357,7 @@ void main() {
       addTearDown(SessionManager.clear);
       final service = SocialService(
         client: MockClient((request) async {
-          if (request.url.path.endsWith('/workspace')) {
+          if (request.url.servicePath.endsWith('/workspace')) {
             return _ok(workspace(tasks: [], sheets: []));
           }
           return _ok({}, 404);
@@ -376,7 +384,7 @@ void main() {
       addTearDown(SessionManager.clear);
       final service = SocialService(
         client: MockClient((request) async {
-          final path = request.url.path;
+          final path = request.url.servicePath;
           if (request.method == 'GET' && path.endsWith('/workspace')) {
             return _ok(
               workspace(
@@ -445,7 +453,7 @@ void main() {
       addTearDown(SessionManager.clear);
       final service = SocialService(
         client: MockClient((request) async {
-          if (request.url.path.endsWith('/workspace')) {
+          if (request.url.servicePath.endsWith('/workspace')) {
             return _ok(
               workspace(
                 tasks: [
@@ -470,8 +478,8 @@ void main() {
               ),
             );
           }
-          if (request.url.path.endsWith('/members')) return _ok([]);
-          if (request.url.path.contains('/hours')) {
+          if (request.url.servicePath.endsWith('/members')) return _ok([]);
+          if (request.url.servicePath.contains('/hours')) {
             return _ok({'data': [], 'total_hours': 0});
           }
           return _ok({}, 404);
@@ -492,7 +500,7 @@ void main() {
   group('KANBAN — sin decoración falsa', () {
     MockClient kanbanClient() {
       return MockClient((request) async {
-        if (request.url.path.endsWith('/workspace')) {
+        if (request.url.servicePath.endsWith('/workspace')) {
           return _ok({
             'group': {'id': _gid, 'name': 'G', 'role': 'admin'},
             'kanban': {
@@ -515,7 +523,7 @@ void main() {
             'chat': {'provider': 'stream', 'token_endpoint': ''},
           });
         }
-        if (request.url.path.endsWith('/members')) return _ok([]);
+        if (request.url.servicePath.endsWith('/members')) return _ok([]);
         return _ok({}, 404);
       });
     }
@@ -552,7 +560,7 @@ void main() {
       addTearDown(SessionManager.clear);
       final service = SocialService(
         client: MockClient((request) async {
-          if (request.url.path.endsWith('/workspace')) {
+          if (request.url.servicePath.endsWith('/workspace')) {
             return _ok({
               'group': {'id': _gid, 'name': 'G', 'role': 'member'},
               'kanban': {'todo': [], 'in_progress': [], 'done': []},
@@ -607,11 +615,12 @@ void main() {
       ];
       final service = SocialService(
         client: MockClient((request) async {
-          if (request.url.path == '/me/overview') {
+          if (request.url.servicePath == '/me/overview') {
             return _ok(_overview(groups));
           }
-          if (request.url.path.endsWith('/members')) return _ok([]);
-          if (request.method == 'GET' && request.url.path == '/groups/$_gid') {
+          if (request.url.servicePath.endsWith('/members')) return _ok([]);
+          if (request.method == 'GET' &&
+              request.url.servicePath == '/groups/$_gid') {
             return _ok({
               'id': _gid,
               'name': 'Grupo Admin',
@@ -637,15 +646,15 @@ void main() {
       // INFO sin código: el código vive solo en INVITAR.
       await tester.tap(find.byTooltip('Información del grupo'));
       await tester.pumpAndSettle();
-      expect(find.text('Abandonar grupo'), findsOneWidget);
-      expect(find.text('Código de invitación'), findsNothing);
+      expect(find.text('ABANDONAR GRUPO'), findsOneWidget);
+      expect(find.text('CÓDIGO DE INVITACIÓN'), findsNothing);
       await tester.tap(find.text('CERRAR'));
       await tester.pumpAndSettle();
       // INVITAR muestra identificador + código, ambos copiables.
       await tester.tap(find.text('INVITAR'));
       await tester.pumpAndSettle();
-      expect(find.text('Identificador del grupo'), findsOneWidget);
-      expect(find.text('Código de invitación'), findsOneWidget);
+      expect(find.text('IDENTIFICADOR DEL GRUPO'), findsOneWidget);
+      expect(find.text('CÓDIGO DE INVITACIÓN'), findsOneWidget);
       // Ambos valores son SelectableText (seleccionables/copiables).
       expect(
         find.byWidgetPredicate((w) => w is SelectableText && w.data == _gid),
@@ -657,8 +666,8 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(find.text('Generar nuevo código'), findsOneWidget);
-      expect(find.text('Copiar datos de invitación'), findsOneWidget);
+      expect(find.text('GENERAR NUEVO CÓDIGO'), findsOneWidget);
+      expect(find.text('COPIAR DATOS DE INVITACIÓN'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 
@@ -667,7 +676,7 @@ void main() {
       addTearDown(SessionManager.clear);
       final service = SocialService(
         client: MockClient((request) async {
-          if (request.url.path == '/me/overview') {
+          if (request.url.servicePath == '/me/overview') {
             return _ok(_overview([]));
           }
           return _ok({}, 404);
@@ -705,12 +714,13 @@ void main() {
       final before = SocialService.groupsChanged.value;
       final service = SocialService(
         client: MockClient((request) async {
-          if (request.method == 'GET' && request.url.path == '/me/overview') {
+          if (request.method == 'GET' &&
+              request.url.servicePath == '/me/overview') {
             return _ok(_overview(groups));
           }
-          if (request.url.path.endsWith('/members')) return _ok([]);
+          if (request.url.servicePath.endsWith('/members')) return _ok([]);
           if (request.method == 'POST' &&
-              request.url.path == '/groups/$_gid/join') {
+              request.url.servicePath == '/groups/$_gid/join') {
             final body = jsonDecode(request.body) as Map<String, dynamic>;
             expect(body['invite_token'], 'codigo-1');
             joined = true;
@@ -757,7 +767,7 @@ void main() {
       addTearDown(SessionManager.clear);
       final service = SocialService(
         client: MockClient((request) async {
-          if (request.url.path == '/me/overview') {
+          if (request.url.servicePath == '/me/overview') {
             return _ok(_overview([]));
           }
           return _ok({}, 404);
@@ -782,7 +792,7 @@ void main() {
       addTearDown(SessionManager.clear);
       final service = SocialService(
         client: MockClient((request) async {
-          final path = request.url.path;
+          final path = request.url.servicePath;
           if (request.method == 'GET' && path == '/groups/$_gid') {
             return _ok({
               'id': _gid,
@@ -834,7 +844,7 @@ void main() {
       addTearDown(SessionManager.clear);
       final service = SocialService(
         client: MockClient((request) async {
-          if (request.url.path.endsWith('/workspace')) {
+          if (request.url.servicePath.endsWith('/workspace')) {
             return _ok({
               'group': {'id': _gid, 'name': 'G', 'role': 'admin'},
               'kanban': {'todo': [], 'in_progress': [], 'done': []},
@@ -864,7 +874,7 @@ void main() {
       addTearDown(SessionManager.clear);
       final service = SocialService(
         client: MockClient((request) async {
-          if (request.url.path.endsWith('/workspace')) {
+          if (request.url.servicePath.endsWith('/workspace')) {
             return _ok({
               'group': {'id': _gid, 'name': 'G', 'role': 'admin'},
               'kanban': {'todo': [], 'in_progress': [], 'done': []},
@@ -873,7 +883,7 @@ void main() {
               'chat': {'provider': 'stream', 'token_endpoint': ''},
             });
           }
-          if (request.url.path.endsWith('/members')) return _ok([]);
+          if (request.url.servicePath.endsWith('/members')) return _ok([]);
           return _ok({}, 404);
         }),
       );
@@ -934,10 +944,10 @@ void main() {
       );
       final service = SocialService(
         client: MockClient((request) async {
-          if (request.url.path.endsWith('/stream-token')) {
+          if (request.url.servicePath.endsWith('/stream-token')) {
             return _ok({'token': 'tok', 'channel_id': 'c1', 'api_key': 'key'});
           }
-          if (request.url.path.endsWith('/members')) {
+          if (request.url.servicePath.endsWith('/members')) {
             return _ok([
               {
                 'id': 'm1',
@@ -988,7 +998,8 @@ void main() {
       addTearDown(SessionManager.clear);
       final service = SocialService(
         client: MockClient((request) async {
-          if (request.method == 'GET' && request.url.path == '/groups/$_gid') {
+          if (request.method == 'GET' &&
+              request.url.servicePath == '/groups/$_gid') {
             return _ok({
               'id': _gid,
               'name': 'Grupo Solo',
@@ -998,7 +1009,7 @@ void main() {
               'role': 'admin',
             });
           }
-          if (request.url.path.endsWith('/members')) {
+          if (request.url.servicePath.endsWith('/members')) {
             return _ok([
               {
                 'id': 'm1',
@@ -1039,7 +1050,7 @@ void main() {
       addTearDown(SessionManager.clear);
       final service = SocialService(
         client: MockClient((request) async {
-          final path = request.url.path;
+          final path = request.url.servicePath;
           if (request.method == 'GET' && path.endsWith('/workspace')) {
             return _ok({
               'group': {'id': _gid, 'name': 'G', 'role': 'admin'},

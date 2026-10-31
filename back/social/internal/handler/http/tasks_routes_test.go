@@ -42,6 +42,7 @@ func newTasksEnv() *tasksEnv {
 	protected.PATCH("/groups/:id/sprint-sheet/:taskId", sprintH.UpdateSprintTask)
 	protected.DELETE("/groups/:id/sprint-sheet/:taskId", sprintH.DeleteSprintTask)
 	protected.POST("/sprint-sheet/:taskId/hours", hoursH.LogHours)
+	protected.GET("/sprint-sheet/:taskId/hours", hoursH.ListHours)
 	return &tasksEnv{
 		router: r,
 		todos:  service.NewTodoService(tStore),

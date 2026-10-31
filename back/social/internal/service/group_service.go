@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/utils"
@@ -22,16 +21,15 @@ type ServiceError struct {
 }
 
 var (
-	ErrNotFound             = errors.New("group_not_found")
-	ErrUnauthorized         = errors.New("unauthorized")
-	ErrForbidden            = errors.New("forbidden")
-	ErrBanned               = errors.New("user_banned")
-	ErrInvalidInviteToken   = errors.New("invalid_invite_token")
-	ErrCannotModifySelf     = errors.New("cannot_modify_self")
-	ErrTargetIsAdmin        = errors.New("target_is_admin")
-	ErrTargetNotFound       = errors.New("target_not_found")
-	ErrInvalidRole          = errors.New("invalid_role")
-	ErrCannotLeaveOnlyAdmin = errors.New("cannot_leave_only_admin")
+	ErrNotFound           = errors.New("group_not_found")
+	ErrUnauthorized       = errors.New("unauthorized")
+	ErrForbidden          = errors.New("forbidden")
+	ErrBanned             = errors.New("user_banned")
+	ErrInvalidInviteToken = errors.New("invalid_invite_token")
+	ErrCannotModifySelf   = errors.New("cannot_modify_self")
+	ErrTargetIsAdmin      = errors.New("target_is_admin")
+	ErrTargetNotFound     = errors.New("target_not_found")
+	ErrInvalidRole        = errors.New("invalid_role")
 )
 
 func (e *ServiceError) Error() string { return e.Code + ": " + e.Message }
@@ -105,9 +103,52 @@ type GroupService struct {
 	groups       GroupStore
 	notifier     GroupCreatedNotifier
 	notesBaseURL string
-	// users es opcional: directorio Identity para enriquecer miembros.
-	// Nil = respuesta sin nombres (comportamiento anterior).
-	users UserDirectory
+	// unsharer es el transporte de limpieza de apuntes (gRPC por defecto, con
+	// fallback HTTP interno). Inyectable para tests.
+	unsharer          NotesUnsharer
+	users             UserDirectory
+	accountTargetGate AccountTargetGate
+	// chat es opcional: quita del canal Stream a quien deja el grupo.
+	// Nil = sin limpieza del chat (tests que no la necesitan).
+	chat ChatMembership
+}
+
+// AccountTargetGate serializes third-party membership/admin changes against an
+// account deletion. The actor is protected separately by HTTP auth middleware.
+type AccountTargetGate interface {
+	AcquireTargetRequest(context.Context, string) (release func(), active bool, err error)
+}
+
+// ChatMembership retira miembros del canal de chat del grupo (stream.Client
+// en producción). Interfaz mínima para no exigir el cliente completo.
+type ChatMembership interface {
+	RemoveMember(ctx context.Context, channelType, channelID, userID string) error
+}
+
+// SetChatMembership configura la limpieza del canal Stream al salir del grupo.
+func (s *GroupService) SetChatMembership(c ChatMembership) {
+	s.chat = c
+}
+
+// removeFromChat quita al usuario del canal Stream del grupo (best-effort, en
+// background). Sin membresía en el canal deja de leer y escribir aunque
+// conserve un token anterior (RN-SOCIAL-03). El canal siempre se crea con
+// ChannelIDForGroup, así que no hace falta leer social.stream_channels (que
+// además desaparece en cascada si el grupo se eliminó).
+func (s *GroupService) removeFromChat(userID, groupID string) {
+	removeChatMember(s.chat, userID, groupID)
+}
+
+func removeChatMember(chat ChatMembership, userID, groupID string) {
+	if chat == nil {
+		return
+	}
+	GoBestEffort("chat-remove-member", func(ctx context.Context) {
+		channelID := ChannelIDForGroup(groupID)
+		if err := chat.RemoveMember(ctx, ChannelTypeStream, channelID, userID); err != nil {
+			logChannelSync("remove-member", channelID, err)
+		}
+	})
 }
 
 func NewGroupService(groups GroupStore, notifier GroupCreatedNotifier) *GroupService {
@@ -118,7 +159,12 @@ func NewGroupService(groups GroupStore, notifier GroupCreatedNotifier) *GroupSer
 	if notesURL == "" {
 		notesURL = defaultNotesBaseURL
 	}
-	return &GroupService{groups: groups, notifier: notifier, notesBaseURL: notesURL}
+	return &GroupService{
+		groups:       groups,
+		notifier:     notifier,
+		notesBaseURL: notesURL,
+		unsharer:     newNotesGRPCUnsharer(os.Getenv("NOTES_GRPC_URL"), os.Getenv("INTERNAL_API_KEY")),
+	}
 }
 
 // SetNotesBaseURL cambia la URL base del servicio Notes (usado por tests).
@@ -126,9 +172,34 @@ func (s *GroupService) SetNotesBaseURL(url string) {
 	s.notesBaseURL = strings.TrimRight(url, "/")
 }
 
+// SetNotesUnsharer sustituye el transporte de limpieza (tests): nil desactiva
+// gRPC y fuerza el fallback HTTP.
+func (s *GroupService) SetNotesUnsharer(u NotesUnsharer) {
+	s.unsharer = u
+}
+
 // SetUserDirectory inyecta el directorio Identity (usado por tests y main).
 func (s *GroupService) SetUserDirectory(d UserDirectory) {
 	s.users = d
+}
+
+func (s *GroupService) SetAccountTargetGate(gate AccountTargetGate) {
+	s.accountTargetGate = gate
+}
+
+func (s *GroupService) withTargetAccount(ctx context.Context, userID string, operation func() error) error {
+	if s.accountTargetGate == nil {
+		return operation()
+	}
+	release, active, err := s.accountTargetGate.AcquireTargetRequest(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if !active {
+		return ErrForbidden
+	}
+	defer release()
+	return operation()
 }
 
 func validateName(name string) error {
@@ -312,6 +383,43 @@ func (s *GroupService) ListMembers(ctx context.Context, groupID string, userID s
 	return members, nil
 }
 
+// ListMembersInternal lista miembros sin exigir membresía del solicitante.
+// Solo para consumo servicio-a-servicio tras RequireInternalKey (tarea 3_5_4:
+// checks is_admin/member de Notes). Grupo inexistente → ErrNotFound.
+func (s *GroupService) ListMembersInternal(ctx context.Context, groupID string) ([]*model.GroupMembership, error) {
+	if !utils.ValidateUUID(groupID) {
+		return nil, ErrNotFound
+	}
+	members, err := s.groups.ListMembers(ctx, groupID)
+	if err != nil {
+		return nil, mapStoreErr(err)
+	}
+	if members == nil {
+		members = []*model.GroupMembership{}
+	}
+	return members, nil
+}
+
+// ListMemberEmailsInternal resuelve los emails de los miembros para shares
+// restricted de Notes. Fail-closed: sin directorio o con fallo de Identity
+// devuelve error (Notes no debe calcular permisos sobre listas incompletas).
+func (s *GroupService) ListMemberEmailsInternal(ctx context.Context, groupID string) ([]string, error) {
+	members, err := s.ListMembersInternal(ctx, groupID)
+	if err != nil {
+		return nil, err
+	}
+	if s.users == nil {
+		return nil, newServiceError(utils.ErrInternal)
+	}
+	ids := make([]string, 0, len(members))
+	for _, m := range members {
+		if m != nil && strings.TrimSpace(m.UserID) != "" {
+			ids = append(ids, m.UserID)
+		}
+	}
+	return s.users.LookupEmailsStrict(ctx, ids)
+}
+
 // ListMembersEnriched igual que ListMembers pero con display_name/email
 // resueltos vía Identity cuando el directorio está configurado.
 // Best-effort: si el directorio falla, devuelve miembros sin nombres
@@ -321,9 +429,46 @@ func (s *GroupService) ListMembersEnriched(ctx context.Context, groupID string, 
 	if err != nil {
 		return nil, err
 	}
+	return s.enrichMembers(ctx, members), nil
+}
+
+// GroupMembers lista los miembros enriquecidos sin exigir que quien consulta
+// sea miembro: solo para llamadas servicio-a-servicio (gRPC con clave interna).
+func (s *GroupService) GroupMembers(ctx context.Context, groupID string) ([]model.MemberView, error) {
+	members, err := s.ListMembersInternal(ctx, groupID)
+	if err != nil {
+		return nil, err
+	}
+	return s.enrichMembers(ctx, members), nil
+}
+
+// MembershipRole devuelve el rol del usuario en el grupo, "" si no es miembro
+// y ErrNotFound si el grupo no existe. Solo servicio-a-servicio.
+func (s *GroupService) MembershipRole(ctx context.Context, groupID, userID string) (string, error) {
+	if !utils.ValidateUUID(groupID) {
+		return "", ErrNotFound
+	}
+	g, err := s.groups.GetByID(ctx, groupID)
+	if err != nil {
+		return "", err
+	}
+	if g == nil {
+		return "", ErrNotFound
+	}
+	role, err := s.groups.GetMemberRole(ctx, groupID, userID)
+	if err != nil {
+		if err.Error() == "not_member" {
+			return "", nil
+		}
+		return "", err
+	}
+	return role, nil
+}
+
+func (s *GroupService) enrichMembers(ctx context.Context, members []*model.GroupMembership) []model.MemberView {
 	views := make([]model.MemberView, 0, len(members))
 	if len(members) == 0 {
-		return views, nil
+		return views
 	}
 	var names map[string]UserPublic
 	if s.users != nil {
@@ -356,7 +501,7 @@ func (s *GroupService) ListMembersEnriched(ctx context.Context, groupID string, 
 		}
 		views = append(views, v)
 	}
-	return views, nil
+	return views
 }
 
 // checkAdminAction valida los ids comunes a las acciones administrativas sobre
@@ -375,33 +520,58 @@ func checkAdminAction(groupID, adminID, targetUserID string) error {
 }
 
 // KickMember expulsa a un miembro. Solo admins; no se puede expulsar a otro admin.
-func (s *GroupService) KickMember(ctx context.Context, groupID, adminID, targetUserID string) error {
+// Con cleanupSharedNotes pide a Notes retirar los apuntes del expulsado
+// (best-effort, con el JWT del admin actor: Notes lo autoriza vía IsGroupAdmin).
+func (s *GroupService) KickMember(ctx context.Context, groupID, adminID, targetUserID string, cleanupSharedNotes bool, token string) error {
 	if err := checkAdminAction(groupID, adminID, targetUserID); err != nil {
 		return err
 	}
-	return mapStoreErr(s.groups.KickMember(ctx, groupID, adminID, targetUserID))
+	if err := s.withTargetAccount(ctx, targetUserID, func() error {
+		return mapStoreErr(s.groups.KickMember(ctx, groupID, adminID, targetUserID))
+	}); err != nil {
+		return err
+	}
+	s.removeFromChat(targetUserID, groupID)
+	if cleanupSharedNotes {
+		go s.unshareNotes(targetUserID, groupID, token)
+	}
+	return nil
 }
 
 // BanMember expulsa y bloquea el reingreso de un miembro. Solo admins.
-func (s *GroupService) BanMember(ctx context.Context, groupID, adminID, targetUserID string) error {
+// Limpieza en Notes igual que KickMember.
+func (s *GroupService) BanMember(ctx context.Context, groupID, adminID, targetUserID string, cleanupSharedNotes bool, token string) error {
 	if err := checkAdminAction(groupID, adminID, targetUserID); err != nil {
 		return err
 	}
-	return mapStoreErr(s.groups.BanMember(ctx, groupID, adminID, targetUserID))
+	if err := s.withTargetAccount(ctx, targetUserID, func() error {
+		return mapStoreErr(s.groups.BanMember(ctx, groupID, adminID, targetUserID))
+	}); err != nil {
+		return err
+	}
+	s.removeFromChat(targetUserID, groupID)
+	if cleanupSharedNotes {
+		go s.unshareNotes(targetUserID, groupID, token)
+	}
+	return nil
 }
 
 func (s *GroupService) ChangeRole(ctx context.Context, groupID, adminID, targetUserID, newRole string) error {
 	if err := checkAdminAction(groupID, adminID, targetUserID); err != nil {
 		return err
 	}
-	return mapStoreErr(s.groups.ChangeMemberRole(ctx, groupID, adminID, targetUserID, newRole))
+	return s.withTargetAccount(ctx, targetUserID, func() error {
+		return mapStoreErr(s.groups.ChangeMemberRole(ctx, groupID, adminID, targetUserID, newRole))
+	})
 }
 
 func (s *GroupService) TransferAdmin(ctx context.Context, groupID, currentAdminID, newAdminID string) error {
 	if err := checkAdminAction(groupID, currentAdminID, newAdminID); err != nil {
 		return err
 	}
-	return mapStoreErr(s.groups.TransferAdmin(ctx, groupID, currentAdminID, newAdminID))
+	return s.withTargetAccount(ctx, newAdminID, func() error {
+		return mapStoreErr(s.groups.TransferAdmin(ctx, groupID, currentAdminID, newAdminID))
+	})
 }
 
 // LeaveGroup realiza la salida y sucesión atómicas antes del cleanup best-effort.
@@ -415,6 +585,7 @@ func (s *GroupService) LeaveGroup(ctx context.Context, groupID string, userID st
 	if _, err := s.groups.LeaveGroup(ctx, groupID, userID); err != nil {
 		return mapStoreErr(err)
 	}
+	s.removeFromChat(userID, groupID)
 	if cleanupSharedNotes {
 		go s.unshareNotes(userID, groupID, token)
 	}
@@ -422,9 +593,30 @@ func (s *GroupService) LeaveGroup(ctx context.Context, groupID string, userID st
 }
 
 // unshareNotes pide a Notes retirar los apuntes que el usuario compartió en el
-// grupo. Es best-effort: un fallo solo se registra. Reenvía el JWT del usuario
-// para pasar el middleware de Notes.
+// grupo. Best-effort: un fallo solo se registra.
+//
+// Durante la migración el transporte primario es gRPC
+// (notes.v1.NotesService/UnshareAll con x-internal-key); si la conexión gRPC
+// falla, cae al HTTP POST /notes/unshare-all reenviando el JWT del usuario,
+// mientras Notes siga sirviendo ambos (dual-serve).
 func (s *GroupService) unshareNotes(userID, groupID, token string) {
+	if s.unsharer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), notesUnshareTimeout)
+		err := s.unsharer.UnshareAll(ctx, userID, groupID)
+		cancel()
+		if err == nil {
+			return
+		}
+		log.Printf("social: unshare-all gRPC falló, reintentando por HTTP: %v", err)
+	}
+	s.unshareNotesHTTP(userID, groupID, token)
+}
+
+// unshareNotesHTTP es el transporte legacy de limpieza a Notes (endpoint HTTP
+// POST /notes/unshare-all, deprecado). Se mantiene solo como fallback
+// controlado durante la migración a gRPC; reenvía el JWT del usuario para
+// pasar el middleware de Notes.
+func (s *GroupService) unshareNotesHTTP(userID, groupID, token string) {
 	payload, err := json.Marshal(map[string]string{"user_id": userID, "group_id": groupID})
 	if err != nil {
 		return
@@ -438,7 +630,7 @@ func (s *GroupService) unshareNotes(userID, groupID, token string) {
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	resp, err := (&http.Client{Timeout: notesUnshareTimeout}).Do(req)
 	if err != nil {
 		log.Printf("social: error llamando a notes/unshare-all: %v", err)
 		return
@@ -450,14 +642,16 @@ func (s *GroupService) unshareNotes(userID, groupID, token string) {
 // usuario elimina su cuenta: en cada grupo donde es el único admin se promueve
 // al miembro más antiguo; si era el último miembro, el grupo se elimina.
 // Es idempotente: sin membresías restantes no hace nada.
-func (s *GroupService) HandleAccountDeletion(ctx context.Context, userID string) ([]model.SuccessionResult, error) {
+// Con token (JWT vigente reenviado por Identity vía gRPC, tarea 3_5_7) pide
+// además a Notes retirar los apuntes del usuario en CADA grupo afectado
+// (best-effort, caller == user). Sin token solo hace sucesión.
+func (s *GroupService) HandleAccountDeletion(ctx context.Context, userID string, token string) ([]model.SuccessionResult, error) {
 	if userID == "" {
 		return nil, ErrUnauthorized
 	}
 	results, err := s.groups.HandleAccountDeletion(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
+	// El repositorio confirma por grupo: incluso con error parcial hay que
+	// limpiar los grupos completados, que no aparecerán en el reintento.
 	for _, r := range results {
 		switch {
 		case r.PromotedUserID != nil:
@@ -465,9 +659,13 @@ func (s *GroupService) HandleAccountDeletion(ctx context.Context, userID string)
 		case r.GroupDeleted:
 			log.Printf("social: grupo %s eliminado: %s era el último miembro", r.GroupID, userID)
 		}
+		s.removeFromChat(userID, r.GroupID)
+		if strings.TrimSpace(token) != "" {
+			go s.unshareNotes(userID, r.GroupID, token)
+		}
 	}
 	if results == nil {
 		results = []model.SuccessionResult{}
 	}
-	return results, nil
+	return results, err
 }

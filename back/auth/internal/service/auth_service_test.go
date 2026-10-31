@@ -88,15 +88,16 @@ func newMockRefreshRepo() *mockRefreshRepo {
 	return &mockRefreshRepo{tokens: make(map[string]*repository.RefreshToken)}
 }
 
-func (m *mockRefreshRepo) Create(ctx context.Context, userID string, tokenHash string, expiresAt time.Time) (string, error) {
+func (m *mockRefreshRepo) Create(ctx context.Context, userID string, tokenHash string, fingerprint []byte, expiresAt time.Time) (string, error) {
 	id := fmt.Sprintf("mock-id-%d", len(m.tokens)+1)
 	m.tokens[id] = &repository.RefreshToken{
-		ID:        id,
-		UserID:    userID,
-		TokenHash: tokenHash,
-		ExpiresAt: expiresAt,
-		Revoked:   false,
-		CreatedAt: time.Now(),
+		ID:               id,
+		UserID:           userID,
+		TokenHash:        tokenHash,
+		TokenFingerprint: fingerprint,
+		ExpiresAt:        expiresAt,
+		Revoked:          false,
+		CreatedAt:        time.Now(),
 	}
 	return id, nil
 }
@@ -128,7 +129,7 @@ func (m *mockRefreshRepo) Revoke(ctx context.Context, id string) error {
 	return nil
 }
 
-func (m *mockRefreshRepo) Rotate(ctx context.Context, oldID, userID, newHash string, newExpires time.Time) (string, error) {
+func (m *mockRefreshRepo) Rotate(ctx context.Context, oldID, userID, newHash string, newFingerprint []byte, newExpires time.Time) (string, error) {
 	if old, ok := m.tokens[oldID]; ok {
 		if old.Revoked {
 			return "", fmt.Errorf("revoked")
@@ -140,12 +141,13 @@ func (m *mockRefreshRepo) Rotate(ctx context.Context, oldID, userID, newHash str
 	}
 	newID := fmt.Sprintf("mock-id-%d", len(m.tokens)+1)
 	m.tokens[newID] = &repository.RefreshToken{
-		ID:        newID,
-		UserID:    userID,
-		TokenHash: newHash,
-		ExpiresAt: newExpires,
-		Revoked:   false,
-		CreatedAt: time.Now(),
+		ID:               newID,
+		UserID:           userID,
+		TokenHash:        newHash,
+		TokenFingerprint: newFingerprint,
+		ExpiresAt:        newExpires,
+		Revoked:          false,
+		CreatedAt:        time.Now(),
 	}
 	return newID, nil
 }
@@ -558,7 +560,7 @@ func TestRefresh_TokenExpirado_401(t *testing.T) {
 	// Crear manualmente un refresh_token expirado
 	raw, hash, _ := repository.GenerateRawToken()
 	// Guardar con expires_at en pasado
-	refreshRepo.Create(context.Background(), "550e8400-e29b-41d4-a716-446655440001", hash, time.Now().Add(-1*time.Hour))
+	refreshRepo.Create(context.Background(), "550e8400-e29b-41d4-a716-446655440001", hash, nil, time.Now().Add(-1*time.Hour))
 	// Como no conocemos el userID real del mock, usamos el raw que acabamos de crear
 	// El FindByRawToken lo encontrará, pero debe estar expirado
 	// Necesitamos asegurar que el token pertenece a un usuario que existe, pero para este test usamos el raw directamente
@@ -571,7 +573,7 @@ func TestRefresh_TokenExpirado_401(t *testing.T) {
 	rawExp, hashExp, _ := repository.GenerateRawToken()
 	// Buscar userID del usuario registrado
 	user, _ := repo.GetByEmail(context.Background(), "expired@example.invalid")
-	refreshRepo.Create(context.Background(), user.ID, hashExp, time.Now().Add(-1*time.Hour))
+	refreshRepo.Create(context.Background(), user.ID, hashExp, nil, time.Now().Add(-1*time.Hour))
 	_, err := svc.Refresh(context.Background(), rawExp)
 	if err == nil {
 		t.Fatal("esperado token_expired")
@@ -644,7 +646,7 @@ func TestLogout_YaRevocado_204(t *testing.T) {
 	svc := NewAuthService(repo, refreshRepo, newJWTForTest(t), 900, 604800)
 	svc.Register(context.Background(), "logout2@example.invalid", "Pass1234", nil, nil, nil, nil, nil, nil)
 	loginRes, _ := svc.Login(context.Background(), "logout2@example.invalid", "Pass1234")
-	svc.Logout(context.Background(), loginRes.RefreshToken) // primera vez revoca
+	svc.Logout(context.Background(), loginRes.RefreshToken)        // primera vez revoca
 	err := svc.Logout(context.Background(), loginRes.RefreshToken) // segunda vez ya revocado
 	if err != nil {
 		t.Fatalf("logout ya revocado debe ser 204, got %v", err)
@@ -677,7 +679,7 @@ func TestLogout_Expirado_204_Revocado(t *testing.T) {
 	svc.Register(context.Background(), "logoutexp@example.invalid", "Pass1234", nil, nil, nil, nil, nil, nil)
 	user, _ := repo.GetByEmail(context.Background(), "logoutexp@example.invalid")
 	raw, hash, _ := repository.GenerateRawToken()
-	refreshRepo.Create(context.Background(), user.ID, hash, time.Now().Add(-1*time.Hour)) // expirado
+	refreshRepo.Create(context.Background(), user.ID, hash, nil, time.Now().Add(-1*time.Hour)) // expirado
 	err := svc.Logout(context.Background(), raw)
 	if err != nil {
 		t.Fatalf("expirado debe ser 204, got %v", err)

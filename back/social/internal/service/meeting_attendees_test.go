@@ -43,6 +43,7 @@ func TestMeetingAttendeesFlow_PersisteYEnvia(t *testing.T) {
 	store.AddGroup(gid, admin, member)
 	cli := calendar.NewMockClient()
 	svc := NewMeetingService(store, NewCalendarMeetingNotifier(&StubCalendarGateway{Token: "tok"}, cli, store))
+	waitNotification := observeMeetingNotification(t, svc)
 
 	m, err := svc.CreateMeeting(context.Background(), gid, admin, "Con invitados", nil, "2026-09-25T15:00:00Z", nil,
 		[]string{"Sofia@x.cl", "ana@x.cl", "sofia@X.cl"})
@@ -56,7 +57,10 @@ func TestMeetingAttendeesFlow_PersisteYEnvia(t *testing.T) {
 		t.Fatalf("se esperaban 2 filas persistidas, got %v %v", len(rows), err)
 	}
 
-	waitFor(t, "evento con invitados", func() bool { return cli.Count == 1 })
+	waitNotification()
+	if cli.Count != 1 {
+		t.Fatalf("se esperaba un envío, got %d", cli.Count)
+	}
 	if cli.LastEvent == nil || len(cli.LastEvent.Attendees) != 2 {
 		t.Fatalf("evento debe llevar 2 attendees, got %+v", cli.LastEvent)
 	}

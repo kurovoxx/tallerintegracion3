@@ -91,3 +91,52 @@ func TestPutDiscordConfig_Contrato(t *testing.T) {
 	w = e.do(http.MethodPut, "/groups/no-uuid/discord-config", admin, body)
 	expect(t, w, http.StatusBadRequest)
 }
+
+func TestGetDiscordConfig_ContractAndMembership(t *testing.T) {
+	e := newDiscordEnv()
+	admin, member, stranger := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	groupID := uuid.NewString()
+	e.store.AddGroup(groupID, admin, member)
+	path := "/groups/" + groupID + "/discord-config"
+
+	w := e.do(http.MethodGet, path, member, nil)
+	expect(t, w, http.StatusNotFound)
+	if decode(t, w)["code"] != "discord_not_configured" {
+		t.Fatalf("el miembro debe distinguir un grupo sin configuración: %s", w.Body)
+	}
+	for _, tc := range []struct {
+		name, path, user string
+		status           int
+	}{
+		{"sin JWT", path, "", http.StatusUnauthorized},
+		{"no miembro", path, stranger, http.StatusForbidden},
+		{"UUID inválido", "/groups/basura/discord-config", member, http.StatusBadRequest},
+		{"grupo inexistente", "/groups/" + uuid.NewString() + "/discord-config", member, http.StatusNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expect(t, e.do(http.MethodGet, tc.path, tc.user, nil), tc.status)
+		})
+	}
+
+	for _, webhook := range []string{"", "https://discord.com/api/webhooks/1/x"} {
+		expect(t, e.do(http.MethodPut, path, admin, map[string]any{
+			"server_name": "Servidor", "invite_url": "https://discord.gg/test", "webhook_url": webhook,
+		}), http.StatusOK)
+		for _, user := range []string{admin, member} {
+			w := e.do(http.MethodGet, path, user, nil)
+			expect(t, w, http.StatusOK)
+			got := decode(t, w)
+			if got["server_name"] != "Servidor" || got["invite_url"] != "https://discord.gg/test" {
+				t.Fatalf("contrato Discord inválido: %s", w.Body)
+			}
+			// El webhook es secreto: solo el admin lo recibe.
+			want := webhook
+			if user == member {
+				want = ""
+			}
+			if want == "" && got["webhook_url"] != nil || want != "" && got["webhook_url"] != want {
+				t.Fatalf("webhook_url esperado %q o null cuando vacío: %s", want, w.Body)
+			}
+		}
+	}
+}

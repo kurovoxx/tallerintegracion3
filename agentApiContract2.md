@@ -86,7 +86,7 @@ servicio pertenece" son ejes independientes.
 | PATCH | `/groups/{id}/members/{userId}/role` | `{role}` | `200` | `403` no eres admin |
 | POST | `/groups/{id}/transfer-admin` | `{new_admin_user_id}` | `200` | `403` no eres admin |
 | GET | `/groups/{id}/members` | — | `200 {items: [{user_id, role, joined_at}]}` | — |
-| POST | `/groups/{id}/leave` | `{cleanup_shared_notes: bool}` | `204` — si `cleanup_shared_notes`, llama a `/notes/unshare-all`; si eras el último miembro, el grupo se elimina | `400` eres el único admin y quedan otros miembros, transfiere primero |
+| POST | `/groups/{id}/leave` | `{cleanup_shared_notes: bool}` | `204` — si `cleanup_shared_notes`, llama a `/notes/unshare-all`; si eras el único admin se promueve al miembro más antiguo (`joined_at`, RN-GRUPO-10); si eras el último miembro, el grupo se elimina | `403` no eres miembro; `404` el grupo no existe |
 | gRPC | `Social.AccountDeletionCleanup` *(interno, invocado por Identity — no expuesto por HTTP)* | `{user_id}` | — | sucesión automática de admin (promueve al miembro más antiguo por grupo donde eras único admin); elimina grupos sin más miembros; limpia tus baneos. Idempotente |
 
 **Nota**: se convirtió de endpoint HTTP a llamada gRPC interna para ser consistente con
@@ -111,10 +111,12 @@ depender de que el token siga siendo válido en ese instante. Confirmar antes de
 | GET | `/groups/{id}/sprint-sheet` | — | `200 {items: [...]}` | — |
 | PATCH | `/groups/{id}/sprint-sheet/{taskId}` | campos parciales, incluye `assignee_user_id` si se reasigna | `200` | `400` nuevo asignado no es miembro |
 | DELETE | `/groups/{id}/sprint-sheet/{taskId}` | — | `204` | — |
-| POST | `/groups/{id}/sprint-sheet/{taskId}/hours` | `{log_date, hours}` | `201` | `409` ya hay horas ese día (usar PATCH) |
+| POST | `/sprint-sheet/{taskId}/hours` | `{log_date, hours}` | `201` día nuevo / `200` reemplaza las horas de ese día (upsert, sin `409`) | `403` no eres miembro; `404` tarea inexistente |
+| GET | `/sprint-sheet/{taskId}/hours?from&to` | — | `200 {data, total_hours}` | `403` no eres miembro |
 | POST | `/groups/{id}/meetings` | `{title, description?, scheduled_at}` | `201 {meeting_id}` — síncrono; dispara Calendar/Discord/Stream en background | — |
 | PUT | `/groups/{id}/discord-config` | `{server_name, invite_url, webhook_url?}` | `200` | `403` no eres admin |
-| GET | `/groups/{id}/stream-token` | — | `200 {token, channel_id}` | `403` no eres miembro |
+| GET | `/groups/{id}/discord-config` | — | `200 {server_name, invite_url, webhook_url}` — `webhook_url` solo para admins (`null` para miembros) | `403` no eres miembro; `404` sin configurar |
+| GET | `/groups/{id}/stream-token` | — | `200 {token, channel_id, api_key}` | `403` no eres miembro |
 
 **Lógica interna, no expuesta como endpoint**: creación del canal de Stream al crear el
 grupo; sincronización con Calendar y notificación a Discord/Stream al agendar reunión
@@ -175,7 +177,7 @@ es nula.
   `GET /groups/{id}/todo` y `GET /groups/{id}/sprint-sheet` — **con `assignee_user_id`**,
   no `assigned_to`.
 - Horas diarias no incluidas aquí (serían N consultas): se piden por tarea con
-  `GET /groups/{id}/sprint-sheet/{taskId}/hours`.
+  `GET /sprint-sheet/{taskId}/hours`.
 - `meetings.upcoming` solo reuniones con `scheduled_at` futuro, orden cronológico.
 - `chat.token_endpoint` apunta al endpoint de §5 que emite el token — el payload nunca
   embebe el token de Stream directamente.

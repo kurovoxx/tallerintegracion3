@@ -1,0 +1,14 @@
+# Módulo buf de Notes (v1). `buf lint`/`buf generate` corren DESDE este
+# directorio vía ./generate.sh. No usar el nivel back/proto: el descubrimiento
+# cruzado de módulos anidados es inestable en buf (ver back/proto/README.md).
+version: v1
+lint:
+  use:
+    # STANDARD (no DEFAULT: categoría deprecada desde buf v1.32+, ver warning
+    # de `buf lint`; common ya usa STANDARD).
+    - STANDARD
+  except:
+    # El contrato vive en v1/notes.proto con package notes.v1 (layout canónico
+    # back/proto/<servicio>/v<N>/<recurso>.proto); la regla pediría dir
+    # "notes/v1" desde la raíz del módulo, igual que en common e infacadem.
+    - PACKAGE_DIRECTORY_MATCH

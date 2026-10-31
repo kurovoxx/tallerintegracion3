@@ -81,6 +81,9 @@ CREATE TABLE academic.subjects (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     curriculum_id uuid NOT NULL REFERENCES academic.curricula(id) ON DELETE CASCADE,
     name varchar(200) NOT NULL,
+    code varchar(50),
+    professor varchar(200),
+    room varchar(100),
     semester int,
     credits int,
     total_classes int,
@@ -98,10 +101,23 @@ CREATE TABLE academic.schedules (
     day_of_week int NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
     start_time time NOT NULL,
     end_time time NOT NULL,
+    modality varchar(50),
     CHECK (end_time > start_time)
 );
 
 CREATE INDEX idx_schedules_subject_id ON academic.schedules(subject_id);
+
+-- Contenidos (unidades) de una materia para el front (UX-05).
+CREATE TABLE academic.contents (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    subject_id uuid NOT NULL REFERENCES academic.subjects(id) ON DELETE CASCADE,
+    title varchar(200) NOT NULL,
+    body text,
+    position int NOT NULL DEFAULT 0,
+    done boolean NOT NULL DEFAULT false
+);
+
+CREATE INDEX idx_contents_subject_id ON academic.contents(subject_id);
 
 -- Una "grade" sin score todavía = evaluación programada a futuro.
 -- parent_grade_id: subnotas (una evaluación compuesta por sub-partes cuyo
@@ -120,6 +136,7 @@ CREATE TABLE academic.grades (
     topics text,
     notify_discord boolean NOT NULL DEFAULT false,
     google_calendar_event_id varchar(255),
+    pinned boolean NOT NULL DEFAULT false,
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -146,6 +163,8 @@ CREATE TABLE academic.absences (
     subject_id uuid NOT NULL REFERENCES academic.subjects(id) ON DELETE CASCADE,
     date date NOT NULL,
     justified boolean NOT NULL DEFAULT false,
+    source varchar(20),
+    type varchar(50),
     created_at timestamptz NOT NULL DEFAULT now()
 );
 

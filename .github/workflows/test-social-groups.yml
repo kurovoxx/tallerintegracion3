@@ -1,0 +1,78 @@
+name: test-social-groups
+
+# Suite completa de Social: unitarios, gRPC, integración y E2E con PostgreSQL temporal.
+# Conserva el nombre del workflow/job para los checks existentes.
+# Falla si se omite cualquier test o falta el E2E de grupos (SKIP no es PASS).
+on:
+  pull_request:
+    paths: ["back/social/**", "back/proto/social/**", "back/proto/auth/**", "back/proto/common/**", "docker/postgres/init.sql", "docker-compose.yml", "k8s/manifests.yaml", ".github/workflows/test-social-groups.yml"]
+  push:
+    paths: ["back/social/**", "back/proto/social/**", "back/proto/auth/**", "back/proto/common/**", "docker/postgres/init.sql", "docker-compose.yml", "k8s/manifests.yaml", ".github/workflows/test-social-groups.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  groups-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: back/social
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: social_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d social_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # BD dedicada de prueba, nunca la de desarrollo.
+      SOCIAL_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/social_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: back/social/go.mod
+          cache-dependency-path: back/social/go.sum
+      - name: gofmt check (test de grupos)
+        run: test -z "$(gofmt -l internal/handler/http/groups_postgres_e2e_test.go)"
+      - name: go vet
+        run: go vet ./...
+      - name: go build
+        run: go build ./...
+      - name: init schema (docker/postgres/init.sql)
+        run: psql "$SOCIAL_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f ../../docker/postgres/init.sql
+      # 11 rutas HTTP (crear, listar, ver, join, regenerate, members,
+      # kick, ban, role, transfer, leave) + AccountDeletionCleanup por
+      # bufconn contra el mismo PostgreSQL, con aserciones SQL.
+      - name: tests Social con detector de carreras (SKIP = fallo)
+        run: |
+          set -euo pipefail
+          go test ./... -race -p 1 -count=1 -timeout=5m -json | tee /tmp/social-tests.json
+          python3 - <<'EOF'
+          import json
+          passed = skipped = failed = False
+          with open('/tmp/social-tests.json') as f:
+              for line in f:
+                  try:
+                      ev = json.loads(line)
+                  except ValueError:
+                      continue
+                  if ev.get('Action') == 'pass' and ev.get('Test') == 'TestGroupsPostgresE2E_MembershipLifecycle':
+                      passed = True
+                  elif ev.get('Action') == 'skip' and ev.get('Test'):
+                      skipped = True
+                  elif ev.get('Action') == 'fail':
+                      failed = True
+          print(f"PASS={passed} SKIP={skipped} FAIL={failed}")
+          if failed or not passed or skipped:
+              raise SystemExit('Social debe pasar sin FAIL ni SKIP e incluir el E2E de grupos')
+          print('Social: suite completa y E2E de grupos PASS real')
+          EOF

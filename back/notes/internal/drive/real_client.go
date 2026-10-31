@@ -413,18 +413,27 @@ func (r *RealDriveClient) FileGone(ctx context.Context, userID string, driveFile
 	return f.Trashed, nil
 }
 
-func (r *RealDriveClient) GrantPermission(ctx context.Context, ownerUserID string, fileID string, granteeEmail string, role string) error {
+func (r *RealDriveClient) GrantPermission(ctx context.Context, ownerUserID string, fileID string, granteeEmail string, role string) (string, error) {
+	if role == "" {
+		role = "reader"
+	}
 	srv, err := r.serviceFor(ctx, ownerUserID)
 	if err != nil {
-		return err
+		return "", err
 	}
-	_, err = srv.Permissions.Create(fileID, &drive.Permission{
+	// type=user + role (reader por defecto) + Fields("id"): se captura el ID
+	// del permiso para persistirlo en notes.drive_managed_permissions y poder
+	// revocarlo nominalmente después sin re-listar el ACL.
+	p, err := srv.Permissions.Create(fileID, &drive.Permission{
 		Type: "user", Role: role, EmailAddress: granteeEmail,
-	}).SendNotificationEmail(false).Context(ctx).Do()
+	}).SendNotificationEmail(false).Fields("id").Context(ctx).Do()
 	if err != nil {
-		return mapGoogleError("GrantPermission", err)
+		return "", mapGoogleError("GrantPermission", err)
 	}
-	return nil
+	if strings.TrimSpace(p.Id) == "" {
+		return "", &DriveError{Code: 500, Message: "Drive no devolvió id de permiso"}
+	}
+	return p.Id, nil
 }
 
 func (r *RealDriveClient) GrantLinkPermission(ctx context.Context, ownerUserID, fileID string) (string, error) {

@@ -207,6 +207,112 @@ class SocialService {
         .toList();
   }
 
+  // POST /groups/:id/members/:userId/kick -> 204. Solo admin.
+  // 400 si el objetivo es otro admin o tú mismo; 404 si no es miembro.
+  // Ver back/social/internal/handler/http/group_handler.go:201 KickMember.
+  Future<void> kickMember({
+    required String groupId,
+    required String userId,
+    bool cleanupSharedNotes = false,
+  }) async {
+    final gid = groupId.trim();
+    final uid = userId.trim();
+    if (gid.isEmpty || uid.isEmpty) {
+      throw SocialApiException('groupId/userId vacíos.', code: 'invalid_args');
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .post(
+            Uri.parse('$baseUrl/groups/$gid/members/$uid/kick'),
+            headers: _headers(json: true),
+            body: jsonEncode(<String, dynamic>{
+              'cleanup_shared_notes': cleanupSharedNotes,
+            }),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 204 && res.statusCode != 200) throw _toError(res);
+  }
+
+  // POST /groups/:id/members/:userId/ban -> 204. Igual que kick + fila en
+  // banned_users (bloquea reingreso con cualquier token).
+  Future<void> banMember({
+    required String groupId,
+    required String userId,
+    bool cleanupSharedNotes = false,
+  }) async {
+    final gid = groupId.trim();
+    final uid = userId.trim();
+    if (gid.isEmpty || uid.isEmpty) {
+      throw SocialApiException('groupId/userId vacíos.', code: 'invalid_args');
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .post(
+            Uri.parse('$baseUrl/groups/$gid/members/$uid/ban'),
+            headers: _headers(json: true),
+            body: jsonEncode(<String, dynamic>{
+              'cleanup_shared_notes': cleanupSharedNotes,
+            }),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 204 && res.statusCode != 200) throw _toError(res);
+  }
+
+  // PATCH /groups/:id/members/:userId/role {role: admin|member} -> 200.
+  // Solo admin. Ver group_handler.go:233 ChangeRole.
+  Future<void> changeMemberRole({
+    required String groupId,
+    required String userId,
+    required String role,
+  }) async {
+    final gid = groupId.trim();
+    final uid = userId.trim();
+    final r = role.trim();
+    if (gid.isEmpty || uid.isEmpty || (r != 'admin' && r != 'member')) {
+      throw SocialApiException(
+        'Datos de rol inválidos.',
+        code: 'invalid_args',
+      );
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .patch(
+            Uri.parse('$baseUrl/groups/$gid/members/$uid/role'),
+            headers: _headers(json: true),
+            body: jsonEncode(<String, dynamic>{'role': r}),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) throw _toError(res);
+  }
+
+  // POST /groups/:id/transfer-admin {new_admin_user_id} -> 200. Solo admin.
+  // El destino pasa a admin y el solicitante a member en una transacción.
+  // Ver back/social/internal/handler/http/group_handler.go:263 TransferAdmin.
+  Future<void> transferAdmin({
+    required String groupId,
+    required String newAdminUserId,
+  }) async {
+    final gid = groupId.trim();
+    final uid = newAdminUserId.trim();
+    if (gid.isEmpty || uid.isEmpty) {
+      throw SocialApiException('groupId/userId vacíos.', code: 'invalid_args');
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .post(
+            Uri.parse('$baseUrl/groups/$gid/transfer-admin'),
+            headers: _headers(json: true),
+            body: jsonEncode(<String, dynamic>{'new_admin_user_id': uid}),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) throw _toError(res);
+    notifyGroupsChanged(); // Tu rol cambia en la lista de grupos.
+  }
+
   // GET /groups/:id/stream-token -> 200 {token, channel_id}.
   // Ver back/social/internal/handler/http/stream_handler.go:26 Token.
   // 401 sesión inválida, 403 no miembro, 404 grupo inexistente,
@@ -613,7 +719,7 @@ class SocialService {
 
   // POST /groups/:id/meetings
   // {title required, description?, scheduled_at RFC3339 required, notify_discord?}
-  // -> 201 {meeting_id}. No existe GET /groups/:id/meetings en el backend.
+  // -> 201 {meeting_id}. Ver back/social/internal/handler/http/meeting_handler.go.
   Future<String> createMeeting({
     required String groupId,
     required String title,
@@ -652,11 +758,73 @@ class SocialService {
     return id;
   }
 
+  // GET /groups/:id/meetings -> 200 {data: [...]}. Solo miembros, futuras.
+  // Ventana "próximas reuniones" (tarea 3_5_14).
+  Future<List<MeetingItem>> listMeetings(String groupId) async {
+    final id = groupId.trim();
+    if (id.isEmpty) {
+      throw SocialApiException('groupId vacío.', code: 'invalid_group_id');
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .get(
+            Uri.parse('$baseUrl/groups/$id/meetings'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) throw _toError(res);
+    final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    final raw = body['data'];
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map<String, dynamic>>()
+        .map(MeetingItem.fromJson)
+        .toList();
+  }
+
+  // GET /notifications/me -> 200 {data: [...]}. Cajita de notificaciones (3_5_14).
+  Future<List<MeetingNotification>> myNotifications() async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .get(Uri.parse('$baseUrl/notifications/me'), headers: _headers())
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) throw _toError(res);
+    final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    final raw = body['data'];
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map<String, dynamic>>()
+        .map(MeetingNotification.fromJson)
+        .toList();
+  }
+
+  // POST /notifications/:id/read -> 200. Marca como leída (3_5_14).
+  Future<void> markNotificationRead(String id) async {
+    final nid = id.trim();
+    if (nid.isEmpty) {
+      throw SocialApiException('notification id vacío.', code: 'invalid_id');
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .post(
+            Uri.parse('$baseUrl/notifications/$nid/read'),
+            headers: _headers(json: true),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) throw _toError(res);
+  }
+
   // POST /groups/:id/leave -> 204. Solo miembros.
-  // Si eres el único admin con más miembros, el backend responde 400
-  // (debes transferir antes). Si eres el último miembro, el grupo se elimina.
+  // Si eres el único admin, el backend promueve al miembro más antiguo
+  // (RN-GRUPO-10). Si eres el último miembro, el grupo se elimina.
   // Ver back/social/internal/handler/http/group_handler.go:277 LeaveGroup.
-  Future<void> leaveGroup(String groupId) async {
+  Future<void> leaveGroup(
+    String groupId, {
+    bool cleanupSharedNotes = false,
+  }) async {
     final id = groupId.trim();
     if (id.isEmpty) {
       throw SocialApiException('groupId vacío.', code: 'invalid_group_id');
@@ -666,7 +834,9 @@ class SocialService {
           .post(
             Uri.parse('$baseUrl/groups/$id/leave'),
             headers: _headers(json: true),
-            body: jsonEncode(const <String, dynamic>{}),
+            body: jsonEncode(<String, dynamic>{
+              'cleanup_shared_notes': cleanupSharedNotes,
+            }),
           )
           .timeout(const Duration(seconds: 10)),
     );

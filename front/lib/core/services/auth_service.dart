@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'api_config.dart';
@@ -77,16 +76,29 @@ class AuthService {
             body: jsonEncode({'refresh_token': refreshToken}),
           )
           .timeout(const Duration(seconds: 10));
-      if (response.body.isEmpty) {
-        return RefreshResult.failure('Sesión inválida.');
+      if (response.statusCode == 401) {
+        // /auth/refresh devuelve 401 solo si el refresh fue rechazado,
+        // revocado o vencido según el contrato vigente de Auth.
+        return RefreshResult.failure(
+          'Sesión inválida.',
+          kind: RefreshFailureKind.rejected,
+        );
       }
-      final body = jsonDecode(response.body);
-      if (response.statusCode == 200 && body is Map<String, dynamic>) {
+      if (response.statusCode == 200 && response.body.isNotEmpty) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is! Map<String, dynamic>) {
+          return RefreshResult.failure('Respuesta de refresh inválida.');
+        }
+        final body = decoded;
         final access = body['access_token'] as String?;
-        if (access != null && access.isNotEmpty) {
+        final rotatedRefresh = body['refresh_token'] as String?;
+        if (access != null &&
+            access.isNotEmpty &&
+            rotatedRefresh != null &&
+            rotatedRefresh.isNotEmpty) {
           return RefreshResult.success(
             accessToken: access,
-            refreshToken: body['refresh_token'] as String?,
+            refreshToken: rotatedRefresh,
           );
         }
       }
@@ -122,8 +134,6 @@ class AuthService {
       'password': password,
     };
 
-    debugPrint('Payload login preparado para email: ${email.trim()}');
-
     try {
       final response = await _client
           .post(
@@ -156,10 +166,9 @@ class AuthService {
       return LoginResult.failure(
         'No se pudo conectar con el servidor. Revisa la URL ($baseUrl), el puerto y que Gin esté ejecutándose.',
       );
-    } catch (e) {
-      // Captura también Error (ej. file:///api-auth en nativo con relativo mal configurado)
+    } catch (_) {
       return LoginResult.failure(
-        'No se pudo conectar con el servidor. Revisa la URL ($baseUrl), el puerto y que Gin esté ejecutándose. ($e)',
+        'No se pudo conectar con el servidor. Revisa la URL configurada, el puerto y que el servicio esté disponible.',
       );
     }
   }
@@ -189,10 +198,6 @@ class AuthService {
         'description': description.trim(),
       if (visibility != null) 'visibility': visibility,
     };
-
-    debugPrint(
-      'Payload register: email=${email.trim()}, display_name=${displayName.trim()}, role=$role',
-    );
 
     try {
       final response = await _client
@@ -226,9 +231,9 @@ class AuthService {
       return RegisterResult.failure(
         'No se pudo conectar con el servidor. Revisa la URL ($baseUrl), el puerto y que Gin esté ejecutándose.',
       );
-    } catch (e) {
+    } catch (_) {
       return RegisterResult.failure(
-        'No se pudo conectar con el servidor. Revisa la URL ($baseUrl), el puerto y que Gin esté ejecutándose. ($e)',
+        'No se pudo conectar con el servidor. Revisa la URL configurada, el puerto y que el servicio esté disponible.',
       );
     }
   }
@@ -298,11 +303,13 @@ class LoginResult {
 class RefreshResult {
   const RefreshResult._({
     required this.success,
+    required this.failureKind,
     this.accessToken,
     this.refreshToken,
   });
 
   final bool success;
+  final RefreshFailureKind failureKind;
   final String? accessToken;
   final String? refreshToken;
 
@@ -312,15 +319,21 @@ class RefreshResult {
   }) {
     return RefreshResult._(
       success: true,
+      failureKind: RefreshFailureKind.none,
       accessToken: accessToken,
       refreshToken: refreshToken,
     );
   }
 
-  factory RefreshResult.failure(String message) {
-    return RefreshResult._(success: false);
+  factory RefreshResult.failure(
+    String message, {
+    RefreshFailureKind kind = RefreshFailureKind.transient,
+  }) {
+    return RefreshResult._(success: false, failureKind: kind);
   }
 }
+
+enum RefreshFailureKind { none, transient, rejected }
 
 /// Resultado registro
 class RegisterResult {

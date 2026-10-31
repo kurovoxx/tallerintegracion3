@@ -115,6 +115,16 @@ func (r *GroupRepository) JoinWithInviteToken(ctx context.Context, groupID strin
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// Comparte el lock con baneo y rotación: validar antes de bloquear permite
+	// reingresar con un baneo o token invalidado mientras espera el INSERT.
+	var locked int
+	if err := tx.QueryRow(ctx, `SELECT 1 FROM social.groups WHERE id = $1 FOR UPDATE`, groupID).Scan(&locked); err != nil {
+		if err == pgx.ErrNoRows {
+			return errors.New("invalid_invite_token")
+		}
+		return err
+	}
+
 	// 1. Verificar si el usuario está baneado en este grupo
 	var isBanned bool
 	err = tx.QueryRow(ctx, `
@@ -160,19 +170,10 @@ func (r *GroupRepository) RegenerateInviteToken(ctx context.Context, groupID str
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// 1. Verificar si el usuario es admin del grupo
-	var role string
-	err = tx.QueryRow(ctx, `
-		SELECT role FROM social.group_memberships WHERE group_id = $1 AND user_id = $2
-	`, groupID, userID).Scan(&role)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return "", errors.New("forbidden")
-		}
+	// La autorización se comprueba después de adquirir el lock compartido con
+	// salidas y transferencias para no usar un rol que acaba de revocarse.
+	if err := requireAdminTx(ctx, tx, groupID, userID); err != nil {
 		return "", err
-	}
-	if role != "admin" {
-		return "", errors.New("forbidden")
 	}
 
 	// 2. Actualizar el invite_token del grupo y retornar el nuevo
@@ -209,7 +210,9 @@ func (r *GroupRepository) IsMember(ctx context.Context, groupID string, userID s
 // ListMembers retorna el listado de miembros de un grupo con sus roles
 func (r *GroupRepository) ListMembers(ctx context.Context, groupID string) ([]*model.GroupMembership, error) {
 	var exists bool
-	_ = r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM social.groups WHERE id = $1)`, groupID).Scan(&exists)
+	if err := r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM social.groups WHERE id = $1)`, groupID).Scan(&exists); err != nil {
+		return nil, err
+	}
 	if !exists {
 		return nil, errors.New("group_not_found")
 	}
@@ -232,6 +235,9 @@ func (r *GroupRepository) ListMembers(ctx context.Context, groupID string) ([]*m
 			return nil, err
 		}
 		members = append(members, &m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
 	if members == nil {
@@ -539,7 +545,8 @@ func (r *GroupRepository) removeUserFromGroup(ctx context.Context, groupID, user
 			if strict {
 				return res, errors.New("group_not_found")
 			}
-			return res, nil // el grupo ya no existe
+			res.GroupDeleted = true
+			return res, nil // el grupo ya no existe; la tarea aún debe limpiar Notes
 		}
 		return res, err
 	}

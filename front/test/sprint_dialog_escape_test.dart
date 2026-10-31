@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -14,7 +15,7 @@ const _gid = '11111111-1111-1111-1111-111111111111';
 
 MockClient _client() {
   return MockClient((request) async {
-    final path = request.url.path;
+    final path = request.url.servicePath;
     if (request.method == 'GET' && path == '/groups/$_gid/workspace') {
       return http.Response(
         jsonEncode(<String, dynamic>{

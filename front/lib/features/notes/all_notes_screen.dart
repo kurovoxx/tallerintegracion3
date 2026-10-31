@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/database/app_database.dart';
+import '../../core/database/app_database_manager.dart';
 import '../../core/database/local_notes_repository.dart';
 import '../../core/services/api_config.dart';
 import '../../core/services/authed_client.dart';
@@ -19,6 +20,7 @@ import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/common_widgets.dart';
 import '../../core/widgets/neobrutalism.dart';
+import '../academic/academic_mappers.dart';
 import 'attachment_resources.dart';
 import 'note_file_picker.dart';
 import 'authenticated_attachment_image.dart';
@@ -57,6 +59,31 @@ void debugClearPendingAttachments() {
   _pendingAttachmentFiles.clear();
 }
 
+/// POST /notes en vuelo por clave de idempotencia, compartido por TODAS las
+/// instancias de la pantalla (shell + vista por materia) y por los tres
+/// disparadores de creación (diálogo, sincronización automática y REFRESCAR).
+/// Una segunda petición con la misma clave se une al Future existente en vez
+/// de lanzar otro POST que el backend respondería con 409 "en progreso".
+final Map<(String?, int, String, String), Future<String?>> _inflightCreates =
+    {};
+int _lastTempNoteId = 0;
+
+String _newTempNoteId() {
+  final now = DateTime.now().microsecondsSinceEpoch;
+  _lastTempNoteId = now > _lastTempNoteId ? now : _lastTempNoteId + 1;
+  return '$_lastTempNoteId';
+}
+
+/// Límite de páginas de GET /notes/me por sincronización (50 × 40 = 2000).
+const int _kMaxNotesPages = 40;
+
+/// Tiempo máximo de espera del POST /notes. El backend crea la fila en PG,
+/// sube el .md a Drive (hasta 15 s con reintentos) y, si es pública, concede
+/// el permiso de enlace (otros 15 s). Cortar antes (antes eran 8 s) dejaba la
+/// nota creada en el servidor mientras el cliente la creía fallida: la fila
+/// temporal quedaba junto a la remota y aparecía duplicada.
+const Duration _kCreateTimeout = Duration(seconds: 45);
+
 /// Ejecuta [run] con el cliente inyectado o con uno nuevo que se cierra al
 /// terminar, para no filtrar conexiones en la subida de adjuntos.
 Future<T> _withNotesClient<T>(
@@ -76,8 +103,33 @@ Future<T> _withNotesClient<T>(
 const double _noteEditorMaxWidth = 920;
 
 class AllNotesScreen extends StatefulWidget {
-  const AllNotesScreen({super.key, this.database});
+  const AllNotesScreen({
+    super.key,
+    this.database,
+    this.initialSubjectCode,
+    this.initialSubjectId,
+    this.initialSubjectName,
+    this.autoOpenCreate = false,
+    this.showBackButton = false,
+  });
   final AppDatabase? database;
+
+  /// Filtro de materia academic (código, ej. "INF-301"): lista solo notas
+  /// cuyo título empieza con "[CODE] ". Null = sin filtro.
+  final String? initialSubjectCode;
+
+  /// UUID de materia academic para el POST (subject_id del backend).
+  final String? initialSubjectId;
+
+  /// Nombre de materia para el título (p. ej. "NOTAS REDES").
+  final String? initialSubjectName;
+
+  /// Abre el diálogo de crear al iniciar (con el prefijo de materia).
+  final bool autoOpenCreate;
+
+  /// Muestra back en el header (UX consolidar: volver a Materiales al
+  /// navegar desde academic; en el shell va false).
+  final bool showBackButton;
 
   @override
   State<AllNotesScreen> createState() => AllNotesScreenState();
@@ -86,6 +138,13 @@ class AllNotesScreen extends StatefulWidget {
 class AllNotesScreenState extends State<AllNotesScreen> {
   AppDatabase? _db;
   LocalNotesRepository? _repo;
+
+  /// Dueño capturado al abrir la pantalla. Evita que una sincronización en
+  /// vuelo escriba filas del usuario anterior si la sesión cambia mientras
+  /// la operación sigue viva (aislamiento entre usuarios).
+  late final String? _sessionOwnerId;
+  late final int _sessionRevision;
+  bool _ownsDatabase = false;
 
   final TextEditingController _searchController = TextEditingController();
   Timer? _debounce;
@@ -107,6 +166,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   int _hiddenDemoCount = 0;
   String _currentQuery = '';
 
+  /// Filtro de materia desde academic (UX-05): prefijo "[CODE] " en título.
+  String? _subjectFilter;
+
+  /// UUID de materia para el POST de crear (UX nombres: evita huérfanas).
+  String? _subjectIdForCreate;
+
   // Identificación verificable de ejemplos sembrados (sin borrar nada).
   // Demo solo existe con id '1'..'7' Y título exacto de _demoNotes().
   // Las notas reales usan UUID (36 con guiones) y las locales del usuario
@@ -122,9 +187,9 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   };
 
   bool _isKnownDemo(LocalNote n) => _kDemoTitles[n.id] == n.title;
-  // Dueño para aislamiento por cuenta: user_id del JWT activo (solo scoping
-  // local; el backend sigue siendo la autoridad). Null sin sesión.
-  String? _ownerId() => SessionManager.currentUserId;
+  // Dueño para aislamiento por cuenta: user_id del JWT al abrir la pantalla
+  // (solo scoping local; el backend sigue siendo la autoridad). Null sin sesión.
+  String? _ownerId() => _sessionOwnerId;
   // Sellado de dueño en notas que pertenecen a la cuenta activa.
   LocalNote _stampOwner(LocalNote n) => n.ownerUserId == _ownerId()
       ? n
@@ -160,6 +225,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     final now = DateTime.now();
     return [
       LocalNote(
+        needsSync: false,
         id: '1',
         title: 'Cálculo - Límites y derivadas',
         content:
@@ -168,6 +234,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         updatedAt: now,
       ),
       LocalNote(
+        needsSync: false,
         id: '2',
         title: 'Estructuras de Datos - Árboles',
         content:
@@ -176,6 +243,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         updatedAt: now.subtract(const Duration(hours: 2)),
       ),
       LocalNote(
+        needsSync: false,
         id: '3',
         title: 'Bases de Datos - SQL Joins',
         content:
@@ -184,6 +252,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         updatedAt: now.subtract(const Duration(days: 1)),
       ),
       LocalNote(
+        needsSync: false,
         id: '4',
         title: 'Redes - Modelo OSI',
         content:
@@ -192,6 +261,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         updatedAt: now.subtract(const Duration(days: 2)),
       ),
       LocalNote(
+        needsSync: false,
         id: '5',
         title: 'Frontend - NestJS MVC',
         content:
@@ -200,6 +270,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         updatedAt: now.subtract(const Duration(days: 3)),
       ),
       LocalNote(
+        needsSync: false,
         id: '6',
         title: 'Cálculo - Integrales dobles',
         content:
@@ -208,6 +279,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         updatedAt: now.subtract(const Duration(days: 4)),
       ),
       LocalNote(
+        needsSync: false,
         id: '7',
         title: 'Nota con Adjuntos de Prueba (Conejita y PDF)',
         content:
@@ -221,7 +293,32 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   @override
   void initState() {
     super.initState();
-    _notesFuture = _initAndLoad();
+    _sessionOwnerId = SessionManager.currentUserId;
+    _sessionRevision = SessionManager.revision.value;
+    _subjectFilter = widget.initialSubjectCode?.trim().isNotEmpty == true
+        ? widget.initialSubjectCode!.trim()
+        : null;
+    _subjectIdForCreate = widget.initialSubjectId?.trim().isNotEmpty == true
+        ? widget.initialSubjectId!.trim()
+        : null;
+    _notesFuture = AppDatabaseManager.instance.guard(_initAndLoad);
+    if (widget.autoOpenCreate) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          openCreateDialog(
+            initialTitle: _subjectTitlePrefix(),
+            subjectId: widget.initialSubjectId,
+          );
+        }
+      });
+    }
+  }
+
+  /// Prefijo "[CODE] " para crear/listar por materia (UX-05, lado cliente).
+  String _subjectTitlePrefix() {
+    final code = _subjectFilter;
+    if (code == null || code.isEmpty) return '';
+    return subjectNotePrefix(code);
   }
 
   @override
@@ -244,9 +341,17 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     }
     try {
       try {
-        _db = widget.database ?? AppDatabase();
+        final injected = widget.database;
+        if (injected != null) {
+          _db = injected;
+          _ownsDatabase = false;
+        } else if (_db == null || !_ownsDatabase) {
+          _db = await AppDatabaseManager.instance.acquire();
+          _ownsDatabase = true;
+        }
         _repo = LocalNotesRepository(_db!);
         await _repo!.getAllNotes(ownerId: _ownerId());
+        await _loadTombstones();
       } catch (e) {
         debugPrint('Drift init falló, fallback a memoria: $e');
         final token = SessionManager.token;
@@ -341,10 +446,116 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     }
   }
 
+  /// Carga los tombstones persistentes del dueño activo (Fase 1 §P3) para que
+  /// una nota borrada no reaparezca tras reiniciar la app.
+  Future<void> _loadTombstones() async {
+    if (_useMemoryFallback || _repo == null) return;
+    try {
+      final tombstones = await _repo!.getTombstones(ownerId: _ownerId());
+      for (final t in tombstones) {
+        _deletedNoteIds.add(t.id);
+      }
+    } catch (e) {
+      debugPrint('No se pudieron cargar tombstones: $e');
+    }
+  }
+
   // Sincroniza GET /notes/me (real). Si hay sesión y falla, guarda
   // _backendError real en vez de ocultar el fallo tras datos demo.
   // Ver back/notes/cmd/server/main.go:130 y note_handler.go:241 ListMy.
-  Future<void> _syncFromBackend() async {
+  //
+  // Coalescente: si ya hay una sincronización en curso, la llamada nueva no
+  // lanza otra en paralelo (dos merges intercalados podían promover la misma
+  // fila temporal dos veces); se marca una pasada extra al terminar la actual
+  // para que quien llamó vea un estado posterior a su petición.
+  Future<void>? _backendSyncRunning;
+  bool _backendSyncAgain = false;
+
+  Future<void> _syncFromBackend() {
+    if (AppDatabaseManager.instance.isClosed) return Future<void>.value();
+    final running = _backendSyncRunning;
+    if (running != null) {
+      _backendSyncAgain = true;
+      return running;
+    }
+    final future = () async {
+      do {
+        _backendSyncAgain = false;
+        if (AppDatabaseManager.instance.isClosed) return;
+        await AppDatabaseManager.instance.guard(_syncFromBackendImpl);
+      } while (_backendSyncAgain);
+    }();
+    _backendSyncRunning = future;
+    return future.whenComplete(() {
+      if (identical(_backendSyncRunning, future)) _backendSyncRunning = null;
+    });
+  }
+
+  /// true mientras la sesión activa sigue siendo la del dueño con el que se
+  /// abrió la pantalla. Si cambió (logout/login de otra cuenta), ninguna
+  /// operación en vuelo debe escribir filas: se sellarían con el dueño
+  /// anterior y mezclarían notas entre cuentas.
+  bool _sessionStillOwner() =>
+      SessionManager.currentUserId == _sessionOwnerId &&
+      SessionManager.revision.value == _sessionRevision;
+
+  (String?, int, String, String) _inflightKey(String key) =>
+      (_sessionOwnerId, _sessionRevision, notesBaseUrl, key);
+
+  /// GET /notes/me paginado con `next_cursor`. Antes solo se pedía la primera
+  /// página (limit=50) y las notas más antiguas nunca llegaban a SQLite.
+  /// Devuelve null si alguna página falla (no se hace convergencia parcial).
+  Future<({List<Map<String, dynamic>> notes, bool complete})?>
+  _fetchAllMyNotes() async {
+    final out = <String, Map<String, dynamic>>{};
+    final seenCursors = <String>{};
+    var cursor = '';
+    for (var page = 0; page < _kMaxNotesPages; page++) {
+      if (!_sessionStillOwner()) return null;
+      if (!seenCursors.add(cursor)) {
+        return (notes: out.values.toList(), complete: false);
+      }
+      final uri = Uri.parse('$notesBaseUrl/notes/me').replace(
+        queryParameters: <String, String>{
+          'limit': '50',
+          if (cursor.isNotEmpty) 'cursor': cursor,
+        },
+      );
+      final res = await AuthedHttp.run(
+        () => _withNotesClient(
+          (client) => client
+              .get(uri, headers: _authHeaders())
+              .timeout(const Duration(seconds: 8)),
+        ),
+      );
+      if (res.statusCode != 200) {
+        String detail = 'HTTP ${res.statusCode}';
+        try {
+          final body = jsonDecode(utf8.decode(res.bodyBytes));
+          if (body is Map && body['error'] is Map) {
+            detail =
+                '${body['error']['code'] ?? 'error'}: ${body['error']['message'] ?? detail}';
+          }
+        } catch (_) {}
+        debugPrint('Backend sync error real: $detail');
+        return null;
+      }
+      final data = jsonDecode(utf8.decode(res.bodyBytes));
+      final List notes = (data is Map ? data['notes'] : null) ?? const [];
+      for (final n in notes) {
+        if (n is Map<String, dynamic> && n['id'] is String) {
+          out[n['id'] as String] = n;
+        }
+      }
+      final next = data is Map ? data['next_cursor'] : null;
+      cursor = next is String ? next.trim() : '';
+      if (cursor.isEmpty) return (notes: out.values.toList(), complete: true);
+    }
+    // Tope de páginas alcanzado: se fusiona lo leído sin converger tombstones.
+    return (notes: out.values.toList(), complete: false);
+  }
+
+  Future<void> _syncFromBackendImpl() async {
     if (_useMemoryFallback || _repo == null) return;
     if (mounted) {
       setState(() {
@@ -360,43 +571,59 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         if (mounted) setState(() => _showingLocalExample = true);
         return;
       }
-      final res = await AuthedHttp.run(
-        () => _withNotesClient(
-          (client) => client
-              .get(
-                Uri.parse('$notesBaseUrl/notes/me?limit=50'),
-                headers: _authHeaders(),
-              )
-              .timeout(const Duration(seconds: 5)),
-        ),
-      );
-      if (res.statusCode == 200) {
+      if (!_sessionStillOwner()) {
+        debugPrint('[Notes] sync omitido: la sesión cambió de cuenta');
+        return;
+      }
+      final fetched = await _fetchAllMyNotes();
+      if (!_sessionStillOwner()) return;
+      if (fetched != null) {
         if (mounted) {
           setState(() {
             _backendError = null;
             _showingLocalExample = false;
           });
         }
-        final data = jsonDecode(utf8.decode(res.bodyBytes));
-        final List notes = data['notes'] ?? [];
+        // 1. Resolver ANTES del merge las creaciones locales pendientes (POST
+        //    sin confirmar: timeout, cierre de la app, cambio de ventana). Se
+        //    reenvía la MISMA clave: el backend responde con la nota ya creada
+        //    (replay) y la fila temporal se promueve a su UUID. Sin este paso
+        //    la fila temporal convivía con la remota => nota duplicada.
+        await _resolvePendingCreates();
+        if (!_sessionStillOwner()) return;
+        final remoteIds = <String>{};
         final cached = {
           for (final n in await _repo!.getAllNotes(ownerId: _ownerId()))
             n.id: n,
         };
-        for (final n in notes) {
+        for (final n in fetched.notes) {
           try {
             final remoteId = n['id'] as String?;
-            if (remoteId != null && remoteId.isNotEmpty) {
-              _ownedNoteIds.add(remoteId);
+            if (remoteId == null || remoteId.isEmpty) continue;
+            remoteIds.add(remoteId);
+            // No resucitar una nota borrada localmente (tombstone §P3): el
+            // backend puede seguir devolviéndola hasta confirmar el DELETE.
+            if (await _isTombstoned(remoteId)) continue;
+            // El listado se pidió antes de resolver creaciones/ediciones. Una
+            // respuesta antigua no puede rebajar una versión ya confirmada.
+            final remoteVersion = (n['version'] as num?)?.toInt();
+            if (cached[remoteId]?.needsSync == true ||
+                (cached[remoteId]?.version ?? 0) > (remoteVersion ?? 0)) {
+              continue;
             }
+            if (!_sessionStillOwner()) return;
+            _ownedNoteIds.add(remoteId);
             await _repo!.upsertNote(
               _stampOwner(
                 LocalNote(
-                  id: n['id'] as String,
+                  needsSync: false,
+                  id: remoteId,
                   version: (n['version'] as num?)?.toInt(),
                   title: n['title'] as String? ?? 'Sin título',
                   content:
-                      n['content'] as String? ?? cached[n['id']]?.content ?? '',
+                      n['content'] as String? ??
+                      cached[remoteId]?.content ??
+                      '',
                   visibility: n['visibility'] as String? ?? 'private',
                   updatedAt: n['updated_at'] != null
                       ? DateTime.tryParse(n['updated_at'].toString()) ??
@@ -408,22 +635,34 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             );
           } catch (_) {}
         }
+        // Convergencia de tombstones: si el servidor ya no devuelve una nota
+        // cuyo DELETE se confirmó, el tombstone dejó de ser necesario. Solo
+        // con el listado COMPLETO, y nunca para una nota temporal cuyo CREATE
+        // sigue en vuelo (su tombstone es lo que traslada el borrado al UUID).
+        if (fetched.complete && !_useMemoryFallback && _repo != null) {
+          try {
+            final tombstones = await _repo!.getTombstones(ownerId: _ownerId());
+            for (final t in tombstones) {
+              if (t.remotePending || remoteIds.contains(t.id)) continue;
+              if (!_isRemoteNote(t.id) &&
+                  (_inflightCreates.containsKey(
+                        _inflightKey(_createKeyFor(t.id)),
+                      ) ||
+                      _pendingNoteSyncs.containsKey(t.id))) {
+                continue;
+              }
+              await _repo!.removeTombstone(t.id);
+              _deletedNoteIds.remove(t.id);
+            }
+          } catch (_) {}
+        }
       } else {
-        String detail = 'HTTP ${res.statusCode}';
-        try {
-          final body = jsonDecode(utf8.decode(res.bodyBytes));
-          if (body is Map && body['error'] is Map) {
-            detail =
-                '${body['error']['code'] ?? 'error'}: ${body['error']['message'] ?? detail}';
-          }
-        } catch (_) {}
         if (mounted) {
           setState(
             () => _backendError =
                 'No pudimos sincronizar tus notas. Puedes seguir usando las notas guardadas en este equipo.',
           );
         }
-        debugPrint('Backend sync error real: $detail');
       }
     } catch (_) {
       debugPrint('Backend sync falló (offline)');
@@ -441,6 +680,133 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     } finally {
       if (mounted) setState(() => _isSyncingBackend = false);
     }
+  }
+
+  /// Reintenta (idempotente) las creaciones locales que ya tienen intención
+  /// persistida (`create_key`) y no tienen un pipeline del diálogo en curso.
+  /// Cubre: crear offline y sincronizar después, reiniciar antes de confirmar
+  /// el POST y timeout tras crear en el backend.
+  Future<void> _resolvePendingCreates() async {
+    if (_useMemoryFallback || _repo == null) return;
+    List<LocalNote> local;
+    try {
+      local = await _repo!.getAllNotes(ownerId: _ownerId());
+    } catch (_) {
+      return;
+    }
+    for (final note in local) {
+      if (_isRemoteNote(note.id) || _isKnownDemo(note)) continue;
+      if ((note.createKey ?? '').isEmpty) continue;
+      if (_pendingNoteSyncs.containsKey(note.id)) continue;
+      if (!_sessionStillOwner()) return;
+      if (_deletedNoteIds.contains(note.id)) {
+        // Borrada por el usuario con el CREATE sin confirmar.
+        await _settleDeletedPendingCreate(note);
+        continue;
+      }
+      await _pushPendingCreate(note);
+    }
+    // Una creación ya promovida puede tener un PATCH pendiente tras reiniciar.
+    for (final note in local.where((n) => _isRemoteNote(n.id) && n.needsSync)) {
+      if (!_sessionStillOwner() || await _isTombstoned(note.id)) continue;
+      if (_pendingSyncFor(note.id) != null) continue;
+      await _retryPendingEdit(note);
+    }
+  }
+
+  /// Crea en el backend (idempotente) una nota local con id temporal, la
+  /// promueve a su UUID y, si el usuario la editó mientras el CREATE seguía
+  /// pendiente o tenía adjuntos en memoria, aplica el PATCH con el contenido
+  /// vigente. Compartido por REFRESCAR y por la sincronización automática.
+  Future<_PendingCreateResult> _pushPendingCreate(LocalNote note) async {
+    // Pipeline del diálogo aún en curso: esperarlo en vez de duplicarlo.
+    final pipeline = _pendingNoteSyncs[note.id];
+    if (pipeline != null) {
+      try {
+        await pipeline.timeout(_kCreateTimeout + const Duration(seconds: 30));
+      } catch (_) {}
+      final resolved = _remoteIds[note.id];
+      return resolved == null
+          ? const _PendingCreateResult(failed: 1)
+          : _PendingCreateResult(realId: resolved);
+    }
+    // Idempotente: reutiliza la misma clave/snapshot en cada reintento
+    // (misma nota, sin duplicar fila PG ni archivo Drive).
+    final intent = await _ensureCreateIntent(note);
+    final realId = await _createNoteOnBackend(
+      title: intent.title,
+      content: intent.content,
+      visibility: intent.visibility,
+      subjectId: intent.subjectId,
+      idempotencyKey: intent.key,
+    );
+    if (realId == null || realId.isEmpty) {
+      return const _PendingCreateResult(failed: 1);
+    }
+    if (!_sessionStillOwner()) return const _PendingCreateResult();
+    await _replaceLocalId(note.id, realId);
+    if (_deletedNoteIds.contains(realId)) {
+      return _PendingCreateResult(realId: realId);
+    }
+    final remoteNote = _latestNotes[realId] ?? note.copyWith(id: realId);
+    final uploadedIds = <String>[];
+    final failedNames = <String>[];
+    final newContent = await _uploadPendingAttachmentsToNote(
+      remoteNote,
+      realId,
+      uploadedIds,
+      failedNames,
+    );
+    // PATCH si cambiaron los adjuntos O si el contenido/título vigentes
+    // difieren del snapshot con el que se creó (edición con CREATE pendiente).
+    if (newContent != intent.content ||
+        remoteNote.title != intent.title ||
+        remoteNote.needsSync) {
+      final saved = await _patchNoteRemote(
+        remoteNote,
+        remoteNote.title,
+        _withoutPendingAttachments(newContent),
+      );
+      if (saved.ok) {
+        await _applyLocalUpsert(
+          remoteNote.copyWith(
+            content: newContent,
+            version: Value(_versions[realId]),
+            needsSync: newContent.contains('attachment-pending://'),
+          ),
+        );
+      }
+    }
+    return _PendingCreateResult(
+      realId: realId,
+      linked: uploadedIds.length,
+      failed: failedNames.length,
+    );
+  }
+
+  Future<bool> _retryPendingEdit(LocalNote note) async {
+    final uploaded = <String>[];
+    final failures = <String>[];
+    final content = await _uploadPendingAttachmentsToNote(
+      note,
+      note.id,
+      uploaded,
+      failures,
+    );
+    final result = await _patchNoteRemote(
+      note,
+      note.title,
+      _withoutPendingAttachments(content),
+    );
+    if (!_sessionStillOwner()) return false;
+    await _applyLocalUpsert(
+      note.copyWith(
+        content: content,
+        version: Value(result.ok ? _versions[note.id] : note.version),
+        needsSync: !result.ok || content.contains('attachment-pending://'),
+      ),
+    );
+    return result.ok && failures.isEmpty;
   }
 
   /// SnackBar neobrutalista reutilizable: borde negro, esquinas rectas y texto
@@ -488,6 +854,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   /// sincronizada sin cambios NO recibe PATCH. Termina con GET /notes/me.
   /// No duplica el pipeline de creación: si hay un Future en curso lo espera.
   Future<void> _syncWithDrive() async {
+    if (AppDatabaseManager.instance.isClosed) return;
+    await AppDatabaseManager.instance.guard(_syncWithDriveImpl);
+  }
+
+  Future<void> _syncWithDriveImpl() async {
     if (_isReconciling) return;
     final token = SessionManager.token;
     if (token == null || token.isEmpty) {
@@ -497,63 +868,68 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       );
       return;
     }
+    if (!_sessionStillOwner()) {
+      // Pantalla abierta con otra cuenta: no mezclar notas entre sesiones.
+      _notifySnack(
+        'La sesión cambió. Vuelve a abrir tus notas para sincronizar.',
+        ok: false,
+      );
+      return;
+    }
     setState(() => _isReconciling = true);
     var pushed = 0;
     var refreshed = 0;
     var failed = 0;
     var linkedAttachments = 0;
+    var tombstonesCleared = 0;
     try {
+      // 0. Tombstones pendientes (Fase 1 §P3): reintentar el DELETE de notas
+      //    borradas sin conexión. Solo ids propios marcados localmente; nunca
+      //    notas ajenas ni comparticiones de otros usuarios.
+      if (!_useMemoryFallback && _repo != null) {
+        final pendingTombstones = await _repo!.getTombstones(
+          ownerId: _ownerId(),
+        );
+        for (final t in pendingTombstones.where((t) => t.remotePending)) {
+          if (!_isRemoteNote(t.id)) continue;
+          final res = await _deleteNoteRemoteById(t.id);
+          if (res.ok || res.status == 404) {
+            await _repo!.updateTombstone(t.id, remotePending: false);
+            tombstonesCleared++;
+          } else {
+            await _repo!.updateTombstone(
+              t.id,
+              remotePending: true,
+              lastError: res.message ?? res.code,
+            );
+            failed++;
+          }
+        }
+      }
       final notes = _useMemoryFallback
           ? List<LocalNote>.from(_memoryFallback)
           : await _repo!.getAllNotes(ownerId: _ownerId());
       // 1. Sin respaldo remoto: id local (timestamp) => crear en backend y
       //    asociar los adjuntos pendientes que sigan en memoria.
       for (final note in notes.where(
-        (n) => !_isRemoteNote(n.id) && !_isKnownDemo(n),
+        (n) =>
+            !_isRemoteNote(n.id) &&
+            !_isKnownDemo(n) &&
+            !_deletedNoteIds.contains(n.id),
       )) {
-        final realId = await _createNoteOnBackend(
-          title: note.title,
-          content: _withoutPendingAttachments(note.content),
-          visibility: note.visibility,
-        );
-        if (realId == null || realId.isEmpty) {
-          failed++;
-          continue;
-        }
-        await _replaceLocalId(note.id, realId);
-        final remoteNote = _latestNotes[realId] ?? note.copyWith(id: realId);
-        final uploadedIds = <String>[];
-        final failedNames = <String>[];
-        final newContent = await _uploadPendingAttachmentsToNote(
-          remoteNote,
-          realId,
-          uploadedIds,
-          failedNames,
-        );
-        linkedAttachments += uploadedIds.length;
-        failed += failedNames.length;
-        if (newContent != _withoutPendingAttachments(remoteNote.content)) {
-          final saved = await _patchNoteRemote(
-            remoteNote,
-            remoteNote.title,
-            newContent,
-          );
-          if (saved.ok) {
-            await _applyLocalUpsert(
-              remoteNote.copyWith(
-                content: newContent,
-                version: Value(_versions[realId]),
-              ),
-            );
-          }
-        }
-        pushed++;
+        final result = await _pushPendingCreate(note);
+        linkedAttachments += result.linked;
+        failed += result.failed;
+        if (result.realId != null) pushed++;
       }
       // 2. Ya remotas propias: SOLO las que necesitan reconciliación
       // (placeholders pendientes o error conocido). Sin pendientes no hay
       // PATCH: pulsar el botón con todo sincronizado es solo un refresh.
       for (final note in notes.where(
-        (n) => _isRemoteNote(n.id) && _isMine(n),
+        (n) =>
+            _isRemoteNote(n.id) &&
+            _isMine(n) &&
+            !_deletedNoteIds.contains(n.id),
       )) {
         // Pipeline de creación en curso: esperarlo en vez de duplicarlo.
         final pending = _pendingSyncFor(note.id);
@@ -566,9 +942,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           }
           continue;
         }
-        final needsRetry = _noteSyncState[note.id] == _NoteSyncState.error;
-        final hasPendingAttachments =
-            note.content.contains('attachment-pending://');
+        final needsRetry =
+            note.needsSync || _noteSyncState[note.id] == _NoteSyncState.error;
+        final hasPendingAttachments = note.content.contains(
+          'attachment-pending://',
+        );
         if (!needsRetry && !hasPendingAttachments) continue;
         final uploadedIds = <String>[];
         final failedNames = <String>[];
@@ -580,13 +958,18 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         );
         linkedAttachments += uploadedIds.length;
         failed += failedNames.length;
-        final res = await _patchNoteRemote(note, note.title, newContent);
+        final res = await _patchNoteRemote(
+          note,
+          note.title,
+          _withoutPendingAttachments(newContent),
+        );
         if (res.ok) {
-          if (newContent != note.content) {
+          if (newContent != note.content || note.needsSync) {
             await _applyLocalUpsert(
               note.copyWith(
                 content: newContent,
                 version: Value(_versions[note.id]),
+                needsSync: newContent.contains('attachment-pending://'),
               ),
             );
           }
@@ -632,7 +1015,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         refreshed == 0 &&
         linkedAttachments == 0 &&
         removedNotes == 0 &&
-        removedAttachments == 0) {
+        removedAttachments == 0 &&
+        tombstonesCleared == 0) {
       _notifySnack('Tus notas están sincronizadas.');
       return;
     }
@@ -641,6 +1025,9 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     if (refreshed > 0) parts.add('$refreshed actualizada(s)');
     if (linkedAttachments > 0) {
       parts.add('$linkedAttachments adjunto(s) vinculado(s)');
+    }
+    if (tombstonesCleared > 0) {
+      parts.add('$tombstonesCleared borrado(s) pendiente(s) confirmado(s)');
     }
     if (removedNotes > 0 || removedAttachments > 0) {
       parts.add(
@@ -705,8 +1092,21 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     for (final match in matches) {
       final url = match.group(1);
       if (url == null) continue;
-      final file = _pendingAttachmentFiles[url];
-      if (file == null) continue;
+      if (!_sessionStillOwner()) break;
+      final stored = await _repo?.pendingAttachment(url, _ownerId());
+      final file = stored == null
+          ? _pendingAttachmentFiles[url]
+          : PickedNoteFile(stored.fileName, stored.bytes, stored.mime);
+      if (file == null) {
+        failedNames.add(url);
+        continue; // Conservar referencia; nunca borrar silenciosamente el adjunto.
+      }
+      final previousId = stored?.uploadedId;
+      if (previousId != null) {
+        content = content.replaceAll('($url)', '(attachment:$previousId)');
+        uploadedIds.add(previousId);
+        continue;
+      }
       final result = await _uploadAttachmentBinary(
         noteId: noteId,
         bytes: file.bytes,
@@ -714,34 +1114,88 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         isInline: file.isImage,
       );
       if (result.ok && result.attachmentId != null) {
+        await _repo?.recordAttachmentUpload(url, result.attachmentId!);
+        _pendingAttachmentFiles.remove(url);
         content = content.replaceAll(
           '($url)',
           '(attachment:${result.attachmentId})',
         );
         uploadedIds.add(result.attachmentId!);
-        _pendingAttachmentFiles.remove(url);
       } else {
         failedNames.add(file.name);
       }
     }
-    return _withoutPendingAttachments(content);
+    if (content != note.content) {
+      await _applyLocalUpsert(note.copyWith(content: content, needsSync: true));
+    }
+    return content;
   }
 
-  /// Intento de creación remota. Devuelve el UUID real del backend (201) o null.
-  /// No bloquea el guardado local: si el backend falla, solo se imprime el error (offline-first).
+  /// Intento de creación remota. Devuelve el UUID real del backend (201/200) o
+  /// null. No bloquea el guardado local: si el backend falla, solo se imprime
+  /// el error (offline-first).
+  ///
+  /// Idempotencia (Fase 1 §P1): [idempotencyKey] viaja como `X-Idempotency-Key`
+  /// y debe ser ESTABLE entre reintentos y acompañar SIEMPRE al MISMO payload.
+  /// El backend reclama la clave antes de tocar PG/Drive, de modo que
+  /// misma clave + mismo payload => replay del recurso ya creado (sin segunda
+  /// fila ni segundo archivo); misma clave + payload distinto => 409. Por eso un
+  /// 409 NUNCA dispara aquí una creación independiente (evitaría duplicados):
+  /// se devuelve null y se reintenta más tarde con la misma intención.
   Future<String?> _createNoteOnBackend({
     required String title,
     required String content,
     required String visibility,
+    String? subjectId,
+    String? idempotencyKey,
+  }) {
+    final key = idempotencyKey ?? '';
+    if (key.isEmpty) {
+      return _postCreate(
+        title: title,
+        content: content,
+        visibility: visibility,
+        subjectId: subjectId,
+        idempotencyKey: null,
+      );
+    }
+    if (!_sessionStillOwner()) return Future.value(null);
+    final scopedKey = _inflightKey(key);
+    final inflight = _inflightCreates[scopedKey];
+    if (inflight != null) return inflight;
+    final future = _postCreate(
+      title: title,
+      content: content,
+      visibility: visibility,
+      subjectId: subjectId,
+      idempotencyKey: key,
+    );
+    _inflightCreates[scopedKey] = future;
+    return future.whenComplete(() {
+      if (identical(_inflightCreates[scopedKey], future)) {
+        _inflightCreates.remove(scopedKey);
+      }
+    });
+  }
+
+  Future<String?> _postCreate({
+    required String title,
+    required String content,
+    required String visibility,
+    String? subjectId,
+    String? idempotencyKey,
   }) async {
     final url = '$notesBaseUrl/notes';
     final body = <String, String>{
       'title': title,
       'content': content,
       'visibility': visibility,
+      if (subjectId != null && subjectId.trim().isNotEmpty)
+        'subject_id': subjectId.trim(),
     };
     debugPrint(
-      '[Notes] POST titleChars=${title.length} contentChars=${content.length}',
+      '[Notes] POST titleChars=${title.length} contentChars=${content.length} '
+      'idem=${idempotencyKey != null && idempotencyKey.isNotEmpty}',
     );
     try {
       final res = await AuthedHttp.run(
@@ -749,14 +1203,18 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           (client) => client
               .post(
                 Uri.parse(url),
-                headers: _authHeaders(),
+                headers: {
+                  ..._authHeaders(),
+                  if (idempotencyKey != null && idempotencyKey.isNotEmpty)
+                    'X-Idempotency-Key': idempotencyKey,
+                },
                 body: jsonEncode(body),
               )
-              .timeout(const Duration(seconds: 8)),
+              .timeout(_kCreateTimeout),
         ),
       );
       debugPrint('[Notes] POST /notes status=${res.statusCode}');
-      if (res.statusCode == 201) {
+      if (res.statusCode == 201 || res.statusCode == 200) {
         try {
           final data = jsonDecode(utf8.decode(res.bodyBytes));
           final newId = data['note_id'] as String?;
@@ -770,6 +1228,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             return newId;
           }
         } catch (_) {}
+      } else if (res.statusCode == 409) {
+        // Claim en progreso o clave reutilizada con payload distinto: se
+        // reintentará con la misma intención, nunca con una creación nueva.
+        debugPrint(
+          '[Notes] POST /notes 409 idempotencia -> reintento diferido',
+        );
       }
     } catch (e) {
       debugPrint('[Notes] POST /notes status=error offline_or_failed');
@@ -777,12 +1241,126 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     return null;
   }
 
+  /// Clave de idempotencia estable derivada del id local persistente: el mismo
+  /// id produce la misma clave en cada reintento y tras reiniciar la app.
+  String _createKeyFor(String tempId) => 'flutter-note-create-$tempId';
+
+  /// Serializa el payload original de creación (la "intención") a JSON para
+  /// persistirlo junto a la nota local.
+  String _encodeCreateSnapshot(
+    String title,
+    String content,
+    String visibility,
+    String? subjectId,
+  ) => jsonEncode(<String, String>{
+    'title': title,
+    'content': content,
+    'visibility': visibility,
+    if (subjectId != null && subjectId.trim().isNotEmpty)
+      'subject_id': subjectId.trim(),
+  });
+
+  /// Obtiene (o crea y persiste la primera vez) la intención de creación de una
+  /// nota local: la clave idempotente y el snapshot congelado del payload.
+  ///
+  /// El payload se congela porque el backend hashea (clave+payload): enviar
+  /// contenido editado con la misma clave daría 409 y obligaría a crear una
+  /// segunda nota. Si el usuario edita mientras el CREATE sigue pendiente, se
+  /// crea con este snapshot y luego se aplica un PATCH con el contenido vigente.
+  Future<_CreateIntent> _ensureCreateIntent(
+    LocalNote note, {
+    String? subjectId,
+  }) async {
+    final existingKey = note.createKey;
+    final existingSnapshot = note.createSnapshot;
+    if (existingKey != null &&
+        existingKey.isNotEmpty &&
+        existingSnapshot != null &&
+        existingSnapshot.isNotEmpty) {
+      try {
+        final map = jsonDecode(existingSnapshot) as Map<String, dynamic>;
+        return _CreateIntent(
+          key: existingKey,
+          title: map['title'] as String? ?? note.title,
+          content:
+              map['content'] as String? ??
+              _withoutPendingAttachments(note.content),
+          visibility: map['visibility'] as String? ?? note.visibility,
+          subjectId: map['subject_id'] as String?,
+        );
+      } catch (_) {
+        // Snapshot corrupto: se reutiliza la MISMA clave con el payload actual.
+        // Si un intento previo usó otro payload, el backend responderá 409 y no
+        // se creará un duplicado (nunca se genera una clave nueva a ciegas).
+      }
+    }
+    final key = (existingKey != null && existingKey.isNotEmpty)
+        ? existingKey
+        : _createKeyFor(note.id);
+    final snapshotContent = _withoutPendingAttachments(note.content);
+    final snapshot = _encodeCreateSnapshot(
+      note.title,
+      snapshotContent,
+      note.visibility,
+      subjectId,
+    );
+    if (!_useMemoryFallback && _repo != null) {
+      try {
+        await _repo!.setPendingCreate(note.id, key: key, snapshot: snapshot);
+      } catch (_) {}
+    } else {
+      final i = _memoryFallback.indexWhere((n) => n.id == note.id);
+      if (i >= 0) {
+        _memoryFallback[i] = _memoryFallback[i].copyWith(
+          createKey: Value(key),
+          createSnapshot: Value(snapshot),
+        );
+      }
+    }
+    return _CreateIntent(
+      key: key,
+      title: note.title,
+      content: snapshotContent,
+      visibility: note.visibility,
+      subjectId: subjectId,
+    );
+  }
+
+  /// Crea una nota local (id sin UUID) en el backend de forma idempotente:
+  /// garantiza que cada reintento reutilice la misma clave y el mismo payload.
+  Future<String?> _createLocalNoteIdempotent(
+    LocalNote note, {
+    String? subjectId,
+  }) async {
+    final intent = await _ensureCreateIntent(note, subjectId: subjectId);
+    return _createNoteOnBackend(
+      title: intent.title,
+      content: intent.content,
+      visibility: intent.visibility,
+      subjectId: intent.subjectId,
+      idempotencyKey: intent.key,
+    );
+  }
+
   /// Reemplaza el id temporal (timestamp) por el UUID real del backend en
   /// Drift/memoria y migra el estado interactivo (likes/saved/tags) para que
   /// PATCH/DELETE usen el UUID válido de Postgres.
+  ///
+  /// La escritura en SQLite NO depende de `mounted`: si el usuario cambió de
+  /// ventana mientras el POST seguía en vuelo, la fila temporal debe
+  /// promoverse igual. Antes se abortaba con la pantalla desmontada y la fila
+  /// temporal convivía con la remota que traía el siguiente GET /notes/me
+  /// (nota duplicada, incluso tras reiniciar la app).
   Future<void> _replaceLocalId(String tempId, String realId) async {
-    if (!mounted) return;
     _ownedNoteIds.add(realId);
+    _remoteIds[tempId] = realId;
+    // Borrada localmente mientras el CREATE estaba en vuelo: el backend ya la
+    // creó, así que el borrado se traslada al UUID real (tombstone + DELETE)
+    // para que el GET siguiente no la resucite.
+    if (await _isTombstoned(tempId)) {
+      await _forwardDeleteToRemote(tempId, realId);
+      return;
+    }
     LocalNote? current;
     if (_useMemoryFallback || _repo == null) {
       final i = _memoryFallback.indexWhere((n) => n.id == tempId);
@@ -790,17 +1368,23 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       current = _memoryFallback[i];
     } else {
       try {
-        final all = await _repo!.getAllNotes(ownerId: _ownerId());
-        for (final n in all) {
-          if (n.id == tempId) {
-            current = n;
-            break;
-          }
+        current = await _repo!.promoteTempNote(
+          tempId,
+          realId,
+          version: _versions[realId],
+        );
+      } catch (e) {
+        debugPrint('[Notes] promote temp=$tempId real=$realId falló: $e');
+      }
+      // null: otra sincronización ya la promovió (o el usuario la borró justo
+      // ahora). En ambos casos no hay fila temporal que renombrar.
+      if (current == null) {
+        if (await _isTombstoned(tempId)) {
+          await _forwardDeleteToRemote(tempId, realId);
         }
-      } catch (_) {}
-      if (current == null) return;
+        return;
+      }
     }
-    _remoteIds[tempId] = realId;
     // El pipeline sigue en curso: el Future y el badge ahora responden por
     // el UUID real (se conserva también la llave tempId hasta el cleanup).
     if (_pendingNoteSyncs.containsKey(tempId)) {
@@ -811,16 +1395,16 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     }
     final renamed = LocalNote(
       id: realId,
-      version: _versions[realId],
+      version: _versions[realId] ?? current.version,
       title: current.title,
       content: current.content,
       visibility: current.visibility,
       updatedAt: current.updatedAt,
       ownerUserId: current.ownerUserId,
+      needsSync: current.needsSync,
     );
     _latestNotes[realId] = renamed;
-    if (!mounted) return;
-    setState(() {
+    void migrate() {
       if (_likesCount.containsKey(tempId)) {
         _likesCount[realId] = _likesCount.remove(tempId)!;
       }
@@ -833,27 +1417,130 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       if (_noteTags.containsKey(tempId)) {
         _noteTags[realId] = _noteTags.remove(tempId)!;
       }
-    });
-    if (_useMemoryFallback || _repo == null) {
-      if (!mounted) return;
-      setState(() {
+      if (_useMemoryFallback || _repo == null) {
         final i = _memoryFallback.indexWhere((n) => n.id == tempId);
         if (i >= 0) {
           _memoryFallback[i] = renamed;
-        } else {
+        } else if (!_memoryFallback.any((n) => n.id == realId)) {
           _memoryFallback.insert(0, renamed);
         }
-      });
+      }
+    }
+
+    if (mounted) {
+      setState(migrate);
+      await _applySearch(_currentQuery);
     } else {
+      migrate();
+    }
+  }
+
+  /// true si [id] fue borrado localmente (memoria o tombstone persistente).
+  Future<bool> _isTombstoned(String id) async {
+    if (_deletedNoteIds.contains(id)) return true;
+    if (_useMemoryFallback || _repo == null) return false;
+    try {
+      return await _repo!.hasTombstone(id);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// El usuario borró la nota temporal [tempId] mientras su CREATE seguía en
+  /// vuelo y el backend terminó creándola como [realId]: se registra el
+  /// tombstone del UUID real y se intenta el DELETE remoto. Si falla, queda
+  /// `remotePending` y REFRESCAR lo reintenta; mientras tanto el tombstone
+  /// impide que GET /notes/me la vuelva a mostrar.
+  Future<void> _forwardDeleteToRemote(String tempId, String realId) async {
+    if (!_sessionStillOwner()) return;
+    _deletedNoteIds.add(realId);
+    _ownedNoteIds.remove(realId);
+    _remoteIds.remove(tempId);
+    if (!_useMemoryFallback && _repo != null) {
       try {
+        await _repo!.addTombstone(
+          id: realId,
+          ownerUserId: _ownerId(),
+          remotePending: true,
+        );
+        await _repo!.deleteNote(realId);
         await _repo!.deleteNote(tempId);
-        await _repo!.upsertNote(renamed);
       } catch (_) {}
     }
+    final res = await _deleteNoteRemoteById(realId);
+    if (!_useMemoryFallback && _repo != null) {
+      try {
+        // El tombstone temporal ya cumplió: el borrado vive ahora en realId.
+        await _repo!.updateTombstone(tempId, remotePending: false);
+        if (res.ok || res.status == 404) {
+          await _repo!.updateTombstone(realId, remotePending: false);
+        } else {
+          await _repo!.updateTombstone(
+            realId,
+            remotePending: true,
+            lastError: res.message ?? res.code,
+          );
+        }
+      } catch (_) {}
+    }
+    debugPrint(
+      '[Notes] CREATE temp=$tempId borrada en vuelo -> DELETE real=$realId '
+      'status=${res.status}',
+    );
+  }
+
+  /// Oculta de inmediato una nota temporal con CREATE sin confirmar que el
+  /// usuario borró. La fila se conserva (con su clave y snapshot) bajo un
+  /// tombstone `remotePending` hasta saber si el backend la llegó a crear.
+  Future<void> _hidePendingCreate(LocalNote note) async {
+    void hide() {
+      _deletedNoteIds.add(note.id);
+      _filtered.removeWhere((n) => n.id == note.id);
+      _latestNotes.remove(note.id);
+      _noteSyncState.remove(note.id);
+    }
+
+    if (mounted) {
+      setState(hide);
+    } else {
+      hide();
+    }
+    try {
+      await _repo!.addTombstone(
+        id: note.id,
+        ownerUserId: note.ownerUserId ?? _ownerId(),
+        remotePending: true,
+        lastError: 'pending_create',
+      );
+    } catch (_) {}
     await _applySearch(_currentQuery);
   }
 
+  /// Resuelve una nota temporal borrada cuyo CREATE no se confirmó: reenvía
+  /// la MISMA intención (replay si el backend ya la creó) y borra el UUID real.
+  /// Sin conexión queda pendiente y se reintenta en la próxima sincronización.
+  Future<void> _settleDeletedPendingCreate(LocalNote note) async {
+    final token = SessionManager.token;
+    if (token == null || token.isEmpty || !_sessionStillOwner()) return;
+    // El pipeline del diálogo sigue en vuelo: su _replaceLocalId verá el
+    // tombstone y trasladará el borrado al UUID real.
+    if (_pendingNoteSyncs.containsKey(note.id)) return;
+    final intent = await _ensureCreateIntent(note);
+    final realId = await _createNoteOnBackend(
+      title: intent.title,
+      content: intent.content,
+      visibility: intent.visibility,
+      subjectId: intent.subjectId,
+      idempotencyKey: intent.key,
+    );
+    if (realId == null || realId.isEmpty || !_sessionStillOwner()) return;
+    await _forwardDeleteToRemote(note.id, realId);
+  }
+
   Map<String, String> _authHeaders() {
+    if (!_sessionStillOwner()) {
+      throw StateError('La sesión de esta pantalla cambió');
+    }
     final headers = <String, String>{'Content-Type': 'application/json'};
     final token = SessionManager.token;
     if (token != null && token.isNotEmpty) {
@@ -952,6 +1639,16 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         final data =
             jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
         final version = (data['version'] as num?)?.toInt();
+        final local = await _repo?.getNoteById(note.id);
+        if (local?.needsSync == true) {
+          // Mantener edición/adjuntos locales mientras falla PATCH. La respuesta
+          // al editor combina metadata remota con el borrador durable.
+          return _RemoteResult(
+            ok: true,
+            status: 200,
+            data: {...data, 'title': local!.title, 'content': local.content},
+          );
+        }
         if (version != null) _versions[note.id] = version;
         await _applyLocalUpsert(
           note.copyWith(
@@ -1036,8 +1733,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   }
 
   /// Borrado en cascada: DELETE /notes/:id. Éxito con 200 o 204.
-  Future<_RemoteResult> _deleteNoteRemote(LocalNote note) async {
-    final url = '$notesBaseUrl/notes/${note.id}';
+  Future<_RemoteResult> _deleteNoteRemote(LocalNote note) =>
+      _deleteNoteRemoteById(note.id);
+
+  Future<_RemoteResult> _deleteNoteRemoteById(String id) async {
+    final url = '$notesBaseUrl/notes/$id';
     try {
       final res = await AuthedHttp.run(
         () => _withNotesClient(
@@ -1049,9 +1749,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
               .timeout(const Duration(seconds: 30)),
         ),
       );
-      debugPrint(
-        '[Notes] DELETE NOTE note=${note.id} status=${res.statusCode}',
-      );
+      debugPrint('[Notes] DELETE NOTE note=$id status=${res.statusCode}');
       if (res.statusCode == 200 || res.statusCode == 204) {
         return _RemoteResult(ok: true, status: res.statusCode);
       }
@@ -1131,18 +1829,28 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     return r.status == 404;
   }
 
+  /// Persiste [note] localmente. La escritura en SQLite ocurre aunque la
+  /// pantalla ya se haya desmontado (p. ej. PATCH que termina después de
+  /// cambiar de ventana): solo el repintado depende de `mounted`. Antes se
+  /// descartaba y la copia local quedaba con placeholders ya subidos, que el
+  /// siguiente REFRESCAR volvía a subir (adjunto duplicado).
   Future<void> _applyLocalUpsert(LocalNote note) async {
-    if (!mounted) return;
     _latestNotes[note.id] = note;
     if (_useMemoryFallback || _repo == null) {
-      final i = _memoryFallback.indexWhere((n) => n.id == note.id);
-      setState(() {
+      void apply() {
+        final i = _memoryFallback.indexWhere((n) => n.id == note.id);
         if (i >= 0) {
           _memoryFallback[i] = note;
         } else {
           _memoryFallback.insert(0, note);
         }
-      });
+      }
+
+      if (mounted) {
+        setState(apply);
+      } else {
+        apply();
+      }
     } else {
       try {
         await _repo!.upsertNote(_stampOwner(note));
@@ -1151,10 +1859,16 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     await _applySearch(_currentQuery);
   }
 
-  Future<void> _applyLocalDelete(LocalNote note) async {
-    if (!mounted) return;
-    setState(() {
-      // Tombstone de Development: la nota borrada no reaparece por sync.
+  Future<void> _applyLocalDelete(
+    LocalNote note, {
+    bool remotePending = false,
+    String? lastError,
+  }) async {
+    // El tombstone y el borrado en SQLite se aplican aunque la pantalla ya no
+    // esté montada (DELETE que responde tras cambiar de ventana); si no, la
+    // nota borrada en el servidor seguía en la base local.
+    void forget() {
+      // Tombstone (memoria + persistente §P3): la nota borrada no reaparece.
       _deletedNoteIds.add(note.id);
       _filtered.removeWhere((n) => n.id == note.id);
       _latestNotes.remove(note.id);
@@ -1168,8 +1882,24 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       _isLiked.remove(note.id);
       _isSaved.remove(note.id);
       _memoryFallback.removeWhere((n) => n.id == note.id);
-    });
+    }
+
+    if (mounted) {
+      setState(forget);
+    } else {
+      forget();
+    }
     if (!_useMemoryFallback && _repo != null) {
+      try {
+        // Persistir ANTES de borrar la fila: si el proceso muere justo después,
+        // el tombstone sigue bloqueando la resurrección y conserva el reintento.
+        await _repo!.addTombstone(
+          id: note.id,
+          ownerUserId: note.ownerUserId ?? _ownerId(),
+          remotePending: remotePending,
+          lastError: lastError,
+        );
+      } catch (_) {}
       try {
         await _repo!.deleteNote(note.id);
       } catch (_) {
@@ -1204,6 +1934,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     if (remote.ok) {
       await _applyLocalUpsert(
         LocalNote(
+          needsSync: false,
           id: note.id,
           version: _versions[note.id],
           ownerUserId: note.ownerUserId,
@@ -1274,11 +2005,27 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     final realId = _remoteIds[note.id];
     if (realId != null) note = note.copyWith(id: realId);
     if (!_isRemoteNote(note.id)) {
+      // Nota local cuyo CREATE ya se intentó (tiene intención persistida): el
+      // backend pudo crearla aunque el cliente no recibiera la respuesta
+      // (timeout). Borrar solo la fila temporal la dejaba viva en el servidor
+      // y el siguiente GET /notes/me la resucitaba. Se oculta con un
+      // tombstone pendiente que CONSERVA la intención y se resuelve: replay de
+      // la misma clave -> UUID real -> DELETE remoto.
+      LocalNote? stored;
+      if (!_useMemoryFallback && _repo != null) {
+        try {
+          stored = await _repo!.getNoteById(note.id);
+        } catch (_) {}
+      }
+      if (stored != null && (stored.createKey ?? '').isNotEmpty) {
+        await _hidePendingCreate(stored);
+        await _settleDeletedPendingCreate(stored);
+        return const _RemoteResult(ok: true, status: 204);
+      }
       await _applyLocalDelete(note);
       return const _RemoteResult(ok: true, status: 204);
     }
     final remote = await _deleteNoteRemote(note);
-    if (!mounted) return remote;
     if (remote.ok) {
       await _applyLocalDelete(note);
       if (!mounted) return remote;
@@ -1300,6 +2047,28 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       );
       return const _RemoteResult(ok: true, status: 404);
     }
+    // Sin conexión (offline-first §P3): el borrado local se aplica de inmediato
+    // y se encola en un tombstone persistente. El siguiente REFRESCAR /
+    // SINCRONIZAR DRIVE reintenta el DELETE remoto de forma idempotente.
+    if (remote.status == -1) {
+      await _applyLocalDelete(
+        note,
+        remotePending: true,
+        lastError: remote.message ?? remote.code ?? 'offline',
+      );
+      if (!mounted) return const _RemoteResult(ok: true, status: 202);
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: Colors.black,
+          content: Text(
+            'La nota se eliminó de este equipo; se borrará del servidor al recuperar la conexión.',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+          ),
+        ),
+      );
+      return const _RemoteResult(ok: true, status: 202);
+    }
     return remote;
   }
 
@@ -1312,6 +2081,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   }
 
   Future<void> _applySearch(String query) async {
+    // Desmontada: no hay lista que repintar (evita consultas inútiles).
+    if (!mounted) return;
     try {
       List<LocalNote> base;
       if (_useMemoryFallback) {
@@ -1337,6 +2108,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     String filter,
   ) {
     var res = notes.where((n) => !_deletedNoteIds.contains(n.id)).toList();
+    // Filtro de materia academic (UX-05, lado cliente): título con prefijo
+    // "[CODE] " (insensible a caso). No toca FTS: evita sintaxis MATCH.
+    final subject = _subjectFilter;
+    if (subject != null && subject.isNotEmpty) {
+      res = res.where((n) => noteMatchesSubjectCode(n.title, subject)).toList();
+    }
     // Con sesión y fallo de backend, se ocultan (sin borrar) solo los
     // ejemplos verificables id+título. Nunca se presentan como reales.
     final token = SessionManager.token;
@@ -1374,7 +2151,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     _searchController.clear();
     _currentQuery = '';
     _selectedFilter = 'all';
-    _notesFuture = _initAndLoad();
+    _notesFuture = AppDatabaseManager.instance.guard(_initAndLoad);
     await _notesFuture;
   }
 
@@ -1654,8 +2431,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           onToggleSave: () => _toggleSave(opened),
           onShare: () => _shareNote(opened),
           onFetchRemote: () => _fetchHybridContent(opened),
-          onSaveEdit: (title, content) =>
-              _saveEditFlow(opened, title, content),
+          onSaveEdit: (title, content) => _saveEditFlow(opened, title, content),
           onDelete: () => _deleteFlow(opened),
           onClone: () => _cloneFlow(opened),
           pendingSyncOf: _pendingSyncFor,
@@ -1673,7 +2449,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   void dispose() {
     _debounce?.cancel();
     _searchController.dispose();
-    _db?.close();
+    // La base es compartida y la posee AppDatabaseManager. Cerrarla aquí
+    // mataba el isolate mientras una sincronización seguía en vuelo.
+    if (_ownsDatabase) {
+      AppDatabaseManager.instance.release();
+    }
     super.dispose();
   }
 
@@ -1686,9 +2466,9 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     return CallbackShortcuts(
       bindings: <ShortcutActivator, VoidCallback>{
         const SingleActivator(LogicalKeyboardKey.keyN, control: true):
-            _showCreateDialog,
+            _showCreateForSubject,
         const SingleActivator(LogicalKeyboardKey.keyN, meta: true):
-            _showCreateDialog,
+            _showCreateForSubject,
       },
       child: Focus(
         autofocus: true,
@@ -1776,18 +2556,36 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     );
   }
 
+  /// Crear con preset de materia cuando hay filtro (UX nombres): título
+  /// "[CODE] " + subject_id para el POST. Sin filtro, diálogo normal.
+  void _showCreateForSubject() {
+    final code = _subjectFilter;
+    if (code == null || code.isEmpty) {
+      _showCreateDialog();
+      return;
+    }
+    _showCreateDialog(
+      initialTitle: subjectNotePrefix(code),
+      subjectId: _subjectIdForCreate,
+    );
+  }
+
   /// Punto de entrada público para que el shell (sidebar, rail, FAB o atajo
   /// Ctrl+N) abra el diálogo de creación de nota.
-  void openCreateDialog() => _showCreateDialog();
+  /// [initialTitle] pre-rellena el título (UX-05: prefijo "[CODE] " academic).
+  void openCreateDialog({String? initialTitle, String? subjectId}) =>
+      _showCreateDialog(initialTitle: initialTitle, subjectId: subjectId);
 
-  void _showCreateDialog() {
+  void _showCreateDialog({String? initialTitle, String? subjectId}) {
     showNeobrutalistDialog<void>(
       context: context,
       dialog: _CreateNoteDialog(
+        initialTitle: initialTitle ?? '',
         onCreate: (title, content, visibility, attachments) async {
           final revision = SessionManager.revision.value;
           final note = LocalNote(
-            id: DateTime.now().millisecondsSinceEpoch.toString(),
+            needsSync: false,
+            id: _newTempNoteId(),
             title: title,
             content: content,
             visibility: visibility,
@@ -1796,6 +2594,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           );
           _noteTags[note.id] = visibility == 'public' ? 'General' : 'Privado';
           final tempId = note.id;
+          var persistedAttachments = false;
           if (_useMemoryFallback) {
             setState(() {
               _memoryFallback.insert(0, note);
@@ -1806,7 +2605,38 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             _applySearch(_currentQuery);
           } else {
             try {
-              await _repo!.upsertNote(note);
+              final toPersist = [
+                for (final a in attachments)
+                  if (a.selectedFile != null && a.fileUrl != null) a,
+              ];
+              // Cuota offline: si no caben, la nota se guarda igual y esos
+              // bytes quedan solo en memoria (se avisa al usuario).
+              persistedAttachments = await _repo!.canStorePendingAttachments(
+                _ownerId(),
+                toPersist.map((a) => a.selectedFile!.bytes.length),
+              );
+              await _db!.transaction(() async {
+                await _repo!.upsertNote(note);
+                if (!persistedAttachments) return;
+                for (final attachment in toPersist) {
+                  final file = attachment.selectedFile!;
+                  await _repo!.savePendingAttachment(
+                    placeholder: attachment.fileUrl!,
+                    noteId: note.id,
+                    ownerId: _ownerId(),
+                    fileName: file.name,
+                    mime: file.mime,
+                    bytes: file.bytes,
+                  );
+                }
+              });
+              if (!persistedAttachments) {
+                _notifySnack(
+                  'No hay espacio offline para guardar estos adjuntos en el '
+                  'equipo; mantén la app abierta hasta que se suban.',
+                  ok: false,
+                );
+              }
               _likesCount[note.id] = 0;
               _isLiked[note.id] = false;
               _isSaved[note.id] = false;
@@ -1828,11 +2658,15 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           _noteSyncState[tempId] = _NoteSyncState.syncing;
           debugPrint('[Notes] CREATE temp=$tempId state=syncing');
           if (mounted) setState(() {});
-          final syncFuture = _completeRemoteCreation(
-            tempId: tempId,
-            note: note,
-            attachments: attachments,
-            revision: revision,
+          final syncFuture = AppDatabaseManager.instance.guard(
+            () => _completeRemoteCreation(
+              tempId: tempId,
+              note: note,
+              attachments: attachments,
+              revision: revision,
+              subjectId: subjectId,
+              attachmentsPersisted: persistedAttachments,
+            ),
           );
           _pendingNoteSyncs[tempId] = syncFuture;
           unawaited(syncFuture);
@@ -1850,13 +2684,14 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     required LocalNote note,
     required List<_DriveUploadResult> attachments,
     required int revision,
+    String? subjectId,
+    bool attachmentsPersisted = false,
   }) async {
     String? resolvedId;
     try {
-      final realId = await _createNoteOnBackend(
-        title: note.title,
-        content: _withoutPendingAttachments(note.content),
-        visibility: note.visibility,
+      final realId = await _createLocalNoteIdempotent(
+        note,
+        subjectId: subjectId,
       );
       if (realId != null &&
           realId.isNotEmpty &&
@@ -1864,82 +2699,68 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         resolvedId = realId;
         debugPrint('[Notes] CREATE remote=$realId state=note_ready');
         await _replaceLocalId(tempId, realId);
-        var finalContent = _latestNotes[realId]?.content ?? note.content;
-        final uploaded = <_DriveUploadResult>[];
-        for (final pending in attachments) {
-          if (revision != SessionManager.revision.value) return;
-          if (pending.selectedFile == null) {
-            // Ya vive en Drive (subido antes de crear la nota): se vincula
-            // por external_file_id (JSON) más abajo. Compat, no flujo normal.
-            uploaded.add(pending);
-            continue;
-          }
-          final file = pending.selectedFile!;
-          // Flujo canónico multipart (Development): el binario va directo a
-          // POST /notes/{uuid}/attachments y la referencia se reescribe con
-          // el attachment_id devuelto. Sin paso por /notes/upload para crear.
-          final result = await _uploadAttachmentBinary(
-            noteId: realId,
-            bytes: file.bytes,
-            fileName: file.name,
-            isInline: file.isImage,
-          );
-          if (revision != SessionManager.revision.value) return;
-          if (result.ok && result.attachmentId != null) {
-            final placeholder = pending.fileUrl;
-            if (placeholder != null && placeholder.isNotEmpty) {
-              finalContent = finalContent.replaceAll(
-                '($placeholder)',
-                '(attachment:${result.attachmentId})',
-              );
-            }
-          } else if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  'La nota se creó, pero no se pudo adjuntar ${file.name}. ${result.message ?? ''}',
-                ),
-              ),
-            );
-          }
-        }
-        final references = await _linkAttachmentsToNote(realId, uploaded);
+        // Borrada mientras el POST estaba en vuelo: _replaceLocalId ya
+        // trasladó el borrado al UUID. Subir adjuntos o hacer PATCH ahora
+        // recrearía la fila local de una nota eliminada.
+        if (_deletedNoteIds.contains(realId)) return;
+        final currentLocal = _latestNotes[realId] ?? note.copyWith(id: realId);
+        final uploadedIds = <String>[];
+        final failedNames = <String>[];
+        var finalContent = await _uploadPendingAttachmentsToNote(
+          currentLocal,
+          realId,
+          uploadedIds,
+          failedNames,
+        );
+        final legacy = attachments
+            .where((a) => a.selectedFile == null)
+            .toList();
+        final references = await _linkAttachmentsToNote(realId, legacy);
         for (final ref in references.entries) {
           finalContent = finalContent.replaceAll(
             '(${ref.key})',
             '(${ref.value})',
           );
         }
-        finalContent = _withoutPendingAttachments(finalContent);
-        if (finalContent != _withoutPendingAttachments(note.content) ||
-            (_latestNotes[realId]?.title ?? note.title) != note.title) {
-          final remoteNote = LocalNote(
-            id: realId,
-            version: _versions[realId],
-            title: _latestNotes[realId]?.title ?? note.title,
-            content: finalContent,
-            visibility: note.visibility,
-            updatedAt: DateTime.now(),
-            ownerUserId: note.ownerUserId,
-          );
+        if (revision != SessionManager.revision.value) return;
+        final remoteNote = currentLocal.copyWith(content: finalContent);
+        var patchOk = true;
+        if (_withoutPendingAttachments(finalContent) !=
+                _withoutPendingAttachments(note.content) ||
+            remoteNote.title != note.title ||
+            remoteNote.needsSync) {
           final saved = await _patchNoteRemote(
             remoteNote,
             remoteNote.title,
-            finalContent,
+            _withoutPendingAttachments(finalContent),
           );
-          if (revision != SessionManager.revision.value) return;
-          await _applyLocalUpsert(
-            remoteNote.copyWith(version: Value(_versions[realId])),
+          patchOk = saved.ok;
+        }
+        if (revision != SessionManager.revision.value) return;
+        final pending =
+            !patchOk || finalContent.contains('attachment-pending://');
+        await _applyLocalUpsert(
+          remoteNote.copyWith(
+            version: Value(_versions[realId]),
+            needsSync: pending,
+          ),
+        );
+        if (pending) {
+          _noteSyncState[realId] = _NoteSyncState.error;
+          _noteSyncState.remove(tempId);
+          final names = failedNames
+              .where((n) => !n.startsWith('attachment-pending://'))
+              .toList();
+          _notifySnack(
+            names.isEmpty
+                ? 'La nota se conservó en este equipo. Hay cambios o adjuntos '
+                      'pendientes de sincronizar.'
+                : 'La nota se creó, pero no se pudo adjuntar '
+                      '${names.join(', ')}. Quedó guardado en este equipo y se '
+                      'reintentará al sincronizar.',
+            ok: false,
           );
-          if (!saved.ok && mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'La nota se creó, pero no se pudo actualizar el contenido de sus adjuntos.',
-                ),
-              ),
-            );
-          }
+          return;
         }
         if (revision != SessionManager.revision.value) return;
         // GET real final: la apertura posterior muestra el estado del
@@ -1963,9 +2784,16 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         setState(() {});
         debugPrint('[Notes] CREATE temp=$tempId state=error');
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             content: Text(
-              'La nota quedó guardada localmente. No se pudieron subir sus archivos; vuelve a seleccionarlos cuando se recupere la conexión.',
+              attachmentsPersisted
+                  // Los bytes ya están en SQLite: pedir que los vuelva a
+                  // seleccionar provocaría adjuntos duplicados.
+                  ? 'La nota y sus archivos quedaron guardados en este equipo; '
+                        'se subirán al recuperar la conexión.'
+                  : 'La nota quedó guardada localmente. No se pudieron subir '
+                        'sus archivos; vuelve a seleccionarlos cuando se '
+                        'recupere la conexión.',
             ),
           ),
         );
@@ -1990,12 +2818,22 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   Widget _buildHeader(bool isDesktop) {
     return Row(
       children: <Widget>[
+        if (widget.showBackButton) ...<Widget>[
+          IconButton(
+            tooltip: 'Volver',
+            icon: const Icon(Icons.arrow_back_rounded),
+            onPressed: () => Navigator.of(context).maybePop(),
+          ),
+          const SizedBox(width: 4),
+        ],
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               Text(
-                'TODAS LAS NOTAS',
+                widget.initialSubjectName?.trim().isNotEmpty == true
+                    ? 'NOTAS ${widget.initialSubjectName!.trim().toUpperCase()}'
+                    : 'TODAS LAS NOTAS',
                 style: TextStyle(
                   fontSize: isDesktop ? 26 : 22,
                   fontWeight: FontWeight.w900,
@@ -2080,7 +2918,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             trailing: NeobrutalistBadge(label: _shortcutLabel, compact: true),
             variant: NeobrutalistButtonVariant.accent,
             borderWidth: AppDimens.borderWidthAction,
-            onPressed: _showCreateDialog,
+            onPressed: _showCreateForSubject,
           ),
           const SizedBox(width: AppDimens.spaceMd),
         ],
@@ -2379,7 +3217,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                           vertical: 12,
                         ),
                       ),
-                      onPressed: _showCreateDialog,
+                      onPressed: _showCreateForSubject,
                       icon: const Icon(Icons.add_rounded, size: 18),
                       label: const Text(
                         'CREAR PRIMERA NOTA',
@@ -2931,6 +3769,33 @@ enum _EditSaveOutcome {
 /// vínculo + PATCH final). Solo aplica a notas recién creadas; el resto no
 /// tiene entrada en [_noteSyncState] y se comporta como antes.
 enum _NoteSyncState { syncing, synced, error }
+
+/// Intención de creación idempotente (Fase 1 §P1): clave + payload congelado.
+/// El payload se reutiliza en cada reintento para que el backend haga replay
+/// (misma fila/archivo) en lugar de crear un duplicado.
+class _CreateIntent {
+  const _CreateIntent({
+    required this.key,
+    required this.title,
+    required this.content,
+    required this.visibility,
+    this.subjectId,
+  });
+  final String key;
+  final String title;
+  final String content;
+  final String visibility;
+  final String? subjectId;
+}
+
+/// Resultado de empujar una creación pendiente: UUID confirmado (o null),
+/// adjuntos vinculados y elementos con error.
+class _PendingCreateResult {
+  const _PendingCreateResult({this.realId, this.linked = 0, this.failed = 0});
+  final String? realId;
+  final int linked;
+  final int failed;
+}
 
 /// Modal de detalle con lectura híbrida (GET /notes/:id), edición (PATCH) y
 /// borrado (DELETE). El contenido local se muestra de inmediato como fallback.
@@ -3677,9 +4542,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                   resource: img,
                   onTap: () => _showResourceDialog(img),
                   // X de Development recableada al ÚNICO mecanismo pending.
-                  onRemove: canRemove
-                      ? () => _togglePendingRemove(img)
-                      : null,
+                  onRemove: canRemove ? () => _togglePendingRemove(img) : null,
                 ),
               ),
           ],
@@ -4113,7 +4976,10 @@ class _CreateNoteDialog extends StatefulWidget {
   )
   onCreate;
 
-  const _CreateNoteDialog({required this.onCreate});
+  /// Título inicial (UX-05: prefijo "[CODE] " desde academic).
+  final String initialTitle;
+
+  const _CreateNoteDialog({required this.onCreate, this.initialTitle = ''});
 
   @override
   State<_CreateNoteDialog> createState() => _CreateNoteDialogState();
@@ -4135,7 +5001,7 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
   @override
   void initState() {
     super.initState();
-    _titleCtrl = TextEditingController();
+    _titleCtrl = TextEditingController(text: widget.initialTitle);
     _contentCtrl = TextEditingController();
     _titleFocus = FocusNode();
     _titleCtrl.addListener(_onTitleChanged);

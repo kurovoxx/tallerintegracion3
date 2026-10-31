@@ -73,10 +73,19 @@ func (v *SimpleHS256Validator) ValidarAccessToken(tokenString string) (string, s
 
 type AuthMiddleware struct {
 	validator JWTValidator
+	gate      AccountAccessGate
 }
 
-func NewAuthMiddleware(v JWTValidator) *AuthMiddleware {
-	return &AuthMiddleware{validator: v}
+type AccountAccessGate interface {
+	AcquireRequest(context.Context, string) (release func(), active bool, err error)
+}
+
+func NewAuthMiddleware(v JWTValidator, gates ...AccountAccessGate) *AuthMiddleware {
+	m := &AuthMiddleware{validator: v}
+	if len(gates) > 0 {
+		m.gate = gates[0]
+	}
+	return m
 }
 
 func (m *AuthMiddleware) RequireAuth() gin.HandlerFunc {
@@ -109,6 +118,20 @@ func (m *AuthMiddleware) RequireAuth() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		if m.gate != nil {
+			release, active, gateErr := m.gate.AcquireRequest(c.Request.Context(), userID)
+			if gateErr != nil {
+				utils.RespondError(c, http.StatusServiceUnavailable, "account_status_unavailable", "No se pudo comprobar el estado de la cuenta")
+				c.Abort()
+				return
+			}
+			if !active {
+				utils.RespondError(c, http.StatusLocked, "account_deletion_in_progress", "La cuenta está en proceso de eliminación")
+				c.Abort()
+				return
+			}
+			defer release()
+		}
 		c.Set(ContextUserIDKey, userID)
 		c.Set(ContextRoleKey, role)
 		ctx := context.WithValue(c.Request.Context(), contextKeyUserID, userID)
@@ -139,6 +162,20 @@ func GetUserIDFromContext(ctx context.Context) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// WithUserID inyecta el user_id en un context.Context usando la misma clave
+// interna que RequireAuth, de modo que el interceptor gRPC (que no tiene
+// *gin.Context) y los handlers gRPC compartan el mismo canal que
+// GetUserIDFromContext. Mantiene un único origen de verdad para el user_id
+// autenticado en ambos transports (HTTP y gRPC).
+func WithUserID(ctx context.Context, userID string) context.Context {
+	return context.WithValue(ctx, contextKeyUserID, userID)
+}
+
+// WithRole inyecta el rol en el contexto (equivalente gRPC de c.Set(role)).
+func WithRole(ctx context.Context, role string) context.Context {
+	return context.WithValue(ctx, contextKeyRole, role)
 }
 
 func GetRole(c *gin.Context) (string, bool) {

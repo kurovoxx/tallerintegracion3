@@ -10,18 +10,30 @@ import 'package:flutter/material.dart';
 import '../../core/common_widgets.dart';
 import '../../core/models/social_models.dart';
 import '../../core/services/api_config.dart';
+import '../../core/services/session_manager.dart';
 import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 import '../auth/google_calendar_service.dart';
 import '../auth/google_drive_service.dart' show LocalPortBusyException;
 
+typedef CalendarConfigLoader = Future<void> Function(String backendBaseUrl);
+
 class ScheduleMeetingScreen extends StatefulWidget {
-  const ScheduleMeetingScreen({super.key, this.groupId, SocialService? service})
-    : _serviceOverride = service;
+  const ScheduleMeetingScreen({
+    super.key,
+    this.groupId,
+    SocialService? service,
+    GoogleCalendarService? calendarService,
+    CalendarConfigLoader? calendarConfigLoader,
+  }) : _serviceOverride = service,
+       _calendarOverride = calendarService,
+       _calendarConfigLoader = calendarConfigLoader;
 
   final String? groupId;
   final SocialService? _serviceOverride;
+  final GoogleCalendarService? _calendarOverride;
+  final CalendarConfigLoader? _calendarConfigLoader;
 
   @override
   State<ScheduleMeetingScreen> createState() => _ScheduleMeetingScreenState();
@@ -42,7 +54,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
   TimeOfDay _selectedTime = const TimeOfDay(hour: 10, minute: 0);
 
   late final SocialService _social;
-  final GoogleCalendarService _calendar = GoogleCalendarService();
+  late final GoogleCalendarService _calendar;
   bool _isSubmitting = false;
   String? _createdMeetingId;
   String? _submitError;
@@ -57,6 +69,8 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
   void initState() {
     super.initState();
     _social = widget._serviceOverride ?? SocialService();
+    _calendar = widget._calendarOverride ?? GoogleCalendarService();
+    SessionManager.revision.addListener(_sessionChanged);
     if (_isRealGroup) {
       _loadUpcoming();
       _loadMembers();
@@ -66,6 +80,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
 
   @override
   void dispose() {
+    SessionManager.revision.removeListener(_sessionChanged);
     _titleCtrl.dispose();
     _descCtrl.dispose();
     _linkCtrl.dispose();
@@ -80,6 +95,25 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
       r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
     );
     return id.isNotEmpty && uuid.hasMatch(id);
+  }
+
+  void _sessionChanged() {
+    if (!mounted) return;
+    setState(() {
+      _calStatus = null;
+      _calError = null;
+      _calLoading = false;
+      _calConnecting = false;
+    });
+    _loadCalendarStatus();
+  }
+
+  Future<void> _ensureCalendarConfigured() {
+    final loader = widget._calendarConfigLoader;
+    if (loader != null) return loader(authApiBaseUrl);
+    return GoogleCalendarService.ensureConfigured(
+      backendBaseUrl: authApiBaseUrl,
+    );
   }
 
   /// Próximas reuniones desde GET /groups/:id/workspace.meetings.upcoming.
@@ -141,24 +175,27 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
   /// igual que Drive). null = sin red/sesión: se conserva el estado previo.
   Future<void> _loadCalendarStatus() async {
     if (!mounted) return;
+    final revision = SessionManager.revision.value;
     setState(() {
       _calLoading = true;
       _calError = null;
     });
     try {
-      await GoogleCalendarService.ensureConfigured(
-        backendBaseUrl: authApiBaseUrl,
-      );
       final status = await _calendar.fetchStatus(
         backendBaseUrl: authApiBaseUrl,
       );
-      if (!mounted) return;
+      if (!mounted || revision != SessionManager.revision.value) return;
       setState(() {
         if (status != null) _calStatus = status;
+        _calError = status == null
+            ? 'No se pudo verificar la conexión con Google Calendar.'
+            : null;
         _calLoading = false;
       });
     } catch (_) {
-      if (mounted) setState(() => _calLoading = false);
+      if (mounted && revision == SessionManager.revision.value) {
+        setState(() => _calLoading = false);
+      }
     }
   }
 
@@ -166,20 +203,21 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
   /// Nunca guarda tokens de Google en el frontend.
   Future<void> _linkGoogleCalendar() async {
     if (_calConnecting) return;
+    final revision = SessionManager.revision.value;
     setState(() {
       _calConnecting = true;
       _calError = null;
     });
     try {
-      await GoogleCalendarService.ensureConfigured(
-        backendBaseUrl: authApiBaseUrl,
-      );
+      await _ensureCalendarConfigured();
+      if (!mounted || revision != SessionManager.revision.value) return;
       final auth = await _calendar.getCalendarAuthCode();
-      if (!mounted) return;
+      if (!mounted || revision != SessionManager.revision.value) return;
       if (auth == null) {
         setState(() {
           _calConnecting = false;
-          _calError = 'Autorización cancelada. Vuelve a intentarlo si quieres vincular Calendar.';
+          _calError =
+              'Autorización cancelada. Vuelve a intentarlo si quieres vincular Calendar.';
         });
         return;
       }
@@ -187,8 +225,9 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
         backendBaseUrl: authApiBaseUrl,
         oauthCode: auth.code,
         redirectUri: auth.redirectUri.isEmpty ? null : auth.redirectUri,
+        expectedSessionRevision: revision,
       );
-      if (!mounted) return;
+      if (!mounted || revision != SessionManager.revision.value) return;
       if (!result.ok) {
         setState(() {
           _calConnecting = false;
@@ -199,10 +238,13 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
       final status = await _calendar.fetchStatus(
         backendBaseUrl: authApiBaseUrl,
       );
-      if (!mounted) return;
+      if (!mounted || revision != SessionManager.revision.value) return;
       setState(() {
         _calConnecting = false;
-        if (status != null) _calStatus = status;
+        _calStatus = status ?? const CalendarStatus(connected: true);
+        _calError = status == null
+            ? 'Conexión confirmada; no se pudo actualizar el estado remoto.'
+            : null;
       });
       if (mounted && (status?.connected ?? false)) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -210,21 +252,21 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
         );
       }
     } on LocalPortBusyException catch (e) {
-      if (mounted) {
+      if (mounted && revision == SessionManager.revision.value) {
         setState(() {
           _calConnecting = false;
           _calError = e.toString();
         });
       }
     } on StateError catch (e) {
-      if (mounted) {
+      if (mounted && revision == SessionManager.revision.value) {
         setState(() {
           _calConnecting = false;
           _calError = e.message;
         });
       }
     } catch (_) {
-      if (mounted) {
+      if (mounted && revision == SessionManager.revision.value) {
         setState(() {
           _calConnecting = false;
           _calError =
@@ -451,9 +493,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                             const LinearProgressIndicator()
                           else if (_calStatus?.connected == true) ...[
                             Container(
-                              padding: const EdgeInsets.all(
-                                AppDimens.spaceMd,
-                              ),
+                              padding: const EdgeInsets.all(AppDimens.spaceMd),
                               decoration: BoxDecoration(
                                 color: const Color(0xFFE7F6E7),
                                 border: Border.all(
@@ -485,8 +525,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                                             color: AppColors.text,
                                           ),
                                         ),
-                                        if (_calStatus?.externalEmail !=
-                                            null)
+                                        if (_calStatus?.externalEmail != null)
                                           Text(
                                             _calStatus!.externalEmail!,
                                             style: const TextStyle(
@@ -507,8 +546,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                                   ? 'CONECTANDO...'
                                   : 'RECONECTAR',
                               icon: Icons.refresh_rounded,
-                              variant:
-                                  NeobrutalistButtonVariant.secondary,
+                              variant: NeobrutalistButtonVariant.secondary,
                               expand: true,
                               onPressed: _calConnecting
                                   ? null
@@ -585,9 +623,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                             ],
                           ),
                           const SizedBox(height: AppDimens.spaceXl),
-                          const AppFieldLabel(
-                            'INVITAR POR CORREO (EXTERNO)',
-                          ),
+                          const AppFieldLabel('INVITAR POR CORREO (EXTERNO)'),
                           const Text(
                             'Solo para alguien fuera del grupo. Si es miembro, selecciónalo arriba.',
                             style: TextStyle(

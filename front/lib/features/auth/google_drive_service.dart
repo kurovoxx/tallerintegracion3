@@ -20,6 +20,13 @@ class DriveConnectResult {
   final String message;
 }
 
+/// La desconexión solo queda confirmada cuando Auth responde HTTP 204.
+class DriveDisconnectResult {
+  const DriveDisconnectResult({required this.confirmed});
+
+  final bool confirmed;
+}
+
 /// Resultado del flujo desktop: código + redirect real usado (puerto efímero).
 typedef DriveDesktopAuth = ({String code, String redirectUri});
 
@@ -28,7 +35,8 @@ typedef DriveDesktopAuth = ({String code, String redirectUri});
 class LocalPortBusyException implements Exception {
   const LocalPortBusyException();
   @override
-  String toString() => 'Puerto local ocupado: cierra la otra instancia e inténtalo de nuevo, o pega el código manualmente.';
+  String toString() =>
+      'Puerto local ocupado: cierra la otra instancia e inténtalo de nuevo, o pega el código manualmente.';
 }
 
 /// Servicio para POST /auth/google-drive/connect con Google real.
@@ -36,6 +44,10 @@ class LocalPortBusyException implements Exception {
 /// Configuración: backend (.env raíz, vía GET /auth/google-config) o
 /// --dart-define (ver front/Dockerfile). Sin client ID el flujo falla visible.
 class GoogleDriveService {
+  GoogleDriveService({http.Client? client}) : _client = client;
+
+  final http.Client? _client;
+
   // Sin defaultValue: el client ID vive en el .env del backend y llega por
   // GET /auth/google-config (o por --dart-define=GOOGLE_CLIENT_ID). Nunca quemado.
   static const _serverClientId = String.fromEnvironment(
@@ -184,7 +196,9 @@ class GoogleDriveService {
       // Espera el retorno con timeout; ?error=access_denied = cancelación.
       final request = await bound.first.timeout(
         const Duration(minutes: 3),
-        onTimeout: () => throw TimeoutException('Se agotó el tiempo de autorización en Google.'),
+        onTimeout: () => throw TimeoutException(
+          'Se agotó el tiempo de autorización en Google.',
+        ),
       );
       final params = request.uri.queryParameters;
       request.response
@@ -216,6 +230,45 @@ class GoogleDriveService {
       Uri.parse(buildWebAuthUrl(loginHint: loginHint)),
       mode: LaunchMode.externalApplication,
     );
+  }
+
+  /// Extrae el `oauth_code` del texto pegado por el usuario en el flujo web
+  /// manual. Acepta tres formas, porque en web Google redirige a
+  /// `http://localhost:8081/...` (que no carga) y el usuario copia desde la
+  /// barra de direcciones:
+  ///   - la URL completa: `http://localhost:8081/auth/google/callback?code=...&scope=...`
+  ///   - la query: `code=...`
+  ///   - el código crudo: `4/0A...`
+  /// El valor se decodifica si viene URL-encoded (Google entrega `4%2F0A...`).
+  /// Devuelve '' si el retorno trae `error=` (p. ej. access_denied) o si no hay
+  /// código. No valida contra el proveedor: eso lo hace el backend.
+  static String extractOAuthCode(String raw) {
+    final input = raw.trim();
+    if (input.isEmpty) return '';
+
+    // URL/query con parámetro code= (permite code= al inicio o tras ? & #).
+    final codeMatch = RegExp(r'(?:^|[?&#\s])code=([^&\s#]+)').firstMatch(input);
+    if (codeMatch != null) {
+      return _decodeCodeValue(codeMatch.group(1) ?? '');
+    }
+
+    // Retorno con error= (access_denied, etc.): no hay código que canjear.
+    if (RegExp(r'(?:^|[?&#\s])error=').hasMatch(input)) return '';
+
+    // Código crudo (posiblemente URL-encoded).
+    return _decodeCodeValue(input);
+  }
+
+  static String _decodeCodeValue(String value) {
+    var v = value.trim();
+    if (v.contains('%')) {
+      try {
+        v = Uri.decodeComponent(v);
+      } catch (_) {
+        // Si no es decodificable se usa tal cual.
+      }
+    }
+    return v.trim();
   }
 
   /// Envía oauth_code al backend. Requiere access_token de tu app (de POST /auth/login).
@@ -313,26 +366,42 @@ class GoogleDriveService {
   /// Desconecta por completo: cierra sesión local de Google y pide al backend
   /// que revoque en Google y borre la fila (DELETE /auth/google-drive/connection).
   /// Ya no hay que revocar a mano desde la cuenta. Retorna mensaje para mostrar.
-  Future<String> disconnectDrive({
+  Future<DriveDisconnectResult> disconnectDrive({
     required String backendBaseUrl,
     required String appAccessToken,
   }) async {
+    final revision = SessionManager.revision.value;
     try {
       await signOut();
     } catch (_) {}
+    if (revision != SessionManager.revision.value) {
+      return const DriveDisconnectResult(confirmed: false);
+    }
+    if (SessionManager.token != appAccessToken) {
+      return const DriveDisconnectResult(confirmed: false);
+    }
     try {
-      final resp = await http
-          .delete(
-            Uri.parse('$backendBaseUrl/auth/google-drive/connection'),
-            headers: {
-              'Authorization': 'Bearer $appAccessToken',
-            },
-          )
-          .timeout(const Duration(seconds: 10));
-      if (resp.statusCode == 204) return 'Drive desconectado.';
-      return 'Drive desconectado localmente.';
+      final resp = await AuthedHttp.run(() {
+        if (revision != SessionManager.revision.value) {
+          throw StateError('La sesión cambió.');
+        }
+        final token = SessionManager.token;
+        if (token == null || token.isEmpty) {
+          throw StateError('No hay una sesión activa.');
+        }
+        final headers = {'Authorization': 'Bearer $token'};
+        final url = Uri.parse('$backendBaseUrl/auth/google-drive/connection');
+        final request = _client == null
+            ? http.delete(url, headers: headers)
+            : _client.delete(url, headers: headers);
+        return request.timeout(const Duration(seconds: 10));
+      });
+      if (revision != SessionManager.revision.value) {
+        return const DriveDisconnectResult(confirmed: false);
+      }
+      return DriveDisconnectResult(confirmed: resp.statusCode == 204);
     } catch (_) {
-      return 'Drive desconectado localmente.';
+      return const DriveDisconnectResult(confirmed: false);
     }
   }
 }

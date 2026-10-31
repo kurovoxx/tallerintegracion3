@@ -16,13 +16,13 @@ const _socialBase = String.fromEnvironment(
   defaultValue: '$_pillanOrigin/api-social',
 );
 
-String _resolve(String v) {
+String resolveApiBaseUrl(String v, {bool isWeb = kIsWeb, String? webOrigin}) {
   if (!v.startsWith('/')) return v;
-  if (kIsWeb) return '${Uri.base.origin}$v';
+  if (isWeb) return '${webOrigin ?? Uri.base.origin}$v';
   // Nativo no tiene origen web. Los paths del build web apuntan también a Pillán.
   return '$_pillanOrigin$v';
 }
 
-String get authApiBaseUrl => _resolve(_authBase);
-String get notesApiBaseUrl => _resolve(_notesBase);
-String get socialApiBaseUrl => _resolve(_socialBase);
+String get authApiBaseUrl => resolveApiBaseUrl(_authBase);
+String get notesApiBaseUrl => resolveApiBaseUrl(_notesBase);
+String get socialApiBaseUrl => resolveApiBaseUrl(_socialBase);

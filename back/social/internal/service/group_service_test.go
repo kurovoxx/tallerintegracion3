@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,7 +12,12 @@ import (
 	"testing"
 	"time"
 
+	notesv1 "github.com/kurovoxx/tallerintegracion3/back/social/internal/gen/notesv1"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/model"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/test/bufconn"
 )
 
 // Ids fijos con formato uuid válido: el servicio rechaza ids mal formados.
@@ -29,6 +35,50 @@ var ctx = context.Background()
 func newTestSvc() (*GroupService, *MemoryGroupStore) {
 	store := NewMemoryGroupStore()
 	return NewGroupService(store, nil), store
+}
+
+type targetGateFake struct {
+	active  bool
+	userIDs []string
+}
+
+func (g *targetGateFake) AcquireTargetRequest(_ context.Context, userID string) (func(), bool, error) {
+	g.userIDs = append(g.userIDs, userID)
+	return func() {}, g.active, nil
+}
+
+func TestThirdPartyMembershipAndAdminChangesRejectDeletingTarget(t *testing.T) {
+	actions := []struct {
+		name string
+		run  func(*GroupService, string) error
+	}{
+		{name: "kick", run: func(s *GroupService, groupID string) error {
+			return s.KickMember(ctx, groupID, uAdmin, uMember, false, "")
+		}},
+		{name: "ban", run: func(s *GroupService, groupID string) error {
+			return s.BanMember(ctx, groupID, uAdmin, uMember, false, "")
+		}},
+		{name: "change role", run: func(s *GroupService, groupID string) error {
+			return s.ChangeRole(ctx, groupID, uAdmin, uMember, model.RoleAdmin)
+		}},
+		{name: "transfer admin", run: func(s *GroupService, groupID string) error { return s.TransferAdmin(ctx, groupID, uAdmin, uMember) }},
+	}
+	for _, action := range actions {
+		t.Run(action.name, func(t *testing.T) {
+			svc, store := newTestSvc()
+			group := newGroup(t, svc, uAdmin)
+			joinAs(t, svc, store, group.ID, uMember)
+			gate := &targetGateFake{active: false}
+			svc.SetAccountTargetGate(gate)
+			wantErr(t, action.run(svc, group.ID), ErrForbidden)
+			if role := roleOf(t, store, group.ID, uMember); role != model.RoleMember {
+				t.Fatalf("operation changed deleting target membership: role=%q", role)
+			}
+			if len(gate.userIDs) != 1 || gate.userIDs[0] != uMember {
+				t.Fatalf("target gate calls=%v", gate.userIDs)
+			}
+		})
+	}
 }
 
 // newGroup crea un grupo con owner como admin.
@@ -277,8 +327,8 @@ type adminAction struct {
 
 func adminActions() []adminAction {
 	return []adminAction{
-		{"kick", func(s *GroupService, g, a, t string) error { return s.KickMember(ctx, g, a, t) }},
-		{"ban", func(s *GroupService, g, a, t string) error { return s.BanMember(ctx, g, a, t) }},
+		{"kick", func(s *GroupService, g, a, t string) error { return s.KickMember(ctx, g, a, t, false, "") }},
+		{"ban", func(s *GroupService, g, a, t string) error { return s.BanMember(ctx, g, a, t, false, "") }},
 		{"role", func(s *GroupService, g, a, t string) error { return s.ChangeRole(ctx, g, a, t, model.RoleMember) }},
 		{"transfer", func(s *GroupService, g, a, t string) error { return s.TransferAdmin(ctx, g, a, t) }},
 	}
@@ -331,13 +381,13 @@ func TestKick(t *testing.T) {
 	}
 
 	t.Run("no se puede expulsar a otro admin", func(t *testing.T) {
-		wantErr(t, svc.KickMember(ctx, g.ID, uAdmin, uAdmin2), ErrTargetIsAdmin)
+		wantErr(t, svc.KickMember(ctx, g.ID, uAdmin, uAdmin2, false, ""), ErrTargetIsAdmin)
 		if roleOf(t, store, g.ID, uAdmin2) != model.RoleAdmin {
 			t.Fatal("el admin objetivo debe seguir en el grupo")
 		}
 	})
 	t.Run("admin expulsa a un miembro y no queda baneado", func(t *testing.T) {
-		if err := svc.KickMember(ctx, g.ID, uAdmin, uMember); err != nil {
+		if err := svc.KickMember(ctx, g.ID, uAdmin, uMember, false, ""); err != nil {
 			t.Fatal(err)
 		}
 		if roleOf(t, store, g.ID, uMember) != "" {
@@ -348,7 +398,7 @@ func TestKick(t *testing.T) {
 		}
 	})
 	t.Run("expulsar a quien ya no es miembro", func(t *testing.T) {
-		wantErr(t, svc.KickMember(ctx, g.ID, uAdmin, uMember), ErrTargetNotFound)
+		wantErr(t, svc.KickMember(ctx, g.ID, uAdmin, uMember, false, ""), ErrTargetNotFound)
 	})
 }
 
@@ -362,19 +412,19 @@ func TestBan(t *testing.T) {
 	}
 
 	t.Run("no se puede banear a otro admin ni queda registrado", func(t *testing.T) {
-		wantErr(t, svc.BanMember(ctx, g.ID, uAdmin, uAdmin2), ErrTargetIsAdmin)
+		wantErr(t, svc.BanMember(ctx, g.ID, uAdmin, uAdmin2, false, ""), ErrTargetIsAdmin)
 		if _, banned := store.BannedBy(g.ID, uAdmin2); banned {
 			t.Fatal("un admin no debe quedar baneado")
 		}
 	})
 	t.Run("banear a quien no es miembro", func(t *testing.T) {
-		wantErr(t, svc.BanMember(ctx, g.ID, uAdmin, uStrang), ErrTargetNotFound)
+		wantErr(t, svc.BanMember(ctx, g.ID, uAdmin, uStrang, false, ""), ErrTargetNotFound)
 		if _, banned := store.BannedBy(g.ID, uStrang); banned {
 			t.Fatal("no se banea a quien no es miembro")
 		}
 	})
 	t.Run("ban expulsa y registra quién baneó", func(t *testing.T) {
-		if err := svc.BanMember(ctx, g.ID, uAdmin2, uMember); err != nil {
+		if err := svc.BanMember(ctx, g.ID, uAdmin2, uMember, false, ""); err != nil {
 			t.Fatal(err)
 		}
 		if roleOf(t, store, g.ID, uMember) != "" {
@@ -529,6 +579,8 @@ func TestLeaveCleansSharedNotes(t *testing.T) {
 
 	svc, store := newTestSvc()
 	svc.SetNotesBaseURL(notes.URL)
+	// gRPC caído -> debe caer al fallback HTTP (lo que valida este test).
+	svc.SetNotesUnsharer(&fakeUnsharer{err: errors.New("grpc down")})
 	g := newGroup(t, svc, uAdmin)
 	joinAs(t, svc, store, g.ID, uMember)
 
@@ -573,6 +625,8 @@ func TestLeaveSucceedsWhenNotesIsDown(t *testing.T) {
 
 	svc, store := newTestSvc()
 	svc.SetNotesBaseURL(url)
+	// Ambos transportes caídos: gRPC (fake) y HTTP (servidor cerrado).
+	svc.SetNotesUnsharer(&fakeUnsharer{err: errors.New("grpc down")})
 	g := newGroup(t, svc, uAdmin)
 	joinAs(t, svc, store, g.ID, uMember)
 	if err := svc.LeaveGroup(ctx, g.ID, uMember, true, "jwt"); err != nil {
@@ -611,7 +665,7 @@ func TestAccountDeletionPromotesOldestMember(t *testing.T) {
 	joinAs(t, svc, store, g.ID, uOther)
 	joinAs(t, svc, store, g.ID, uThird)
 
-	res, err := svc.HandleAccountDeletion(ctx, uAdmin)
+	res, err := svc.HandleAccountDeletion(ctx, uAdmin, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -639,7 +693,7 @@ func TestAccountDeletionWithCoAdminDoesNotPromote(t *testing.T) {
 	joinAs(t, svc, store, g.ID, uAdmin2)
 	_ = svc.ChangeRole(ctx, g.ID, uAdmin, uAdmin2, model.RoleAdmin)
 
-	res, err := svc.HandleAccountDeletion(ctx, uAdmin)
+	res, err := svc.HandleAccountDeletion(ctx, uAdmin, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -658,7 +712,7 @@ func TestAccountDeletionWithCoAdminDoesNotPromote(t *testing.T) {
 func TestAccountDeletionLastMemberDeletesGroup(t *testing.T) {
 	svc, store := newTestSvc()
 	g := newGroup(t, svc, uAdmin)
-	res, err := svc.HandleAccountDeletion(ctx, uAdmin)
+	res, err := svc.HandleAccountDeletion(ctx, uAdmin, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -674,7 +728,7 @@ func TestAccountDeletionOfRegularMember(t *testing.T) {
 	svc, store := newTestSvc()
 	g := newGroup(t, svc, uAdmin)
 	joinAs(t, svc, store, g.ID, uMember)
-	res, err := svc.HandleAccountDeletion(ctx, uMember)
+	res, err := svc.HandleAccountDeletion(ctx, uMember, "")
 	if err != nil || len(res) != 1 || res[0].PromotedUserID != nil || res[0].GroupDeleted {
 		t.Fatalf("resultado inesperado: %+v err=%v", res, err)
 	}
@@ -685,17 +739,17 @@ func TestAccountDeletionOfRegularMember(t *testing.T) {
 
 func TestAccountDeletionWithoutGroupsIsNoOpAndIdempotent(t *testing.T) {
 	svc, store := newTestSvc()
-	res, err := svc.HandleAccountDeletion(ctx, uStrang)
+	res, err := svc.HandleAccountDeletion(ctx, uStrang, "")
 	if err != nil || res == nil || len(res) != 0 {
 		t.Fatalf("sin grupos debe devolver slice vacío: %v %v", res, err)
 	}
 
 	g := newGroup(t, svc, uAdmin)
 	joinAs(t, svc, store, g.ID, uMember)
-	if _, err := svc.HandleAccountDeletion(ctx, uAdmin); err != nil {
+	if _, err := svc.HandleAccountDeletion(ctx, uAdmin, ""); err != nil {
 		t.Fatal(err)
 	}
-	res, err = svc.HandleAccountDeletion(ctx, uAdmin)
+	res, err = svc.HandleAccountDeletion(ctx, uAdmin, "")
 	if err != nil || len(res) != 0 {
 		t.Fatalf("segunda llamada debe ser no-op: %v %v", res, err)
 	}
@@ -714,11 +768,11 @@ func TestAccountDeletionAcrossSeveralGroups(t *testing.T) {
 	// baneo del usuario en un tercer grupo: debe limpiarse
 	banGroup := newGroup(t, svc, uAdmin2)
 	joinAs(t, svc, store, banGroup.ID, uAdmin)
-	if err := svc.BanMember(ctx, banGroup.ID, uAdmin2, uAdmin); err != nil {
+	if err := svc.BanMember(ctx, banGroup.ID, uAdmin2, uAdmin, false, ""); err != nil {
 		t.Fatal(err)
 	}
 
-	res, err := svc.HandleAccountDeletion(ctx, uAdmin)
+	res, err := svc.HandleAccountDeletion(ctx, uAdmin, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -741,8 +795,78 @@ func TestAccountDeletionAcrossSeveralGroups(t *testing.T) {
 
 func TestAccountDeletionRequiresUser(t *testing.T) {
 	svc, _ := newTestSvc()
-	_, err := svc.HandleAccountDeletion(ctx, "")
+	_, err := svc.HandleAccountDeletion(ctx, "", "")
 	wantErr(t, err, ErrUnauthorized)
+}
+
+// Borrado de cuenta e2e (tarea 3_5_7): sucesión en cada grupo + unshare-all
+// en TODOS los grupos afectados (promovido o eliminado), con el JWT del
+// usuario reenviado por Identity. Sin token solo hay sucesión.
+func TestAccountDeletionCleansNotesInAllGroups(t *testing.T) {
+	type call struct {
+		body map[string]string
+		auth string
+	}
+	setup := func(t *testing.T) (*GroupService, string, string, chan call) {
+		t.Helper()
+		got := make(chan call, 4)
+		notes := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			got <- call{body, r.Header.Get("Authorization")}
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		t.Cleanup(notes.Close)
+		svc, store := newTestSvc()
+		svc.SetNotesBaseURL(notes.URL)
+		// Transporte HTTP explicito: este test valida el wiring de cleanup y el
+		// payload/JWT del borrado de cuenta (no el transporte). En produccion
+		// Social usa gRPC primero y cae a HTTP; aqui se fija HTTP para ser
+		// determinista (mismo patron que TestKickBanCleanSharedNotes).
+		svc.SetNotesUnsharer(nil)
+		// g1: admin + miembro (promueve al miembro); g2: solo admin (se elimina).
+		g1 := newGroup(t, svc, uAdmin)
+		joinAs(t, svc, store, g1.ID, uMember)
+		g2 := newGroup(t, svc, uAdmin)
+		return svc, g1.ID, g2.ID, got
+	}
+
+	t.Run("con token limpia ambos grupos", func(t *testing.T) {
+		svc, g1, g2, got := setup(t)
+		res, err := svc.HandleAccountDeletion(ctx, uAdmin, "jwt-del-usuario")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res) != 2 {
+			t.Fatalf("se esperaban 2 grupos afectados, got %d", len(res))
+		}
+		seen := map[string]bool{}
+		for i := 0; i < 2; i++ {
+			select {
+			case c := <-got:
+				if c.auth != "Bearer jwt-del-usuario" || c.body["user_id"] != uAdmin {
+					t.Fatalf("llamada inesperada a Notes: %+v", c)
+				}
+				seen[c.body["group_id"]] = true
+			case <-time.After(2 * time.Second):
+				t.Fatal("faltan llamadas a notes/unshare-all")
+			}
+		}
+		if !seen[g1] || !seen[g2] {
+			t.Fatalf("unshare debe cubrir grupo promovido y eliminado, got %v", seen)
+		}
+	})
+	t.Run("sin token solo sucesión", func(t *testing.T) {
+		svc, _, _, got := setup(t)
+		if _, err := svc.HandleAccountDeletion(ctx, uAdmin, ""); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-got:
+			t.Fatal("sin token no se debe llamar a Notes")
+		case <-time.After(150 * time.Millisecond):
+		}
+	})
 }
 
 func TestLeaveSuccessionOrderAndOwner(t *testing.T) {
@@ -809,4 +933,194 @@ func TestConcurrentAdminLeaveRetainsAdminAndOwner(t *testing.T) {
 	if updated.OwnerUserID != uMember {
 		t.Fatal("owner not transferred")
 	}
+}
+
+// --- Limpieza de apuntes al salir del grupo (migración unshare-all a gRPC) ---
+
+type unsharerCall struct{ userID, groupID string }
+
+type fakeUnsharer struct {
+	mu    sync.Mutex
+	calls []unsharerCall
+	err   error
+}
+
+func (f *fakeUnsharer) UnshareAll(ctx context.Context, userID, groupID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, unsharerCall{userID: userID, groupID: groupID})
+	return f.err
+}
+
+func (f *fakeUnsharer) snapshot() []unsharerCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]unsharerCall(nil), f.calls...)
+}
+
+// gRPC operativo: se usa el unsharer y NO se toca el HTTP legacy.
+func TestLeavePrefersGRPCUnsharer(t *testing.T) {
+	httpCalled := make(chan struct{}, 1)
+	notes := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { httpCalled <- struct{}{} }))
+	defer notes.Close()
+
+	svc, store := newTestSvc()
+	svc.SetNotesBaseURL(notes.URL)
+	fake := &fakeUnsharer{}
+	svc.SetNotesUnsharer(fake)
+	g := newGroup(t, svc, uAdmin)
+	joinAs(t, svc, store, g.ID, uMember)
+
+	if err := svc.LeaveGroup(ctx, g.ID, uMember, true, "jwt"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(2 * time.Second)
+	for len(fake.snapshot()) == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("no se llamó al unsharer gRPC")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	calls := fake.snapshot()
+	if calls[0].userID != uMember || calls[0].groupID != g.ID {
+		t.Fatalf("args inesperados: %+v", calls[0])
+	}
+	select {
+	case <-httpCalled:
+		t.Fatal("no debe usarse HTTP cuando gRPC funciona")
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+// fakeNotesServer captura el RPC UnshareAll y su metadata.
+type fakeNotesServer struct {
+	notesv1.UnimplementedNotesServiceServer
+	gotUser  string
+	gotGroup string
+	gotKey   string
+	called   chan struct{}
+}
+
+func (s *fakeNotesServer) UnshareAll(ctx context.Context, req *notesv1.UnshareAllRequest) (*notesv1.UnshareAllResponse, error) {
+	s.gotUser = req.GetUserId()
+	s.gotGroup = req.GetGroupId()
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if v := md.Get(metadataInternalKey); len(v) > 0 {
+			s.gotKey = v[0]
+		}
+	}
+	close(s.called)
+	return &notesv1.UnshareAllResponse{}, nil
+}
+
+// El cliente gRPC real (bufconn) envía user_id, group_id y x-internal-key.
+func TestNotesGRPCUnsharerSendsInternalKey(t *testing.T) {
+	lis := bufconn.Listen(1024 * 1024)
+	srv := grpc.NewServer()
+	fake := &fakeNotesServer{called: make(chan struct{})}
+	notesv1.RegisterNotesServiceServer(srv, fake)
+	go func() { _ = srv.Serve(lis) }()
+	defer srv.Stop()
+
+	u := newNotesGRPCUnsharer("bufnet", "secreto-interno")
+	u.dial = func(target string) (*grpc.ClientConn, error) {
+		return grpc.NewClient("passthrough:///bufnet",
+			grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+				return lis.DialContext(ctx)
+			}),
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		)
+	}
+
+	callCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := u.UnshareAll(callCtx, uMember, "grupo-1"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-fake.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("el servidor gRPC no recibió el RPC")
+	}
+	if fake.gotUser != uMember || fake.gotGroup != "grupo-1" || fake.gotKey != "secreto-interno" {
+		t.Fatalf("RPC inesperado: user=%q group=%q key=%q", fake.gotUser, fake.gotGroup, fake.gotKey)
+	}
+}
+
+// cleanup_shared_notes=true en kick/ban debe llamar a Notes con el EXPULSADO
+// como user_id y el JWT del admin actor (Notes lo autoriza vía IsGroupAdmin).
+func TestKickBanCleanSharedNotes(t *testing.T) {
+	type call struct {
+		path, auth string
+		body       map[string]string
+	}
+	setup := func(t *testing.T) (*GroupService, *MemoryGroupStore, string, chan call) {
+		t.Helper()
+		got := make(chan call, 1)
+		notes := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			got <- call{r.URL.Path, r.Header.Get("Authorization"), body}
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		t.Cleanup(notes.Close)
+		svc, store := newTestSvc()
+		svc.SetNotesBaseURL(notes.URL)
+		// Transporte HTTP explícito (fallback): valida el wiring de cleanup y el
+		// payload/JWT, sin depender de un Notes gRPC real (que en prod es 1º).
+		svc.SetNotesUnsharer(nil)
+		g := newGroup(t, svc, uAdmin)
+		joinAs(t, svc, store, g.ID, uMember)
+		return svc, store, g.ID, got
+	}
+	expectCleanup := func(t *testing.T, got chan call, gid string) {
+		t.Helper()
+		select {
+		case c := <-got:
+			if c.path != "/notes/unshare-all" || c.auth != "Bearer jwt-del-admin" ||
+				c.body["user_id"] != uMember || c.body["group_id"] != gid {
+				t.Fatalf("llamada inesperada a Notes: %+v", c)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("no se llamó a notes/unshare-all")
+		}
+	}
+
+	t.Run("kick", func(t *testing.T) {
+		svc, _, gid, got := setup(t)
+		if err := svc.KickMember(ctx, gid, uAdmin, uMember, true, "jwt-del-admin"); err != nil {
+			t.Fatal(err)
+		}
+		expectCleanup(t, got, gid)
+	})
+	t.Run("ban", func(t *testing.T) {
+		svc, _, gid, got := setup(t)
+		if err := svc.BanMember(ctx, gid, uAdmin, uMember, true, "jwt-del-admin"); err != nil {
+			t.Fatal(err)
+		}
+		expectCleanup(t, got, gid)
+	})
+	t.Run("sin flag no llama", func(t *testing.T) {
+		svc, _, gid, got := setup(t)
+		if err := svc.KickMember(ctx, gid, uAdmin, uMember, false, "jwt"); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-got:
+			t.Fatal("no se debe llamar a Notes sin cleanup_shared_notes")
+		case <-time.After(150 * time.Millisecond):
+		}
+	})
+	t.Run("kick fallido no llama", func(t *testing.T) {
+		svc, _, gid, got := setup(t)
+		if err := svc.KickMember(ctx, gid, uAdmin, uStrang, true, "jwt"); err == nil {
+			t.Fatal("se esperaba error al expulsar no-miembro")
+		}
+		select {
+		case <-got:
+			t.Fatal("no se debe llamar a Notes si el kick falló")
+		case <-time.After(150 * time.Millisecond):
+		}
+	})
 }

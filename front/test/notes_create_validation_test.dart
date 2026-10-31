@@ -1,3 +1,4 @@
+import 'support/service_uri.dart';
 import 'dart:convert';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -28,14 +29,14 @@ void main() {
     final calls = <String>[];
     final db = AppDatabase.forTesting(NativeDatabase.memory());
     notesHttpClientOverride = MockClient((r) async {
-      calls.add('${r.method} ${r.url.path}');
-      if (r.method == 'POST' && r.url.path == '/notes') {
+      calls.add('${r.method} ${r.url.servicePath}');
+      if (r.method == 'POST' && r.url.servicePath == '/notes') {
         return json({
           'note_id': '12345678-1234-4234-8234-123456789abc',
           'version': 1,
         }, 201);
       }
-      if (r.url.path == '/notes/me') {
+      if (r.url.servicePath == '/notes/me') {
         return json({'notes': []});
       }
       return json({}, 404);
@@ -77,10 +78,7 @@ void main() {
     expect(find.text('El título es obligatorio.'), findsOneWidget);
     // Modal sigue abierto y no se llamó al backend.
     expect(find.text('NUEVA NOTA'), findsWidgets);
-    expect(
-      calls.where((c) => c == 'POST /notes'),
-      isEmpty,
-    );
+    expect(calls.where((c) => c == 'POST /notes'), isEmpty);
     await t.pumpWidget(const SizedBox());
   });
 
@@ -91,10 +89,7 @@ void main() {
     await tapGuardar(t);
     expect(find.text('El título es obligatorio.'), findsOneWidget);
     expect(find.text('NUEVA NOTA'), findsWidgets);
-    expect(
-      calls.where((c) => c == 'POST /notes'),
-      isEmpty,
-    );
+    expect(calls.where((c) => c == 'POST /notes'), isEmpty);
     await t.pumpWidget(const SizedBox());
   });
 
@@ -119,10 +114,7 @@ void main() {
     );
     await tapGuardar(t);
     await t.pumpAndSettle();
-    expect(
-      calls.where((c) => c == 'POST /notes'),
-      hasLength(1),
-    );
+    expect(calls.where((c) => c == 'POST /notes'), hasLength(1));
     await t.pumpWidget(const SizedBox());
   });
 }
