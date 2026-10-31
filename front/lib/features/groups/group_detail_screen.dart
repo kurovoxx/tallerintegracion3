@@ -513,29 +513,26 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
       return;
     }
 
-    // Intentar deep links de Discord en orden de preferencia.
-    final deepLinks = <Uri>[
-      Uri.parse('discord://invite/$inviteCode'),
-      Uri.parse('discord://-invite/$inviteCode'), // variante legacy desktop
+    // Intentar abrir directamente en la app de Discord con varios deep links.
+    final candidates = <Uri>[
+      Uri.parse('discord://discord.com/invite/$inviteCode'), // URL completa
+      Uri.parse('discord://invite/$inviteCode'),             // formato corto
     ];
 
-    final webUri = Uri.parse('https://discord.com/invite/$inviteCode');
-
-    bool opened = false;
-    for (final uri in deepLinks) {
+    for (final uri in candidates) {
       try {
-        opened = await launchUrl(uri, mode: LaunchMode.platformDefault);
-        if (opened) break;
+        final opened = await launchUrl(uri, mode: LaunchMode.platformDefault);
+        if (opened) return; // Se abrió en la app
       } catch (_) {
         // Sigue al siguiente intento.
       }
       if (!mounted) return;
     }
 
-    if (!opened) {
-      // Fallback: abrir enlace web en el navegador.
-      await _launchUrlOrSnackbar(webUri);
-    }
+    // Fallback: abrir en navegador web. El usuario puede usar el enlace
+    // para unirse manualmente si la app no se abrió.
+    final webUri = Uri.parse('https://discord.com/invite/$inviteCode');
+    await _launchUrlOrSnackbar(webUri);
   }
 
   /// Lanza una URL o muestra snackbar si falla. Retorna true si se lanzó.
