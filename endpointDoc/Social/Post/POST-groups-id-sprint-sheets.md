@@ -1,21 +1,33 @@
-# POST /groups/:id/sprint-sheets
+# `POST /groups/:id/sprint-sheets`
 
-Crea una hoja (sprint) en el grupo (microservicio `social`).
 
 ## Req
-- Método: `POST`, ruta: `/groups/:id/sprint-sheets` (protegida con JWT `Bearer`; cualquier miembro; `back/social/cmd/server/main.go:265`).
-- Headers: `Content-Type: application/json`, `Authorization: Bearer <access_token>`.
-- Path: `id` (uuid del grupo).
-- Body (`service.SheetPatch`): `{"name":"Sprint 1","period_start":"2026-10-01","period_end":"2026-10-14"}`. Los tres obligatorios; `name` 1-200 caracteres (se recorta); `period_end` >= `period_start`.
+
+- `POST /groups/:id/sprint-sheets`, JWT y membresía requeridos; registro `back/social/cmd/server/main.go:282`.
+- JSON: name, period_start y period_end requeridos; las fechas usan YYYY-MM-DD. No acepta un sheetId en path.
+- Aplican límite de 200 caracteres al nombre, fechas válidas y end no anterior al start.
 
 ## Res
-- `201`: `{"data":{"id","name","period_start","period_end"}}`.
-- `400` `invalid_body` (faltan campos, fechas inválidas o invertidas). `403` `forbidden`. `404` `not_found`. `401` sin body.
+
+- `201`: {"data":{"id":"<uuid>","name":"Sprint 1","period_start":"YYYY-MM-DD","period_end":"YYYY-MM-DD"}}.
+- 400 por body/fecha/nombre inválido; 401 sesión inválida; 403 no miembro; 404 grupo ausente; 500 interno. sheetError usa {"error":{"code":"...","message":"..."}}.
+- Inserta una hoja; la lista del grupo cambia tras guardar en PostgreSQL.
+
+## Invocación (Front / Otros Servicios)
+
+- `front/lib/core/services/social_service.dart:459`, `saveSprintSheet` envía POST cuando sheetId es null.
+- `_SprintSheetScreenState._manageSprint` abre `SprintEditorDialog`, llama `SocialService.saveSprintSheet` y recarga la hoja seleccionada (`front/lib/features/workspace/sprint_sheet_screen.dart:230-253`).
+- No se encontró consumidor de producción desde otro servicio.
 
 ## Flujo
-- `SprintHandler.CreateSheet` → `writeSheet(update=false)` (`internal/handler/http/sprint_sheets.go:72`) → `SprintService.CreateSprintSheet` (`internal/service/sprint_sheets.go:52`: membresía + `applySheetPatch`) → `CreateSheet` (sqlc).
+
+1. `main()` registra `POST /groups/:id/sprint-sheets` (`back/social/cmd/server/main.go:282`).
+2. `SprintHandler.CreateSheet` delega en `SprintHandler.writeSheet`, que toma el actor, enlaza el JSON y prepara la respuesta (`back/social/internal/handler/http/sprint_sheets.go:57,72-97`).
+3. `SprintService.CreateSprintSheet` valida acceso y campos (`back/social/internal/service/sprint_sheets.go:52-65`); `applySheetPatch` normaliza nombre y fechas (`back/social/internal/service/sprint_sheets.go:122-142`).
+4. `SprintRepository.CreateSheet` delega en sqlc (`back/social/internal/repository/sprint_repository.go:42-44`); `Queries.CreateSheet` ejecuta el `INSERT INTO social.sprint_sheets` (`back/social/internal/repository/sqlc/sprint.sql.go:61-85`).
+5. `SprintHandler.writeSheet` responde `201` con `data` usando `sheetJSON` (`back/social/internal/handler/http/sprint_sheets.go:12-20,83-97`). `_SprintSheetScreenState._manageSprint` toma el ID y recarga la hoja creada (`front/lib/features/workspace/sprint_sheet_screen.dart:230-253`).
 
 ## Tests
-- `internal/handler/http/sprint_sheets_test.go`: `TestSprintSheetRoutes`.
-- `internal/service/sprint_sheets_test.go`: `TestSprintSheetsLifecycleAndIsolation`.
-- `test/social_routes_e2e_test.go`: subtest `todo_sprint_hours_and_workspace`.
+
+- `back/social/internal/handler/http/sprint_sheets_test.go:13`, `TestSprintSheetRoutes`.
+- `back/social/internal/service/sprint_sheets_test.go:10`, `TestSprintSheetsLifecycleAndIsolation`.

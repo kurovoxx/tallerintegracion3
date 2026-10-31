@@ -1,42 +1,38 @@
-# DELETE /auth/account
-
-Borrado de la cuenta propia, orquestado por Identity (Auth) hacia Notes y Social por gRPC. Público vía nginx como `/api-auth/auth/account`.
+# `DELETE /auth/account`
 
 ## Req
-- Método: `DELETE`, ruta: `/auth/account` (`back/auth/cmd/server/main.go:120`, middleware `RequireIdentity`).
-- Headers requeridos: `Authorization: Bearer <access_token>`. Sin body ni query: el usuario sale **solo** del JWT.
-- No pide contraseña ni token extra; la confirmación explícita es responsabilidad del cliente (el frontend exige escribir `ELIMINAR`).
-- `RequireIdentity` valida firma y expiración pero **no** exige cuenta activa: el mismo JWT sirve para reanudar un borrado ya iniciado.
+
+- Ruta protegida por `AuthMiddleware.RequireIdentity`: `back/auth/cmd/server/main.go:123`.
+- Requiere `Authorization: Bearer <access JWT>` válido. `user_id` se obtiene únicamente del JWT. No tiene body ni query.
+- `RequireIdentity` valida la identidad sin exigir que la cuenta siga activa (`back/auth/internal/middleware/auth_middleware.go:54-57`); permite consultar/reanudar el borrado mientras el JWT siga vigente.
+- En el gateway web el prefijo `/api-auth` se retira antes de llegar a Auth; no forma parte de la ruta Gin (`front/nginx.conf:23-27`).
 
 ## Res
-- `200`: `{"status":"complete"}`. Notes, Social e Identity confirmaron; la fila `identity.users` ya no existe (cascada: perfil, refresh tokens, password resets y OAuth). Repetir la llamada con el mismo JWT devuelve `200` otra vez (idempotente).
-- `202`: `{"status":"pending"}`. Hay un tombstone durable en `identity.account_deletions`: la cuenta quedó bloqueada y un worker (`RunWorker`, cada 15 s) reintenta las etapas sin necesitar el JWT. Corresponde a `ErrAccountCleanupPending`, `ErrAccountCleanupFailed` o `ErrInvalidCleanupResult` (servicio antiguo que responde `UNSPECIFIED`).
-- `404`: `{"error":"account_not_found"}`. No hay usuario ni tombstone para ese `user_id`.
-- `503`: `{"error":"account_deletion_unavailable"}`. Fallo de lock/estado o del commit local final. **Puede haber comenzado** (p. ej. Social y Notes limpios y falla `CompleteAndDelete`): consultar `GET /auth/account-deletion` antes de reintentar.
-- `401`: `{"error":{"code":"unauthorized|invalid_token|token_expired","message":"..."}}` (middleware).
-- No devuelve `403` ni `409`.
 
-## Efectos mientras está pendiente o completo
-- Rutas con `RequireAuth` en Auth y Notes: `423 {"error":{"code":"account_deletion_in_progress",...}}`.
-- `POST /auth/refresh` → `401 invalid_token`; `POST /auth/login` → `401 invalid_credentials`. No hay forma de cancelar el borrado.
+- `200 OK`: `{"status":"complete"}` cuando Social y Notes informan `COMPLETE` y Identity elimina la cuenta local.
+- `202 Accepted`: `{"status":"pending"}` si queda trabajo pendiente, un RPC falla/expira o devuelve un estado no explícito. El registro durable permite reintentar; la cuenta local y OAuth aún se conservan.
+- `404 Not Found`: `{"error":"account_not_found"}` si no existe la cuenta ni un borrado durable previo.
+- `503 Service Unavailable`: `{"error":"account_deletion_unavailable"}` ante fallo del bloqueo o del estado local. Los errores de limpieza remota se convierten en `202`, no autorizan el borrado.
+- `401 Unauthorized`: `AuthMiddleware.require` rechaza el encabezado/JWT antes del handler (`back/auth/internal/middleware/auth_middleware.go:60-94`). Si falta `Authorization`, el cuerpo es `{"error":{"code":"unauthorized","message":"Authorization header requerido"}}`; si no usa el prefijo `Bearer `, `{"error":{"code":"unauthorized","message":"Formato de Authorization debe ser Bearer {token}"}}`; si el bearer está vacío, `{"error":{"code":"unauthorized","message":"Token vacío"}}`. JWT inválido y vencido devuelven respectivamente `{"error":{"code":"invalid_token","message":"Token inválido"}}` y `{"error":{"code":"token_expired","message":"Token expirado"}}`, con mensajes de `utils.MessageForCode` (`back/auth/internal/utils/response.go:45-75`).
+- La operación elimina Identity y limpia membresías/accesos compartidos. Conserva los apuntes propios y archivos personales de Drive. El tombstone `complete` queda para rechazar JWT antiguos.
+
+## Invocación (Front / Otros Servicios)
+
+- Tras la confirmación de la persona, `AccountDeletionDialog._submit` llama `AccountDeletionService.requestDeletion` (`front/lib/features/auth/account_deletion_dialog.dart:158-167`).
+- `AccountDeletionService._requestDeletion` envía el DELETE con el JWT actual (`front/lib/core/services/account_deletion_service.dart:175-245`). Si el resultado es ambiguo, consulta `AccountDeletionService.checkStatus` (`front/lib/core/services/account_deletion_service.dart:271-329`) en vez de repetir el DELETE.
+- `AccountDeletionDialog._apply` muestra el estado pendiente y consulta de nuevo, o finaliza el flujo al recibir `complete` (`front/lib/features/auth/account_deletion_dialog.dart:178-193`).
+- Identity coordina Notes y Social mediante RPC gRPC autenticados con `x-internal-key`; no usa sus endpoints HTTP para esta orquestación.
 
 ## Flujo
-`AccountDeletionHandler.Delete` (`internal/handler/http/account_deletion_handler.go`) → `AccountDeletionCoordinator.DeleteAccount` (`internal/service/account_deletion.go`), bajo lock exclusivo por usuario:
-1. `Begin`: tombstone `pending` (espera a que terminen las peticiones en curso del usuario: lock compartido en `AcquireRequest`).
-2. Notes `BeginAccountDeletion` (gRPC `notes:9082`): tombstone Notes, bloquea escrituras.
-3. Social `PrepareAccountDeletion` (gRPC `social:9083`): tombstone y snapshot de membresías.
-4. Social `AccountDeletionCleanup`: sale de cada grupo (sucesión de admin; si era el último miembro el grupo se borra), borra baneos, llama a Notes `UnshareAll` por grupo y quita al usuario del canal Stream.
-5. Notes `AccountDeletionCleanup`: retira los shares restantes y reconcilia permisos de Drive. **Conserva** las notas, adjuntos y archivos Markdown en el Drive del autor (sin regla de producto que autorice borrarlos).
-6. `CompleteAndDelete`: marca `complete` y borra `identity.users` en una transacción. El tombstone queda para invalidar JWT ya emitidos.
 
-Llamadas gRPC con `x-internal-key` y 30 s de timeout cada una (`account_deletion_grpc.go`). Solo `COMPLETE` autoriza avanzar.
-
-## Requisito de esquema
-Necesita `identity.account_deletions` (Auth `004_account_deletion.sql`), `notes.account_deletion_users` y `notes.account_deletion_group_notes` (Notes `003_account_deletion.sql`), `social.account_deletion_users` y `social.account_deletion_groups` (Social `002_account_deletion.sql`) con `stream_removed` (Social `003_account_deletion_stream.sql`). `init.sql` solo corre con un volumen nuevo: en bases existentes hay que aplicar esas migraciones. Auth, Notes y Social verifican estas tablas al arrancar (`repository.VerifyAccountDeletionSchema`) y no arrancan si faltan. Síntoma si faltan las de Notes en un proceso ya iniciado: `202 pending` permanente con `last_error = notes_begin_incomplete` y, en Notes, `borrado de cuenta [begin] ... relation "notes.account_deletion_users" does not exist`.
+1. `main()` registra la ruta protegida y su middleware (`back/auth/cmd/server/main.go:123`). `AuthMiddleware.RequireIdentity` valida el JWT sin comprobar que la cuenta siga activa (`back/auth/internal/middleware/auth_middleware.go:54-60`).
+2. `AccountDeletionHandler.Delete` toma el `user_id` del contexto JWT y llama al coordinador (`back/auth/internal/handler/http/account_deletion_handler.go:24-40`).
+3. `AccountDeletionCoordinator.DeleteAccount` serializa por usuario, guarda `pending`, inicia los gates de Notes y Social, ejecuta ambas limpiezas y acepta solo `COMPLETE` explícito (`back/auth/internal/service/account_deletion.go:64-104`). `AccountDeletionRepository.WithExclusiveUserLock` serializa solicitudes (`back/auth/internal/repository/account_deletion_repository.go:84-99`) y `AccountDeletionRepository.Begin` crea el tombstone durable (`back/auth/internal/repository/account_deletion_repository.go:126-144`).
+4. `GRPCAccountCleanup.BeginNotes`, `BeginSocial`, `CleanupSocial` y `CleanupNotes` realizan los RPC (`back/auth/internal/service/account_deletion_grpc.go:52-120`). `withCleanupKey` adjunta `x-internal-key` (`back/auth/internal/service/account_deletion_grpc.go:127-129`) y `cleanupRPCContext` aplica el límite de 30 segundos (`back/auth/internal/service/account_deletion_grpc.go:123-125`). Un error, timeout o estado desconocido no equivale a `COMPLETE`.
+5. Tras ambas limpiezas, `AccountDeletionRepository.CompleteAndDelete` marca el tombstone `complete` y elimina `identity.users` dentro de una transacción (`back/auth/internal/repository/account_deletion_repository.go:174-189`). Las FK eliminan refresh tokens y OAuth por cascada (`docker/postgres/init.sql:41-54,76-84`); el tombstone no depende de la fila de usuario.
+6. `AccountDeletionHandler.Delete` traduce el resultado al status HTTP (`back/auth/internal/handler/http/account_deletion_handler.go:30-40`). En Flutter, `AccountDeletionService._requestDeletion` interpreta `200/202` o consulta el estado, y `AccountDeletionDialog._apply` actualiza la vista (`front/lib/core/services/account_deletion_service.dart:205-245`; `front/lib/features/auth/account_deletion_dialog.dart:178-193`).
 
 ## Tests
-- `back/auth/internal/handler/http/account_deletion_contract_test.go`: códigos/cuerpos 200 (idempotente), 202 por etapa pendiente/error/`UNSPECIFIED`, 404, 503 (incluido el 503 con borrado ya iniciado), 401 y 423 posterior en `RequireAuth`.
-- `back/auth/internal/service/account_deletion_test.go`: confirmación explícita en cada etapa, reintento tras fallo del commit local, compatibilidad con servidores antiguos.
-- `back/auth/internal/service/account_deletion_integration_test.go` (`AUTH_TEST_DATABASE_URL`): cascadas, bloqueo de login/refresh, gate de peticiones en vuelo.
-- `back/social/test/cross_service_e2e_test.go` (`-tags=crossservice`): `TestCrossServiceAccountDeletionRetriesPartialDriveCleanup`, `TestCrossServiceAccountDeletionCompletesNormallyAndCanRepeat`.
-- Frontend: `front/test/account_deletion_service_test.dart`, `front/test/account_deletion_flow_test.dart`.
+
+- `back/auth/internal/handler/http/account_deletion_contract_test.go:146`, `TestAccountDeletionContract_CompleteIsIdempotentAndBlocksNormalRoutes`; `back/auth/internal/handler/http/account_deletion_contract_test.go:181`, `TestAccountDeletionContract_PendingStagesReturn202`; `back/auth/internal/handler/http/account_deletion_contract_test.go:218`, `TestAccountDeletionContract_ErrorsAndAuth`.
+- `back/auth/internal/service/account_deletion_integration_test.go:48`, `TestAuthIntegration_AccountDeletionPreservesRowsUntilCompleteAndCascades` (PostgreSQL de integración cuando la suite está configurada).

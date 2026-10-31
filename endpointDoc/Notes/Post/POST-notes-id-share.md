@@ -26,9 +26,9 @@ Comparte una nota propia con un grupo de Social en modo `link` o `restricted`. P
 
 **201 Created** (`note_handler.go:743`)
 
-```json
-{"shared_note_id":"66666666-6666-4666-8666-666666666666"}
-```
+- `_GroupNotesTabState._shareFlow` inicia el diálogo y la llamada de compartir (`front/lib/features/groups/group_notes_tab.dart:127-162`).
+- `front/lib/core/services/notes_sharing_service.dart:224`, `shareNote` envía POST y utiliza shared_note_id para refrescar la vista.
+- Para `restricted`, `NoteService.ComputeDesiredDrivePermissions` obtiene correos mediante `SocialGRPCAdapter.ListMemberEmails` (`back/notes/internal/service/note_service.go:2037-2086`; `back/notes/internal/service/social_grpc_adapter.go:111-121`); no es una llamada iniciada por Flutter.
 
 - `shared_note_id`: UUID de la fila en `notes.shared_notes`. Es el identificador que exige [DELETE /notes/shared/{id}](../Delete/DELETE-notes-shared-sharedNoteId.md).
 - Se responde **201 aunque Drive falle**: el share queda guardado con `permission_sync_status=failed` (`note_service.go:2020-2026`). El HTTP no informa ese estado; puede consultarse con `GET /notes/:id/access` (`drive_sync_status`).
