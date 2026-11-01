@@ -26,11 +26,6 @@ Ejemplo de respuesta (IDs y fechas ilustrativos, campos del contrato real):
 
 Fuentes: `back/notes/cmd/server/main.go`, `internal/handler/http/` y `internal/service/` dentro de `back/notes`.
 
-## Front
-- Cliente: `NotesSharingService.listGroupNotes` (`front/lib/core/services/notes_sharing_service.dart:168`), contra el servicio Notes (`/api-notes`), no Social.
-- Pantalla: `_GroupNotesTabState._load` (`front/lib/features/groups/group_notes_tab.dart:79`), pestaña NOTAS del grupo.
-- Pide `limit=50` y sigue `next_cursor` hasta agotarlo (máx. 10 páginas). Lee `notes[]` → `SharedGroupNote` (`id, title, visibility, likes_count, version, user_id`); el contenido de cada nota se abre aparte con `GET /notes/:id`.
-
 ## Tests
 
 - Handler/router: `TestHandlerShareAndGroupNotes; TestListGroupNotesOrdering`.
