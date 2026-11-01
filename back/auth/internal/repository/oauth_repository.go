@@ -194,3 +194,13 @@ func (r *OAuthRepository) MarkGoogleDriveConnectionRevoked(ctx context.Context, 
 	}
 	return nil
 }
+
+// DeleteGoogleDriveConnection borra la fila de conexión (desconexión explícita
+// desde la app). No falla si no existe (idempotente).
+func (r *OAuthRepository) DeleteGoogleDriveConnection(ctx context.Context, userID string) error {
+	_, err := r.pool.Exec(ctx, `DELETE FROM identity.oauth_connections WHERE user_id = $1 AND provider = 'google_drive'`, userID)
+	if err != nil {
+		return fmt.Errorf("delete oauth: %w", err)
+	}
+	return nil
+}

@@ -201,3 +201,58 @@ func (q *Queries) UpdateMeetingCalendarEventID(ctx context.Context, arg UpdateMe
 	)
 	return i, err
 }
+
+const createMeetingAttendee = `-- name: CreateMeetingAttendee :one
+INSERT INTO social.meeting_attendees (meeting_id, email)
+VALUES ($1, $2)
+ON CONFLICT (meeting_id, email) DO NOTHING
+RETURNING id, meeting_id, email, created_at
+`
+
+type CreateMeetingAttendeeParams struct {
+	MeetingID pgtype.UUID
+	Email     string
+}
+
+func (q *Queries) CreateMeetingAttendee(ctx context.Context, arg CreateMeetingAttendeeParams) (SocialMeetingAttendee, error) {
+	row := q.db.QueryRow(ctx, createMeetingAttendee, arg.MeetingID, arg.Email)
+	var i SocialMeetingAttendee
+	err := row.Scan(
+		&i.ID,
+		&i.MeetingID,
+		&i.Email,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const listMeetingAttendees = `-- name: ListMeetingAttendees :many
+SELECT id, meeting_id, email, created_at FROM social.meeting_attendees
+WHERE meeting_id = $1
+ORDER BY created_at ASC
+`
+
+func (q *Queries) ListMeetingAttendees(ctx context.Context, meetingID pgtype.UUID) ([]SocialMeetingAttendee, error) {
+	rows, err := q.db.Query(ctx, listMeetingAttendees, meetingID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SocialMeetingAttendee
+	for rows.Next() {
+		var i SocialMeetingAttendee
+		if err := rows.Scan(
+			&i.ID,
+			&i.MeetingID,
+			&i.Email,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

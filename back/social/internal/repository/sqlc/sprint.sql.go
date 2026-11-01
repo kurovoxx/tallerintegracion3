@@ -59,18 +59,20 @@ func (q *Queries) ListSheetsByGroup(ctx context.Context, groupID pgtype.UUID) ([
 }
 
 const createSheet = `-- name: CreateSheet :one
-INSERT INTO social.sprint_sheets (group_id, name)
-VALUES ($1, $2)
+INSERT INTO social.sprint_sheets (group_id, name, period_start, period_end)
+VALUES ($1, $2, $3, $4)
 RETURNING id, group_id, name, period_start, period_end, created_at
 `
 
 type CreateSheetParams struct {
-	GroupID pgtype.UUID
-	Name    string
+	GroupID     pgtype.UUID
+	Name        string
+	PeriodStart pgtype.Date
+	PeriodEnd   pgtype.Date
 }
 
 func (q *Queries) CreateSheet(ctx context.Context, arg CreateSheetParams) (SocialSprintSheet, error) {
-	row := q.db.QueryRow(ctx, createSheet, arg.GroupID, arg.Name)
+	row := q.db.QueryRow(ctx, createSheet, arg.GroupID, arg.Name, arg.PeriodStart, arg.PeriodEnd)
 	var i SocialSprintSheet
 	err := row.Scan(
 		&i.ID,
@@ -274,4 +276,43 @@ func (q *Queries) DeleteSprintSheetTask(ctx context.Context, id pgtype.UUID) (So
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const updateSheet = `-- name: UpdateSheet :one
+UPDATE social.sprint_sheets SET name = $3, period_start = $4, period_end = $5
+WHERE id = $1 AND group_id = $2
+RETURNING id, group_id, name, period_start, period_end, created_at
+`
+
+type UpdateSheetParams struct {
+	ID          pgtype.UUID
+	GroupID     pgtype.UUID
+	Name        string
+	PeriodStart pgtype.Date
+	PeriodEnd   pgtype.Date
+}
+
+func (q *Queries) UpdateSheet(ctx context.Context, arg UpdateSheetParams) (SocialSprintSheet, error) {
+	row := q.db.QueryRow(ctx, updateSheet, arg.ID, arg.GroupID, arg.Name, arg.PeriodStart, arg.PeriodEnd)
+	var s SocialSprintSheet
+	err := row.Scan(&s.ID, &s.GroupID, &s.Name, &s.PeriodStart, &s.PeriodEnd, &s.CreatedAt)
+	return s, err
+}
+
+const deleteSheet = `-- name: DeleteSheet :one
+DELETE FROM social.sprint_sheets
+WHERE id = $1 AND group_id = $2
+RETURNING id, group_id, name, period_start, period_end, created_at
+`
+
+type DeleteSheetParams struct {
+	ID      pgtype.UUID
+	GroupID pgtype.UUID
+}
+
+func (q *Queries) DeleteSheet(ctx context.Context, arg DeleteSheetParams) (SocialSprintSheet, error) {
+	row := q.db.QueryRow(ctx, deleteSheet, arg.ID, arg.GroupID)
+	var s SocialSprintSheet
+	err := row.Scan(&s.ID, &s.GroupID, &s.Name, &s.PeriodStart, &s.PeriodEnd, &s.CreatedAt)
+	return s, err
 }

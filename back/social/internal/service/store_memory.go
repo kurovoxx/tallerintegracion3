@@ -269,27 +269,7 @@ func (m *MemoryGroupStore) HandleAccountDeletion(_ context.Context, userID strin
 		if ms == nil {
 			continue
 		}
-		res := model.SuccessionResult{GroupID: gid}
-		wasAdmin := ms.Role == model.RoleAdmin
-		m.removeLocked(gid, userID)
-
-		if wasAdmin && m.countAdminsLocked(gid) == 0 {
-			if len(m.member[gid]) == 0 {
-				m.deleteGroupLocked(gid)
-				res.GroupDeleted = true
-				results = append(results, res)
-				continue
-			}
-			oldest := m.oldest(gid, "")
-			oldest.Role = model.RoleAdmin
-			id := oldest.UserID
-			res.PromotedUserID = &id
-		}
-		if g := m.groups[gid]; g.OwnerUserID == userID {
-			if a := m.oldest(gid, model.RoleAdmin); a != nil {
-				g.OwnerUserID = a.UserID
-			}
-		}
+		res := m.removeWithSuccessionLocked(gid, userID)
 		results = append(results, res)
 	}
 	for _, banned := range m.bans {
@@ -407,7 +387,7 @@ func (m *MemoryGroupStore) oldest(groupID, role string) *model.GroupMembership {
 		if role != "" && ms.Role != role {
 			continue
 		}
-		if best == nil || ms.JoinedAt.Before(best.JoinedAt) {
+		if best == nil || ms.JoinedAt.Before(best.JoinedAt) || (ms.JoinedAt.Equal(best.JoinedAt) && ms.UserID < best.UserID) {
 			best = ms
 		}
 	}
@@ -421,4 +401,40 @@ func (m *MemoryGroupStore) newestFirst() []string {
 		return m.groups[ids[i]].CreatedAt.After(m.groups[ids[j]].CreatedAt)
 	})
 	return ids
+}
+
+func (m *MemoryGroupStore) LeaveGroup(_ context.Context, groupID, userID string) (model.SuccessionResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.groups[groupID] == nil {
+		return model.SuccessionResult{}, errors.New("group_not_found")
+	}
+	if m.find(groupID, userID) == nil {
+		return model.SuccessionResult{}, errors.New("not_member")
+	}
+	return m.removeWithSuccessionLocked(groupID, userID), nil
+}
+
+func (m *MemoryGroupStore) removeWithSuccessionLocked(gid, userID string) model.SuccessionResult {
+	res := model.SuccessionResult{GroupID: gid}
+	wasAdmin := m.find(gid, userID).Role == model.RoleAdmin
+	m.removeLocked(gid, userID)
+
+	if wasAdmin && m.countAdminsLocked(gid) == 0 {
+		if len(m.member[gid]) == 0 {
+			m.deleteGroupLocked(gid)
+			res.GroupDeleted = true
+			return res
+		}
+		oldest := m.oldest(gid, "")
+		oldest.Role = model.RoleAdmin
+		id := oldest.UserID
+		res.PromotedUserID = &id
+	}
+	if g := m.groups[gid]; g.OwnerUserID == userID {
+		if a := m.oldest(gid, model.RoleAdmin); a != nil {
+			g.OwnerUserID = a.UserID
+		}
+	}
+	return res
 }

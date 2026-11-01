@@ -1,0 +1,101 @@
+# Job de Kubernetes que ejecuta el E2E cruzado de la tarea 3_5_10
+# (auth → social → academic → notes) contra servicios ya desplegados en el cluster.
+#
+# Requisitos previos:
+# 1. Los 4 servicios desplegados en el namespace student-brojas:
+#    auth, notes, social, academic (infacadem).
+# 2. Un Postgres accesible desde el cluster donde se pueda crear una BD hija
+#    terminada en _test (el test crea y elimina social_cross_e2e_<uuid>).
+# 3. La imagen del Job construida y pusheada a GHCR (ver Dockerfile.e2e).
+#
+# Uso:
+#   kubectl -n student-brojas apply -f k8s/cross-service-e2e-job.yaml
+#   kubectl -n student-brojas logs job/cross-service-e2e -f
+#   kubectl -n student-brojas delete job/cross-service-e2e
+#
+# Los secretos JWT_SECRET, INTERNAL_API_KEY y DATABASE_URL se esperan en el
+# Secret `ti3-secrets` (mismo que usa el resto de servicios).
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cross-service-e2e
+  namespace: student-brojas
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600  # borra el Job terminado tras 10 min
+  template:
+    metadata:
+      labels:
+        app: cross-service-e2e
+    spec:
+      restartPolicy: Never
+      # ghcr-cred es el secret para extraer imágenes de GHCR (creado con k8s/create-secrets.sh)
+      imagePullSecrets:
+        - name: ghcr-cred
+      containers:
+        - name: e2e
+          image: ghcr.io/kurovoxx/tallerintegracion3/cross-service-e2e:latest
+          imagePullPolicy: IfNotPresent
+          # Se ejecuta solo el viaje de 4 servicios (no los tests de borrado de cuenta
+          # que necesitan reiniciar procesos locales, imposible en modo remoto).
+          command:
+            - "go"
+            - "test"
+            - "-tags=crossservice"
+            - "./test"
+            - "-run"
+            - "TestCrossService_FourServiceJourney|TestCrossService_AcademicHealth"
+            - "-count=1"
+            - "-v"
+          workingDir: /app/back/social
+          env:
+            # Modo remoto: conectar a servicios desplegados, no buildar procesos locales.
+            - name: CROSS_SERVICE_MODE
+              value: "remote"
+            # URLs HTTP de los servicios (DNS interno del cluster).
+            - name: AUTH_BASE_URL
+              value: "http://auth.student-brojas.svc.cluster.local:8080"
+            - name: NOTES_BASE_URL
+              value: "http://notes.student-brojas.svc.cluster.local:8082"
+            - name: SOCIAL_BASE_URL
+              value: "http://social.student-brojas.svc.cluster.local:8083"
+            - name: ACADEMIC_BASE_URL
+              value: "http://academic.student-brojas.svc.cluster.local:8081"
+            # gRPC de Social (usado para GetMemberEmails / AccountDeletionCleanup).
+            - name: SOCIAL_GRPC_ADDR
+              value: "social.student-brojas.svc.cluster.local:9083"
+            # BD dedicada para el test (debe terminar en _test).
+            # El test crea una BD hija social_cross_e2e_<uuid> y la elimina al final.
+            - name: CROSS_SERVICE_TEST_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ti3-secrets
+                  key: CROSS_SERVICE_TEST_DATABASE_URL
+                  optional: false
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ti3-secrets
+                  key: JWT_SECRET
+            - name: INTERNAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ti3-secrets
+                  key: INTERNAL_API_KEY
+            # Modos mock para proveedores externos (sin red fuera del cluster).
+            - name: STORAGE_MODE
+              value: "mock"
+            - name: CALENDAR_MODE
+              value: "mock"
+            - name: STREAM_MODE
+              value: "mock"
+            - name: GIN_MODE
+              value: "release"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi

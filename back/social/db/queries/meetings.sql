@@ -19,6 +19,17 @@ INSERT INTO social.meeting_notifications (meeting_id, user_id)
 VALUES ($1, $2)
 RETURNING *;
 
+-- name: CreateMeetingAttendee :one
+INSERT INTO social.meeting_attendees (meeting_id, email)
+VALUES ($1, $2)
+ON CONFLICT (meeting_id, email) DO NOTHING
+RETURNING *;
+
+-- name: ListMeetingAttendees :many
+SELECT * FROM social.meeting_attendees
+WHERE meeting_id = $1
+ORDER BY created_at ASC;
+
 -- name: ListGroupMemberUserIDs :many
 SELECT user_id FROM social.group_memberships
 WHERE group_id = $1;

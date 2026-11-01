@@ -1,0 +1,12 @@
+# Generación de stubs Go del módulo social.
+# Se corre desde back/proto/social (ver Makefile raíz). Plugins locales en
+# ./bin del repo (van por PATH). Salida: back/social/internal/gen/socialv1
+# (opt module= recorta el prefijo del go_package).
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: ../../social
+    opt: module=github.com/kurovoxx/tallerintegracion3/back/social
+  - local: protoc-gen-go-grpc
+    out: ../../social
+    opt: module=github.com/kurovoxx/tallerintegracion3/back/social

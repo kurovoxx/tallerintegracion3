@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/drive"
+	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/model"
 )
 
 // --- XSS completo: sanitizeMarkdown ---
@@ -93,9 +93,9 @@ func TestSanitizeMarkdownFullXSSCoverage(t *testing.T) {
 
 // --- X-Idempotency-Key en Update (servicio) ---
 
-// Un replay de red con la misma X-Idempotency-Key devuelve el resultado
-// cacheado sin volver a mutar PG/Drive; un error purga la clave permitiendo el
-// reintento con una clave nueva o la misma tras el fallo.
+// Un replay de red con la misma X-Idempotency-Key y el mismo payload devuelve
+// el resultado cacheado sin volver a mutar PG/Drive; la misma clave con un body
+// distinto es 409 Conflict; un error purga la clave permitiendo el reintento.
 func TestUpdateIdempotencyReplayAndErrorCleanup(t *testing.T) {
 	svc, driveMock, _, _, _, _, _, _ := newTestService()
 	ctx := context.Background()
@@ -114,10 +114,10 @@ func TestUpdateIdempotencyReplayAndErrorCleanup(t *testing.T) {
 		t.Fatalf("primer update con key failed: %v", err)
 	}
 
-	// Replay con la misma clave aunque el payload cambie: responde desde el
-	// caché con exactamente el resultado anterior y no vuelve a tocar Drive.
-	v3 := "v3 que no debe persistir"
-	upd2, err := svc.Update(ctx, author, note.ID, stringPtr("Título v3"), nil, &v3, key)
+	// Replay con la misma clave y el mismo payload: responde desde el registro
+	// 'completed' con exactamente el resultado anterior y no vuelve a tocar Drive.
+	v2Replay := "v2"
+	upd2, err := svc.Update(ctx, author, note.ID, stringPtr("Título v2"), nil, &v2Replay, key)
 	if err != nil {
 		t.Fatalf("replay update failed: %v", err)
 	}
@@ -135,15 +135,26 @@ func TestUpdateIdempotencyReplayAndErrorCleanup(t *testing.T) {
 		t.Fatalf("Drive no debe re-escribirse en un replay, got %q", got)
 	}
 
-	// Error con otra clave: la clave se purga y el reintento con la misma
-	// clave (tras el fallo) vuelve a ejecutarse sin quedar bloqueada.
+	// Misma clave con un body distinto: 409 Conflict sin re-escribir Drive.
+	v3 := "v3 que no debe persistir"
+	_, err = svc.Update(ctx, author, note.ID, stringPtr("Título v3"), nil, &v3, key)
+	se, ok := err.(*ServiceError)
+	if !ok || se.Code != "conflict" {
+		t.Fatalf("misma clave con body distinto debe dar 409 conflict, got %v", err)
+	}
+	if got, _ := driveMock.GetFileContent(ctx, author, fileID); got != "v2" {
+		t.Fatalf("el conflicto no debe re-escribir Drive, got %q", got)
+	}
+
+	// Error con otra clave: la clave durable se libera y el reintento con la
+	// misma clave (tras el fallo) vuelve a ejecutarse sin quedar bloqueada.
 	badKey := "update-spec95-fail"
 	missing := uuid.NewString()
 	if _, err := svc.Update(ctx, author, missing, stringPtr("x"), nil, nil, badKey); err == nil {
 		t.Fatal("update de nota inexistente debe fallar")
 	}
-	if entry, loaded := idemEntryStored(svc, idemKey("update", badKey)); loaded || entry != nil {
-		t.Fatal("la clave de un update fallido debe purgarse para permitir reintento")
+	if rec, loaded := idemRecordStored(svc, author, "update", badKey); loaded {
+		t.Fatalf("la clave de un update fallido debe liberarse para permitir reintento, got %+v", rec)
 	}
 	ok2, err := svc.Update(ctx, author, note.ID, stringPtr("Título v4"), nil, &v3, badKey)
 	if err != nil {
@@ -154,8 +165,8 @@ func TestUpdateIdempotencyReplayAndErrorCleanup(t *testing.T) {
 	}
 }
 
-// El mismo contrato unificado vale para el estado in-flight de Update: una
-// solicitud concurrente con la misma clave se rechaza con "solicitud en
+// El mismo contrato durable vale para el estado in_progress de Update: una
+// solicitud concurrente con la misma clave se rechaza con 409 "solicitud en
 // progreso" y no toca el storage.
 func TestUpdateIdempotencyInFlightRejectsConcurrent(t *testing.T) {
 	svc, driveMock, noteStore, _, _, _, _, _ := newTestService()
@@ -166,7 +177,7 @@ func TestUpdateIdempotencyInFlightRejectsConcurrent(t *testing.T) {
 		t.Fatalf("create failed: %v", err)
 	}
 	key := "update-spec95-inflight"
-	svc.storeIdemEntry(idemKey("update", key), &idemEntry{status: idemInFlight, createdAt: time.Now()})
+	seedIdemClaim(svc, author, "update", key, "hash-en-vuelo", model.IdempotencyStatusInProgress, time.Now().Add(idemClaimTTL))
 	beforeFiles := driveMock.FileCount()
 	body := "v1"
 	_, err = svc.Update(ctx, author, note.ID, stringPtr("T"), nil, &body, key)
@@ -174,8 +185,8 @@ func TestUpdateIdempotencyInFlightRejectsConcurrent(t *testing.T) {
 		t.Fatal("clave in-flight debe rechazar la actualización concurrente")
 	}
 	se, ok := err.(*ServiceError)
-	if !ok || se.Code != "bad_request" || se.Message != "solicitud en progreso" {
-		t.Fatalf("esperaba bad_request/solicitud en progreso, got %v", err)
+	if !ok || se.Code != "conflict" || se.Message != "solicitud en progreso" {
+		t.Fatalf("esperaba conflict/solicitud en progreso, got %v", err)
 	}
 	if driveMock.FileCount() != beforeFiles {
 		t.Fatal("la solicitud rechazada por in-flight no debe tener efectos")
@@ -183,49 +194,6 @@ func TestUpdateIdempotencyInFlightRejectsConcurrent(t *testing.T) {
 	stored, _ := noteStore.GetByID(ctx, note.ID)
 	if stored.Title != "In-flight update" {
 		t.Fatalf("PG no debe mutar con in-flight vigente, got %q", stored.Title)
-	}
-}
-
-// --- idemStore: límite de entradas y purga por TTL ---
-
-// storeIdemEntry impone maxIdemEntries: al alcanzar el tope purga las entradas
-// vencidas por TTL y solo entonces admite la nueva clave, de modo que el caché
-// no crece sin límite.
-func TestIdemCacheMaxEntriesPurgesExpired(t *testing.T) {
-	svc, _, _, _, _, _, _, _ := newTestService()
-	// Llenar el caché con maxIdemEntries claves vivas.
-	for i := 0; i < maxIdemEntries; i++ {
-		k := fmt.Sprintf("spec-cache-%05d", i)
-		svc.storeIdemEntry(idemKey("create", k), &idemEntry{status: idemInFlight, createdAt: time.Now()})
-	}
-	svc.idemMu.RLock()
-	if got := len(svc.idemStore); got != maxIdemEntries {
-		svc.idemMu.RUnlock()
-		t.Fatalf("tras llenar debe haber exactamente %d claves, got %d", maxIdemEntries, got)
-	}
-	svc.idemMu.RUnlock()
-
-	// Envejecer la primera clave (in-flight con 3 min de antigüedad vence su
-	// TTL de 2 min) manteniendo el conteo en el tope.
-	expiredKey := idemKey("create", "spec-cache-00000")
-	svc.storeIdemEntry(expiredKey, &idemEntry{status: idemInFlight, createdAt: time.Now().Add(-3 * time.Minute)})
-
-	// Insertar una clave nueva: dispara la purga de la vencida y admite la nueva.
-	newKey := idemKey("create", "spec-cache-50000")
-	svc.storeIdemEntry(newKey, &idemEntry{status: idemInFlight, createdAt: time.Now()})
-	if _, loaded := idemEntryStored(svc, expiredKey); loaded {
-		t.Fatal("la entrada vencida por TTL debe purgarse al llegar al tope")
-	}
-	if entry, loaded := idemEntryStored(svc, newKey); !loaded || entry == nil {
-		t.Fatal("la clave nueva debe insertarse tras la purga")
-	}
-	svc.idemMu.RLock()
-	defer svc.idemMu.RUnlock()
-	if got := len(svc.idemStore); got > maxIdemEntries {
-		t.Fatalf("el caché no puede superar maxIdemEntries, got %d", got)
-	}
-	if got := len(svc.idemStore); got != maxIdemEntries {
-		t.Fatalf("se debe haber purgado una vencida y admitido una nueva (%d claves)", got)
 	}
 }
 
@@ -246,9 +214,7 @@ func (c *countingNoteStore) Delete(ctx context.Context, id string) error {
 	return c.MemoryNoteStore.Delete(ctx, id)
 }
 
-// Ejecuciones concurrentes del job de reconciliación deben serializarse con
-// reconcileMu: con N goroutines simultáneas, la nota pendiente antigua se
-// compensa exactamente una vez y ninguna goroutine queda bloqueada.
+// Concurrent reconciliation preserves valid empty Markdown and repairs status.
 func TestReconcilePendingNotesConcurrentSerializedByMutex(t *testing.T) {
 	driveMock := drive.NewMockClient()
 	base := &countingNoteStore{MemoryNoteStore: NewMemoryNoteStore()}
@@ -258,10 +224,9 @@ func TestReconcilePendingNotesConcurrentSerializedByMutex(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.NewString()
 
-	// Contenido vacío: la verificación previa en Drive no encuentra datos que
-	// preservar, por lo que la nota antigua sí se compensa exactamente una vez.
-	fileID, _ := driveMock.CreateFile(ctx, userID, "concurrent.md", "")
-	n, err := base.Create(ctx, userID, nil, "concurrent", &fileID, "private", nil, "pending_drive")
+	// Empty Markdown is a valid note and must never trigger compensation.
+	fileID, _ := driveMock.CreateFile(ctx, userID, "", "concurrent.md", "")
+	n, err := base.Create(ctx, "", userID, nil, "concurrent", &fileID, "private", nil, "pending_drive")
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -287,15 +252,15 @@ func TestReconcilePendingNotesConcurrentSerializedByMutex(t *testing.T) {
 			t.Fatalf("reconcile %d falló: %v", i, e)
 		}
 	}
-	if got, _ := base.GetByID(ctx, n.ID); got != nil {
-		t.Fatal("la nota pendiente antigua debe haberse compensado")
+	if got, _ := base.GetByID(ctx, n.ID); got == nil || got.SyncStatus != "synced" {
+		t.Fatal("empty Markdown must survive and become synced")
 	}
-	if driveMock.HasFile(fileID) {
-		t.Fatal("el huérfano de Drive debe eliminarse al compensar")
+	if !driveMock.HasFile(fileID) {
+		t.Fatal("empty Markdown file must survive reconciliation")
 	}
 	base.mu.Lock()
 	defer base.mu.Unlock()
-	if base.deletes != 1 {
-		t.Fatalf("con reconcileMu la nota debe borrarse exactamente una vez, got %d", base.deletes)
+	if base.deletes != 0 {
+		t.Fatalf("empty Markdown must never be deleted, got %d deletes", base.deletes)
 	}
 }

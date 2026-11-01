@@ -113,6 +113,24 @@ func TestCalendarToken_Vencido_RefrescaYActualiza(t *testing.T) {
 	}
 }
 
+func TestCalendarStatus_Desconectado(t *testing.T) {
+	svc := NewCalendarOAuthService(&mockCalendarRepo{}, &mockCalendarProvider{})
+	st, err := svc.GetCalendarConnectionStatus(context.Background(), "user-1")
+	if err != nil || st.Connected {
+		t.Fatalf("desconectado esperado, got %+v, %v", st, err)
+	}
+}
+
+func TestCalendarStatus_Conectado_ConEmail(t *testing.T) {
+	email := "cal@gmail.com"
+	repo := &mockCalendarRepo{conn: &model.OAuthConnection{AccessToken: "acc", ExternalAccountEmail: &email}}
+	svc := NewCalendarOAuthService(repo, &mockCalendarProvider{})
+	st, err := svc.GetCalendarConnectionStatus(context.Background(), "user-1")
+	if err != nil || !st.Connected || st.ExternalEmail == nil || *st.ExternalEmail != email {
+		t.Fatalf("conectado+email esperados, got %+v, %v", st, err)
+	}
+}
+
 func TestCalendarToken_RefreshInvalido_MarcaRevocado(t *testing.T) {
 	exp := time.Now().Add(-1 * time.Hour)
 	rt := "refresh-malo"

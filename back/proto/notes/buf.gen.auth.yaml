@@ -1,0 +1,15 @@
+# Copy of the Notes client stubs for Identity. Services keep local generated
+# code so their Go modules and deployment images remain independent.
+version: v2
+managed:
+  enabled: true
+  override:
+    - file_option: go_package
+      value: github.com/kurovoxx/tallerintegracion3/back/auth/internal/gen/notesv1;notesv1
+plugins:
+  - local: protoc-gen-go
+    out: ../../auth
+    opt: module=github.com/kurovoxx/tallerintegracion3/back/auth
+  - local: protoc-gen-go-grpc
+    out: ../../auth
+    opt: module=github.com/kurovoxx/tallerintegracion3/back/auth

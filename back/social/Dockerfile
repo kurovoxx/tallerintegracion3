@@ -11,6 +11,6 @@ FROM alpine:3.19
 RUN apk --no-cache add ca-certificates tzdata
 WORKDIR /app
 COPY --from=builder /social-server .
-EXPOSE 8083
+EXPOSE 8083 9083
 ENV PORT=8083
 CMD ["./social-server"]

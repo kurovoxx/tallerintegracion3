@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -13,11 +14,18 @@ import (
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/calendar"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/config"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/discord"
+	identityv1 "github.com/kurovoxx/tallerintegracion3/back/social/internal/gen/identityv1"
+	socialv1 "github.com/kurovoxx/tallerintegracion3/back/social/internal/gen/socialv1"
+	grpcHandler "github.com/kurovoxx/tallerintegracion3/back/social/internal/handler/grpc"
 	httpHandler "github.com/kurovoxx/tallerintegracion3/back/social/internal/handler/http"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/identity"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/interceptor"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/mail"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/middleware"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/service"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/stream"
+	"google.golang.org/grpc"
 )
 
 func corsMiddleware() gin.HandlerFunc {
@@ -57,14 +65,43 @@ func main() {
 	} else {
 		log.Printf("DB check: social.groups count=%d", cnt)
 	}
+	// Sin estas tablas el gate rechaza toda petición autenticada (503) y el
+	// borrado de cuenta queda pending para siempre: mejor no arrancar.
+	if err := repository.VerifyAccountDeletionSchema(ctx, pool); err != nil {
+		log.Fatalf("%v", err)
+	}
 
 	runServer(pool, cfg)
 }
 
 func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	groupRepo := repository.NewGroupRepository(pool)
+	deletionRepo := repository.NewAccountDeletionRepository(pool)
+	defer deletionRepo.Close()
+	deletionSvc, err := service.NewAccountDeletionService(deletionRepo, cfg.NotesGRPCAddr, cfg.InternalKey)
+	if err != nil {
+		log.Fatalf("notes account deletion gRPC: %v", err)
+	}
+	defer deletionSvc.Close()
+	chatClient := streamClientFor(cfg)
+	deletionSvc.SetChatMembership(chatClient)
 	streamRepo := repository.NewStreamRepository(pool)
 	groupSvc := service.NewGroupService(groupRepo, streamNotifierFor(cfg, streamRepo))
+	groupSvc.SetAccountTargetGate(deletionRepo)
+	// Salir/expulsar/banear/borrar cuenta quita al usuario del canal Stream.
+	groupSvc.SetChatMembership(chatClient)
+	// Cliente Identity por gRPC con conexión compartida (directorio y
+	// Calendar). La conexión es perezosa: Auth caído no impide arrancar;
+	// cada operación falla controlada y se recupera solo al volver Auth.
+	// Vive lo que el proceso (Close idempotente al salir).
+	identityConn, err := identity.DialConn(cfg.IdentityGRPCAddr)
+	if err != nil {
+		log.Fatalf("identity grpc: dirección inválida %q: %v", cfg.IdentityGRPCAddr, err)
+	}
+	defer identityConn.Close()
+	// Directorio Identity por gRPC para nombres en GET /groups/{id}/members
+	// (best-effort: sin Auth responde solo IDs, sin romper).
+	groupSvc.SetUserDirectory(identity.NewGRPCUserDirectory(identity.NewGRPCClientWithConn(identityConn, cfg.InternalKey, 5*time.Second)))
 
 	todoRepo := repository.NewTodoRepository(pool)
 	todoSvc := service.NewTodoService(todoRepo)
@@ -84,19 +121,52 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	discordH := httpHandler.NewDiscordHandler(discordSvc)
 	meetingSvc := service.NewMeetingService(meetingRepo,
 		service.NewMultiMeetingNotifier(
-			calendarNotifierFor(cfg, meetingRepo),
+			calendarNotifierFor(cfg, meetingRepo, identityConn),
 			service.NewDiscordMeetingNotifier(discordRepo, discord.NewWebhookClient()),
 			service.NewStreamMessageNotifier(streamRepo, streamClientFor(cfg)),
+			service.NewMeetingMailNotifier(meetingRepo, newMeetingMailer(cfg)),
 		))
 	meetingH := httpHandler.NewMeetingHandler(meetingSvc)
+	notifH := httpHandler.NewNotificationHandler(service.NewNotificationService(meetingRepo))
+
+	streamTokenSvc := service.NewStreamTokenServiceWithKey(streamRepo, cfg.StreamSecret, cfg.StreamAPIKey)
+	// Sincronización server-side de membresía del canal al emitir tokens:
+	// MockClient en modo mock (sin red), RESTClient en modo real.
+	streamTokenSvc.SetClient(streamClientFor(cfg))
+	streamH := httpHandler.NewStreamHandler(streamTokenSvc)
+
+	startGRPC(groupSvc, deletionSvc, cfg)
 
 	viewSvc := service.NewViewService(groupSvc, todoSvc, sprintSvc, meetingSvc)
 	viewH := httpHandler.NewViewHandler(groupSvc, viewSvc)
 
-	startGin(groupSvc, todoH, sprintH, hoursH, meetingH, discordH, viewH, pool, cfg)
+	startGin(groupSvc, todoH, sprintH, hoursH, meetingH, notifH, discordH, viewH, streamH, deletionRepo, pool, cfg)
 }
 
-func calendarNotifierFor(cfg *config.Config, meetingRepo *repository.MeetingRepository) service.MeetingCreatedNotifier {
+// startGRPC sirve SocialService (membresía/admin/limpieza) para Notes e
+// Identity. Logging va afuera para auditar también los rechazos de clave.
+func startGRPC(groupSvc *service.GroupService, deletionSvc *service.AccountDeletionService, cfg *config.Config) {
+	if cfg.InternalKey == "" {
+		log.Printf("gRPC social: INTERNAL_API_KEY vacía, todas las llamadas fallarán (fail-closed)")
+	}
+	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
+	if err != nil {
+		log.Fatalf("Error gRPC (puerto %s ocupado?): %v", cfg.GRPCPort, err)
+	}
+	s := grpc.NewServer(grpc.ChainUnaryInterceptor(
+		interceptor.NewLogging(log.Default()),
+		interceptor.NewInternalAuth(cfg.InternalKey),
+	))
+	socialv1.RegisterSocialServiceServer(s, grpcHandler.NewSocialServer(groupSvc, deletionSvc))
+	go func() {
+		log.Printf("Servidor gRPC de Social en :%s", cfg.GRPCPort)
+		if err := s.Serve(lis); err != nil {
+			log.Printf("gRPC detenido: %v", err)
+		}
+	}()
+}
+
+func calendarNotifierFor(cfg *config.Config, meetingRepo *repository.MeetingRepository, identityConn *grpc.ClientConn) service.MeetingCreatedNotifier {
 	// CALENDAR_MODE=mock (default): sync simulado, sin llamar a Google ni a Auth.
 	// Persiste un google_calendar_event_id falso para verificar el cableado E2E.
 	if strings.ToLower(strings.TrimSpace(cfg.CalendarMode)) != "real" {
@@ -107,13 +177,32 @@ func calendarNotifierFor(cfg *config.Config, meetingRepo *repository.MeetingRepo
 			meetingRepo,
 		)
 	}
-	// CALENDAR_MODE=real: token vía Auth interno + API REST de Google.
-	log.Printf("calendar sync: modo real contra Auth %s", cfg.AuthBaseURL)
+	// CALENDAR_MODE=real: token vía Auth gRPC + API REST de Google.
+	// Sin validación bloqueante: si Auth está caído al arrancar, Social igual
+	// inicia y cada operación falla controlada (Unavailable) hasta que Auth
+	// vuelve, gracias a la conexión perezosa. La distinción revocación vs
+	// clave mala se hace por mensaje de dominio en el gateway, no al arrancar.
+	log.Printf("calendar sync: modo real contra Identity gRPC %s (degradable si Auth está caído)", cfg.IdentityGRPCAddr)
 	return service.NewCalendarMeetingNotifier(
-		&service.AuthCalendarGateway{BaseURL: cfg.AuthBaseURL, InternalKey: cfg.InternalKey},
+		&service.GRPCalendarGateway{Client: identityv1.NewIdentityServiceClient(identityConn), Key: cfg.InternalKey},
 		calendar.NewRESTClient(),
 		meetingRepo,
 	)
+}
+
+// newMeetingMailer arma el mailer de avisos (tarea 3_5_15, remitente noreply).
+// Sin SMTP configurado el notifier hace skip silencioso por reunión.
+func newMeetingMailer(cfg *config.Config) *mail.MeetingMailer {
+	m := &mail.MeetingMailer{
+		Host:     cfg.SMTPHost,
+		Port:     cfg.SMTPPort,
+		Username: cfg.SMTPUsername,
+		Password: cfg.SMTPPassword,
+	}
+	if !m.Ready() {
+		log.Printf("meeting mail: SMTP sin configurar, avisos por mail desactivados")
+	}
+	return m
 }
 
 func streamClientFor(cfg *config.Config) stream.Client {
@@ -139,13 +228,13 @@ func streamNotifierFor(cfg *config.Config, streamRepo *repository.StreamReposito
 	)
 }
 
-func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, meetingH *httpHandler.MeetingHandler, discordH *httpHandler.DiscordHandler, viewH *httpHandler.ViewHandler, pool *pgxpool.Pool, cfg *config.Config) {
+func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, meetingH *httpHandler.MeetingHandler, notifH *httpHandler.NotificationHandler, discordH *httpHandler.DiscordHandler, viewH *httpHandler.ViewHandler, streamH *httpHandler.StreamHandler, deletionGate middleware.AccountAccessGate, pool *pgxpool.Pool, cfg *config.Config) {
 	validator := &middleware.SimpleHS256Validator{
 		Secret:   []byte(cfg.JWTSecret),
 		Issuer:   "apuntes-auth",
 		Audience: "apuntes-client",
 	}
-	authMw := middleware.NewAuthMiddleware(validator)
+	authMw := middleware.NewAuthMiddleware(validator, deletionGate)
 	groupHandler := httpHandler.NewGroupHandler(groupSvc)
 
 	r := gin.Default()
@@ -187,16 +276,34 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 
 		protected.POST("/groups/:id/todo", todoH.CreateTodo)
 		protected.GET("/groups/:id/todo", todoH.ListTodos)
-		protected.PATCH("/groups/:id/todo", todoH.UpdateTodo)
-		protected.DELETE("/groups/:id/todo", todoH.DeleteTodo)
+		protected.PATCH("/groups/:id/todo/:taskId", todoH.UpdateTodo)
+		protected.DELETE("/groups/:id/todo/:taskId", todoH.DeleteTodo)
+		protected.GET("/groups/:id/sprint-sheets", sprintH.ListSheets)
+		protected.POST("/groups/:id/sprint-sheets", sprintH.CreateSheet)
+		protected.PATCH("/groups/:id/sprint-sheets/:sheetId", sprintH.UpdateSheet)
+		protected.DELETE("/groups/:id/sprint-sheets/:sheetId", sprintH.DeleteSheet)
 		protected.POST("/groups/:id/sprint-sheet", sprintH.CreateSprintTask)
 		protected.GET("/groups/:id/sprint-sheet", sprintH.ListSprintTasks)
-		protected.PATCH("/groups/:id/sprint-sheet", sprintH.UpdateSprintTask)
-		protected.DELETE("/groups/:id/sprint-sheet", sprintH.DeleteSprintTask)
+		protected.PATCH("/groups/:id/sprint-sheet/:taskId", sprintH.UpdateSprintTask)
+		protected.DELETE("/groups/:id/sprint-sheet/:taskId", sprintH.DeleteSprintTask)
 		protected.POST("/sprint-sheet/:taskId/hours", hoursH.LogHours)
 		protected.GET("/sprint-sheet/:taskId/hours", hoursH.ListHours)
 		protected.POST("/groups/:id/meetings", meetingH.CreateMeeting)
+		protected.GET("/groups/:id/meetings", meetingH.ListMeetings)
+		protected.GET("/notifications/me", notifH.ListMine)
+		protected.POST("/notifications/:id/read", notifH.MarkRead)
+		protected.GET("/groups/:id/stream-token", streamH.Token)
 		discordH.RegisterRoutes(protected)
+	}
+
+	// Interno servicio-a-servicio (Notes → Social): secreto compartido, sin JWT.
+	// Tarea 3_5_4: checks is_admin/member + member-emails para share.
+	internalH := httpHandler.NewInternalHandler(groupSvc)
+	internal := r.Group("/internal")
+	internal.Use(middleware.RequireInternalKey(cfg.InternalKey))
+	{
+		internal.GET("/groups/:id/members", internalH.Members)
+		internal.GET("/groups/:id/member-emails", internalH.MemberEmails)
 	}
 
 	addr := ":" + cfg.Port

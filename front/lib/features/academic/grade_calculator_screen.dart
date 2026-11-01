@@ -1,4 +1,3 @@
-
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -6,8 +5,12 @@ import 'package:flutter/services.dart';
 
 import '../../core/common_widgets.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/neobrutalism.dart';
+import 'academic_api.dart';
+import 'academic_mappers.dart';
+import 'academic_models.dart';
 
-enum _ResultState { none, success, invalid }
+enum _ResultState { none, success, reached, invalid }
 
 const double _passingGrade = 4.0;
 
@@ -52,16 +55,21 @@ double? _computedParentNote(_GradeItem parent) {
 final RegExp _numberRegex = RegExp(r'^\d{0,3}([.,]\d{0,2})?$');
 
 class _GradeItem {
-  _GradeItem({
-    required this.id,
-  })  : scoreController = TextEditingController(),
-        weightController = TextEditingController(),
-        children = [];
+  _GradeItem({required this.id})
+    : scoreController = TextEditingController(),
+      weightController = TextEditingController(),
+      children = [];
 
   final String id;
   final TextEditingController scoreController;
   final TextEditingController weightController;
   List<_GradeItem> children;
+
+  /// Nivel de confianza 1/2/3 (default 2 = Media) para el reparto.
+  int confidence = 2;
+
+  /// Nombre backend preservado al hidratar (para guardar sin renombrar).
+  String? backendName;
 
   bool get isSubdivided => children.isNotEmpty;
 
@@ -86,24 +94,52 @@ class _CalcEntry {
   final double weight;
 }
 
+/// Hoja para el reparto por confianza (tops simples, examen/final o hijas).
+class _ConfidenceLeaf {
+  const _ConfidenceLeaf({required this.item, required this.entry});
+
+  final _GradeItem item;
+  final ConfidenceEntry entry;
+}
+
 class GradeCalculatorScreen extends StatefulWidget {
-  const GradeCalculatorScreen({super.key});
+  const GradeCalculatorScreen({
+    super.key,
+    this.initialCourse,
+    this.embedded = false,
+    this.onSaved,
+  });
+
+  /// Curso preseleccionado (UX materiales: materia de la ventana).
+  /// Si no está en la lista, se antepone.
+  final String? initialCourse;
+
+  /// Embebida en otra ventana (sin Scaffold/scroll/header propios:
+  /// los provee el padre).
+  final bool embedded;
+
+  /// Se invoca tras un guardado backend exitoso (sin fallos parciales)
+  /// para que el padre recargue IDs vivos (rename sobre IDs nuevos).
+  final VoidCallback? onSaved;
 
   @override
   State<GradeCalculatorScreen> createState() => _GradeCalculatorScreenState();
 }
 
 class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
-  final List<String> _courses = const [
+  static const List<String> _baseCourses = [
     'Cálculo III',
     'Estructuras de Datos',
     'Física General II',
     'Ingeniería de Software',
   ];
 
+  late final List<String> _courses;
+
   late String _selectedCourse;
-  final TextEditingController _targetController =
-      TextEditingController(text: '4.0');
+  final TextEditingController _targetController = TextEditingController(
+    text: '4.0',
+  );
 
   /// Estado para modo normal.
   List<_GradeItem> _normalGrades = [];
@@ -120,11 +156,41 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
   double? _neededPendingGrade;
   bool _isReachable = true;
 
+  /// Fill-back de la calculadora con confianza: ids con nota auto-calculada
+  /// + si con ellas se alcanza el objetivo (verde) o no (rojo). Se limpian
+  /// al editar (vuelven a negro) vía [_resetResult].
+  final Set<String> _calculatedIds = {};
+  bool _calcReached = true;
+
+  // Backend Academic: con sesión se hidratan las notas (GET anidados +
+  // average) y se persiste el árbol (fan-out de hijas); sin sesión rige
+  // el estado local.
+  final AcademicApi _academicApi = AcademicApi();
+  bool _backendMode = false;
+  String? _backendSubjectId;
+  double? _backendAverage;
+  String? _backendAverageStatus;
+  String? _backendError;
+  bool _isSavingBackend = false;
+  bool _isReloading = false;
+  bool _loadedFromBackend = false;
+
   @override
   void initState() {
     super.initState();
-    _selectedCourse = _courses.first;
+    final initial = widget.initialCourse?.trim();
+    if (initial != null &&
+        initial.isNotEmpty &&
+        !_baseCourses.contains(initial)) {
+      _courses = [initial, ..._baseCourses];
+    } else {
+      _courses = List<String>.of(_baseCourses);
+    }
+    _selectedCourse = (initial != null && initial.isNotEmpty)
+        ? initial
+        : _courses.first;
     _initializeNormalGrades();
+    _loadFromBackend();
   }
 
   @override
@@ -133,6 +199,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     _disposeNormalGrades();
     _finalGrade?.dispose();
     _exam?.dispose();
+    _academicApi.dispose();
     super.dispose();
   }
 
@@ -162,11 +229,32 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     _average = null;
     _neededPendingGrade = null;
     _isReachable = true;
+    _calculatedIds.clear();
+    _calcReached = true;
+  }
+
+  /// Confianza 1/2/3: invalida el resultado (limpia fill verde/rojo).
+  void _changeConfidence(_GradeItem item, int value) {
+    if (value < 1 || value > 3 || item.confidence == value) return;
+    setState(() {
+      item.confidence = value;
+      _resetResult();
+    });
+  }
+
+  Color _scoreColor(String id) {
+    if (!_calculatedIds.contains(id)) return AppColors.text;
+    return _calcReached ? AppColors.successDeep : AppColors.error;
+  }
+
+  String _formatCalc(double v) {
+    return roundHalfUp(v, 1).toStringAsFixed(1);
   }
 
   void _resetCalculator() {
     setState(() {
       _resetResult();
+      _loadedFromBackend = false;
 
       if (_finalExamMode) {
         _finalGrade?.dispose();
@@ -179,15 +267,474 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     });
   }
 
-  _GradeItem _newItem(
-    String id, {
-    double? weight,
-  }) {
+  _GradeItem _newItem(String id, {double? weight}) {
     final item = _GradeItem(id: id);
     if (weight != null) {
       item.weightController.text = _formatWeight(weight);
     }
     return item;
+  }
+
+  // ---------------------------------------------------------------------
+  // BACKEND (hidratar + persistir)
+  // ---------------------------------------------------------------------
+
+  /// Curso visible -> materia backend (match por nombre, insensible a caso).
+  AcademicSubject? _matchSubject(
+    List<AcademicSubject> subjects,
+    String course,
+  ) {
+    final want = course.trim().toLowerCase();
+    for (final s in subjects) {
+      if (s.name.trim().toLowerCase() == want) return s;
+    }
+    for (final s in subjects) {
+      final name = s.name.trim().toLowerCase();
+      if (name.contains(want) || want.contains(name)) return s;
+    }
+    return null;
+  }
+
+  String _formatScore(double v) {
+    if (v == v.roundToDouble()) return v.toStringAsFixed(0);
+    return v.toStringAsFixed(1);
+  }
+
+  _GradeItem _itemFromGrade(AcademicGrade g, String id) {
+    final item = _GradeItem(id: id)..backendName = g.name;
+    final ui = gradeRawToUi(g.score);
+    if (ui != null) item.scoreController.text = _formatScore(ui);
+    item.weightController.text = _formatWeight(fractionToPercent(g.weight));
+    return item;
+  }
+
+  /// Hidrata el estado desde GET grades anidados + average. Sin match o sin
+  /// sesión: modo local (comportamiento previo).
+  ///
+  /// Con [manual] (botón "Cargar Notas" en embebida): recarga bajo demanda
+  /// que descarta cambios locales; reutiliza el mismo path post-guardado
+  /// (entries + lista + promedio vía `onSaved`). Vacío backend → SnackBar
+  /// [reloadEmptyMessage] sin tocar lo local. Error (sin sesión/red) →
+  /// error visible + SnackBar (el botón reintenta, patrón existente).
+  Future<void> _loadFromBackend({bool manual = false}) async {
+    if (manual) {
+      if (_isReloading) return;
+      setState(() {
+        _isReloading = true;
+      });
+    }
+    AcademicSubject? match;
+    List<AcademicGradeNode> nodes = const [];
+    AcademicAverage? avg;
+    try {
+      final malla = await _academicApi.ensureCurriculum();
+      final subjects = await _academicApi.listSubjects(malla.id);
+      match = _matchSubject(subjects, _selectedCourse);
+      if (match == null) {
+        if (!mounted) return;
+        if (manual) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(reloadEmptyMessage),
+              backgroundColor: AppColors.border,
+            ),
+          );
+          return;
+        }
+        setState(() {
+          _backendMode = false;
+          _backendSubjectId = null;
+          _backendAverage = null;
+          _backendAverageStatus = null;
+          _backendError = null;
+        });
+        return;
+      }
+      nodes = await _academicApi.listGrades(match.id);
+      try {
+        avg = await _academicApi.getAverage(match.id);
+      } catch (_) {
+        avg = null;
+      }
+    } on AcademicApiException catch (e) {
+      if (!mounted) return;
+      if (manual) {
+        setState(() {
+          _backendMode = false;
+          _backendSubjectId = null;
+          _backendAverage = null;
+          _backendAverageStatus = null;
+          _backendError = e.message;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message), backgroundColor: AppColors.border),
+        );
+        return;
+      }
+      setState(() {
+        _backendMode = false;
+        _backendSubjectId = null;
+        _backendAverage = null;
+        _backendAverageStatus = null;
+        // Sin sesión es el modo local esperado: sin error visible.
+        _backendError = e.code == 'no_session' ? null : e.message;
+      });
+      return;
+    } finally {
+      if (manual && mounted) {
+        setState(() {
+          _isReloading = false;
+        });
+      }
+    }
+    if (!mounted) return;
+    if (manual) {
+      if (!hasSavedNotes(nodes)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(reloadEmptyMessage),
+            backgroundColor: AppColors.border,
+          ),
+        );
+        return;
+      }
+      final subjectId = match.id;
+      final average = avg;
+      setState(() {
+        _resetResult();
+        _disposeNormalGrades();
+        _normalGrades = nodes.map((n) {
+          final item = _itemFromGrade(n.grade, 'backend-${n.grade.id}');
+          item.children = n.children
+              .map((c) => _itemFromGrade(c, 'backend-${c.id}'))
+              .toList();
+          return item;
+        }).toList();
+        if (_normalGrades.isEmpty) _initializeNormalGrades();
+        _backendMode = true;
+        _backendSubjectId = subjectId;
+        _backendAverage = average?.average;
+        _backendAverageStatus = average?.status;
+        _backendError = null;
+        _loadedFromBackend = true;
+      });
+      // Mismo path post-guardado: recarga lista + promedio en el padre para
+      // no desincronizar (recarga fresca, sin duplicados ni IDs viejos).
+      final cb = widget.onSaved;
+      if (cb != null) cb();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(reloadSuccessMessage),
+          backgroundColor: AppColors.border,
+        ),
+      );
+      return;
+    }
+    setState(() {
+      _resetResult();
+      _disposeNormalGrades();
+      _normalGrades = nodes.map((n) {
+        final item = _itemFromGrade(n.grade, 'backend-${n.grade.id}');
+        item.children = n.children
+            .map((c) => _itemFromGrade(c, 'backend-${c.id}'))
+            .toList();
+        return item;
+      }).toList();
+      if (_normalGrades.isEmpty) _initializeNormalGrades();
+      _backendMode = true;
+      _backendSubjectId = match!.id;
+      _backendAverage = avg?.average;
+      _backendAverageStatus = avg?.status;
+      _backendError = null;
+    });
+  }
+
+  /// Estado local -> borradores (pesos %→fracción, notas UI→10–70).
+  /// Omite filas totalmente vacías (sin nota, sin peso y sin hijas).
+  List<GradeDraft> _normalDrafts() {
+    final out = <GradeDraft>[];
+    for (var i = 0; i < _normalGrades.length; i++) {
+      final item = _normalGrades[i];
+      final score = gradeUiToRaw(_parseNumber(item.scoreController.text));
+      final weight = percentToFraction(_readWeight(item)) ?? 0;
+      final children = <GradeDraft>[];
+      for (var j = 0; j < item.children.length; j++) {
+        final ch = item.children[j];
+        final cs = gradeUiToRaw(_parseNumber(ch.scoreController.text));
+        final cw = percentToFraction(_readWeight(ch)) ?? 0;
+        if (cs == null && cw == 0) continue;
+        children.add(
+          GradeDraft(
+            name: ch.backendName ?? 'SUBNOTA ${j + 1}',
+            score: cs,
+            weight: cw,
+            status: cs != null ? 'graded' : 'pending',
+          ),
+        );
+      }
+      if (score == null && weight == 0 && children.isEmpty) continue;
+      out.add(
+        GradeDraft(
+          name: item.backendName ?? 'NOTA ${i + 1}',
+          score: score,
+          weight: weight,
+          status: score != null ? 'graded' : 'pending',
+          children: children,
+        ),
+      );
+    }
+    return out;
+  }
+
+  /// Persiste el árbol (borra y recrea con fan-out de hijas). Reintentable
+  /// sin duplicar.
+  Future<void> _saveToBackend() async {
+    final subjectId = _backendSubjectId;
+    if (!_backendMode || subjectId == null || _isSavingBackend) return;
+    setState(() {
+      _isSavingBackend = true;
+      _backendError = null;
+    });
+    try {
+      final List<GradeDraft> tops;
+      if (_finalExamMode && _finalGrade != null && _exam != null) {
+        final fs = gradeUiToRaw(
+          _parseNumber(_finalGrade!.scoreController.text),
+        );
+        final es = gradeUiToRaw(_parseNumber(_exam!.scoreController.text));
+        tops = [
+          GradeDraft(
+            name: _finalGrade!.backendName ?? 'Final',
+            score: fs,
+            weight: (percentToFraction(_readWeight(_finalGrade!)) ?? 0.7),
+            status: fs != null ? 'graded' : 'pending',
+          ),
+          GradeDraft(
+            name: _exam!.backendName ?? 'Examen',
+            score: es,
+            weight: (percentToFraction(_readWeight(_exam!)) ?? 0.3),
+            status: es != null ? 'graded' : 'pending',
+            isFinalExam: true,
+          ),
+        ];
+      } else {
+        tops = _normalDrafts();
+      }
+      final res = await _academicApi.saveGradeTree(
+        subjectId: subjectId,
+        tops: tops,
+      );
+      AcademicAverage? avg;
+      try {
+        avg = await _academicApi.getAverage(subjectId);
+      } catch (_) {
+        avg = null;
+      }
+      if (!mounted) return;
+      setState(() {
+        _backendAverage = avg?.average;
+        _backendAverageStatus = avg?.status;
+      });
+      final problems = [
+        ...res.failedTops.entries.map((e) => '${e.key}: ${e.value}'),
+        ...res.failedChildren.entries.map((e) => '${e.key}: ${e.value}'),
+        if (res.deleteError != null) 'borrado: ${res.deleteError}',
+      ];
+      final cb = widget.onSaved;
+      if (problems.isEmpty && cb != null) cb();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            problems.isEmpty
+                ? 'Notas guardadas correctamente'
+                : 'Guardado parcial: ${problems.join(' · ')}',
+          ),
+          backgroundColor: AppColors.border,
+        ),
+      );
+    } on AcademicApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _backendError = e.message);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('No se pudo guardar: ${e.message}'),
+          backgroundColor: AppColors.border,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isSavingBackend = false);
+    }
+  }
+
+  /// Recordatorio compacto: todo lo de esta sección es simulación local.
+  Widget _buildSimulatorNotice() {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const NeobrutalistBadge(
+          label: 'Simulación',
+          tone: NeobrutalistTone.info,
+          compact: true,
+        ),
+        const SizedBox(width: AppDimens.spaceSm),
+        const Expanded(
+          child: Text(
+            'Prueba escenarios aquí. Nada se guarda como nota oficial hasta que uses Guardar.',
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 11.5,
+              color: AppColors.mutedStrong,
+              height: 1.3,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Estado de la fuente oficial. En la versión embebida el promedio oficial
+  /// ya lo muestra el encabezado de la pestaña, así que aquí solo se muestran
+  /// errores (evita duplicar el mismo valor).
+  Widget _buildSourceStatus() {
+    if (_backendError != null) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: AppDimens.spaceMd),
+        child: Text(
+          'No se pudieron cargar tus notas oficiales: $_backendError',
+          style: const TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 11.5,
+            color: AppColors.errorDeep,
+          ),
+        ),
+      );
+    }
+    if (widget.embedded) return const SizedBox.shrink();
+    final value = _backendAverage;
+    if (value == null) {
+      if (!_backendMode) return const SizedBox.shrink();
+      return const Padding(
+        padding: EdgeInsets.only(bottom: AppDimens.spaceMd),
+        child: Text(
+          'SIN NOTAS OFICIALES REGISTRADAS',
+          style: TextStyle(
+            fontWeight: FontWeight.w900,
+            fontSize: 11,
+            letterSpacing: 0.4,
+            color: AppColors.mutedStrong,
+          ),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppDimens.spaceMd),
+      child: Row(
+        children: [
+          NeobrutalistBadge(
+            label: 'Promedio oficial ${value.toStringAsFixed(1)}',
+            tone: NeobrutalistTone.accent,
+            icon: Icons.fact_check_rounded,
+          ),
+          if (_backendAverageStatus != null) ...[
+            const SizedBox(width: AppDimens.spaceSm),
+            NeobrutalistBadge(
+              label: _formatAverageStatus(_backendAverageStatus!),
+              tone: NeobrutalistTone.neutral,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Traduce estados del backend a etiquetas comprensibles.
+  String _formatAverageStatus(String raw) {
+    final key = raw.trim().toLowerCase();
+    return switch (key) {
+      'approved' || 'aprobado' => 'Aprobado',
+      'in_progress' || 'en curso' || 'cursando' => 'En curso',
+      'pending' || 'pendiente' => 'Pendiente',
+      'failed' || 'reprobado' => 'Reprobado',
+      _ => raw,
+    };
+  }
+
+  /// Aviso al cargar notas oficiales: son copias editables para simular.
+  Widget _buildEditableCopyNotice() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: AppDimens.spaceMd),
+      padding: const EdgeInsets.all(AppDimens.spaceMd),
+      decoration: BoxDecoration(
+        color: AppColors.accentYellow,
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+      ),
+      child: const Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.content_copy_rounded, size: 18, color: AppColors.text),
+          SizedBox(width: AppDimens.spaceSm),
+          Expanded(
+            child: Text(
+              'Copias editables: estas notas se cargaron desde tus evaluaciones oficiales. Editarlas aquí solo afecta la simulación; no se guardan hasta que uses Guardar.',
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w700,
+                color: AppColors.text,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Sección de resultado: visible de inmediato, con pista cuando aún no hay.
+  Widget _buildResultSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          'RESULTADO DE LA SIMULACIÓN',
+          style: TextStyle(
+            fontWeight: FontWeight.w900,
+            fontSize: 12,
+            letterSpacing: 0.6,
+            color: AppColors.text,
+          ),
+        ),
+        const SizedBox(height: AppDimens.spaceSm),
+        if (_resultState == _ResultState.none)
+          Container(
+            padding: const EdgeInsets.all(AppDimens.spaceLg),
+            decoration: BoxDecoration(
+              color: AppColors.surfaceLow,
+              border: Border.all(
+                color: AppColors.border,
+                width: AppDimens.borderWidth,
+              ),
+              borderRadius: BorderRadius.circular(AppDimens.radius),
+            ),
+            child: const Text(
+              'Completa tus notas y presiona Calcular para ver el resultado aquí.',
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 12,
+                color: AppColors.mutedStrong,
+                height: 1.35,
+              ),
+            ),
+          )
+        else
+          _buildResult(),
+      ],
+    );
   }
 
   // ---------------------------------------------------------------------
@@ -248,8 +795,14 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         final finalWeight = _readWeight(finalItem);
         final textF = _formatWeight(finalWeight);
         final textE = _formatWeight(100 - finalWeight);
-        finalItem.weightController.value = TextEditingValue(text: textF, selection: TextSelection.collapsed(offset: textF.length));
-        examItem.weightController.value = TextEditingValue(text: textE, selection: TextSelection.collapsed(offset: textE.length));
+        finalItem.weightController.value = TextEditingValue(
+          text: textF,
+          selection: TextSelection.collapsed(offset: textF.length),
+        );
+        examItem.weightController.value = TextEditingValue(
+          text: textE,
+          selection: TextSelection.collapsed(offset: textE.length),
+        );
       } finally {
         _isRedistributing = false;
       }
@@ -268,8 +821,14 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         final examWeight = _readWeight(examItem);
         final textE = _formatWeight(examWeight);
         final textF = _formatWeight(100 - examWeight);
-        examItem.weightController.value = TextEditingValue(text: textE, selection: TextSelection.collapsed(offset: textE.length));
-        finalItem.weightController.value = TextEditingValue(text: textF, selection: TextSelection.collapsed(offset: textF.length));
+        examItem.weightController.value = TextEditingValue(
+          text: textE,
+          selection: TextSelection.collapsed(offset: textE.length),
+        );
+        finalItem.weightController.value = TextEditingValue(
+          text: textF,
+          selection: TextSelection.collapsed(offset: textF.length),
+        );
       } finally {
         _isRedistributing = false;
       }
@@ -295,7 +854,10 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     try {
       final changedWeight = _readWeight(changed);
       final tChanged = _formatWeight(changedWeight);
-      changed.weightController.value = TextEditingValue(text: tChanged, selection: TextSelection.collapsed(offset: tChanged.length));
+      changed.weightController.value = TextEditingValue(
+        text: tChanged,
+        selection: TextSelection.collapsed(offset: tChanged.length),
+      );
 
       final otherGrades = _normalGrades
           .where((item) => item != changed)
@@ -312,13 +874,20 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         final equalWeight = remaining / otherGrades.length;
         for (final item in otherGrades) {
           final t = _formatWeight(equalWeight);
-          item.weightController.value = TextEditingValue(text: t, selection: TextSelection.collapsed(offset: t.length));
+          item.weightController.value = TextEditingValue(
+            text: t,
+            selection: TextSelection.collapsed(offset: t.length),
+          );
         }
       } else {
         for (final item in otherGrades) {
-          final proportionalWeight = remaining * _readWeight(item) / previousTotal;
+          final proportionalWeight =
+              remaining * _readWeight(item) / previousTotal;
           final t = _formatWeight(proportionalWeight);
-          item.weightController.value = TextEditingValue(text: t, selection: TextSelection.collapsed(offset: t.length));
+          item.weightController.value = TextEditingValue(
+            text: t,
+            selection: TextSelection.collapsed(offset: t.length),
+          );
         }
       }
     } finally {
@@ -335,7 +904,10 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       try {
         final changedWeight = _readWeight(changed);
         final tChanged = _formatWeight(changedWeight);
-        changed.weightController.value = TextEditingValue(text: tChanged, selection: TextSelection.collapsed(offset: tChanged.length));
+        changed.weightController.value = TextEditingValue(
+          text: tChanged,
+          selection: TextSelection.collapsed(offset: tChanged.length),
+        );
 
         final others = parent.children
             .where((item) => item != changed)
@@ -352,12 +924,20 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
           final equalWeight = remaining / others.length;
           for (final item in others) {
             final t = _formatWeight(equalWeight);
-            item.weightController.value = TextEditingValue(text: t, selection: TextSelection.collapsed(offset: t.length));
+            item.weightController.value = TextEditingValue(
+              text: t,
+              selection: TextSelection.collapsed(offset: t.length),
+            );
           }
         } else {
           for (final item in others) {
-            final t = _formatWeight(remaining * _readWeight(item) / previousTotal);
-            item.weightController.value = TextEditingValue(text: t, selection: TextSelection.collapsed(offset: t.length));
+            final t = _formatWeight(
+              remaining * _readWeight(item) / previousTotal,
+            );
+            item.weightController.value = TextEditingValue(
+              text: t,
+              selection: TextSelection.collapsed(offset: t.length),
+            );
           }
         }
       } finally {
@@ -408,14 +988,8 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     if (_finalExamMode || parent.isSubdivided) return;
 
     setState(() {
-      final firstChild = _newItem(
-        '${parent.id}-child-1',
-        weight: 50,
-      );
-      final secondChild = _newItem(
-        '${parent.id}-child-2',
-        weight: 50,
-      );
+      final firstChild = _newItem('${parent.id}-child-1', weight: 50);
+      final secondChild = _newItem('${parent.id}-child-2', weight: 50);
 
       parent.children = [firstChild, secondChild];
       _resetResult();
@@ -427,9 +1001,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
 
     setState(() {
       parent.children.add(
-        _newItem(
-          '${parent.id}-child-${DateTime.now().microsecondsSinceEpoch}',
-        ),
+        _newItem('${parent.id}-child-${DateTime.now().microsecondsSinceEpoch}'),
       );
 
       final equalWeight = 100 / parent.children.length;
@@ -468,14 +1040,32 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
   // CALCULATION
   // ---------------------------------------------------------------------
 
+  /// Notas crudas de todos los controladores (tops, hijas, examen/final)
+  /// para validar rango antes de aplanar/promediar.
+  List<double?> _rawScores() {
+    final out = <double?>[];
+    void collect(_GradeItem item) {
+      out.add(_parseNumber(item.scoreController.text));
+      for (final child in item.children) {
+        out.add(_parseNumber(child.scoreController.text));
+      }
+    }
+
+    if (_finalExamMode && _finalGrade != null && _exam != null) {
+      collect(_finalGrade!);
+      collect(_exam!);
+    } else {
+      for (final item in _normalGrades) {
+        collect(item);
+      }
+    }
+    return out;
+  }
+
   List<_CalcEntry> _buildEntries() {
     final entries = <_CalcEntry>[];
 
-    void flatten(
-      _GradeItem item,
-      String label,
-      double globalWeight,
-    ) {
+    void flatten(_GradeItem item, String label, double globalWeight) {
       if (item.isSubdivided) {
         var sumScore = 0.0;
         var sumWeight = 0.0;
@@ -520,10 +1110,58 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
   }
 
   double _totalWeight() {
-    return _buildEntries().fold<double>(
-      0,
-      (sum, entry) => sum + entry.weight,
-    );
+    return _buildEntries().fold<double>(0, (sum, entry) => sum + entry.weight);
+  }
+
+  /// Hojas para el reparto por confianza: tops simples, examen/final o
+  /// hijas con peso efectivo (padre × hija) antes del promedio al padre.
+  List<_ConfidenceLeaf> _buildConfidenceLeaves() {
+    final out = <_ConfidenceLeaf>[];
+    if (_finalExamMode && _finalGrade != null && _exam != null) {
+      for (final item in <_GradeItem>[_finalGrade!, _exam!]) {
+        out.add(
+          _ConfidenceLeaf(
+            item: item,
+            entry: ConfidenceEntry(
+              score: _parseNumber(item.scoreController.text),
+              weight: _readWeight(item) / 100,
+              confidence: item.confidence,
+            ),
+          ),
+        );
+      }
+      return out;
+    }
+    for (final top in _normalGrades) {
+      final parentFrac = _readWeight(top) / 100;
+      if (top.isSubdivided) {
+        for (final child in top.children) {
+          final eff = parentFrac * (_readWeight(child) / 100);
+          out.add(
+            _ConfidenceLeaf(
+              item: child,
+              entry: ConfidenceEntry(
+                score: _parseNumber(child.scoreController.text),
+                weight: eff,
+                confidence: child.confidence,
+              ),
+            ),
+          );
+        }
+      } else {
+        out.add(
+          _ConfidenceLeaf(
+            item: top,
+            entry: ConfidenceEntry(
+              score: _parseNumber(top.scoreController.text),
+              weight: parentFrac,
+              confidence: top.confidence,
+            ),
+          ),
+        );
+      }
+    }
+    return out;
   }
 
   void _calculate() {
@@ -541,34 +1179,78 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       return;
     }
 
-    final entries = _buildEntries();
-    final knownEntries = entries.where((entry) => entry.score != null);
-    final pendingEntries = entries.where(
-      (entry) => entry.score == null && entry.weight > 0,
-    );
-
-    double weightedKnown = 0;
-    for (final entry in knownEntries) {
-      weightedKnown += entry.score! * entry.weight;
+    // Toda nota conocida (tops, hijas, examen/final) en [1.0, 7.0].
+    // Se valida el input crudo: las hijas se promedian al aplanar y un 80
+    // podría esconderse en el promedio del padre.
+    if (!allScoresInRange(_rawScores())) {
+      _showError('Las notas deben estar entre 1.0 y 7.0.');
+      return;
     }
 
-    final pendingWeight = pendingEntries.fold<double>(
-      0,
-      (sum, entry) => sum + entry.weight,
-    );
+    final leaves = _buildConfidenceLeaves();
+    double weightedKnown = 0;
+    double pendingWeight = 0;
+    for (final leaf in leaves) {
+      if (leaf.entry.score != null) {
+        weightedKnown += leaf.entry.score! * leaf.entry.weight;
+      } else if (leaf.entry.weight > 0) {
+        pendingWeight += leaf.entry.weight;
+      }
+    }
 
     setState(() {
-      _average = roundHalfUp(weightedKnown, 1);
+      _calculatedIds.clear();
       _error = null;
-      _resultState = _ResultState.success;
 
       if (pendingWeight == 0) {
+        _average = roundHalfUp(weightedKnown, 1);
         _neededPendingGrade = null;
+        _resultState = _ResultState.success;
         _isReachable = weightedKnown >= target;
+        _calcReached = true;
       } else {
-        final needed = (target - weightedKnown) / pendingWeight;
-        _neededPendingGrade = roundHalfUp(needed, 1);
-        _isReachable = needed <= 7;
+        final res = computeNeeded(
+          target: target,
+          weightedKnown: weightedKnown,
+          pendingWeight: pendingWeight,
+        );
+        if (res.status == NeededStatus.reached) {
+          for (final leaf in leaves) {
+            if (leaf.entry.score == null && leaf.entry.weight > 0) {
+              leaf.item.scoreController.text = '1.0';
+              _calculatedIds.add(leaf.item.id);
+            }
+          }
+          _calcReached = true;
+          _average = roundHalfUp(weightedKnown + pendingWeight * 1.0, 1);
+          _neededPendingGrade = null;
+          _resultState = _ResultState.reached;
+          _isReachable = true;
+        } else {
+          final dist = distributeNeeded(
+            target: target,
+            entries: leaves.map((l) => l.entry).toList(),
+          );
+          _calcReached = dist.reached;
+          for (var i = 0; i < leaves.length; i++) {
+            final orig = leaves[i].entry.score;
+            final a = dist.assigned[i];
+            if (orig == null && a != null && leaves[i].entry.weight > 0) {
+              leaves[i].item.scoreController.text = _formatCalc(a);
+              _calculatedIds.add(leaves[i].item.id);
+            }
+          }
+          _average = roundHalfUp(weightedKnown, 1);
+          if (dist.reached) {
+            _neededPendingGrade = roundHalfUp(res.needed!, 1);
+            _resultState = _ResultState.success;
+            _isReachable = true;
+          } else {
+            _neededPendingGrade = null;
+            _resultState = _ResultState.success;
+            _isReachable = false;
+          }
+        }
       }
     });
   }
@@ -579,6 +1261,8 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       _average = null;
       _neededPendingGrade = null;
       _resultState = _ResultState.invalid;
+      _calculatedIds.clear();
+      _calcReached = true;
     });
   }
 
@@ -589,37 +1273,58 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
   @override
   Widget build(BuildContext context) {
     final isDesktop =
-        MediaQuery.of(context).size.width > AppDimens.breakpointDesktop;
+        MediaQuery.of(context).size.width > AppDimens.breakpointMedium;
+
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (!widget.embedded) _buildHeader(),
+        if (!widget.embedded) const SizedBox(height: AppDimens.spaceXl),
+        _buildSimulatorNotice(),
+        const SizedBox(height: AppDimens.spaceMd),
+        if (widget.embedded)
+          Padding(
+            padding: const EdgeInsets.only(bottom: AppDimens.spaceSm),
+            child: Text(
+              _selectedCourse.toUpperCase(),
+              style: const TextStyle(
+                fontWeight: FontWeight.w800,
+                fontSize: 11,
+                letterSpacing: 0.5,
+                color: AppColors.mutedStrong,
+              ),
+            ),
+          ),
+        _buildConfiguration(isDesktop),
+        const SizedBox(height: AppDimens.spaceLg),
+        _buildSourceStatus(),
+        _buildReloadAction(),
+        if (_loadedFromBackend) _buildEditableCopyNotice(),
+        _finalExamMode ? _buildFinalExamMode() : _buildNormalMode(isDesktop),
+        const SizedBox(height: AppDimens.spaceLg),
+        _buildWeightSummary(),
+        const SizedBox(height: AppDimens.spaceXl),
+        _buildActions(),
+        const SizedBox(height: AppDimens.spaceLg),
+        _buildResultSection(),
+      ],
+    );
+
+    // Embebida: el padre provee Scaffold + scroll; se conserva el ancho.
+    if (widget.embedded) return content;
 
     return Scaffold(
       backgroundColor: AppColors.bg,
       body: SafeArea(
         child: SingleChildScrollView(
           padding: EdgeInsets.symmetric(
-            horizontal: isDesktop ? 40 : 18,
-            vertical: 22,
+            horizontal: isDesktop ? AppDimens.spaceXxl : AppDimens.spaceLg,
+            vertical: AppDimens.spaceXl,
           ),
           child: Center(
             child: ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: isDesktop ? 1040 : 640),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _buildHeader(),
-                  const SizedBox(height: 20),
-                  _buildConfiguration(isDesktop),
-                  const SizedBox(height: 18),
-                  _finalExamMode
-                      ? _buildFinalExamMode()
-                      : _buildNormalMode(isDesktop),
-                  const SizedBox(height: 18),
-                  _buildWeightSummary(),
-                  const SizedBox(height: 20),
-                  _buildActions(),
-                  const SizedBox(height: 22),
-                  if (_resultState != _ResultState.none) _buildResult(),
-                ],
-              ),
+              constraints: const BoxConstraints(maxWidth: 1120),
+              child: content,
             ),
           ),
         ),
@@ -661,6 +1366,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
                     _selectedCourse = course;
                     _resetResult();
                   });
+                  _loadFromBackend();
                 },
               ),
             ],
@@ -688,13 +1394,17 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
-            flex: 2,
-            child: targetCard,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 120),
+              child: targetCard,
+            ),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: AppDimens.spaceMd),
           Expanded(
-            flex: 3,
-            child: modeCard,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 120),
+              child: modeCard,
+            ),
           ),
         ],
       );
@@ -704,11 +1414,12 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         targetCard,
-        const SizedBox(height: 16),
+        const SizedBox(height: AppDimens.spaceMd),
         modeCard,
       ],
     );
   }
+
   Widget _buildFinalExamMode() {
     final finalItem = _finalGrade!;
     final examItem = _exam!;
@@ -718,22 +1429,23 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       children: [
         const Text(
           'NOTA FINAL Y EXAMEN',
-          style: TextStyle(
-            fontWeight: FontWeight.w900,
-            fontSize: 14,
-          ),
+          style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14),
         ),
         const SizedBox(height: 10),
         _FinalGradeCard(
           item: finalItem,
           onScoreChanged: () => setState(_resetResult),
           onWeightChanged: _changeFinalWeight,
+          onConfidenceChanged: (v) => _changeConfidence(finalItem, v),
+          scoreColor: _scoreColor(finalItem.id),
         ),
         const SizedBox(height: 12),
         _ExamCard(
           item: examItem,
           onScoreChanged: () => setState(_resetResult),
           onWeightChanged: _changeExamWeight,
+          onConfidenceChanged: (v) => _changeConfidence(examItem, v),
+          scoreColor: _scoreColor(examItem.id),
         ),
       ],
     );
@@ -741,38 +1453,70 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
 
   Widget _buildNormalMode(bool isDesktop) {
     final columns = isDesktop ? 2 : 1;
+    final canRemove = !_finalExamMode && _normalGrades.length > 1;
+
+    final header = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: const [
+        Text(
+          'NOTAS DEL SIMULADOR',
+          style: TextStyle(
+            fontWeight: FontWeight.w900,
+            fontSize: 13,
+            letterSpacing: 0.4,
+            color: AppColors.text,
+          ),
+        ),
+        SizedBox(height: AppDimens.spaceXs),
+        Text(
+          'Agrega, subdivide o ajusta ponderaciones para simular.',
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 11.5,
+            color: AppColors.mutedStrong,
+          ),
+        ),
+      ],
+    );
+
+    final addButton = NeobrutalistButton(
+      label: 'Agregar nota',
+      icon: Icons.add_rounded,
+      variant: NeobrutalistButtonVariant.secondary,
+      onPressed: _addNormalGrade,
+    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          children: [
-            const Expanded(
-              child: Text(
-                'NOTAS DE LA UNIVERSIDAD',
-                style: TextStyle(
-                  fontWeight: FontWeight.w900,
-                  fontSize: 14,
-                ),
-              ),
-            ),
-            _SmallActionButton(
-              label: 'AGREGAR NOTA',
-              icon: Icons.add_rounded,
-              onPressed: _addNormalGrade,
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
+        if (context.isCompact)
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              header,
+              const SizedBox(height: AppDimens.spaceSm),
+              addButton,
+            ],
+          )
+        else
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: header),
+              const SizedBox(width: AppDimens.spaceMd),
+              addButton,
+            ],
+          ),
+        const SizedBox(height: AppDimens.spaceMd),
         LayoutBuilder(
           builder: (context, constraints) {
             final width = columns == 1
                 ? constraints.maxWidth
-                : (constraints.maxWidth - 14) / 2;
+                : (constraints.maxWidth - AppDimens.spaceMd) / 2;
 
             return Wrap(
-              spacing: 14,
-              runSpacing: 14,
+              spacing: AppDimens.spaceMd,
+              runSpacing: AppDimens.spaceMd,
               children: _normalGrades.map((item) {
                 final index = _normalGrades.indexOf(item);
 
@@ -781,7 +1525,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
                   child: _NormalGradeCard(
                     key: ValueKey(item.id),
                     item: item,
-                    label: 'NOTA ${index + 1}',
+                    label: gradeRowLabel(item.backendName, 'NOTA ${index + 1}'),
                     onScoreChanged: () => setState(_resetResult),
                     onWeightChanged: () => _changeNormalWeight(item),
                     onSubdivide: () => _subdivideNormalGrade(item),
@@ -790,19 +1534,25 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
                         _changeChildWeight(item, child),
                     onAddChild: () => _addChild(item),
                     onRemoveChild: () => _removeChild(item),
+                    onConfidenceChanged: (v) => _changeConfidence(item, v),
+                    scoreColor: _scoreColor(item.id),
+                    onChildConfidenceChanged: (child, v) =>
+                        _changeConfidence(child, v),
+                    childScoreColor: (child) => _scoreColor(child.id),
                   ),
                 );
               }).toList(),
             );
           },
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: AppDimens.spaceSm),
         Align(
           alignment: Alignment.centerLeft,
-          child: TextButton.icon(
-            onPressed: _removeLastNormalGrade,
-            icon: const Icon(Icons.remove_circle_outline_rounded),
-            label: const Text('ELIMINAR ÚLTIMA'),
+          child: NeobrutalistButton(
+            label: 'Eliminar última',
+            icon: Icons.delete_outline_rounded,
+            variant: NeobrutalistButtonVariant.secondary,
+            onPressed: canRemove ? _removeLastNormalGrade : null,
           ),
         ),
       ],
@@ -813,41 +1563,124 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     final value = _totalWeight() * 100;
 
     return _WeightSummary(
-      label: 'PONDERACIÓN TOTAL',
+      label: 'PONDERACIÓN TOTAL DEL SIMULADOR',
       value: value,
       isComplete: (value - 100).abs() <= 0.5,
     );
   }
 
   Widget _buildActions() {
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(
-          child: OutlinedButton.icon(
-            onPressed: _resetCalculator,
-            icon: const Icon(Icons.restart_alt_rounded),
-            label: const Text('RESET'),
+        const Text(
+          'ACCIONES',
+          style: TextStyle(
+            fontWeight: FontWeight.w900,
+            fontSize: 12,
+            letterSpacing: 0.6,
+            color: AppColors.text,
           ),
         ),
-        const SizedBox(width: 12),
-        Expanded(
-          flex: 2,
-          child: SubmitButton(
-            text: 'CALCULAR PROMEDIO',
-            onPressed: _calculate,
+        const SizedBox(height: AppDimens.spaceSm),
+        NeobrutalistButton(
+          label: 'Calcular promedio',
+          icon: Icons.calculate_rounded,
+          variant: NeobrutalistButtonVariant.accent,
+          expand: true,
+          onPressed: _calculate,
+        ),
+        if (_backendMode) ...[
+          const SizedBox(height: AppDimens.spaceSm),
+          NeobrutalistButton(
+            label: _isSavingBackend ? 'Guardando…' : 'Guardar cambios',
+            icon: Icons.cloud_upload_rounded,
+            variant: NeobrutalistButtonVariant.primary,
+            expand: true,
+            onPressed: _isSavingBackend ? null : _saveToBackend,
+          ),
+        ],
+        const SizedBox(height: AppDimens.spaceSm),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: NeobrutalistButton(
+            label: 'Reset',
+            icon: Icons.restart_alt_rounded,
+            variant: NeobrutalistButtonVariant.secondary,
+            onPressed: _resetCalculator,
           ),
         ),
       ],
     );
   }
 
+  /// Botón "Cargar Notas" visible siempre en la calculadora embebida.
+  /// Recarga entries + lista + promedio (mismo path post-guardado).
+  Widget _buildReloadAction() {
+    if (!widget.embedded) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppDimens.spaceLg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          NeobrutalistButton(
+            label: _isReloading ? 'Cargando…' : 'Cargar notas',
+            icon: Icons.cloud_download_rounded,
+            variant: NeobrutalistButtonVariant.secondary,
+            onPressed: _isReloading
+                ? null
+                : () => _loadFromBackend(manual: true),
+          ),
+          const SizedBox(height: AppDimens.spaceXs),
+          const Text(
+            'Descarga tus notas oficiales como copias editables para simular.',
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 11,
+              color: AppColors.mutedStrong,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildResult() {
+    final targetValue = _parseNumber(_targetController.text);
+    final stats = (
+      simulated: _average != null ? _average!.toStringAsFixed(1) : '—',
+      target: targetValue != null ? targetValue.toStringAsFixed(1) : '—',
+      official: _backendAverage != null
+          ? _backendAverage!.toStringAsFixed(1)
+          : '—',
+    );
+
     if (_resultState == _ResultState.invalid) {
       return _ResultCard(
-        background: const Color(0xFFFFE1DE),
-        foreground: AppColors.error,
+        background: AppColors.errorDeep,
+        foreground: AppColors.surface,
         title: 'ERROR',
         message: _error ?? 'Revisa los datos.',
+        simulated: stats.simulated,
+        target: stats.target,
+        official: stats.official,
+      );
+    }
+
+    if (_resultState == _ResultState.reached) {
+      final current = (_average ?? 0).toStringAsFixed(1);
+      final filled = _calculatedIds.isNotEmpty;
+      return _ResultCard(
+        background: AppColors.accentYellow,
+        foreground: AppColors.text,
+        title: 'META YA ALCANZADA',
+        value: current,
+        message: filled
+            ? 'Meta alcanzada: se rellenó 1.0 en las pendientes. Promedio calculado con esos 1.0.'
+            : 'Tu promedio actual ya cubre la meta. Las evaluaciones pendientes solo pueden mantenerlo.',
+        simulated: stats.simulated,
+        target: stats.target,
+        official: stats.official,
       );
     }
 
@@ -860,14 +1693,34 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
           value: _neededPendingGrade!.toStringAsFixed(1),
           message:
               'Necesitas aproximadamente esta nota en las evaluaciones pendientes.',
+          simulated: stats.simulated,
+          target: stats.target,
+          official: stats.official,
         );
       }
 
       return _ResultCard(
-        background: const Color(0xFFFFE1DE),
-        foreground: AppColors.error,
+        background: AppColors.errorDeep,
+        foreground: AppColors.surface,
         title: 'META NO ALCANZABLE',
         message: 'La nota necesaria supera 7.0.',
+        simulated: stats.simulated,
+        target: stats.target,
+        official: stats.official,
+      );
+    }
+
+    if (_resultState == _ResultState.success &&
+        !_isReachable &&
+        _calculatedIds.isNotEmpty) {
+      return _ResultCard(
+        background: AppColors.errorDeep,
+        foreground: AppColors.surface,
+        title: 'META NO ALCANZABLE',
+        message: 'La nota necesaria supera 7.0.',
+        simulated: stats.simulated,
+        target: stats.target,
+        official: stats.official,
       );
     }
 
@@ -875,13 +1728,16 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     final passed = average >= _passingGrade;
 
     return _ResultCard(
-      background: passed ? AppColors.accentYellow : const Color(0xFFFFE1DE),
-      foreground: passed ? AppColors.text : AppColors.error,
+      background: passed ? AppColors.accentYellow : AppColors.errorDeep,
+      foreground: passed ? AppColors.text : AppColors.surface,
       title: passed ? 'PROMEDIO CALCULADO' : 'REPROBASTE EL RAMO',
       value: average.toStringAsFixed(1),
       message: passed
           ? 'Aprobado con promedio igual o superior a 4.0.'
           : 'Promedio inferior a 4.0.',
+      simulated: stats.simulated,
+      target: stats.target,
+      official: stats.official,
     );
   }
 }
@@ -938,10 +1794,7 @@ class _CourseDropdown extends StatelessWidget {
 }
 
 class _TargetCard extends StatelessWidget {
-  const _TargetCard({
-    required this.controller,
-    required this.onChanged,
-  });
+  const _TargetCard({required this.controller, required this.onChanged});
 
   final TextEditingController controller;
   final VoidCallback onChanged;
@@ -949,28 +1802,54 @@ class _TargetCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(AppDimens.spaceLg),
       decoration: _cardDecoration(
         color: AppColors.surface,
         shadow: const Offset(4, 4),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Expanded(
-            child: Text(
-              'QUIERO UN',
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                fontSize: 14,
-              ),
+          const Text(
+            'NOTA OBJETIVO',
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+              fontSize: 11,
+              letterSpacing: 0.6,
+              color: AppColors.mutedStrong,
             ),
           ),
-          SizedBox(
-            width: 100,
-            child: _NumericInput(
-              controller: controller,
-              hint: '4.0',
-              onChanged: onChanged,
+          const SizedBox(height: AppDimens.spaceSm),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Quiero un',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 14,
+                    color: AppColors.text,
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: 110,
+                child: _NumericInput(
+                  controller: controller,
+                  hint: '4.0',
+                  onChanged: onChanged,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppDimens.spaceXs),
+          const Text(
+            'Escala 1.0 – 7.0',
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 11,
+              color: AppColors.mutedStrong,
             ),
           ),
         ],
@@ -980,10 +1859,7 @@ class _TargetCard extends StatelessWidget {
 }
 
 class _ModeSwitchCard extends StatelessWidget {
-  const _ModeSwitchCard({
-    required this.enabled,
-    required this.onChanged,
-  });
+  const _ModeSwitchCard({required this.enabled, required this.onChanged});
 
   final bool enabled;
   final ValueChanged<bool> onChanged;
@@ -991,26 +1867,57 @@ class _ModeSwitchCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(AppDimens.spaceLg),
       decoration: _cardDecoration(
         color: AppColors.accentYellow,
         shadow: const Offset(3, 3),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Expanded(
-            child: Text(
-              'SOLO NOTA FINAL Y EXAMEN',
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                fontSize: 13,
-              ),
+          const Text(
+            'MODO DE CÁLCULO',
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+              fontSize: 11,
+              letterSpacing: 0.6,
+              color: AppColors.text,
             ),
           ),
-          Switch(
-            value: enabled,
-            activeThumbColor: AppColors.text,
-            onChanged: onChanged,
+          const SizedBox(height: AppDimens.spaceSm),
+          Row(
+            children: [
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Solo nota final y examen',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 13,
+                        color: AppColors.text,
+                      ),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      'Oculta las notas parciales del simulador.',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 11,
+                        color: AppColors.text,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Switch(
+                value: enabled,
+                activeThumbColor: AppColors.text,
+                onChanged: onChanged,
+              ),
+            ],
           ),
         ],
       ),
@@ -1025,11 +1932,15 @@ class _FinalGradeCard extends StatelessWidget {
     required this.item,
     required this.onScoreChanged,
     required this.onWeightChanged,
+    required this.onConfidenceChanged,
+    required this.scoreColor,
   });
 
   final _GradeItem item;
   final VoidCallback onScoreChanged;
   final VoidCallback onWeightChanged;
+  final ValueChanged<int> onConfidenceChanged;
+  final Color scoreColor;
 
   @override
   Widget build(BuildContext context) {
@@ -1044,10 +1955,7 @@ class _FinalGradeCard extends StatelessWidget {
         children: [
           const Text(
             'NOTA FINAL / PROMEDIO GENERAL',
-            style: TextStyle(
-              fontWeight: FontWeight.w900,
-              fontSize: 14,
-            ),
+            style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14),
           ),
           const SizedBox(height: 8),
           _ScoreAndWeightRow(
@@ -1056,6 +1964,9 @@ class _FinalGradeCard extends StatelessWidget {
             scoreHint: 'Promedio',
             onScoreChanged: onScoreChanged,
             onWeightChanged: onWeightChanged,
+            confidence: item.confidence,
+            onConfidenceChanged: onConfidenceChanged,
+            scoreColor: scoreColor,
           ),
         ],
       ),
@@ -1068,11 +1979,15 @@ class _ExamCard extends StatelessWidget {
     required this.item,
     required this.onScoreChanged,
     required this.onWeightChanged,
+    required this.onConfidenceChanged,
+    required this.scoreColor,
   });
 
   final _GradeItem item;
   final VoidCallback onScoreChanged;
   final VoidCallback onWeightChanged;
+  final ValueChanged<int> onConfidenceChanged;
+  final Color scoreColor;
 
   @override
   Widget build(BuildContext context) {
@@ -1087,10 +2002,7 @@ class _ExamCard extends StatelessWidget {
         children: [
           const Text(
             'EXAMEN',
-            style: TextStyle(
-              fontWeight: FontWeight.w900,
-              fontSize: 14,
-            ),
+            style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14),
           ),
           const SizedBox(height: 8),
           _ScoreAndWeightRow(
@@ -1099,6 +2011,9 @@ class _ExamCard extends StatelessWidget {
             scoreHint: 'Nota examen',
             onScoreChanged: onScoreChanged,
             onWeightChanged: onWeightChanged,
+            confidence: item.confidence,
+            onConfidenceChanged: onConfidenceChanged,
+            scoreColor: scoreColor,
           ),
         ],
       ),
@@ -1118,6 +2033,10 @@ class _NormalGradeCard extends StatelessWidget {
     required this.onChildWeightChanged,
     required this.onAddChild,
     required this.onRemoveChild,
+    required this.onConfidenceChanged,
+    required this.scoreColor,
+    required this.onChildConfidenceChanged,
+    required this.childScoreColor,
   });
 
   final _GradeItem item;
@@ -1129,6 +2048,10 @@ class _NormalGradeCard extends StatelessWidget {
   final ValueChanged<_GradeItem> onChildWeightChanged;
   final VoidCallback onAddChild;
   final VoidCallback onRemoveChild;
+  final ValueChanged<int> onConfidenceChanged;
+  final Color scoreColor;
+  final void Function(_GradeItem child, int value) onChildConfidenceChanged;
+  final Color Function(_GradeItem child) childScoreColor;
 
   @override
   Widget build(BuildContext context) {
@@ -1137,9 +2060,7 @@ class _NormalGradeCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: _cardDecoration(
-        color: item.isSubdivided
-            ? const Color(0xFFD6E3FF)
-            : AppColors.surface,
+        color: item.isSubdivided ? AppColors.subjectBlue : AppColors.surface,
         shadow: Offset.zero,
       ),
       child: Column(
@@ -1151,20 +2072,17 @@ class _NormalGradeCard extends StatelessWidget {
                 child: Text(
                   label,
                   style: const TextStyle(
-                    fontSize: 11,
+                    fontSize: 11.5,
                     fontWeight: FontWeight.w900,
-                    color: AppColors.muted,
+                    color: AppColors.text,
                   ),
                 ),
               ),
               if (item.isSubdivided)
-                const Text(
-                  'SUBDIVIDIDA',
-                  style: TextStyle(
-                    fontSize: 9,
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.accentBlue,
-                  ),
+                const NeobrutalistBadge(
+                  label: 'Subdividida',
+                  tone: NeobrutalistTone.info,
+                  compact: true,
                 ),
             ],
           ),
@@ -1176,6 +2094,9 @@ class _NormalGradeCard extends StatelessWidget {
               scoreHint: 'Nota opcional',
               onScoreChanged: onScoreChanged,
               onWeightChanged: onWeightChanged,
+              confidence: item.confidence,
+              onConfidenceChanged: onConfidenceChanged,
+              scoreColor: scoreColor,
             ),
             const SizedBox(height: 8),
             Align(
@@ -1190,14 +2111,7 @@ class _NormalGradeCard extends StatelessWidget {
             Row(
               children: [
                 const Expanded(
-                  child: Text(
-                    'PESO EN EL RAMO',
-                    style: TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.w900,
-                      color: AppColors.muted,
-                    ),
-                  ),
+                  child: Text('PESO EN EL RAMO', style: _fieldLabelStyle),
                 ),
                 SizedBox(
                   width: 68,
@@ -1214,14 +2128,7 @@ class _NormalGradeCard extends StatelessWidget {
             Row(
               children: [
                 const Expanded(
-                  child: Text(
-                    'NOTA PADRE (AUTO)',
-                    style: TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.w900,
-                      color: AppColors.muted,
-                    ),
-                  ),
+                  child: Text('NOTA PADRE (AUTO)', style: _fieldLabelStyle),
                 ),
                 Text(
                   parentNote == null
@@ -1240,12 +2147,19 @@ class _NormalGradeCard extends StatelessWidget {
               if (index != 0) const SizedBox(height: 6),
               _ChildGradeRow(
                 key: ValueKey(item.children[index].id),
-                label: 'SUBNOTA ${index + 1}',
+                label: gradeRowLabel(
+                  item.children[index].backendName,
+                  'SUBNOTA ${index + 1}',
+                ),
                 item: item.children[index],
                 onScoreChanged: onChildScoreChanged,
                 onWeightChanged: () {
                   onChildWeightChanged(item.children[index]);
                 },
+                onConfidenceChanged: (v) {
+                  onChildConfidenceChanged(item.children[index], v);
+                },
+                scoreColor: childScoreColor(item.children[index]),
               ),
             ],
             const SizedBox(height: 8),
@@ -1271,6 +2185,48 @@ class _NormalGradeCard extends StatelessWidget {
   }
 }
 
+class _ConfidenceSwitch extends StatelessWidget {
+  const _ConfidenceSwitch({required this.value, required this.onChanged});
+
+  final int value;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [1, 2, 3].map((v) {
+        final selected = v == value;
+        return Padding(
+          padding: EdgeInsets.only(left: v == 1 ? 0 : 3),
+          child: InkWell(
+            onTap: () => onChanged(v),
+            borderRadius: BorderRadius.circular(4),
+            child: Container(
+              width: 26,
+              height: 30,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: selected ? AppColors.text : AppColors.surface,
+                border: Border.all(color: AppColors.border, width: 1.5),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                '$v',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                  color: selected ? AppColors.surface : AppColors.text,
+                ),
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+}
+
 class _ChildGradeRow extends StatelessWidget {
   const _ChildGradeRow({
     super.key,
@@ -1278,43 +2234,77 @@ class _ChildGradeRow extends StatelessWidget {
     required this.item,
     required this.onScoreChanged,
     required this.onWeightChanged,
+    required this.onConfidenceChanged,
+    required this.scoreColor,
   });
 
   final String label;
   final _GradeItem item;
   final VoidCallback onScoreChanged;
   final VoidCallback onWeightChanged;
+  final ValueChanged<int> onConfidenceChanged;
+  final Color scoreColor;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(
-          child: Text(
-            label,
-            style: const TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.w800,
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
             ),
-          ),
+            _ConfidenceSwitch(
+              value: item.confidence,
+              onChanged: onConfidenceChanged,
+            ),
+          ],
         ),
-        Expanded(
-          flex: 2,
-          child: _NumericInput(
-            controller: item.scoreController,
-            hint: 'Nota',
-            onChanged: onScoreChanged,
-          ),
-        ),
-        const SizedBox(width: 6),
-        SizedBox(
-          width: 68,
-          child: _NumericInput(
-            controller: item.weightController,
-            hint: '%',
-            integer: true,
-            onChanged: onWeightChanged,
-          ),
+        const SizedBox(height: AppDimens.spaceXs),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              flex: 2,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('NOTA', style: _fieldLabelStyle),
+                  const SizedBox(height: AppDimens.spaceXs),
+                  _NumericInput(
+                    controller: item.scoreController,
+                    hint: 'Nota',
+                    onChanged: onScoreChanged,
+                    textColor: scoreColor,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: AppDimens.spaceSm),
+            SizedBox(
+              width: 80,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('PESO %', style: _fieldLabelStyle),
+                  const SizedBox(height: AppDimens.spaceXs),
+                  _NumericInput(
+                    controller: item.weightController,
+                    hint: '%',
+                    integer: true,
+                    onChanged: onWeightChanged,
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ],
     );
@@ -1328,6 +2318,9 @@ class _ScoreAndWeightRow extends StatelessWidget {
     required this.scoreHint,
     required this.onScoreChanged,
     required this.onWeightChanged,
+    required this.confidence,
+    required this.onConfidenceChanged,
+    required this.scoreColor,
   });
 
   final TextEditingController scoreController;
@@ -1335,27 +2328,68 @@ class _ScoreAndWeightRow extends StatelessWidget {
   final String scoreHint;
   final VoidCallback onScoreChanged;
   final VoidCallback onWeightChanged;
+  final int confidence;
+  final ValueChanged<int> onConfidenceChanged;
+  final Color scoreColor;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    const labelStyle = TextStyle(
+      fontSize: 9.5,
+      fontWeight: FontWeight.w900,
+      letterSpacing: 0.4,
+      color: AppColors.mutedStrong,
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(
-          child: _NumericInput(
-            controller: scoreController,
-            hint: scoreHint,
-            onChanged: onScoreChanged,
-          ),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('NOTA', style: labelStyle),
+                  const SizedBox(height: AppDimens.spaceXs),
+                  _NumericInput(
+                    controller: scoreController,
+                    hint: scoreHint,
+                    onChanged: onScoreChanged,
+                    textColor: scoreColor,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: AppDimens.spaceSm),
+            SizedBox(
+              width: 120,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('PONDERACIÓN (%)', style: labelStyle),
+                  const SizedBox(height: AppDimens.spaceXs),
+                  _NumericInput(
+                    controller: weightController,
+                    hint: '%',
+                    integer: true,
+                    onChanged: onWeightChanged,
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: 8),
-        SizedBox(
-          width: 78,
-          child: _NumericInput(
-            controller: weightController,
-            hint: '%',
-            integer: true,
-            onChanged: onWeightChanged,
-          ),
+        const SizedBox(height: AppDimens.spaceSm),
+        Row(
+          children: [
+            const Expanded(child: Text('CONFIANZA', style: labelStyle)),
+            _ConfidenceSwitch(
+              value: confidence,
+              onChanged: onConfidenceChanged,
+            ),
+          ],
         ),
       ],
     );
@@ -1368,12 +2402,14 @@ class _NumericInput extends StatelessWidget {
     required this.hint,
     required this.onChanged,
     this.integer = false,
+    this.textColor = AppColors.text,
   });
 
   final TextEditingController controller;
   final String hint;
   final VoidCallback onChanged;
   final bool integer;
+  final Color textColor;
 
   @override
   Widget build(BuildContext context) {
@@ -1382,15 +2418,24 @@ class _NumericInput extends StatelessWidget {
       keyboardType: integer
           ? TextInputType.number
           : const TextInputType.numberWithOptions(decimal: true),
-      inputFormatters: [
-        FilteringTextInputFormatter.allow(_numberRegex),
-      ],
-      style: const TextStyle(
+      inputFormatters: [FilteringTextInputFormatter.allow(_numberRegex)],
+      style: TextStyle(
         fontWeight: FontWeight.w800,
         fontSize: 13,
-        color: AppColors.text,
+        color: textColor,
       ),
-      decoration: appInputDecoration(hint),
+      decoration: appInputDecoration(hint).copyWith(
+        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: AppDimens.spaceMd,
+          vertical: AppDimens.spaceSm + AppDimens.borderWidth,
+        ),
+        hintStyle: const TextStyle(
+          color: AppColors.muted,
+          fontWeight: FontWeight.w700,
+          fontSize: 12,
+        ),
+      ),
       onChanged: (_) => onChanged(),
     );
   }
@@ -1412,7 +2457,7 @@ class _WeightSummary extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
       decoration: BoxDecoration(
-        color: isComplete ? AppColors.bg : const Color(0xFFFFE1DE),
+        color: isComplete ? AppColors.bg : AppColors.surfaceLow,
         border: Border.all(
           color: isComplete ? AppColors.border : AppColors.error,
           width: 2,
@@ -1452,48 +2497,6 @@ class _WeightSummary extends StatelessWidget {
   }
 }
 
-class _SmallActionButton extends StatelessWidget {
-  const _SmallActionButton({
-    required this.label,
-    required this.icon,
-    required this.onPressed,
-  });
-
-  final String label;
-  final IconData icon;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onPressed,
-      borderRadius: BorderRadius.circular(4),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          border: Border.all(color: AppColors.border, width: 1.5),
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 14),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              style: const TextStyle(
-                fontSize: 9,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _MiniActionButton extends StatelessWidget {
   const _MiniActionButton({
     required this.label,
@@ -1507,34 +2510,49 @@ class _MiniActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onPressed,
-      borderRadius: BorderRadius.circular(4),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 6),
-        decoration: BoxDecoration(
-          color: AppColors.bg,
-          border: Border.all(color: AppColors.border, width: 1.5),
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 13),
-            const SizedBox(width: 3),
-            Text(
-              label,
-              style: const TextStyle(
-                fontSize: 8.5,
-                fontWeight: FontWeight.w900,
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppDimens.spaceSm,
+            vertical: AppDimens.spaceSm,
+          ),
+          decoration: BoxDecoration(
+            color: AppColors.bg,
+            border: Border.all(color: AppColors.border, width: 1.5),
+            borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+            boxShadow: AppShadows.badge,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 15, color: AppColors.text),
+              const SizedBox(width: AppDimens.spaceXs),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w900,
+                  color: AppColors.text,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 }
+
+const TextStyle _fieldLabelStyle = TextStyle(
+  fontSize: 9.5,
+  fontWeight: FontWeight.w900,
+  letterSpacing: 0.4,
+  color: AppColors.mutedStrong,
+);
 
 class _ResultCard extends StatelessWidget {
   const _ResultCard({
@@ -1543,6 +2561,9 @@ class _ResultCard extends StatelessWidget {
     required this.title,
     required this.message,
     this.value,
+    this.simulated,
+    this.target,
+    this.official,
   });
 
   final Color background;
@@ -1550,14 +2571,29 @@ class _ResultCard extends StatelessWidget {
   final String title;
   final String message;
   final String? value;
+  final String? simulated;
+  final String? target;
+  final String? official;
 
   @override
   Widget build(BuildContext context) {
+    final stats = <Widget>[
+      if (simulated != null) _ResultStat(label: 'Simulado', value: simulated!),
+      if (target != null) _ResultStat(label: 'Meta', value: target!),
+      if (official != null) _ResultStat(label: 'Oficial', value: official!),
+    ];
+
     return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: _cardDecoration(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppDimens.spaceXl),
+      decoration: BoxDecoration(
         color: background,
-        shadow: const Offset(4, 4),
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidthThick,
+        ),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+        boxShadow: AppShadows.dialog,
       ),
       child: Column(
         children: [
@@ -1565,30 +2601,89 @@ class _ResultCard extends StatelessWidget {
             title,
             textAlign: TextAlign.center,
             style: TextStyle(
-              fontSize: 13,
+              fontSize: 12.5,
               fontWeight: FontWeight.w900,
+              letterSpacing: 0.6,
               color: foreground,
             ),
           ),
           if (value != null) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: AppDimens.spaceSm),
             Text(
               value!,
               style: TextStyle(
-                fontSize: 46,
+                fontSize: 52,
                 fontWeight: FontWeight.w900,
+                height: 1,
                 color: foreground,
               ),
             ),
           ],
-          const SizedBox(height: 8),
+          if (stats.isNotEmpty) ...[
+            const SizedBox(height: AppDimens.spaceLg),
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: AppDimens.spaceSm,
+              runSpacing: AppDimens.spaceSm,
+              children: stats,
+            ),
+          ],
+          const SizedBox(height: AppDimens.spaceMd),
           Text(
             message,
             textAlign: TextAlign.center,
             style: TextStyle(
-              fontSize: 12,
+              fontSize: 12.5,
               fontWeight: FontWeight.w700,
               color: foreground,
+              height: 1.35,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ResultStat extends StatelessWidget {
+  const _ResultStat({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppDimens.spaceMd,
+        vertical: AppDimens.spaceSm,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
+        borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '$label ',
+            style: const TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0.4,
+              color: AppColors.mutedStrong,
+            ),
+          ),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+              color: AppColors.text,
             ),
           ),
         ],
@@ -1630,23 +2725,13 @@ class _SquareIconButton extends StatelessWidget {
   }
 }
 
-BoxDecoration _cardDecoration({
-  required Color color,
-  required Offset shadow,
-}) {
+BoxDecoration _cardDecoration({required Color color, required Offset shadow}) {
   return BoxDecoration(
     color: color,
-    border: Border.all(
-      color: AppColors.border,
-      width: AppDimens.borderWidth,
-    ),
+    border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
     borderRadius: BorderRadius.circular(AppDimens.radius),
     boxShadow: [
-      BoxShadow(
-        color: AppColors.border,
-        offset: shadow,
-        blurRadius: 0,
-      ),
+      BoxShadow(color: AppColors.border, offset: shadow, blurRadius: 0),
     ],
   );
 }

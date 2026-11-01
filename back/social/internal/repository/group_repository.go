@@ -20,8 +20,6 @@ func NewGroupRepository(pool *pgxpool.Pool) *GroupRepository {
 	return &GroupRepository{pool: pool}
 }
 
-
-
 // CreateWithOwner inserta el grupo y, en la misma transacción, la membresía
 // del creador como "admin". Si cualquiera de las dos falla, no queda ni
 // grupo ni membresía huérfana (rollback).
@@ -65,11 +63,11 @@ func (r *GroupRepository) GetByID(ctx context.Context, id string) (*model.Group,
 		SELECT id, name, description, owner_user_id, notes_restricted_to_staff, invite_token, created_at 
 		FROM social.groups 
 		WHERE id = $1`
-		
+
 	err := r.pool.QueryRow(ctx, query, id).Scan(
 		&g.ID, &g.Name, &g.Description, &g.OwnerUserID, &g.NotesRestrictedToStaff, &g.InviteToken, &g.CreatedAt,
 	)
-	
+
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil // Se maneja el 404 en la capa de servicio
@@ -86,7 +84,7 @@ func (r *GroupRepository) ListMyGroups(ctx context.Context, userID string) ([]*m
 		JOIN social.group_memberships m ON g.id = m.group_id
 		WHERE m.user_id = $1
 		ORDER BY g.created_at DESC`
-		
+
 	rows, err := r.pool.Query(ctx, query, userID)
 	if err != nil {
 		return nil, err
@@ -101,11 +99,11 @@ func (r *GroupRepository) ListMyGroups(ctx context.Context, userID string) ([]*m
 		}
 		groups = append(groups, &mg)
 	}
-	
+
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	
+
 	return groups, nil
 }
 
@@ -116,6 +114,16 @@ func (r *GroupRepository) JoinWithInviteToken(ctx context.Context, groupID strin
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Comparte el lock con baneo y rotación: validar antes de bloquear permite
+	// reingresar con un baneo o token invalidado mientras espera el INSERT.
+	var locked int
+	if err := tx.QueryRow(ctx, `SELECT 1 FROM social.groups WHERE id = $1 FOR UPDATE`, groupID).Scan(&locked); err != nil {
+		if err == pgx.ErrNoRows {
+			return errors.New("invalid_invite_token")
+		}
+		return err
+	}
 
 	// 1. Verificar si el usuario está baneado en este grupo
 	var isBanned bool
@@ -162,19 +170,10 @@ func (r *GroupRepository) RegenerateInviteToken(ctx context.Context, groupID str
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// 1. Verificar si el usuario es admin del grupo
-	var role string
-	err = tx.QueryRow(ctx, `
-		SELECT role FROM social.group_memberships WHERE group_id = $1 AND user_id = $2
-	`, groupID, userID).Scan(&role)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return "", errors.New("forbidden")
-		}
+	// La autorización se comprueba después de adquirir el lock compartido con
+	// salidas y transferencias para no usar un rol que acaba de revocarse.
+	if err := requireAdminTx(ctx, tx, groupID, userID); err != nil {
 		return "", err
-	}
-	if role != "admin" {
-		return "", errors.New("forbidden")
 	}
 
 	// 2. Actualizar el invite_token del grupo y retornar el nuevo
@@ -211,7 +210,9 @@ func (r *GroupRepository) IsMember(ctx context.Context, groupID string, userID s
 // ListMembers retorna el listado de miembros de un grupo con sus roles
 func (r *GroupRepository) ListMembers(ctx context.Context, groupID string) ([]*model.GroupMembership, error) {
 	var exists bool
-	_ = r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM social.groups WHERE id = $1)`, groupID).Scan(&exists)
+	if err := r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM social.groups WHERE id = $1)`, groupID).Scan(&exists); err != nil {
+		return nil, err
+	}
 	if !exists {
 		return nil, errors.New("group_not_found")
 	}
@@ -235,6 +236,9 @@ func (r *GroupRepository) ListMembers(ctx context.Context, groupID string) ([]*m
 		}
 		members = append(members, &m)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 
 	if members == nil {
 		return []*model.GroupMembership{}, nil
@@ -245,6 +249,16 @@ func (r *GroupRepository) ListMembers(ctx context.Context, groupID string) ([]*m
 // requireAdminTx valida dentro de la transacción que userID sea admin del grupo.
 // Devuelve "forbidden" si no es miembro o no es admin.
 func requireAdminTx(ctx context.Context, tx pgx.Tx, groupID, userID string) error {
+	// El mismo lock que LeaveGroup: no permitir expulsar/degradar al sucesor
+	// mientras una salida decide quién administrará el grupo.
+	var locked int
+	if err := tx.QueryRow(ctx, `SELECT 1 FROM social.groups WHERE id = $1 FOR UPDATE`, groupID).Scan(&locked); err != nil {
+		if err == pgx.ErrNoRows {
+			return errors.New("forbidden")
+		}
+		return err
+	}
+
 	var role string
 	err := tx.QueryRow(ctx, `SELECT role FROM social.group_memberships WHERE group_id = $1 AND user_id = $2`, groupID, userID).Scan(&role)
 	if err != nil {
@@ -436,6 +450,7 @@ func (r *GroupRepository) RemoveMember(ctx context.Context, groupID, userID stri
 	}
 	return nil
 }
+
 // ListMyGroupsDetailed devuelve los grupos del usuario con descripción,
 // fecha de ingreso y cantidad de miembros (vista principal, tarea 2_3_14).
 func (r *GroupRepository) ListMyGroupsDetailed(ctx context.Context, userID string) ([]*model.GroupCard, error) {
@@ -499,7 +514,7 @@ func (r *GroupRepository) HandleAccountDeletion(ctx context.Context, userID stri
 
 	results := make([]model.SuccessionResult, 0, len(groupIDs))
 	for _, gid := range groupIDs {
-		res, err := r.removeUserFromGroup(ctx, gid, userID)
+		res, err := r.removeUserFromGroup(ctx, gid, userID, false)
 		if err != nil {
 			return results, err
 		}
@@ -515,7 +530,7 @@ func (r *GroupRepository) HandleAccountDeletion(ctx context.Context, userID stri
 // removeUserFromGroup quita la membresía y aplica la sucesión de admin.
 // Bloquea la fila del grupo (FOR UPDATE) para que dos admins que eliminan su
 // cuenta a la vez no dejen el grupo sin administrador.
-func (r *GroupRepository) removeUserFromGroup(ctx context.Context, groupID, userID string) (model.SuccessionResult, error) {
+func (r *GroupRepository) removeUserFromGroup(ctx context.Context, groupID, userID string, strict bool) (model.SuccessionResult, error) {
 	res := model.SuccessionResult{GroupID: groupID}
 
 	tx, err := r.pool.Begin(ctx)
@@ -527,7 +542,11 @@ func (r *GroupRepository) removeUserFromGroup(ctx context.Context, groupID, user
 	var locked int
 	if err := tx.QueryRow(ctx, `SELECT 1 FROM social.groups WHERE id = $1 FOR UPDATE`, groupID).Scan(&locked); err != nil {
 		if err == pgx.ErrNoRows {
-			return res, nil // el grupo ya no existe
+			if strict {
+				return res, errors.New("group_not_found")
+			}
+			res.GroupDeleted = true
+			return res, nil // el grupo ya no existe; la tarea aún debe limpiar Notes
 		}
 		return res, err
 	}
@@ -536,6 +555,9 @@ func (r *GroupRepository) removeUserFromGroup(ctx context.Context, groupID, user
 	err = tx.QueryRow(ctx, `SELECT role FROM social.group_memberships WHERE group_id = $1 AND user_id = $2`, groupID, userID).Scan(&role)
 	if err != nil {
 		if err == pgx.ErrNoRows {
+			if strict {
+				return res, errors.New("not_member")
+			}
 			return res, nil // otro proceso ya lo sacó
 		}
 		return res, err
@@ -555,7 +577,7 @@ func (r *GroupRepository) removeUserFromGroup(ctx context.Context, groupID, user
 			err := tx.QueryRow(ctx, `
 				SELECT user_id FROM social.group_memberships
 				WHERE group_id = $1
-				ORDER BY joined_at ASC, id ASC
+				ORDER BY joined_at ASC, user_id ASC
 				LIMIT 1`, groupID).Scan(&successor)
 			if err == pgx.ErrNoRows {
 				// era el último miembro: el grupo se elimina
@@ -581,7 +603,7 @@ func (r *GroupRepository) removeUserFromGroup(ctx context.Context, groupID, user
 		FROM (
 			SELECT user_id FROM social.group_memberships
 			WHERE group_id = $1 AND role = 'admin'
-			ORDER BY joined_at ASC, id ASC
+			ORDER BY joined_at ASC, user_id ASC
 			LIMIT 1
 		) a
 		WHERE g.id = $1 AND g.owner_user_id = $2`, groupID, userID); err != nil {
@@ -589,4 +611,9 @@ func (r *GroupRepository) removeUserFromGroup(ctx context.Context, groupID, user
 	}
 
 	return res, tx.Commit(ctx)
+}
+
+// LeaveGroup comparte transacción y lock con la eliminación de cuenta.
+func (r *GroupRepository) LeaveGroup(ctx context.Context, groupID, userID string) (model.SuccessionResult, error) {
+	return r.removeUserFromGroup(ctx, groupID, userID, true)
 }

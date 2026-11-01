@@ -44,13 +44,16 @@ func (h *HoursHandler) LogHours(c *gin.Context) {
 		return
 	}
 
-	if _, exists := c.Get("user_id"); !exists {
+	uidVal, exists := c.Get("user_id")
+	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized", "code": "unauthorized"})
 		return
 	}
+	userID, _ := uidVal.(string)
 
 	entry, created, err := h.svc.LogHours(
 		c.Request.Context(),
+		userID,
 		taskID,
 		strings.TrimSpace(req.LogDate),
 		req.Hours,
@@ -59,6 +62,8 @@ func (h *HoursHandler) LogHours(c *gin.Context) {
 		switch {
 		case errors.Is(err, service.ErrSprintTaskNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": "sprint task not found", "code": "sprint_task_not_found"})
+		case errors.Is(err, service.ErrForbidden):
+			c.JSON(http.StatusForbidden, gin.H{"error": "you must be a member of the group", "code": "forbidden"})
 		case errors.Is(err, service.ErrInvalidSprintTaskID):
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_sprint_task_id"})
 		case errors.Is(err, service.ErrInvalidLogDate),
@@ -95,13 +100,16 @@ func (h *HoursHandler) ListHours(c *gin.Context) {
 		return
 	}
 
-	if _, exists := c.Get("user_id"); !exists {
+	uidVal, exists := c.Get("user_id")
+	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized", "code": "unauthorized"})
 		return
 	}
+	userID, _ := uidVal.(string)
 
 	entries, total, err := h.svc.ListHours(
 		c.Request.Context(),
+		userID,
 		taskID,
 		strings.TrimSpace(c.Query("from")),
 		strings.TrimSpace(c.Query("to")),
@@ -110,6 +118,8 @@ func (h *HoursHandler) ListHours(c *gin.Context) {
 		switch {
 		case errors.Is(err, service.ErrSprintTaskNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": "sprint task not found", "code": "sprint_task_not_found"})
+		case errors.Is(err, service.ErrForbidden):
+			c.JSON(http.StatusForbidden, gin.H{"error": "you must be a member of the group", "code": "forbidden"})
 		case errors.Is(err, service.ErrInvalidSprintTaskID):
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_sprint_task_id"})
 		case errors.Is(err, service.ErrInvalidLogDate):

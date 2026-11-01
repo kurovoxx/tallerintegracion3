@@ -1,0 +1,10 @@
+# Generación Go del contrato Academic. Plugins locales instalados vía
+# `go install` (versiones fijadas en generate.sh); no requiere protoc del sistema.
+version: v1
+plugins:
+  - plugin: go
+    out: ../../infacadem/internal/gen/academicv1
+    opt: paths=source_relative
+  - plugin: go-grpc
+    out: ../../infacadem/internal/gen/academicv1
+    opt: paths=source_relative

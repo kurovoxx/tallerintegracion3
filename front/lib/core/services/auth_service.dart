@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'api_config.dart';
@@ -17,6 +16,114 @@ class AuthService {
   static String get baseUrl => authApiBaseUrl;
   static const String loginPath = '/auth/login';
   static const String registerPath = '/auth/register';
+  static const String refreshPath = '/auth/refresh';
+  static const String logoutPath = '/auth/logout';
+
+  Future<LoginResult> forgotPassword(String email) => _passwordRecovery(
+    '/auth/forgot-password',
+    {'email': email.trim().toLowerCase()},
+  );
+
+  Future<LoginResult> resetPassword({
+    required String email,
+    required String code,
+    required String password,
+  }) => _passwordRecovery('/auth/reset-password', {
+    'email': email.trim().toLowerCase(),
+    'code': code.trim(),
+    'password': password,
+  });
+
+  Future<LoginResult> _passwordRecovery(
+    String path,
+    Map<String, String> payload,
+  ) async {
+    try {
+      final response = await _client
+          .post(
+            Uri.parse('$baseUrl$path'),
+            headers: const {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: jsonEncode(payload),
+          )
+          .timeout(const Duration(seconds: 20));
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      if (response.statusCode == 200) return LoginResult.success(body);
+      return LoginResult.failure(
+        _extractErrorMessage(body, response.statusCode),
+      );
+    } catch (_) {
+      return LoginResult.failure(
+        'No se pudo completar la solicitud. Revisa tu conexión e inténtalo de nuevo.',
+      );
+    }
+  }
+
+  /// POST /auth/refresh {refresh_token} -> 200 {access_token, refresh_token?, expires_in?}.
+  /// El backend rota el refresh: si devuelve uno nuevo debe guardarse.
+  /// Nunca lanza: toda falla se reporta como RefreshResult.failure.
+  Future<RefreshResult> refresh(String refreshToken) async {
+    try {
+      final response = await _client
+          .post(
+            Uri.parse('$baseUrl$refreshPath'),
+            headers: const {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: jsonEncode({'refresh_token': refreshToken}),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode == 401) {
+        // /auth/refresh devuelve 401 solo si el refresh fue rechazado,
+        // revocado o vencido según el contrato vigente de Auth.
+        return RefreshResult.failure(
+          'Sesión inválida.',
+          kind: RefreshFailureKind.rejected,
+        );
+      }
+      if (response.statusCode == 200 && response.body.isNotEmpty) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is! Map<String, dynamic>) {
+          return RefreshResult.failure('Respuesta de refresh inválida.');
+        }
+        final body = decoded;
+        final access = body['access_token'] as String?;
+        final rotatedRefresh = body['refresh_token'] as String?;
+        if (access != null &&
+            access.isNotEmpty &&
+            rotatedRefresh != null &&
+            rotatedRefresh.isNotEmpty) {
+          return RefreshResult.success(
+            accessToken: access,
+            refreshToken: rotatedRefresh,
+          );
+        }
+      }
+      return RefreshResult.failure('Sesión inválida.');
+    } catch (_) {
+      return RefreshResult.failure('Sesión inválida.');
+    }
+  }
+
+  /// POST /auth/logout {refresh_token} — best-effort, nunca lanza.
+  Future<void> logout(String? refreshToken) async {
+    if (refreshToken == null || refreshToken.isEmpty) return;
+    try {
+      await _client
+          .post(
+            Uri.parse('$baseUrl$logoutPath'),
+            headers: const {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: jsonEncode({'refresh_token': refreshToken}),
+          )
+          .timeout(const Duration(seconds: 10));
+    } catch (_) {}
+  }
 
   Future<LoginResult> login({
     required String email,
@@ -26,8 +133,6 @@ class AuthService {
       'email': email.trim(),
       'password': password,
     };
-
-    debugPrint('Payload login preparado para email: ${email.trim()}');
 
     try {
       final response = await _client
@@ -52,17 +157,18 @@ class AuthService {
         return LoginResult.success(responseBody);
       }
 
-      return LoginResult.failure(_extractErrorMessage(responseBody, response.statusCode));
+      return LoginResult.failure(
+        _extractErrorMessage(responseBody, response.statusCode),
+      );
     } on FormatException {
       return LoginResult.failure('La API respondió con un JSON inválido.');
     } on Exception {
       return LoginResult.failure(
         'No se pudo conectar con el servidor. Revisa la URL ($baseUrl), el puerto y que Gin esté ejecutándose.',
       );
-    } catch (e) {
-      // Captura también Error (ej. file:///api-auth en nativo con relativo mal configurado)
+    } catch (_) {
       return LoginResult.failure(
-        'No se pudo conectar con el servidor. Revisa la URL ($baseUrl), el puerto y que Gin esté ejecutándose. ($e)',
+        'No se pudo conectar con el servidor. Revisa la URL configurada, el puerto y que el servicio esté disponible.',
       );
     }
   }
@@ -83,14 +189,15 @@ class AuthService {
       'password': password,
       'role': role,
       'display_name': displayName.trim(),
-      if (institution != null && institution.trim().isNotEmpty) 'institution': institution.trim(),
-      if (photoUrl != null && photoUrl.trim().isNotEmpty) 'photo_url': photoUrl.trim(),
+      if (institution != null && institution.trim().isNotEmpty)
+        'institution': institution.trim(),
+      if (photoUrl != null && photoUrl.trim().isNotEmpty)
+        'photo_url': photoUrl.trim(),
       if (phone != null && phone.trim().isNotEmpty) 'phone': phone.trim(),
-      if (description != null && description.trim().isNotEmpty) 'description': description.trim(),
+      if (description != null && description.trim().isNotEmpty)
+        'description': description.trim(),
       if (visibility != null) 'visibility': visibility,
     };
-
-    debugPrint('Payload register: email=${email.trim()}, display_name=${displayName.trim()}, role=$role');
 
     try {
       final response = await _client
@@ -115,16 +222,18 @@ class AuthService {
         return RegisterResult.success(responseBody);
       }
 
-      return RegisterResult.failure(_extractErrorMessage(responseBody, response.statusCode));
+      return RegisterResult.failure(
+        _extractErrorMessage(responseBody, response.statusCode),
+      );
     } on FormatException {
       return RegisterResult.failure('La API respondió con un JSON inválido.');
     } on Exception {
       return RegisterResult.failure(
         'No se pudo conectar con el servidor. Revisa la URL ($baseUrl), el puerto y que Gin esté ejecutándose.',
       );
-    } catch (e) {
+    } catch (_) {
       return RegisterResult.failure(
-        'No se pudo conectar con el servidor. Revisa la URL ($baseUrl), el puerto y que Gin esté ejecutándose. ($e)',
+        'No se pudo conectar con el servidor. Revisa la URL configurada, el puerto y que el servicio esté disponible.',
       );
     }
   }
@@ -175,11 +284,7 @@ class AuthService {
 
 /// Resultado login
 class LoginResult {
-  const LoginResult._({
-    required this.success,
-    this.data,
-    this.message,
-  });
+  const LoginResult._({required this.success, this.data, this.message});
 
   final bool success;
   final Map<String, dynamic>? data;
@@ -194,13 +299,45 @@ class LoginResult {
   }
 }
 
+/// Resultado refresh
+class RefreshResult {
+  const RefreshResult._({
+    required this.success,
+    required this.failureKind,
+    this.accessToken,
+    this.refreshToken,
+  });
+
+  final bool success;
+  final RefreshFailureKind failureKind;
+  final String? accessToken;
+  final String? refreshToken;
+
+  factory RefreshResult.success({
+    required String accessToken,
+    String? refreshToken,
+  }) {
+    return RefreshResult._(
+      success: true,
+      failureKind: RefreshFailureKind.none,
+      accessToken: accessToken,
+      refreshToken: refreshToken,
+    );
+  }
+
+  factory RefreshResult.failure(
+    String message, {
+    RefreshFailureKind kind = RefreshFailureKind.transient,
+  }) {
+    return RefreshResult._(success: false, failureKind: kind);
+  }
+}
+
+enum RefreshFailureKind { none, transient, rejected }
+
 /// Resultado registro
 class RegisterResult {
-  const RegisterResult._({
-    required this.success,
-    this.data,
-    this.message,
-  });
+  const RegisterResult._({required this.success, this.data, this.message});
 
   final bool success;
   final Map<String, dynamic>? data;

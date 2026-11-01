@@ -24,6 +24,13 @@ func (r *SprintRepository) GetGroupByID(ctx context.Context, id pgtype.UUID) (sq
 	return r.queries.GetGroupByID(ctx, id)
 }
 
+func (r *SprintRepository) IsMember(ctx context.Context, groupID, userID pgtype.UUID) (bool, error) {
+	return r.queries.IsGroupMember(ctx, sqlc.IsGroupMemberParams{
+		GroupID: groupID,
+		UserID:  userID,
+	})
+}
+
 func (r *SprintRepository) GetSheetByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialSprintSheet, error) {
 	return r.queries.GetSheetByID(ctx, id)
 }
@@ -54,4 +61,12 @@ func (r *SprintRepository) UpdateTask(ctx context.Context, arg sqlc.UpdateSprint
 
 func (r *SprintRepository) DeleteTask(ctx context.Context, id pgtype.UUID) (sqlc.SocialSprintSheetTask, error) {
 	return r.queries.DeleteSprintSheetTask(ctx, id)
+}
+
+func (r *SprintRepository) UpdateSheet(ctx context.Context, arg sqlc.UpdateSheetParams) (sqlc.SocialSprintSheet, error) {
+	return r.queries.UpdateSheet(ctx, arg)
+}
+
+func (r *SprintRepository) DeleteSheet(ctx context.Context, arg sqlc.DeleteSheetParams) (sqlc.SocialSprintSheet, error) {
+	return r.queries.DeleteSheet(ctx, arg)
 }

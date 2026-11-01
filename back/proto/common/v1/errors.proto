@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package common.v1;
+
+option go_package = "github.com/kurovoxx/tallerintegracion3/back/proto/gen/go/common/v1;commonv1";
+
+// Error común servicio-a-servicio (tarea 3_5_2).
+//
+// `code` es string a propósito: reusa el catálogo snake_case que ya devuelven
+// los handlers HTTP (invalid_body, todo_not_found, assignee_not_member, ...)
+// sin reescribir validaciones. Viaja en los detalles del status gRPC; el
+// código gRPC nativo lleva solo la categoría gruesa (NotFound,
+// PermissionDenied, InvalidArgument, ...).
+message Error {
+  // Código estable estilo snake_case, ej: "assignee_not_member".
+  string code = 1;
+  // Mensaje humano (inglés, como los actuales). No incluir datos sensibles.
+  string message = 2;
+  // Campo que originó el error, si aplica (ej: "assigned_to").
+  string field = 3;
+}
+
+// Sobre para respuestas que necesitan lista de errores.
+message ErrorResponse {
+  repeated Error errors = 1;
+}

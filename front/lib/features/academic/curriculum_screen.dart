@@ -5,14 +5,23 @@ import '../../core/common_widgets.dart';
 import '../../core/services/courses_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import 'academic_api.dart';
+import 'academic_mappers.dart';
+import 'academic_models.dart';
 
 const String kSubjectApproved = 'approved';
 const String kSubjectInProgress = 'in_progress';
 const String kSubjectFailed = 'failed';
 const String kSubjectPending = 'pending';
 
-/// Ancho de cada columna de semestre en la fila horizontal única.
+/// Ancho de cada columna de semestre en la fila horizontal única (desktop).
 const double _kSemesterColumnWidth = 350;
+
+/// Ancho compacto de cada columna de semestre en pantallas móviles.
+const double _kSemesterColumnWidthMobile = 285;
+
+/// Breakpoint móvil: por debajo se aplica la malla compacta.
+const double _kMobileBreakpoint = 600;
 
 /// Semestre en el que se insertan los cursos creados en Mis Cursos que no
 /// existen aún en la malla.
@@ -36,6 +45,15 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   // snapshot para limpiar
   Map<int, List<Map<String, dynamic>>>? _snapshot;
 
+  // Backend Academic: si hay sesión y backend, la malla se lista/crea por
+  // API; si no, se usa el mock local (mismo comportamiento que antes).
+  final AcademicApi _academicApi = AcademicApi();
+  bool _backendMode = false;
+  String? _curriculumId;
+
+  /// Materias backend para el combobox del diálogo (vacío en modo local).
+  List<AcademicSubject> _backendSubjects = const [];
+
   @override
   void initState() {
     super.initState();
@@ -52,6 +70,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   void dispose() {
     CoursesService.instance.removeListener(_onCoursesChanged);
     _horizontalScrollController.dispose();
+    _academicApi.dispose();
     super.dispose();
   }
 
@@ -62,6 +81,14 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     });
     try {
       await Future.delayed(const Duration(milliseconds: 620));
+      if (await _loadFromBackend()) {
+        _syncWithCoursesService();
+        // snapshot deep copy
+        _snapshot = _deepCopy(_semesters);
+        if (!mounted) return;
+        setState(() => _isLoading = false);
+        return;
+      }
       _semesters = {
         1: [
           {
@@ -202,6 +229,47 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     }
   }
 
+  /// Carga la malla desde el backend (primera malla propia + sus materias).
+  /// Retorna false si no hay sesión/backend: la pantalla usa el mock local.
+  Future<bool> _loadFromBackend() async {
+    try {
+      final malla = await _academicApi.ensureCurriculum();
+      final subjects = await _academicApi.listSubjects(malla.id);
+      if (!mounted) return true;
+      final map = <int, List<Map<String, dynamic>>>{};
+      for (final s in subjects) {
+        final sem = s.semester;
+        final key = (sem != null && sem >= 1 && sem <= 8)
+            ? sem
+            : _kCoursesInsertSemester;
+        (map[key] ??= []).add({
+          'id': s.id,
+          'code': s.code ?? '',
+          'name': s.name,
+          'credits': s.credits ?? 5,
+          'status': s.status,
+          'requisite': null,
+        });
+      }
+      setState(() {
+        _semesters = map;
+        _curriculumId = malla.id;
+        _backendMode = true;
+        _backendSubjects = subjects;
+      });
+      return true;
+    } on AcademicApiException {
+      if (mounted) {
+        setState(() {
+          _backendMode = false;
+          _curriculumId = null;
+          _backendSubjects = const [];
+        });
+      }
+      return false;
+    }
+  }
+
   Map<int, List<Map<String, dynamic>>> _deepCopy(
     Map<int, List<Map<String, dynamic>>> src,
   ) {
@@ -245,8 +313,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         'code': course['code'] ?? '',
         'name': course['name'] ?? 'Nuevo ramo',
         'credits': course['credits'] is int ? course['credits'] : 5,
-        'status':
-            course['status'] is String ? course['status'] : kSubjectPending,
+        'status': course['status'] is String
+            ? course['status']
+            : kSubjectPending,
         'requisite': null,
       });
     }
@@ -378,14 +447,45 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   Future<void> _showAddSubjectDialog(int semester) async {
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (_) => _AddSubjectDialog(semester: semester),
+      builder: (_) => _AddSubjectDialog(
+        semester: semester,
+        existing: _backendMode ? _backendSubjects : const [],
+      ),
     );
 
     if (result != null) {
+      final existingId = result['existingId'] as String?;
+      if (existingId != null) {
+        await _assignExistingSubject(semester, result, existingId);
+        return;
+      }
+      String subjectId = 'ramo-${DateTime.now().microsecondsSinceEpoch}';
+      if (_backendMode && _curriculumId != null) {
+        try {
+          subjectId = await _academicApi.createSubject(
+            curriculumId: _curriculumId!,
+            name: (result['name'] as String?) ?? '',
+            code: result['code'] as String?,
+            credits: result['credits'] as int?,
+            status: (result['status'] as String?) ?? kSubjectPending,
+            semester: semester,
+          );
+        } on AcademicApiException catch (e) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('No se pudo crear el ramo: ${e.message}'),
+              backgroundColor: AppColors.border,
+            ),
+          );
+          return;
+        }
+      }
+      if (!mounted) return;
       setState(() {
         final list = _semesters[semester] ?? [];
         list.add({
-          'id': 'ramo-${DateTime.now().microsecondsSinceEpoch}',
+          'id': subjectId,
           'code': result['code'],
           'name': result['name'],
           'credits': result['credits'],
@@ -404,6 +504,74 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         ),
       );
     }
+  }
+
+  /// Asigna una materia backend existente al semestre (PATCH semester).
+  /// En modo local solo la refleja en la malla visible.
+  Future<void> _assignExistingSubject(
+    int semester,
+    Map<String, dynamic> result,
+    String existingId,
+  ) async {
+    if (_backendMode) {
+      try {
+        await _academicApi.patchSubject(existingId, {'semester': semester});
+      } on AcademicApiException catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No se pudo asignar el ramo: ${e.message}'),
+            backgroundColor: AppColors.border,
+          ),
+        );
+        return;
+      }
+      // Refresca el cache del combobox con el semestre nuevo.
+      final idx = _backendSubjects.indexWhere((s) => s.id == existingId);
+      if (idx != -1) {
+        final s = _backendSubjects[idx];
+        _backendSubjects = List<AcademicSubject>.of(_backendSubjects)
+          ..[idx] = AcademicSubject(
+            id: s.id,
+            curriculumId: s.curriculumId,
+            name: s.name,
+            code: s.code,
+            professor: s.professor,
+            room: s.room,
+            semester: semester,
+            credits: s.credits,
+            status: s.status,
+            totalClasses: s.totalClasses,
+            minAttendancePct: s.minAttendancePct,
+          );
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      // Evita duplicados si ya estaba en otro semestre visible.
+      for (final entry in _semesters.entries) {
+        entry.value.removeWhere((r) => r['id'] == existingId);
+      }
+      final list = _semesters[semester] ?? [];
+      list.add({
+        'id': existingId,
+        'code': result['code'] ?? '',
+        'name': result['name'] ?? 'Ramo',
+        'credits': result['credits'] ?? 5,
+        'status': result['status'] ?? kSubjectPending,
+        'requisite': null,
+      });
+      _semesters[semester] = list;
+    });
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Ramo "${result['name']}" asignado a Semestre $semester',
+        ),
+        backgroundColor: AppColors.border,
+      ),
+    );
   }
 
   void _removeSubject(int semester, String id) {
@@ -447,8 +615,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isDesktop =
-        MediaQuery.of(context).size.width > AppDimens.breakpointDesktop;
+    final width = MediaQuery.of(context).size.width;
+    final isDesktop = width > AppDimens.breakpointDesktop;
+    final isMobile = width < _kMobileBreakpoint;
     final canPop = Navigator.of(context).canPop();
 
     return Scaffold(
@@ -469,12 +638,12 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      _buildHeader(canPop, isDesktop),
-                      const SizedBox(height: 18),
+                      _buildHeader(canPop, isDesktop, isMobile),
+                      SizedBox(height: isMobile ? 12 : 18),
                       if (_isLoading)
                         _buildLoadingCard()
                       else
-                        _buildMallaContent(isDesktop),
+                        _buildMallaContent(isDesktop, isMobile),
                     ],
                   ),
                 ),
@@ -483,7 +652,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     );
   }
 
-  Widget _buildHeader(bool canPop, bool isDesktop) {
+  Widget _buildHeader(bool canPop, bool isDesktop, bool isMobile) {
     final titleBlock = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -496,7 +665,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             letterSpacing: -0.6,
           ),
         ),
-        const SizedBox(height: 4),
+        SizedBox(height: isMobile ? 2 : 4),
         const Text(
           'Planifica y visualiza tu progreso académico.',
           style: TextStyle(
@@ -505,7 +674,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             fontSize: 13,
           ),
         ),
-        const SizedBox(height: 6),
+        SizedBox(height: isMobile ? 4 : 6),
         Wrap(
           spacing: 8,
           runSpacing: 6,
@@ -560,11 +729,14 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             ),
           ],
         ),
-        const SizedBox(height: 12),
+        SizedBox(height: isMobile ? 8 : 12),
         // Progreso dinámico de la carrera: se recalcula según los créditos
         // aprobados de las asignaturas realmente registradas en la malla.
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          padding: EdgeInsets.symmetric(
+            horizontal: isMobile ? 10 : 12,
+            vertical: isMobile ? 8 : 10,
+          ),
           decoration: BoxDecoration(
             color: AppColors.surface,
             border: Border.all(color: AppColors.border, width: 2),
@@ -576,7 +748,11 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             children: [
               Row(
                 children: [
-                  const Icon(Icons.trending_up_rounded, size: 16, color: AppColors.text),
+                  const Icon(
+                    Icons.trending_up_rounded,
+                    size: 16,
+                    color: AppColors.text,
+                  ),
                   const SizedBox(width: 8),
                   const Expanded(
                     child: Text(
@@ -599,7 +775,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
+              SizedBox(height: isMobile ? 6 : 8),
               Container(
                 height: 12,
                 decoration: BoxDecoration(
@@ -615,7 +791,11 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
               const SizedBox(height: 6),
               Row(
                 children: [
-                  const Icon(Icons.sync_rounded, size: 13, color: AppColors.muted),
+                  const Icon(
+                    Icons.sync_rounded,
+                    size: 13,
+                    color: AppColors.muted,
+                  ),
                   const SizedBox(width: 6),
                   const Expanded(
                     child: Text(
@@ -720,9 +900,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             ),
           ],
         ),
-        const SizedBox(height: 14),
+        SizedBox(height: isMobile ? 10 : 14),
         actions,
-        const SizedBox(height: 14),
+        SizedBox(height: isMobile ? 10 : 14),
         Container(
           height: 4,
           decoration: BoxDecoration(
@@ -734,7 +914,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     );
   }
 
-  Widget _buildMallaContent(bool isDesktop) {
+  Widget _buildMallaContent(bool isDesktop, bool isMobile) {
     // Ordena semestres numéricamente
     final semesterKeys = _semesters.keys.toList()..sort();
     // Asegura que al menos se muestren semestres 1..8 aunque algunos vacíos
@@ -744,18 +924,19 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     }
     semesterKeys.sort();
 
-    final isMobile =
-        MediaQuery.of(context).size.width < AppDimens.breakpointCompact;
-    final columnHeight = isMobile ? 480.0 : 520.0;
+    // En móvil la columna se compacta (285 dp, 450 dp de alto) para que
+    // quepa cómodamente en pantallas de 360-412 dp de ancho; en desktop
+    // conserva los 350 dp de presencia técnica.
+    final columnHeight = isMobile ? 450.0 : 520.0;
+    final columnWidth = isMobile
+        ? _kSemesterColumnWidthMobile
+        : _kSemesterColumnWidth;
 
     // Fila horizontal única con desplazamiento lateral: las columnas conservan
     // presencia técnica (350 dp) en lugar de comprimirse en dos filas.
     final columns = <Widget>[
       for (final semester in semesterKeys)
-        SizedBox(
-          width: _kSemesterColumnWidth,
-          child: _buildSemesterColumn(semester),
-        ),
+        SizedBox(width: columnWidth, child: _buildSemesterColumn(semester)),
     ];
 
     return Column(
@@ -805,16 +986,17 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                         right: 4,
                       ),
                       itemCount: columns.length,
-                      separatorBuilder: (_, _) =>
-                          const SizedBox(width: AppDimens.spaceLg),
+                      separatorBuilder: (_, _) => SizedBox(
+                        width: isMobile ? AppDimens.spaceMd : AppDimens.spaceLg,
+                      ),
                       itemBuilder: (context, idx) => columns[idx],
                     ),
             ),
           ),
         ),
-        const SizedBox(height: 10),
+        SizedBox(height: isMobile ? 8 : 10),
         Container(
-          padding: const EdgeInsets.all(12),
+          padding: EdgeInsets.all(isMobile ? 8 : 12),
           decoration: BoxDecoration(
             color: AppColors.surface,
             border: Border.all(color: AppColors.border, width: 2),
@@ -996,7 +1178,8 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
 
 class _AddSubjectDialog extends StatefulWidget {
   final int semester;
-  const _AddSubjectDialog({required this.semester});
+  final List<AcademicSubject> existing;
+  const _AddSubjectDialog({required this.semester, this.existing = const []});
 
   @override
   State<_AddSubjectDialog> createState() => _AddSubjectDialogState();
@@ -1009,12 +1192,18 @@ class _AddSubjectDialogState extends State<_AddSubjectDialog> {
   late final TextEditingController _creditsCtrl;
   String _status = kSubjectPending;
 
+  /// true = elegir existente; false = crear nueva. Sin existentes, crear.
+  late bool _pickExisting;
+  String? _pickedId;
+
   @override
   void initState() {
     super.initState();
     _nameCtrl = TextEditingController();
     _codeCtrl = TextEditingController();
     _creditsCtrl = TextEditingController(text: '5');
+    _pickExisting = widget.existing.isNotEmpty;
+    if (_pickExisting) _pickedId = widget.existing.first.id;
   }
 
   @override
@@ -1026,6 +1215,20 @@ class _AddSubjectDialogState extends State<_AddSubjectDialog> {
   }
 
   void _submit() {
+    if (_pickExisting && widget.existing.isNotEmpty) {
+      final found = widget.existing.firstWhere(
+        (s) => s.id == _pickedId,
+        orElse: () => widget.existing.first,
+      );
+      Navigator.of(context).pop({
+        'existingId': found.id,
+        'name': found.name,
+        'code': found.code ?? '',
+        'credits': found.credits ?? 5,
+        'status': found.status,
+      });
+      return;
+    }
     if (!_formKey.currentState!.validate()) return;
     Navigator.of(context).pop({
       'name': _nameCtrl.text.trim(),
@@ -1058,6 +1261,69 @@ class _AddSubjectDialogState extends State<_AddSubjectDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              if (widget.existing.isNotEmpty) ...[
+                Row(
+                  children: [
+                    Expanded(
+                      child: NeobrutalistButton(
+                        label: 'Existente',
+                        variant: _pickExisting
+                            ? NeobrutalistButtonVariant.accent
+                            : NeobrutalistButtonVariant.secondary,
+                        onPressed: () => setState(() => _pickExisting = true),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: NeobrutalistButton(
+                        label: 'Crear nueva',
+                        variant: !_pickExisting
+                            ? NeobrutalistButtonVariant.accent
+                            : NeobrutalistButtonVariant.secondary,
+                        onPressed: () => setState(() => _pickExisting = false),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+              ],
+              if (_pickExisting && widget.existing.isNotEmpty) ...[
+                const AppFieldLabel('MATERIA CREADA'),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  decoration: BoxDecoration(
+                    color: AppColors.bg,
+                    border: Border.all(color: AppColors.border, width: 2),
+                    borderRadius: BorderRadius.circular(AppDimens.radius),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: _pickedId,
+                      isExpanded: true,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 13,
+                        color: AppColors.text,
+                      ),
+                      items: [
+                        for (final s in widget.existing)
+                          DropdownMenuItem(
+                            value: s.id,
+                            child: Text(
+                              subjectOptionLabel(s.code, s.name),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      ],
+                      onChanged: (v) {
+                        if (v != null) setState(() => _pickedId = v);
+                      },
+                    ),
+                  ),
+                ),
+              ],
+              if (!_pickExisting || widget.existing.isEmpty) ...[
               const AppFieldLabel('NOMBRE DE LA ASIGNATURA'),
               const SizedBox(height: 6),
               TextFormField(
@@ -1179,6 +1445,7 @@ class _AddSubjectDialogState extends State<_AddSubjectDialog> {
                   ),
                 ),
               ),
+              ],
             ],
           ),
         ),
@@ -1190,7 +1457,9 @@ class _AddSubjectDialogState extends State<_AddSubjectDialog> {
           onPressed: () => Navigator.of(context).pop(),
         ),
         NeobrutalistButton(
-          label: 'Añadir',
+          label: _pickExisting && widget.existing.isNotEmpty
+              ? 'Asignar'
+              : 'Añadir',
           icon: Icons.add_rounded,
           variant: NeobrutalistButtonVariant.accent,
           onPressed: _submit,
@@ -1219,6 +1488,7 @@ class _SemesterColumn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = MediaQuery.of(context).size.width < _kMobileBreakpoint;
     final isEmpty = ramos.isEmpty;
     return Container(
       decoration: BoxDecoration(
@@ -1234,13 +1504,13 @@ class _SemesterColumn extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppDimens.radius),
         boxShadow: isEmpty ? null : AppShadows.dialog,
       ),
-      padding: const EdgeInsets.all(12),
+      padding: EdgeInsets.all(isMobile ? 8 : 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // Header
           Container(
-            padding: const EdgeInsets.only(bottom: 10),
+            padding: EdgeInsets.only(bottom: isMobile ? 8 : 10),
             decoration: BoxDecoration(
               border: Border(
                 bottom: BorderSide(
@@ -1288,7 +1558,7 @@ class _SemesterColumn extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: isMobile ? 8 : 12),
           Expanded(
             child: isEmpty
                 ? Column(
@@ -1326,7 +1596,8 @@ class _SemesterColumn extends StatelessWidget {
                   )
                 : ListView.separated(
                     itemCount: ramos.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 10),
+                    separatorBuilder: (_, _) =>
+                        SizedBox(height: isMobile ? 8 : 10),
                     itemBuilder: (context, i) {
                       final r = ramos[i];
                       return _CurriculumCard(
@@ -1337,12 +1608,12 @@ class _SemesterColumn extends StatelessWidget {
                     },
                   ),
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: isMobile ? 8 : 12),
           InkWell(
             onTap: onAdd,
             borderRadius: BorderRadius.circular(AppDimens.radius),
             child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 10),
+              padding: EdgeInsets.symmetric(vertical: isMobile ? 8 : 10),
               decoration: BoxDecoration(
                 color: AppColors.surface,
                 border: Border.all(
@@ -1387,6 +1658,7 @@ class _CurriculumCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = MediaQuery.of(context).size.width < _kMobileBreakpoint;
     final status = ramo['status'] as String;
     final isApproved = status == kSubjectApproved;
     final isFailed = status == kSubjectFailed;
@@ -1457,7 +1729,12 @@ class _CurriculumCard extends StatelessWidget {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+            padding: EdgeInsets.fromLTRB(
+              isMobile ? 10 : 12,
+              isMobile ? 8 : 10,
+              isMobile ? 6 : 8,
+              isMobile ? 8 : 10,
+            ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1469,12 +1746,12 @@ class _CurriculumCard extends StatelessWidget {
                         ramo['name'] as String,
                         style: TextStyle(
                           fontWeight: FontWeight.w900,
-                          fontSize: 12.5,
+                          fontSize: isMobile ? 12 : 13,
                           color: isFailed ? AppColors.error : AppColors.text,
                           height: 1.1,
                         ),
                       ),
-                      const SizedBox(height: 6),
+                      SizedBox(height: isMobile ? 4 : 6),
                       Row(
                         children: [
                           Container(
@@ -1513,16 +1790,16 @@ class _CurriculumCard extends StatelessWidget {
                           const SizedBox(width: 6),
                           Text(
                             '${ramo['credits']} cr.',
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontWeight: FontWeight.w700,
-                              fontSize: 10,
+                              fontSize: isMobile ? 10 : 11,
                               color: AppColors.muted,
                             ),
                           ),
                         ],
                       ),
                       if (isPending && requisiteLabel != null) ...[
-                        const SizedBox(height: 6),
+                        SizedBox(height: isMobile ? 4 : 6),
                         Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 6,
@@ -1560,7 +1837,7 @@ class _CurriculumCard extends StatelessWidget {
                         ),
                       ],
                       if (isFailed && requisiteLabel != null) ...[
-                        const SizedBox(height: 6),
+                        SizedBox(height: isMobile ? 4 : 6),
                         Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 6,
@@ -1600,15 +1877,19 @@ class _CurriculumCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                const SizedBox(width: 8),
+                SizedBox(width: isMobile ? 6 : 8),
                 Column(
                   children: [
                     InkWell(
                       onTap: onCycle,
                       borderRadius: BorderRadius.circular(4),
-                      child: Icon(statusIcon, size: 22, color: statusIconColor),
+                      child: Icon(
+                        statusIcon,
+                        size: isMobile ? 20 : 22,
+                        color: statusIconColor,
+                      ),
                     ),
-                    const SizedBox(height: 6),
+                    SizedBox(height: isMobile ? 4 : 6),
                     InkWell(
                       onTap: onRemove,
                       borderRadius: BorderRadius.circular(4),

@@ -9,18 +9,25 @@ import (
 )
 
 type Config struct {
-	DatabaseURL  string
-	DirectURL    string
-	SupabaseURL  string
-	SupabaseKey  string
-	JWTSecret    string
-	Port         string
-	AuthBaseURL  string // base del servicio Auth para el gateway interno de Calendar
-	InternalKey  string // secreto X-Internal-Key compartido con Auth
-	CalendarMode string // "mock" (default, sin Google) o "real"
-	StreamAPIKey string // API key de Stream (solo backend, jamás al front)
-	StreamSecret string // API secret de Stream para firmar tokens server-side
-	StreamMode   string // "mock" (default, sin Stream) o "real"
+	DatabaseURL      string
+	DirectURL        string
+	SupabaseURL      string
+	SupabaseKey      string
+	JWTSecret        string
+	Port             string
+	GRPCPort         string // servidor gRPC servicio-a-servicio (SocialService)
+	AuthBaseURL      string // base del servicio Auth para el gateway interno de Calendar
+	InternalKey      string // secreto X-Internal-Key compartido con Auth
+	CalendarMode     string // "mock" (default, sin Google) o "real"
+	StreamAPIKey     string // API key de Stream (solo backend, jamás al front)
+	SMTPHost         string // SMTP para avisos por mail (tarea 3_5_15)
+	SMTPPort         string
+	SMTPUsername     string // remitente noreply
+	SMTPPassword     string
+	IdentityGRPCAddr string // dirección gRPC de Identity (tarea 3_4_3), ej. "auth:9080"
+	NotesGRPCAddr    string // limpieza durable de shares durante borrado de cuenta
+	StreamSecret     string // API secret de Stream para firmar tokens server-side
+	StreamMode       string // "mock" (default, sin Stream) o "real"
 }
 
 func Load() *Config {
@@ -46,24 +53,33 @@ func Load() *Config {
 	_ = godotenv.Load()
 
 	cfg := &Config{
-		DatabaseURL:  os.Getenv("DATABASE_URL"),
-		DirectURL:    os.Getenv("DIRECT_URL"),
-		SupabaseURL:  os.Getenv("SUPABASE_URL"),
-		SupabaseKey:  os.Getenv("SQL_API_KEY"),
-		JWTSecret:    os.Getenv("JWT_SECRET"),
-		Port:         os.Getenv("SOCIAL_PORT"),
-		AuthBaseURL:  os.Getenv("AUTH_BASE_URL"),
-		InternalKey:  os.Getenv("INTERNAL_API_KEY"),
-		CalendarMode: os.Getenv("CALENDAR_MODE"),
-		StreamAPIKey: os.Getenv("STREAM_API_KEY"),
-		StreamSecret: os.Getenv("STREAM_API_SECRET"),
-		StreamMode:   os.Getenv("STREAM_MODE"),
+		DatabaseURL:      os.Getenv("DATABASE_URL"),
+		DirectURL:        os.Getenv("DIRECT_URL"),
+		SupabaseURL:      os.Getenv("SUPABASE_URL"),
+		SupabaseKey:      os.Getenv("SQL_API_KEY"),
+		JWTSecret:        os.Getenv("JWT_SECRET"),
+		Port:             os.Getenv("SOCIAL_PORT"),
+		AuthBaseURL:      os.Getenv("AUTH_BASE_URL"),
+		IdentityGRPCAddr: os.Getenv("IDENTITY_GRPC_ADDR"),
+		NotesGRPCAddr:    os.Getenv("NOTES_GRPC_ADDR"),
+		InternalKey:      os.Getenv("INTERNAL_API_KEY"),
+		CalendarMode:     os.Getenv("CALENDAR_MODE"),
+		StreamAPIKey:     os.Getenv("STREAM_API_KEY"),
+		StreamSecret:     os.Getenv("STREAM_API_SECRET"),
+		StreamMode:       os.Getenv("STREAM_MODE"),
 	}
 	if cfg.Port == "" {
 		cfg.Port = os.Getenv("PORT")
 	}
 	if cfg.Port == "" {
 		cfg.Port = "8083"
+	}
+	cfg.GRPCPort = os.Getenv("SOCIAL_GRPC_PORT")
+	if cfg.GRPCPort == "" {
+		cfg.GRPCPort = os.Getenv("GRPC_PORT")
+	}
+	if cfg.GRPCPort == "" {
+		cfg.GRPCPort = "9083"
 	}
 	if cfg.JWTSecret == "" {
 		cfg.JWTSecret = os.Getenv("JWT")
@@ -75,11 +91,21 @@ func Load() *Config {
 	if cfg.AuthBaseURL == "" {
 		cfg.AuthBaseURL = "http://localhost:8080"
 	}
+	if cfg.IdentityGRPCAddr == "" {
+		cfg.IdentityGRPCAddr = "auth:9080"
+	}
+	if cfg.NotesGRPCAddr == "" {
+		cfg.NotesGRPCAddr = "notes:9082"
+	}
 	if cfg.CalendarMode == "" {
 		cfg.CalendarMode = "mock"
 	}
 	if cfg.StreamMode == "" {
 		cfg.StreamMode = "mock"
 	}
+	cfg.SMTPHost = os.Getenv("SMTP_HOST")
+	cfg.SMTPPort = os.Getenv("SMTP_PORT")
+	cfg.SMTPUsername = os.Getenv("SMTP_USERNAME")
+	cfg.SMTPPassword = os.Getenv("SMTP_PASSWORD")
 	return cfg
 }

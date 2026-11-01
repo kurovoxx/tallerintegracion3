@@ -9,7 +9,7 @@ if ! docker ps >/dev/null 2>&1; then
 fi
 COMPOSE="$DOCKER compose"
 
-echo "=== TI3 run-deploy (dominio ngrok/tunnel) ==="
+echo "=== TI3 run-deploy (dominio del Ingress) ==="
 echo "Usa dominio público para que el front pegue a k8s pillan sin localhost"
 echo ""
 
@@ -55,8 +55,8 @@ echo ""
 $COMPOSE ps
 echo ""
 echo "Front local: http://localhost:8086"
-echo "Front público (k8s tunnel): $API_BASE_URL (ver kubectl logs deploy/tunnel -n student-brojas para URL actual)"
-echo "Si el dominio ngrok cambió, edita $DEPLOY_ENV y re-ejecuta este script"
+echo "Front público (Ingress k8s): https://ti3-brojas.dev.censei.cl"
+echo "Si el dominio del Ingress cambia, edita $DEPLOY_ENV y re-ejecuta este script"
 echo ""
 echo "Test dominio:"
 echo "  curl -v $API_BASE_URL/health"

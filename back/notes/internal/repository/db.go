@@ -36,5 +36,3 @@ func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	}
 	return pool, nil
 }
-
-

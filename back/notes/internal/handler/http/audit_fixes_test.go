@@ -274,11 +274,11 @@ type failingCreateNoteStore struct {
 	failCreate bool
 }
 
-func (f *failingCreateNoteStore) Create(ctx context.Context, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string, syncStatus string) (*model.Note, error) {
+func (f *failingCreateNoteStore) Create(ctx context.Context, noteID string, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string, syncStatus string) (*model.Note, error) {
 	if f.failCreate {
 		return nil, fmt.Errorf("db insert failed (simulado)")
 	}
-	return f.MemoryNoteStore.Create(ctx, userID, subjectID, title, externalFileID, visibility, forkedFrom, syncStatus)
+	return f.MemoryNoteStore.Create(ctx, noteID, userID, subjectID, title, externalFileID, visibility, forkedFrom, syncStatus)
 }
 
 func setupRouterWithFailingCreate(fail bool) (*gin.Engine, *drive.MockClient, *failingCreateNoteStore) {
@@ -504,26 +504,32 @@ func TestHandlerAttachmentBoundary10MB(t *testing.T) {
 		r.ServeHTTP(w, req)
 		return w
 	}
-	// Exactamente 10MB debe pasar (límite es >10MB).
+	// Exactamente 10MB debe pasar (límite es >10MB). El contenido debe
+	// pertenecer a la whitelist estricta: firma PNG + relleno.
 	exact := make([]byte, 10*1024*1024)
-	wOK := upload(exact, "exact10.bin")
+	copy(exact, testPNGBytes)
+	wOK := upload(exact, "exact10.png")
 	if wOK.Code != http.StatusCreated {
 		t.Fatalf("exactamente 10MB esperaba 201, got %d %s", wOK.Code, wOK.Body.String())
 	}
-	// 10MB+1 debe fallar 413.
+	// 10MB+1 debe fallar 413 (el tamaño se valida antes del sniffing).
 	over := make([]byte, 10*1024*1024+1)
-	wFail := upload(over, "over10.bin")
+	copy(over, testPNGBytes)
+	wFail := upload(over, "over10.png")
 	if wFail.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("10MB+1 esperaba 413, got %d %s", wFail.Code, wFail.Body.String())
 	}
 }
 
-
 func doReq(r *gin.Engine, method, path, token, bodyStr string) *httptest.ResponseRecorder {
 	var body io.Reader
-	if bodyStr != "" { body = strings.NewReader(bodyStr) }
+	if bodyStr != "" {
+		body = strings.NewReader(bodyStr)
+	}
 	req := httptest.NewRequest(method, path, body)
-	if token != "" { req.Header.Set("Authorization", "Bearer "+token) }
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)

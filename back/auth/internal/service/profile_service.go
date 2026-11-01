@@ -19,10 +19,35 @@ type ProfileRepository interface {
 // ProfileService contiene reglas de negocio para GET/PATCH /profile/me.
 type ProfileService struct {
 	repo ProfileRepository
+	// users es opcional: fuente de identity.users.email para completar el
+	// perfil propio. Nil = comportamiento anterior (sin email).
+	users UserEmailLookup
+}
+
+// UserEmailLookup resuelve el email de un usuario por id.
+type UserEmailLookup interface {
+	GetEmailByID(ctx context.Context, userID string) (string, error)
 }
 
 func NewProfileService(repo ProfileRepository) *ProfileService {
 	return &ProfileService{repo: repo}
+}
+
+// NewProfileServiceWithUsers igual que NewProfileService pero con email.
+func NewProfileServiceWithUsers(repo ProfileRepository, users UserEmailLookup) *ProfileService {
+	return &ProfileService{repo: repo, users: users}
+}
+
+// fillEmail completa Email de forma best-effort (nunca falla la operación).
+func (s *ProfileService) fillEmail(ctx context.Context, p *model.Profile) {
+	if p == nil || s.users == nil {
+		return
+	}
+	email, err := s.users.GetEmailByID(ctx, p.UserID)
+	if err != nil || strings.TrimSpace(email) == "" {
+		return
+	}
+	p.Email = &email
 }
 
 // GetProfile retorna el perfil del usuario autenticado.
@@ -39,6 +64,7 @@ func (s *ProfileService) GetProfile(ctx context.Context, userID string) (*model.
 	if profile == nil {
 		return nil, &ServiceError{Code: "profile_not_found", Message: "Perfil no encontrado"}
 	}
+	s.fillEmail(ctx, profile)
 	return profile, nil
 }
 
@@ -135,5 +161,6 @@ func (s *ProfileService) UpdateProfile(ctx context.Context, userID string, req r
 	if updated == nil {
 		return nil, &ServiceError{Code: "profile_not_found", Message: "Perfil no encontrado"}
 	}
+	s.fillEmail(ctx, updated)
 	return updated, nil
 }

@@ -19,9 +19,7 @@ func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse DATABASE_URL: %w", err)
 	}
-	// Tuning razonable para Supabase pooler (transaction mode)
-	// Pool en modo transacción (Supavisor/pgbouncer) no soporta prepared statements con cache
-	// → usar SimpleProtocol para evitar "prepared statement already exists" 42P05
+	// Compatible con PostgreSQL directo y poolers en modo transacción.
 	cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
 	cfg.MaxConns = 5
 	cfg.MinConns = 1

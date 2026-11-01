@@ -1,0 +1,60 @@
+// Contrato gRPC de Academic (backlog 3_1_6).
+//
+// El server vive en back/infacadem (internal/handler/grpc); el cliente en
+// Notes llega en la tarea de Héctor. Ejemplo de consumo para Notes:
+//
+//	conn, err := grpc.NewClient(
+//	    "academic:9081", // en Pillán: nombre del Service k8s
+//	    grpc.WithTransportCredentials(insecure.NewCredentials()),
+//	)
+//	if err != nil { /* ... */ }
+//	defer conn.Close()
+//	client := academicv1.NewAcademicServiceClient(conn)
+//	resp, err := client.GetSubject(ctx, &academicv1.GetSubjectRequest{
+//	    SubjectId:       subjectID,  // UUID de la materia (notes.notes.subject_id)
+//	    RequesterUserId: userID,     // user_id del solicitante (del JWT)
+//	})
+//	if err != nil {
+//	    st, _ := status.FromError(err)
+//	    switch st.Code() {
+//	    case codes.NotFound:
+//	        // No existe o no es del solicitante (sin oráculo: indistinguibles).
+//	    case codes.InvalidArgument:
+//	        // subject_id o requester_user_id malformados.
+//	    }
+//	}
+//	_ = resp.GetName() // usar solo si err == nil (exists siempre true ahí)
+//
+// Regenerar (hermético, sin protoc del sistema):
+//   ./generate.sh   (desde back/proto/infacadem; instala el toolchain fijado)
+syntax = "proto3";
+
+package academic.v1;
+
+option go_package = "github.com/kurovoxx/tallerintegracion3/back/infacadem/internal/gen/academicv1";
+
+// AcademicService resuelve materias propias para otros servicios.
+service AcademicService {
+  // GetSubject devuelve una materia solo si existe y pertenece al
+  // solicitante. NOT_FOUND en ambos casos (no filtra existencia ajena);
+  // INVALID_ARGUMENT si algún id está malformado.
+  rpc GetSubject(GetSubjectRequest) returns (GetSubjectResponse);
+}
+
+// GetSubjectRequest pide una materia en nombre de un usuario.
+message GetSubjectRequest {
+  // UUID de la materia.
+  string subject_id = 1;
+  // user_id del solicitante (propietario esperado).
+  string requester_user_id = 2;
+}
+
+// GetSubjectResponse describe la materia. Solo se devuelve con exists=true;
+// si no existe o es ajena el RPC falla con NOT_FOUND.
+message GetSubjectResponse {
+  bool exists = 1;
+  string subject_id = 2;
+  string owner_user_id = 3;
+  string name = 4;
+  string status = 5;
+}

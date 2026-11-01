@@ -31,13 +31,19 @@ class _KanbanTask {
     required this.subject,
     required this.assignee,
     required this.priority,
+    this.backendId,
   });
 
   final String id;
   final String title;
   final String subject;
   final String assignee;
-  final _TaskPriority priority;
+  final _TaskPriority? priority;
+
+  /// Id backend (todo task). Null = ficha local de vista previa.
+  final String? backendId;
+
+  bool get isReal => backendId != null && backendId!.isNotEmpty;
 }
 
 class _KanbanColumnData {
@@ -90,7 +96,7 @@ _ColumnPlateStyle _plateStyleFor(String title) {
 
 class KanbanScreen extends StatefulWidget {
   const KanbanScreen({super.key, this.groupId, SocialService? service})
-      : _serviceOverride = service;
+    : _serviceOverride = service;
 
   final String? groupId;
   final SocialService? _serviceOverride;
@@ -121,12 +127,12 @@ class _KanbanScreenState extends State<KanbanScreen> {
   bool get _isRealGroup {
     final id = widget.groupId?.trim() ?? '';
     final uuid = RegExp(
-        r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$');
+      r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+    );
     return id.isNotEmpty && uuid.hasMatch(id);
   }
 
-  // Lectura real: GET /groups/:id/workspace.kanban (todo/in_progress/done).
-  // Ver view_handler.go:84-94 y todo_handler.go:107 ListTodos.
+  // Lectura: GET /groups/:id/workspace.kanban (todo/in_progress/done).
   Future<void> _loadReal() async {
     if (!_isRealGroup) return;
     if (!mounted) return;
@@ -143,77 +149,280 @@ class _KanbanScreenState extends State<KanbanScreen> {
         _realDone = ws.done;
         _loadingReal = false;
       });
-    } on SocialApiException catch (e) {
+      // Nombres de responsables (best-effort; sin ellos, id corto).
+      try {
+        final members = await _social.listMembers(widget.groupId!.trim());
+        if (!mounted) return;
+        setState(() {
+          _memberById = {for (final m in members) m.userId: m};
+        });
+      } catch (_) {}
+    } on SocialApiException catch (_) {
       if (!mounted) return;
       setState(() {
-        _realError = e.toString();
+        _realError = 'No se pudo cargar el tablero.';
         _loadingReal = false;
       });
-    } catch (e) {
+    } catch (_) {
       if (!mounted) return;
       setState(() {
-        _realError = 'No se pudo cargar el tablero real: $e';
+        _realError = 'No se pudo cargar el tablero.';
         _loadingReal = false;
       });
+    }
+  }
+
+  /// Miembros del grupo para el selector de responsable.
+  /// El backend enriquece con display_name/email cuando puede.
+  Future<List<GroupMember>?> _loadMembers() async {
+    if (!_isRealGroup) return null;
+    try {
+      return await _social.listMembers(widget.groupId!.trim());
+    } on SocialApiException catch (_) {
+      if (!mounted) return null;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No se pudieron cargar los miembros del grupo.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return null;
     }
   }
 
   Future<void> _createRealTodo(String status) async {
     if (!_isRealGroup || _creatingReal) return;
+    final members = await _loadMembers();
+    if (!mounted) return;
+    if (members == null) return;
     final ctrl = TextEditingController();
-    final ok = await showDialog<bool>(
+    GroupMember? selected;
+    final ok = await showNeobrutalistDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('NUEVA TAREA REAL',
-            style: TextStyle(fontWeight: FontWeight.w900)),
-        content: TextField(
-            controller: ctrl,
-            decoration:
-                const InputDecoration(labelText: 'Título (requerido)')),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Cancelar')),
-          TextButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Crear (POST real)')),
-        ],
+      dialog: NeobrutalistDialog(
+        title: 'NUEVA TAREA',
+        confirmLabel: 'Crear',
+        cancelLabel: 'Cancelar',
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop(true),
+        content: StatefulBuilder(
+          builder: (context, setDialogState) => Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const AppFieldLabel('Título (requerido)'),
+              const SizedBox(height: 4),
+              TextField(
+                controller: ctrl,
+                decoration: appInputDecoration('Título (requerido)'),
+              ),
+              const SizedBox(height: 8),
+              const AppFieldLabel('Responsable (opcional)'),
+              const SizedBox(height: 4),
+              DropdownButton<GroupMember?>(
+                value: selected,
+                hint: const Text('Sin asignar'),
+                isExpanded: true,
+                items: [
+                  const DropdownMenuItem<GroupMember?>(
+                    value: null,
+                    child: Text('Sin asignar'),
+                  ),
+                  for (final m in members)
+                    DropdownMenuItem<GroupMember?>(
+                      value: m,
+                      child: Text(m.displayLabel),
+                    ),
+                ],
+                onChanged: (v) => setDialogState(() => selected = v),
+              ),
+            ],
+          ),
+        ),
       ),
     );
-    if (ok != true || !mounted) return;
     final title = ctrl.text.trim();
+    ctrl.dispose();
+    if (ok != true || !mounted) return;
     if (title.isEmpty) return;
     setState(() => _creatingReal = true);
     try {
-      final created = await _social.createTodo(
+      await _social.createTodo(
         groupId: widget.groupId!.trim(),
         title: title,
         status: status,
+        assignedTo: selected?.userId,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Tarea creada: ${created.id} (real)'),
-          backgroundColor: AppColors.border));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Tarea creada.'),
+          backgroundColor: AppColors.border,
+        ),
+      );
       await _loadReal();
-    } on SocialApiException catch (e) {
+    } on SocialApiException catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('No se pudo crear: $e'),
-          backgroundColor: AppColors.error));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo crear la tarea.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
     } finally {
       if (mounted) setState(() => _creatingReal = false);
     }
   }
 
-  void _blockedMoveNotice() {
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text(
-            'Movimiento no persistido: PATCH /groups/:id/todo sin :taskId en ruta '
-            '(main.go:190 vs todo_handler.go:162). Solo lectura y creación están conectadas.'),
-        backgroundColor: AppColors.error));
+  Future<void> _editRealTodo({
+    required String taskId,
+    required String title,
+    required String status,
+  }) async {
+    if (!_isRealGroup) return;
+    final ctrl = TextEditingController(text: title);
+    String next = status;
+    final ok = await showNeobrutalistDialog<bool>(
+      context: context,
+      dialog: NeobrutalistDialog(
+        title: 'EDITAR TAREA',
+        confirmLabel: 'Guardar',
+        cancelLabel: 'Cancelar',
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop(true),
+        content: StatefulBuilder(
+          builder: (context, setDialogState) => Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const AppFieldLabel('Título (requerido)'),
+              const SizedBox(height: 4),
+              TextField(
+                controller: ctrl,
+                decoration: appInputDecoration('Título (requerido)'),
+              ),
+              const SizedBox(height: 8),
+              const AppFieldLabel('Estado'),
+              const SizedBox(height: 4),
+              DropdownButton<String>(
+                value: const ['todo', 'in_progress', 'done'].contains(next)
+                    ? next
+                    : 'todo',
+                isExpanded: true,
+                items: const [
+                  DropdownMenuItem(value: 'todo', child: Text('Por hacer')),
+                  DropdownMenuItem(
+                    value: 'in_progress',
+                    child: Text('En progreso'),
+                  ),
+                  DropdownMenuItem(value: 'done', child: Text('Finalizada')),
+                ],
+                onChanged: (v) {
+                  if (v != null) setDialogState(() => next = v);
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    final newTitle = ctrl.text.trim();
+    ctrl.dispose();
+    if (ok != true || !mounted) return;
+    if (newTitle.isEmpty) return;
+    try {
+      await _social.updateTodo(
+        groupId: widget.groupId!.trim(),
+        taskId: taskId,
+        title: newTitle,
+        status: next,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Tarea actualizada.'),
+          backgroundColor: AppColors.border,
+        ),
+      );
+      await _loadReal();
+    } on SocialApiException catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo actualizar la tarea.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    }
   }
 
-  final List<_KanbanColumnData> _columns = [
+  Future<void> _deleteRealTodo({
+    required String taskId,
+    required String title,
+  }) async {
+    if (!_isRealGroup) return;
+    final ok = await showNeobrutalistDialog<bool>(
+      context: context,
+      dialog: NeobrutalistDialog(
+        title: 'ELIMINAR TAREA',
+        confirmLabel: 'Eliminar',
+        cancelLabel: 'Cancelar',
+        confirmVariant: NeobrutalistButtonVariant.danger,
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop(true),
+        content: Text('¿Eliminar "$title"?'),
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await _social.deleteTodo(groupId: widget.groupId!.trim(), taskId: taskId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Tarea eliminada.'),
+          backgroundColor: AppColors.border,
+        ),
+      );
+      await _loadReal();
+    } on SocialApiException catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo eliminar la tarea.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    }
+  }
+
+  Future<void> _moveRealTodo({
+    required String taskId,
+    required String currentStatus,
+    required String status,
+  }) async {
+    if (!_isRealGroup) return;
+    if (currentStatus == status) return;
+    try {
+      await _social.updateTodo(
+        groupId: widget.groupId!.trim(),
+        taskId: taskId,
+        status: status,
+      );
+      if (!mounted) return;
+      await _loadReal();
+    } on SocialApiException catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo mover la tarea.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      await _loadReal();
+    }
+  }
+
+  final List<_KanbanColumnData> _previewColumns = [
     _KanbanColumnData(
       title: 'Por Hacer',
       code: 'PLC-01',
@@ -262,11 +471,126 @@ class _KanbanScreenState extends State<KanbanScreen> {
     ),
   ];
 
+  /// Columnas del tablero: con grupo (cargado y sin error) siempre son las
+  /// fichas reales del backend, aunque estén vacías; sin grupo, vista
+  /// previa local de ejemplo.
+  List<_KanbanColumnData> get _columns {
+    if (_showingRealBoard) {
+      return [
+        _KanbanColumnData(
+          title: 'Por Hacer',
+          code: 'PLC-01',
+          tasks: _realCards('todo'),
+        ),
+        _KanbanColumnData(
+          title: 'En Progreso',
+          code: 'PLC-02',
+          tasks: _realCards('in_progress'),
+        ),
+        _KanbanColumnData(
+          title: 'Finalizado',
+          code: 'PLC-03',
+          tasks: _realCards('done'),
+        ),
+      ];
+    }
+    return _previewColumns;
+  }
+
+  /// Nombre visible del responsable (display_name/email) o id corto.
+  Map<String, GroupMember> _memberById = {};
+
+  List<_KanbanTask> _realCards(String status) {
+    final all = [..._realTodo, ..._realDoing, ..._realDone];
+    return [
+      for (final t in all.where((t) => t.status == status))
+        _KanbanTask(
+          id: t.id,
+          title: t.title,
+          // Sin "GENERAL" falso: solo se muestra si el backend trae un
+          // board_name significativo (no vacío ni "general" por defecto).
+          subject: _realBoardLabel(t.boardName),
+          assignee: _displayForTodo(t.assignedTo),
+          priority: null,
+          backendId: t.id,
+        ),
+    ];
+  }
+
+  static String _realBoardLabel(String raw) {
+    final t = raw.trim();
+    if (t.isEmpty) return '';
+    if (t.toLowerCase() == 'general') return '';
+    return t;
+  }
+
+  String _displayForTodo(String? userId) {
+    if (userId == null || userId.isEmpty) return 'Sin asignar';
+    final m = _memberById[userId];
+    if (m != null) return m.displayLabel;
+    return userId.length > 8 ? '${userId.substring(0, 8)}…' : userId;
+  }
+
+  static String _statusForColumn(String title) {
+    switch (title) {
+      case 'En Progreso':
+        return 'in_progress';
+      case 'Finalizado':
+        return 'done';
+      default:
+        return 'todo';
+    }
+  }
+
+  /// Menú contextual de una ficha real: editar o eliminar.
+  Future<void> _cardMenu(_KanbanTask task) async {
+    if (task.backendId == null) return;
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      barrierColor: AppColors.scrim,
+      builder: (_) => _CardMenuSheet(title: task.title),
+    );
+    if (action == null || !mounted) return;
+    final repo = [
+      ..._realTodo,
+      ..._realDoing,
+      ..._realDone,
+    ].where((t) => t.id == task.backendId).toList();
+    if (repo.isEmpty) return;
+    if (action == 'edit') {
+      await _editRealTodo(
+        taskId: repo.first.id,
+        title: repo.first.title,
+        status: repo.first.status,
+      );
+    } else if (action == 'delete') {
+      await _deleteRealTodo(taskId: repo.first.id, title: repo.first.title);
+    }
+  }
+
   @override
   void dispose() {
     _pageController.dispose();
     if (widget._serviceOverride == null) _social.dispose();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(KanbanScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Cambio de grupo: limpiar todo lo del anterior y cargar el nuevo.
+    if (oldWidget.groupId?.trim() != widget.groupId?.trim()) {
+      _realTodo = const [];
+      _realDoing = const [];
+      _realDone = const [];
+      _memberById = {};
+      _realError = null;
+      _loadingReal = false;
+      _creatingReal = false;
+      if (_isRealGroup) _loadReal();
+      if (mounted) setState(() {});
+    }
   }
 
   _KanbanColumnData _columnOf(_KanbanTask task) =>
@@ -278,13 +602,17 @@ class _KanbanScreenState extends State<KanbanScreen> {
     _KanbanColumnData to,
   ) {
     if (identical(from, to)) return;
-    // Con grupo real no se finge persistencia: el PATCH está bloqueado
-    // (ver _blockedMoveNotice). Solo se permite movimiento local en vista
-    // previa sin grupo.
-    if (_isRealGroup) {
-      _blockedMoveNotice();
+    // Ficha real: el movimiento persiste por PATCH.
+    if (task.isReal) {
+      _moveRealTodo(
+        taskId: task.backendId!,
+        currentStatus: _statusForColumn(from.title),
+        status: _statusForColumn(to.title),
+      );
       return;
     }
+    // Sin grupo solo se permite movimiento local en la vista previa.
+    if (_isRealGroup) return;
     setState(() {
       from.tasks.remove(task);
       to.tasks.add(task);
@@ -292,6 +620,11 @@ class _KanbanScreenState extends State<KanbanScreen> {
   }
 
   Future<void> _openNewTaskSheet(_KanbanColumnData column) async {
+    // Con grupo se crea por backend con selector de responsable.
+    if (_isRealGroup) {
+      await _createRealTodo(_statusForColumn(column.title));
+      return;
+    }
     final task = await showModalBottomSheet<_KanbanTask>(
       context: context,
       isScrollControlled: true,
@@ -304,6 +637,11 @@ class _KanbanScreenState extends State<KanbanScreen> {
     setState(() => column.tasks.add(task));
   }
 
+  /// true cuando el tablero rico muestra fichas del backend (incluso vacío:
+  /// las tres columnas siguen visibles con su estado vacío).
+  bool get _showingRealBoard =>
+      _isRealGroup && !_loadingReal && _realError == null;
+
   @override
   Widget build(BuildContext context) {
     final breakpoint = context.breakpoint;
@@ -313,30 +651,53 @@ class _KanbanScreenState extends State<KanbanScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _buildRealPanel(),
-            if (!_isRealGroup)
+            if (!_isRealGroup) ...[
+              _buildRealPanel(),
               Expanded(
                 child: breakpoint == AppBreakpoint.compact
                     ? _buildCompactBoard()
                     : _buildWideBoard(
-                        expanded: breakpoint == AppBreakpoint.expanded),
-              )
-            else
-              Expanded(child: _buildRealLists()),
+                        expanded: breakpoint == AppBreakpoint.expanded,
+                      ),
+              ),
+            ] else ...[
+              Expanded(
+                child: _loadingReal || _realError != null
+                    ? _buildRealLists()
+                    : breakpoint == AppBreakpoint.compact
+                    ? _buildCompactBoard()
+                    : _buildWideBoard(
+                        expanded: breakpoint == AppBreakpoint.expanded,
+                      ),
+              ),
+            ],
           ],
         ),
       ),
     );
   }
 
-  // Solo datos reales con grupo UUID. Sin preview mock debajo.
+  /// Recargar integrado al encabezado rico (sin caja blanca duplicada).
+  Widget _buildReloadButton() {
+    if (!_isRealGroup) return const SizedBox.shrink();
+    return NeobrutalistButton(
+      label: 'Recargar',
+      icon: Icons.refresh_rounded,
+      variant: NeobrutalistButtonVariant.secondary,
+      onPressed: _loadingReal ? null : _loadReal,
+    );
+  }
+
+  // Carga / error / vacío del grupo. Con datos se muestra el tablero rico.
   Widget _buildRealLists() {
     if (_loadingReal) {
       return const Center(
-          child: SizedBox(
-              width: 24,
-              height: 24,
-              child: CircularProgressIndicator(strokeWidth: 2)));
+        child: SizedBox(
+          width: 24,
+          height: 24,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      );
     }
     if (_realError != null) {
       return Center(
@@ -345,18 +706,24 @@ class _KanbanScreenState extends State<KanbanScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('NO SE PUDO CARGAR EL TABLERO REAL',
-                  style: TextStyle(
-                      fontWeight: FontWeight.w900,
-                      fontSize: 13,
-                      color: AppColors.text)),
+              const Text(
+                'NO SE PUDO CARGAR EL TABLERO',
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 13,
+                  color: AppColors.text,
+                ),
+              ),
               const SizedBox(height: 8),
-              Text(_realError!,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.mutedStrong)),
+              const Text(
+                'No se pudo cargar el tablero.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.mutedStrong,
+                ),
+              ),
               const SizedBox(height: 12),
               NeobrutalistButton(
                 label: 'Reintentar',
@@ -373,150 +740,44 @@ class _KanbanScreenState extends State<KanbanScreen> {
       return const Center(
         child: Padding(
           padding: EdgeInsets.all(16),
-          child: Text('Sin tareas reales. Crea la primera con + Nueva real.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.mutedStrong)),
+          child: Text(
+            'Aún no hay tareas.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: AppColors.mutedStrong,
+            ),
+          ),
         ),
       );
     }
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _RealListSection(title: 'POR HACER (REAL)', tasks: _realTodo),
-          const SizedBox(height: 10),
-          _RealListSection(
-              title: 'EN PROGRESO (REAL)', tasks: _realDoing),
-          const SizedBox(height: 10),
-          _RealListSection(title: 'FINALIZADO (REAL)', tasks: _realDone),
-          const SizedBox(height: 8),
-          const Text(
-            'Mover/editar/borrar bloqueado: PATCH/DELETE /groups/:id/todo sin :taskId (main.go:190-191 vs todo_handler.go:162,219). Solo lectura y creación.',
-            style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: AppColors.mutedStrong),
-          ),
-        ],
-      ),
-    );
+    // Con datos se muestra el tablero rico (ver build()).
+    return const SizedBox.shrink();
   }
 
+  /// Aviso de vista previa (solo sin grupo). En modo real se usa
+  /// [_buildRealHeader] + tablero.
   Widget _buildRealPanel() {
-    if (!_isRealGroup) {
-      return Container(
-        margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          border: Border.all(
-              color: AppColors.border, width: AppDimens.borderWidth),
-          borderRadius: BorderRadius.circular(AppDimens.radius),
-        ),
-        child: const Text(
-          'TABLERO REAL: selecciona un grupo real (UUID) para GET /groups/:id/workspace.kanban y POST /groups/:id/todo. '
-          'Abajo: vista previa local, movimientos no persistidos.',
-          style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              color: AppColors.mutedStrong),
-        ),
-      );
-    }
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        border:
-            Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
-        boxShadow: AppShadows.card,
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              const Expanded(
-                child: Text('TABLERO REAL (workspace.kanban)',
-                    style: TextStyle(
-                        fontWeight: FontWeight.w900,
-                        fontSize: 12,
-                        color: AppColors.text)),
-              ),
-              NeobrutalistButton(
-                label: 'Recargar',
-                icon: Icons.refresh_rounded,
-                variant: NeobrutalistButtonVariant.secondary,
-                onPressed: _loadingReal ? null : _loadReal,
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              Expanded(
-                  child: _RealCountChip(
-                      label: 'POR HACER',
-                      count: _realTodo.length,
-                      onAdd: () => _createRealTodo('todo'))),
-              const SizedBox(width: 6),
-              Expanded(
-                  child: _RealCountChip(
-                      label: 'EN PROGRESO',
-                      count: _realDoing.length,
-                      onAdd: () => _createRealTodo('in_progress'))),
-              const SizedBox(width: 6),
-              Expanded(
-                  child: _RealCountChip(
-                      label: 'FINALIZADO',
-                      count: _realDone.length,
-                      onAdd: () => _createRealTodo('done'))),
-            ],
-          ),
-          if (_loadingReal) ...[
-            const SizedBox(height: 6),
-            const Center(
-                child: SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2))),
-          ] else if (_realError != null) ...[
-            const SizedBox(height: 6),
-            Text(_realError!,
-                style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.error)),
-          ] else ...[
-            const SizedBox(height: 6),
-            Text(
-              'Real: ${_realTodo.length} por hacer · ${_realDoing.length} en progreso · ${_realDone.length} finalizadas. '
-              'Mover/editar/borrar bloqueado: PATCH/DELETE /groups/:id/todo sin :taskId '
-              '(main.go:190-191 vs todo_handler.go:162,219).',
-              style: const TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.mutedStrong),
-            ),
-            if (_realTodo.isNotEmpty)
-              Text(
-                'Ej. real: ${_realTodo.first.title}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.text),
-              ),
-          ],
-        ],
+      child: const Text(
+        'Selecciona un grupo para ver su tablero. '
+        'Abajo: vista previa local de ejemplo.',
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          color: AppColors.mutedStrong,
+        ),
       ),
     );
   }
@@ -585,6 +846,8 @@ class _KanbanScreenState extends State<KanbanScreen> {
                     onMoveRight: index < _columns.length - 1
                         ? (task) => _moveTask(task, column, _columns[index + 1])
                         : null,
+                    onMenu: _cardMenu,
+                    dragEnabled: !_showingRealBoard,
                   ),
                 );
               },
@@ -616,6 +879,8 @@ class _KanbanScreenState extends State<KanbanScreen> {
                 onMoveRight: i < _columns.length - 1
                     ? (task) => _moveTask(task, _columns[i], _columns[i + 1])
                     : null,
+                onMenu: _cardMenu,
+                dragEnabled: !_showingRealBoard,
               ),
             ),
           ),
@@ -646,6 +911,8 @@ class _KanbanScreenState extends State<KanbanScreen> {
                 onMoveRight: i < _columns.length - 1
                     ? (task) => _moveTask(task, _columns[i], _columns[i + 1])
                     : null,
+                onMenu: _cardMenu,
+                dragEnabled: !_showingRealBoard,
               ),
             ),
           ),
@@ -654,6 +921,8 @@ class _KanbanScreenState extends State<KanbanScreen> {
   }
 
   Widget _buildBoardHeader({required bool compact}) {
+    // Sin SPRINT 3 hardcodeado: Kanban y Sprint son módulos separados.
+    // Recargar vive aquí en modo real (sin caja TABLERO duplicada).
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -678,7 +947,7 @@ class _KanbanScreenState extends State<KanbanScreen> {
               ),
               const SizedBox(height: AppDimens.spaceSm),
               Text(
-                'Arrastra las fichas técnicas entre placas para cambiar su estado.',
+                'Organiza las tareas según su estado.',
                 style: TextStyle(
                   color: AppColors.mutedStrong,
                   fontWeight: FontWeight.w700,
@@ -689,8 +958,10 @@ class _KanbanScreenState extends State<KanbanScreen> {
             ],
           ),
         ),
-        const SizedBox(width: AppDimens.spaceMd),
-        const _SprintStamp(label: 'Sprint 3'),
+        if (_isRealGroup) ...[
+          const SizedBox(width: AppDimens.spaceMd),
+          _buildReloadButton(),
+        ],
       ],
     );
   }
@@ -730,6 +1001,8 @@ class _KanbanColumn extends StatelessWidget {
     required this.onAcceptTask,
     this.onMoveLeft,
     this.onMoveRight,
+    this.onMenu,
+    this.dragEnabled = true,
   });
 
   final _KanbanColumnData column;
@@ -737,6 +1010,11 @@ class _KanbanColumn extends StatelessWidget {
   final ValueChanged<_KanbanTask> onAcceptTask;
   final ValueChanged<_KanbanTask>? onMoveLeft;
   final ValueChanged<_KanbanTask>? onMoveRight;
+  final ValueChanged<_KanbanTask>? onMenu;
+
+  /// Sin drag en modo real (el movimiento es explícito por flechas/menú
+  /// con PATCH): evita duplicados y fichas flotantes.
+  final bool dragEnabled;
 
   @override
   Widget build(BuildContext context) {
@@ -811,6 +1089,31 @@ class _KanbanColumn extends StatelessWidget {
   }
 
   Widget _buildDropZone(BuildContext context) {
+    final content = Stack(
+      children: [
+        if (column.tasks.isEmpty)
+          const Positioned.fill(child: _EmptyPlate())
+        else
+          ListView.builder(
+            padding: const EdgeInsets.fromLTRB(
+              AppDimens.spaceSm + 2,
+              AppDimens.spaceSm + 2,
+              AppDimens.spaceSm + 5,
+              AppDimens.spaceXs,
+            ),
+            itemCount: column.tasks.length,
+            itemBuilder: (context, index) {
+              final task = column.tasks[index];
+              return Padding(
+                key: ValueKey(task.id),
+                padding: const EdgeInsets.only(bottom: AppDimens.spaceMd),
+                child: _buildDraggable(context, task),
+              );
+            },
+          ),
+      ],
+    );
+    if (!dragEnabled) return content;
     return DragTarget<_KanbanTask>(
       onWillAcceptWithDetails: (_) => true,
       onAcceptWithDetails: (details) => onAcceptTask(details.data),
@@ -826,40 +1129,16 @@ class _KanbanColumn extends StatelessWidget {
               width: AppDimens.borderWidth,
             ),
           ),
-          child: Stack(
-            children: [
-              if (column.tasks.isEmpty)
-                const Positioned.fill(child: _EmptyPlate())
-              else
-                ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(
-                    AppDimens.spaceSm + 2,
-                    AppDimens.spaceSm + 2,
-                    AppDimens.spaceSm + 5,
-                    AppDimens.spaceXs,
-                  ),
-                  itemCount: column.tasks.length,
-                  itemBuilder: (context, index) {
-                    final task = column.tasks[index];
-                    return Padding(
-                      key: ValueKey(task.id),
-                      padding: const EdgeInsets.only(bottom: AppDimens.spaceMd),
-                      child: _buildDraggable(context, task),
-                    );
-                  },
-                ),
-              if (active)
-                const Positioned.fill(
-                  child: IgnorePointer(child: _DropHereStamp()),
-                ),
-            ],
-          ),
+          child: content,
         );
       },
     );
   }
 
   Widget _buildDraggable(BuildContext context, _KanbanTask task) {
+    // Sin drag (modo real): la ficha es estática; el movimiento es
+    // explícito por flechas/menú con PATCH.
+    if (!dragEnabled) return _buildCard(task);
     final feedback = Transform.rotate(
       angle: 0.02,
       child: Transform.scale(
@@ -897,6 +1176,7 @@ class _KanbanColumn extends StatelessWidget {
       task: task,
       onMoveLeft: onMoveLeft == null ? null : () => onMoveLeft!(task),
       onMoveRight: onMoveRight == null ? null : () => onMoveRight!(task),
+      onMenu: onMenu == null ? null : () => onMenu!(task),
     );
   }
 }
@@ -911,12 +1191,16 @@ class _TaskCard extends StatefulWidget {
     this.dragging = false,
     this.onMoveLeft,
     this.onMoveRight,
+    this.onMenu,
   });
 
   final _KanbanTask task;
   final bool dragging;
   final VoidCallback? onMoveLeft;
   final VoidCallback? onMoveRight;
+
+  /// Menú contextual (editar/eliminar) para fichas reales.
+  final VoidCallback? onMenu;
 
   @override
   State<_TaskCard> createState() => _TaskCardState();
@@ -975,18 +1259,36 @@ class _TaskCardState extends State<_TaskCard> {
             children: [
               Row(
                 children: [
-                  _PrioritySticker(priority: widget.task.priority),
-                  const Spacer(),
-                  _PlateCodeTag(
-                    code: widget.task.subject,
-                    background: AppColors.bg,
-                  ),
-                  const SizedBox(width: AppDimens.spaceSm),
-                  const Icon(
-                    Icons.drag_indicator_rounded,
-                    size: 15,
-                    color: AppColors.muted,
-                  ),
+                  if (widget.task.priority != null)
+                    _PrioritySticker(priority: widget.task.priority!),
+                  if (widget.task.priority != null) const Spacer(),
+                  if (widget.task.priority == null) const Spacer(),
+                  if (widget.task.subject.trim().isNotEmpty) ...[
+                    _PlateCodeTag(
+                      code: widget.task.subject,
+                      background: AppColors.bg,
+                    ),
+                    const SizedBox(width: AppDimens.spaceSm),
+                  ],
+                  if (widget.task.isReal && widget.onMenu != null)
+                    InkWell(
+                      onTap: widget.onMenu,
+                      borderRadius: BorderRadius.circular(12),
+                      child: const Padding(
+                        padding: EdgeInsets.all(2),
+                        child: Icon(
+                          Icons.more_vert_rounded,
+                          size: 15,
+                          color: AppColors.mutedStrong,
+                        ),
+                      ),
+                    )
+                  else
+                    const Icon(
+                      Icons.drag_indicator_rounded,
+                      size: 15,
+                      color: AppColors.muted,
+                    ),
                 ],
               ),
               const SizedBox(height: AppDimens.spaceSm),
@@ -1284,47 +1586,6 @@ class _PlateStamp extends StatelessWidget {
   }
 }
 
-class _SprintStamp extends StatelessWidget {
-  const _SprintStamp({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Transform.rotate(
-      angle: 0.02,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
-        decoration: BoxDecoration(
-          color: AppColors.accentYellow,
-          border: Border.all(
-            color: AppColors.border,
-            width: AppDimens.borderWidth,
-          ),
-          borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-          boxShadow: AppShadows.badge,
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.bolt_rounded, size: 13, color: AppColors.text),
-            const SizedBox(width: AppDimens.spaceXs),
-            Text(
-              label.toUpperCase(),
-              style: const TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 0.8,
-                color: AppColors.text,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _BoardTabChip extends StatefulWidget {
   const _BoardTabChip({
     required this.label,
@@ -1404,40 +1665,6 @@ class _BoardTabChipState extends State<_BoardTabChip> {
                 ),
               ],
             ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _DropHereStamp extends StatelessWidget {
-  const _DropHereStamp();
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-          horizontal: AppDimens.spaceLg,
-          vertical: AppDimens.spaceSm,
-        ),
-        decoration: BoxDecoration(
-          color: AppColors.accentYellow,
-          border: Border.all(
-            color: AppColors.border,
-            width: AppDimens.borderWidth,
-          ),
-          borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-          boxShadow: AppShadows.badge,
-        ),
-        child: const Text(
-          'SUELTA AQUÍ',
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 0.8,
-            color: AppColors.text,
           ),
         ),
       ),
@@ -1681,90 +1908,73 @@ class _NewTaskSheetState extends State<_NewTaskSheet> {
   }
 }
 
-class _RealCountChip extends StatelessWidget {
-  const _RealCountChip(
-      {required this.label, required this.count, required this.onAdd});
+// ---------------------------------------------------------------------------
+// Menú contextual de ficha real (editar / eliminar).
+// ---------------------------------------------------------------------------
 
-  final String label;
-  final int count;
-  final VoidCallback onAdd;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      decoration: BoxDecoration(
-        color: AppColors.bg,
-        border: Border.all(color: AppColors.border, width: 1.5),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        children: [
-          Text('$label ($count)',
-              style: const TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w900,
-                  color: AppColors.text)),
-          const SizedBox(height: 4),
-          InkWell(
-              onTap: onAdd,
-              child: const Text('+ Nueva real',
-                  style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.accentBlueDeep))),
-        ],
-      ),
-    );
-  }
-}
-
-class _RealListSection extends StatelessWidget {
-  const _RealListSection({required this.title, required this.tasks});
+class _CardMenuSheet extends StatelessWidget {
+  const _CardMenuSheet({required this.title});
 
   final String title;
-  final List<TodoTask> tasks;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        border:
-            Border.all(color: AppColors.border, width: AppDimens.borderWidth),
-        borderRadius: BorderRadius.circular(AppDimens.radius),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('$title (${tasks.length})',
-              style: const TextStyle(
-                  fontWeight: FontWeight.w900,
-                  fontSize: 11,
-                  color: AppColors.text)),
-          const SizedBox(height: 6),
-          if (tasks.isEmpty)
-            const Text('Vacío (real).',
-                style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.mutedStrong))
-          else
-            for (final t in tasks)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
-                child: Text('• ${t.title}',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.text)),
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: Container(
+          decoration: const BoxDecoration(
+            color: AppColors.surface,
+            border: Border(
+              top: BorderSide(
+                color: AppColors.border,
+                width: AppDimens.borderWidthThick,
               ),
-        ],
+            ),
+          ),
+          padding: const EdgeInsets.fromLTRB(
+            AppDimens.spaceXl,
+            AppDimens.spaceMd,
+            AppDimens.spaceXl,
+            AppDimens.spaceXl,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 14,
+                  color: AppColors.text,
+                ),
+              ),
+              const SizedBox(height: AppDimens.spaceMd),
+              NeobrutalistButton(
+                label: 'Editar',
+                icon: Icons.edit_rounded,
+                variant: NeobrutalistButtonVariant.primary,
+                expand: true,
+                onPressed: () => Navigator.of(context).pop('edit'),
+              ),
+              const SizedBox(height: AppDimens.spaceSm),
+              NeobrutalistButton(
+                label: 'Eliminar',
+                icon: Icons.delete_rounded,
+                variant: NeobrutalistButtonVariant.secondary,
+                expand: true,
+                onPressed: () => Navigator.of(context).pop('delete'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
 }
-

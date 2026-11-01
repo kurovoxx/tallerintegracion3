@@ -24,6 +24,13 @@ func (r *StreamRepository) GetGroupByID(ctx context.Context, id pgtype.UUID) (sq
 	return r.queries.GetGroupByID(ctx, id)
 }
 
+func (r *StreamRepository) GetMemberRole(ctx context.Context, groupID, userID pgtype.UUID) (string, error) {
+	return r.queries.GetGroupMemberRole(ctx, sqlc.GetGroupMemberRoleParams{
+		GroupID: groupID,
+		UserID:  userID,
+	})
+}
+
 func (r *StreamRepository) GetChannelByGroup(ctx context.Context, groupID pgtype.UUID) (sqlc.SocialStreamChannel, error) {
 	return r.queries.GetStreamChannelByGroup(ctx, groupID)
 }

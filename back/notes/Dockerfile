@@ -12,6 +12,6 @@ FROM alpine:3.19
 RUN apk --no-cache add ca-certificates tzdata
 WORKDIR /app
 COPY --from=builder /notes-server .
-EXPOSE 8082
+EXPOSE 8082 9082
 ENV PORT=8082
 CMD ["./notes-server"]

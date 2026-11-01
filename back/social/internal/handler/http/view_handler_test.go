@@ -27,7 +27,7 @@ type stubSources struct {
 	calls    int
 }
 
-func (s *stubSources) ListTodos(context.Context, string, string, string) ([]service.TodoTaskView, error) {
+func (s *stubSources) ListTodos(context.Context, string, string, string, string) ([]service.TodoTaskView, error) {
 	s.calls++
 	return s.todos, s.err
 }
@@ -35,7 +35,7 @@ func (s *stubSources) ListSheets(context.Context, string) ([]sqlc.SocialSprintSh
 	s.calls++
 	return s.sheets, s.err
 }
-func (s *stubSources) ListSprintTasks(context.Context, string, string, string, string) ([]service.SprintTaskView, error) {
+func (s *stubSources) ListSprintTasks(context.Context, string, string, string, string, string) ([]service.SprintTaskView, error) {
 	s.calls++
 	return s.tasks, s.err
 }

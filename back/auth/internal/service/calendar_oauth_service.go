@@ -49,9 +49,30 @@ type ConfigCalendarOAuthProvider struct {
 	HTTPClient  *NetHTTPClient
 }
 
+// CalendarRedirectExchanger extiende el provider para flujos desktop con
+// puerto efímero (RFC 8252), igual que Drive: el redirect_uri viaja en el
+// request y debe validarse con ValidateRedirectURI antes de usarse.
+type CalendarRedirectExchanger interface {
+	ExchangeWithRedirect(ctx context.Context, oauthCode, redirectURI string) (*CalendarOAuthResult, error)
+}
+
+func (p *ConfigCalendarOAuthProvider) ConfiguredRedirectURI() string {
+	return strings.TrimSpace(p.RedirectURI)
+}
+
 func (p *ConfigCalendarOAuthProvider) Exchange(ctx context.Context, oauthCode string) (*CalendarOAuthResult, error) {
+	return p.exchangeWithRedirect(ctx, oauthCode, strings.TrimSpace(p.RedirectURI))
+}
+
+// ExchangeWithRedirect intercambia usando un redirect_uri validado por el
+// llamador (flujo desktop con puerto efímero). Sin validación previa no usar.
+func (p *ConfigCalendarOAuthProvider) ExchangeWithRedirect(ctx context.Context, oauthCode, redirectURI string) (*CalendarOAuthResult, error) {
+	return p.exchangeWithRedirect(ctx, oauthCode, strings.TrimSpace(redirectURI))
+}
+
+func (p *ConfigCalendarOAuthProvider) exchangeWithRedirect(ctx context.Context, oauthCode, redirectURI string) (*CalendarOAuthResult, error) {
 	oauthCode = strings.TrimSpace(oauthCode)
-	if strings.TrimSpace(p.ClientID) == "" || strings.TrimSpace(p.ClientSecret) == "" || strings.TrimSpace(p.RedirectURI) == "" {
+	if strings.TrimSpace(p.ClientID) == "" || strings.TrimSpace(p.ClientSecret) == "" || redirectURI == "" {
 		return nil, ErrGoogleUnavailable
 	}
 	if oauthCode == "" {
@@ -68,7 +89,7 @@ func (p *ConfigCalendarOAuthProvider) Exchange(ctx context.Context, oauthCode st
 	cfg := &oauth2.Config{
 		ClientID:     p.ClientID,
 		ClientSecret: p.ClientSecret,
-		RedirectURL:  p.RedirectURI,
+		RedirectURL:  redirectURI,
 		Endpoint:     endpoint,
 		Scopes:       []string{"https://www.googleapis.com/auth/calendar.events", "openid", "email", "profile"},
 	}
@@ -147,6 +168,13 @@ func NewCalendarOAuthService(repo CalendarOAuthRepository, provider CalendarOAut
 
 // Connect intercambia oauth_code y guarda la conexión. No devuelve tokens.
 func (s *CalendarOAuthService) Connect(ctx context.Context, userID, oauthCode string) error {
+	return s.ConnectWithRedirect(ctx, userID, oauthCode, "")
+}
+
+// ConnectWithRedirect acepta el redirect_uri real del flujo desktop con
+// puerto efímero (RFC 8252). Vacío = redirect configurado. Se valida con la
+// misma allowlist que Drive antes de usarse.
+func (s *CalendarOAuthService) ConnectWithRedirect(ctx context.Context, userID, oauthCode, redirectURI string) error {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
 		return NewServiceError(utils.ErrUnauthorized)
@@ -155,7 +183,25 @@ func (s *CalendarOAuthService) Connect(ctx context.Context, userID, oauthCode st
 	if oauthCode == "" {
 		return NewServiceError("bad_request")
 	}
-	result, err := s.provider.Exchange(ctx, oauthCode)
+	redirectURI = strings.TrimSpace(redirectURI)
+	exchanger := s.provider.Exchange
+	if redirectURI != "" {
+		ex, ok := s.provider.(CalendarRedirectExchanger)
+		if !ok {
+			return NewServiceError("internal_error")
+		}
+		configured := ""
+		if rc, ok := s.provider.(redirectConfigured); ok {
+			configured = rc.ConfiguredRedirectURI()
+		}
+		if err := ValidateRedirectURI(redirectURI, configured, legacyDesktopRedirect); err != nil {
+			return NewServiceError("invalid_redirect_uri")
+		}
+		exchanger = func(ctx context.Context, code string) (*CalendarOAuthResult, error) {
+			return ex.ExchangeWithRedirect(ctx, code, redirectURI)
+		}
+	}
+	result, err := exchanger(ctx, oauthCode)
 	if err != nil {
 		if errors.Is(err, ErrInvalidOAuthCode) {
 			return NewServiceError("invalid_oauth_code")
@@ -230,6 +276,30 @@ func (s *CalendarOAuthService) GetValidAccessToken(ctx context.Context, userID s
 		return "", NewServiceError("internal_error")
 	}
 	return result.AccessToken, nil
+}
+
+// CalendarConnectionStatus es el estado para la UI (vincular/reconectar).
+// Nunca incluye tokens ni secretos: solo bandera + email externo opcional.
+type CalendarConnectionStatus struct {
+	Connected     bool
+	ExternalEmail *string
+}
+
+// GetCalendarConnectionStatus devuelve el estado sin HTTP ni escritura.
+// disconnected si no hay fila o está revocada; nunca expone tokens.
+func (s *CalendarOAuthService) GetCalendarConnectionStatus(ctx context.Context, userID string) (CalendarConnectionStatus, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return CalendarConnectionStatus{}, NewServiceError("bad_request")
+	}
+	conn, err := s.oauthRepo.GetByUserIDAndProvider(ctx, userID, model.ProviderGoogleCalendar)
+	if err != nil {
+		return CalendarConnectionStatus{}, NewServiceError("internal_error")
+	}
+	if conn == nil || conn.RevokedAt != nil {
+		return CalendarConnectionStatus{Connected: false}, nil
+	}
+	return CalendarConnectionStatus{Connected: true, ExternalEmail: conn.ExternalAccountEmail}, nil
 }
 
 // ReportCalendarPermissionDenied marca revoked_at para que el cliente muestre "reconecta Calendar".

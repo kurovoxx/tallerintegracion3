@@ -130,3 +130,53 @@ func TestCalendarHandler_Connect_GoogleCaido_502(t *testing.T) {
 		t.Fatalf("esperado 502, got %d %s", w.Code, w.Body.String())
 	}
 }
+
+func newCalendarStatusCtx(withUser bool) (*gin.Context, *httptest.ResponseRecorder) {
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/auth/google-calendar/status", nil)
+	if withUser {
+		c.Set(middleware.ContextUserIDKey, "user-123")
+	}
+	return c, w
+}
+
+func TestCalendarHandler_Status_Desconectado_200(t *testing.T) {
+	h := NewCalendarHandler(service.NewCalendarOAuthService(&mockCalendarRepo{}, &mockCalendarProvider{}))
+	c, w := newCalendarStatusCtx(true)
+	h.Status(c)
+	if w.Code != 200 {
+		t.Fatalf("esperado 200, got %d", w.Code)
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || resp["connected"] != false {
+		t.Fatalf("connected false esperado, got %s", w.Body.String())
+	}
+}
+
+func TestCalendarHandler_Status_Conectado_ConEmail_200(t *testing.T) {
+	email := "cal@gmail.com"
+	repo := &mockCalendarRepo{conn: &model.OAuthConnection{AccessToken: "acc", ExternalAccountEmail: &email}}
+	h := NewCalendarHandler(service.NewCalendarOAuthService(repo, &mockCalendarProvider{}))
+	c, w := newCalendarStatusCtx(true)
+	h.Status(c)
+	if w.Code != 200 {
+		t.Fatalf("esperado 200, got %d", w.Code)
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || resp["connected"] != true || resp["external_email"] != email {
+		t.Fatalf("connected+email esperados, got %s", w.Body.String())
+	}
+	if b := w.Body.String(); b != `{"connected":true,"external_email":"cal@gmail.com"}` {
+		t.Fatalf("respuesta no debe exponer tokens: %s", b)
+	}
+}
+
+func TestCalendarHandler_Status_SinUser_401(t *testing.T) {
+	h := NewCalendarHandler(service.NewCalendarOAuthService(&mockCalendarRepo{}, &mockCalendarProvider{}))
+	c, w := newCalendarStatusCtx(false)
+	h.Status(c)
+	if w.Code != 401 {
+		t.Fatalf("esperado 401, got %d", w.Code)
+	}
+}

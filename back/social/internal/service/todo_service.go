@@ -10,7 +10,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository/sqlc"
 )
 
@@ -27,6 +26,8 @@ var (
 	ErrInvalidDueDate = errors.New("invalid due_date: must be YYYY-MM-DD")
 	ErrTitleTooLong   = errors.New("title too long: max 300 characters")
 	ErrNothingToPatch = errors.New("nothing to update: provide at least one of title, status, assigned_to, due_date")
+	// ErrAssigneeNotMember exige regla 4.4: el asignado debe ser miembro del grupo.
+	ErrAssigneeNotMember = errors.New("assignee must be a member of the group")
 )
 
 var validStatuses = map[string]struct{}{
@@ -37,11 +38,27 @@ var validStatuses = map[string]struct{}{
 
 const defaultBoardName = "General"
 
-type TodoService struct {
-	repo *repository.TodoRepository
+// TodoRepo es la porción de persistencia que usa TodoService.
+// *repository.TodoRepository es la implementación real (Postgres);
+// MemoryTasksStore, la de tests.
+type TodoRepo interface {
+	GetGroupByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialGroup, error)
+	IsMember(ctx context.Context, groupID, userID pgtype.UUID) (bool, error)
+	GetBoardByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialTodoBoard, error)
+	ListBoardsByGroup(ctx context.Context, groupID pgtype.UUID) ([]sqlc.SocialTodoBoard, error)
+	CreateBoard(ctx context.Context, arg sqlc.CreateBoardParams) (sqlc.SocialTodoBoard, error)
+	GetTaskByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialTodoTask, error)
+	CreateTask(ctx context.Context, arg sqlc.CreateTodoTaskParams) (sqlc.SocialTodoTask, error)
+	ListTasksByGroup(ctx context.Context, arg sqlc.ListTodoTasksByGroupParams) ([]sqlc.ListTodoTasksByGroupRow, error)
+	UpdateTask(ctx context.Context, arg sqlc.UpdateTodoTaskParams) (sqlc.SocialTodoTask, error)
+	DeleteTask(ctx context.Context, id pgtype.UUID) (sqlc.SocialTodoTask, error)
 }
 
-func NewTodoService(repo *repository.TodoRepository) *TodoService {
+type TodoService struct {
+	repo TodoRepo
+}
+
+func NewTodoService(repo TodoRepo) *TodoService {
 	return &TodoService{
 		repo: repo,
 	}
@@ -69,6 +86,50 @@ func (s *TodoService) requireGroup(ctx context.Context, gid pgtype.UUID) error {
 			return ErrGroupNotFound
 		}
 		return err
+	}
+	return nil
+}
+
+// requireMembership exige que el usuario pertenezca al grupo (403 si no).
+func (s *TodoService) requireMembership(ctx context.Context, gid, uid pgtype.UUID) error {
+	isMember, err := s.repo.IsMember(ctx, gid, uid)
+	if err != nil {
+		return err
+	}
+	if !isMember {
+		return ErrForbidden
+	}
+	return nil
+}
+
+// requireAssigneeMember exige regla 4.4: asignado no vacío debe ser miembro.
+// Vacío (sin asignar) siempre pasa.
+func (s *TodoService) requireAssigneeMember(ctx context.Context, gid, auid pgtype.UUID) error {
+	if !auid.Valid {
+		return nil
+	}
+	isMember, err := s.repo.IsMember(ctx, gid, auid)
+	if err != nil {
+		return err
+	}
+	if !isMember {
+		return ErrAssigneeNotMember
+	}
+	return nil
+}
+
+// requireTaskInGroup verifica que el tablero de la tarea pertenece al grupo.
+// Tarea de otro grupo (o tablero inexistente) => ErrTodoNotFound (404, sin filtrar).
+func (s *TodoService) requireTaskInGroup(ctx context.Context, gid, boardID pgtype.UUID) error {
+	board, err := s.repo.GetBoardByID(ctx, boardID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrTodoNotFound
+		}
+		return err
+	}
+	if board.GroupID != gid {
+		return ErrTodoNotFound
 	}
 	return nil
 }
@@ -158,7 +219,7 @@ func normalizeStatus(status string) (string, error) {
 	return status, nil
 }
 
-func (s *TodoService) CreateTodo(ctx context.Context, groupID, boardID, title, status, assignedTo, dueDate string) (TodoTaskView, error) {
+func (s *TodoService) CreateTodo(ctx context.Context, groupID, userID, boardID, title, status, assignedTo, dueDate string) (TodoTaskView, error) {
 	title, err := validateTitle(title)
 	if err != nil {
 		return TodoTaskView{}, err
@@ -180,7 +241,17 @@ func (s *TodoService) CreateTodo(ctx context.Context, groupID, boardID, title, s
 	if err != nil {
 		return TodoTaskView{}, err
 	}
+	uid, err := parseMeetingUserUUID(userID)
+	if err != nil {
+		return TodoTaskView{}, err
+	}
 	if err := s.requireGroup(ctx, gid); err != nil {
+		return TodoTaskView{}, err
+	}
+	if err := s.requireMembership(ctx, gid, uid); err != nil {
+		return TodoTaskView{}, err
+	}
+	if err := s.requireAssigneeMember(ctx, gid, assignee); err != nil {
 		return TodoTaskView{}, err
 	}
 	board, err := s.resolveBoard(ctx, gid, boardID)
@@ -205,8 +276,12 @@ func (s *TodoService) CreateTodo(ctx context.Context, groupID, boardID, title, s
 	return TodoTaskView{Task: task, Board: board}, nil
 }
 
-func (s *TodoService) ListTodos(ctx context.Context, groupID, status, boardID string) ([]TodoTaskView, error) {
+func (s *TodoService) ListTodos(ctx context.Context, groupID, userID, status, boardID string) ([]TodoTaskView, error) {
 	gid, err := parseGroupUUID(groupID)
+	if err != nil {
+		return nil, err
+	}
+	uid, err := parseMeetingUserUUID(userID)
 	if err != nil {
 		return nil, err
 	}
@@ -219,6 +294,9 @@ func (s *TodoService) ListTodos(ctx context.Context, groupID, status, boardID st
 	}
 
 	if err := s.requireGroup(ctx, gid); err != nil {
+		return nil, err
+	}
+	if err := s.requireMembership(ctx, gid, uid); err != nil {
 		return nil, err
 	}
 
@@ -263,9 +341,24 @@ func (s *TodoService) ListTodos(ctx context.Context, groupID, status, boardID st
 	return views, nil
 }
 
-func (s *TodoService) UpdateTodo(ctx context.Context, todoID string, title, status, assignedTo, dueDate *string) (TodoTaskView, error) {
+func (s *TodoService) UpdateTodo(ctx context.Context, groupID, userID, todoID string, title, status, assignedTo, dueDate *string) (TodoTaskView, error) {
 	if title == nil && status == nil && assignedTo == nil && dueDate == nil {
 		return TodoTaskView{}, ErrNothingToPatch
+	}
+
+	gid, err := parseGroupUUID(groupID)
+	if err != nil {
+		return TodoTaskView{}, err
+	}
+	uid, err := parseMeetingUserUUID(userID)
+	if err != nil {
+		return TodoTaskView{}, err
+	}
+	if err := s.requireGroup(ctx, gid); err != nil {
+		return TodoTaskView{}, err
+	}
+	if err := s.requireMembership(ctx, gid, uid); err != nil {
+		return TodoTaskView{}, err
 	}
 
 	todoID = strings.TrimSpace(todoID)
@@ -282,6 +375,9 @@ func (s *TodoService) UpdateTodo(ctx context.Context, todoID string, title, stat
 		if errors.Is(err, pgx.ErrNoRows) {
 			return TodoTaskView{}, ErrTodoNotFound
 		}
+		return TodoTaskView{}, err
+	}
+	if err := s.requireTaskInGroup(ctx, gid, current.BoardID); err != nil {
 		return TodoTaskView{}, err
 	}
 
@@ -315,6 +411,9 @@ func (s *TodoService) UpdateTodo(ctx context.Context, todoID string, title, stat
 		if err != nil {
 			return TodoTaskView{}, err
 		}
+		if err := s.requireAssigneeMember(ctx, gid, a); err != nil {
+			return TodoTaskView{}, err
+		}
 		arg.AssigneeUserID = a
 	}
 	if dueDate != nil {
@@ -340,7 +439,22 @@ func (s *TodoService) UpdateTodo(ctx context.Context, todoID string, title, stat
 	return TodoTaskView{Task: updated, Board: board}, nil
 }
 
-func (s *TodoService) DeleteTodo(ctx context.Context, todoID string) (TodoTaskView, error) {
+func (s *TodoService) DeleteTodo(ctx context.Context, groupID, userID, todoID string) (TodoTaskView, error) {
+	gid, err := parseGroupUUID(groupID)
+	if err != nil {
+		return TodoTaskView{}, err
+	}
+	uid, err := parseMeetingUserUUID(userID)
+	if err != nil {
+		return TodoTaskView{}, err
+	}
+	if err := s.requireGroup(ctx, gid); err != nil {
+		return TodoTaskView{}, err
+	}
+	if err := s.requireMembership(ctx, gid, uid); err != nil {
+		return TodoTaskView{}, err
+	}
+
 	todoID = strings.TrimSpace(todoID)
 	if _, err := uuid.Parse(todoID); err != nil {
 		return TodoTaskView{}, ErrInvalidTodoID
@@ -348,6 +462,17 @@ func (s *TodoService) DeleteTodo(ctx context.Context, todoID string) (TodoTaskVi
 	var tid pgtype.UUID
 	if err := tid.Scan(todoID); err != nil {
 		return TodoTaskView{}, ErrInvalidTodoID
+	}
+
+	current, err := s.repo.GetTaskByID(ctx, tid)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return TodoTaskView{}, ErrTodoNotFound
+		}
+		return TodoTaskView{}, err
+	}
+	if err := s.requireTaskInGroup(ctx, gid, current.BoardID); err != nil {
+		return TodoTaskView{}, err
 	}
 
 	deleted, err := s.repo.DeleteTask(ctx, tid)

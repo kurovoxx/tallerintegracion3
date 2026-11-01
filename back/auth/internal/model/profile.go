@@ -4,6 +4,8 @@ import "time"
 
 // Profile representa identity.profiles según agentSql.md:40.
 // Campos nulables usan *string para distinguir NULL vs valor.
+// Email (de identity.users) lo completa el Service de forma best-effort;
+// omitempty mantiene compatibilidad con clientes que no lo esperan.
 type Profile struct {
 	UserID      string    `json:"user_id"`
 	DisplayName string    `json:"display_name"`
@@ -12,6 +14,7 @@ type Profile struct {
 	Institution *string   `json:"institution"`
 	Description *string   `json:"description"`
 	Visibility  string    `json:"visibility"` // public | private
+	Email       *string   `json:"email,omitempty"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 

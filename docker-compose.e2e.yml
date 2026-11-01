@@ -1,0 +1,157 @@
+# Entorno E2E AISLADO (solo local).
+#
+# - No lee variables del .env raíz: todos los valores son literales de prueba.
+# - Contenedores, red, volumen y credenciales dedicados (prefijo ti3-e2e).
+# - Puertos host distintos a la instalación normal (1xxxx) para no colisionar.
+# - Notes usa Drive mock (sin Google) y Social usa Stream mock (sin GetStream).
+# - PostgreSQL es el contenedor local; nunca Supabase.
+#
+# Uso:
+#   docker compose -f docker-compose.e2e.yml -p ti3-e2e up -d --build
+#   docker compose -f docker-compose.e2e.yml -p ti3-e2e down
+#   docker compose -f docker-compose.e2e.yml -p ti3-e2e down -v   # borra SOLO datos E2E
+
+name: ti3-e2e
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ti3-e2e-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ti3_e2e_pw_2026
+      POSTGRES_DB: postgres
+    ports:
+      - "15432:5432"
+    volumes:
+      - ti3-e2e-pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+    networks:
+      - ti3-e2e-net
+    restart: "no"
+
+  auth:
+    build:
+      context: ./back/auth
+      dockerfile: Dockerfile
+    container_name: ti3-e2e-auth
+    ports:
+      - "18085:8080"
+    environment:
+      DATABASE_URL: postgresql://postgres:ti3_e2e_pw_2026@postgres:5432/postgres?sslmode=disable
+      DIRECT_URL: postgresql://postgres:ti3_e2e_pw_2026@postgres:5432/postgres?sslmode=disable
+      JWT_SECRET: ti3-e2e-jwt-secret-not-for-deploy
+      JWT: ti3-e2e-jwt-kid-not-for-deploy
+      PORT: 8080
+      GRPC_PORT: 9080
+      INTERNAL_API_KEY: ti3-e2e-internal-key
+      # Sin SMTP real: si algo intentara enviar correo, falla contra localhost.
+      SMTP_HOST: 127.0.0.1
+      SMTP_PORT: 1025
+      SMTP_USERNAME: ""
+      SMTP_PASSWORD: ""
+      # Sin Google OAuth: el E2E usa email/password local.
+      GOOGLE_CLIENT_ID: ""
+      GOOGLE_CLIENT_SECRET: ""
+      GOOGLE_REDIRECT_URI: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ti3-e2e-net
+    restart: "no"
+
+  notes:
+    build:
+      context: ./back/notes
+      dockerfile: Dockerfile
+    container_name: ti3-e2e-notes
+    ports:
+      - "18082:8082"
+    environment:
+      DATABASE_URL: postgresql://postgres:ti3_e2e_pw_2026@postgres:5432/postgres?sslmode=disable
+      DIRECT_URL: postgresql://postgres:ti3_e2e_pw_2026@postgres:5432/postgres?sslmode=disable
+      JWT_SECRET: ti3-e2e-jwt-secret-not-for-deploy
+      JWT: ti3-e2e-jwt-kid-not-for-deploy
+      PORT: 8082
+      NOTES_PORT: 8082
+      GRPC_PORT: 9082
+      NOTES_GRPC_PORT: 9082
+      STORAGE_MODE: mock
+      SOCIAL_SERVICE_URL: http://social:8083
+      SOCIAL_GRPC_ADDR: social:9083
+      INTERNAL_API_KEY: ti3-e2e-internal-key
+      GOOGLE_CLIENT_ID: ""
+      GOOGLE_CLIENT_SECRET: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ti3-e2e-net
+    restart: "no"
+
+  social:
+    build:
+      context: ./back/social
+      dockerfile: Dockerfile
+    container_name: ti3-e2e-social
+    ports:
+      - "18083:8083"
+    environment:
+      DATABASE_URL: postgresql://postgres:ti3_e2e_pw_2026@postgres:5432/postgres?sslmode=disable
+      DIRECT_URL: postgresql://postgres:ti3_e2e_pw_2026@postgres:5432/postgres?sslmode=disable
+      JWT_SECRET: ti3-e2e-jwt-secret-not-for-deploy
+      JWT: ti3-e2e-jwt-kid-not-for-deploy
+      PORT: 8083
+      SOCIAL_PORT: 8083
+      GRPC_PORT: 9083
+      SOCIAL_GRPC_PORT: 9083
+      AUTH_BASE_URL: http://auth:8080
+      INTERNAL_API_KEY: ti3-e2e-internal-key
+      NOTES_GRPC_URL: notes:9082
+      CALENDAR_MODE: mock
+      STREAM_MODE: mock
+      STREAM_API_KEY: ""
+      STREAM_API_SECRET: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ti3-e2e-net
+    restart: "no"
+
+  infacadem:
+    build:
+      context: ./back/infacadem
+      dockerfile: Dockerfile
+    container_name: ti3-e2e-academic
+    ports:
+      - "18087:8081"
+    environment:
+      DATABASE_URL: postgresql://postgres:ti3_e2e_pw_2026@postgres:5432/postgres?sslmode=disable
+      DIRECT_URL: postgresql://postgres:ti3_e2e_pw_2026@postgres:5432/postgres?sslmode=disable
+      JWT_SECRET: ti3-e2e-jwt-secret-not-for-deploy
+      PORT: 8081
+      GRPC_PORT: 9081
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      ti3-e2e-net:
+        aliases:
+          - academic
+    restart: "no"
+
+volumes:
+  ti3-e2e-pgdata:
+    name: ti3-e2e-pgdata
+
+networks:
+  ti3-e2e-net:
+    name: ti3-e2e-net
+    driver: bridge

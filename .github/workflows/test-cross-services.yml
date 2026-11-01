@@ -1,0 +1,48 @@
+name: test-cross-services
+
+on:
+  push:
+    paths: ["back/auth/**", "back/notes/**", "back/social/**", "back/infacadem/**", "docker/postgres/init.sql", ".github/workflows/test-cross-services.yml"]
+  pull_request:
+    paths: ["back/auth/**", "back/notes/**", "back/social/**", "back/infacadem/**", "docker/postgres/init.sql", ".github/workflows/test-cross-services.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  four-service-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cross_services_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d cross_services_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # El harness crea/elimina una BD hija única; nunca usa .env ni servicios desplegados.
+      CROSS_SERVICE_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cross_services_test?sslmode=disable
+    defaults:
+      run:
+        working-directory: back/social
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: back/social/go.mod
+          cache-dependency-path: |
+            back/auth/go.sum
+            back/notes/go.sum
+            back/social/go.sum
+            back/infacadem/go.sum
+      - name: Formato del E2E
+        run: test -z "$(gofmt -l test/*.go)"
+      - name: E2E Auth, Social, Academic y Notes (procesos y PostgreSQL reales)
+        run: go test -tags=crossservice ./test -count=1 -timeout=12m -v

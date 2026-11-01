@@ -1,0 +1,130 @@
+syntax = "proto3";
+
+package identity.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Stubs dentro de back/auth (como social): el Dockerfile de cada servicio
+// solo ve su propio directorio, así que un paquete compartido en
+// back/proto/gen/go no compila en la imagen. Un consumidor (Social, Notes)
+// genera su propia copia desde este mismo contrato (ver buf.gen.<svc>.yaml
+// cuando se necesite, igual que buf.gen.notes.yaml de social).
+option go_package = "github.com/kurovoxx/tallerintegracion3/back/auth/internal/gen/identityv1;identityv1";
+
+// Contrato servicio-a-servicio de Identity (usuarios, verificación de JWT y
+// tokens OAuth de Google).
+//
+// Reemplaza los /internal/... HTTP que hoy consume Social
+// (back/social/internal/identity/client.go, service/user_directory.go y
+// service/calendar_gateway.go) y prepara los que Notes usará en 3_4_6
+// (hoy Notes lee identity.oauth_connections directo desde su pool).
+//   GET /internal/users/:id         → GetUser
+//   GET /internal/users/lookup      → LookupUsers (lote)
+//   POST /internal/auth/verify      → VerifyToken
+//   GET /internal/oauth/calendar-token → GetOAuthToken (drive y calendar)
+//   POST /internal/oauth/calendar-revoked → ReportCalendarRevoked
+//
+// Auth: metadata `x-internal-key` = INTERNAL_API_KEY (interceptor con la
+// misma convención que social/internal/interceptor). Los ids son UUID en
+// texto. Nunca se exponen refresh tokens, hashes ni secretos. GetOAuthToken
+// devuelve un access token sensible: solo servicios internos autorizados, y
+// ni JWT completos ni access tokens se registran en logs.
+//
+// Errores: código gRPC nativo (InvalidArgument si un id/token/provider es
+// inválido o vacío, NotFound si el usuario no existe o no tiene vinculación,
+// Unauthenticated si el JWT es inválido/expirado o la conexión OAuth está
+// revocada, Unavailable si Google no responde, Internal ante fallas de BD).
+service IdentityService {
+  // Datos públicos de un usuario (nunca hashes ni tokens).
+  // Usuario inexistente = NotFound.
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+
+  // Lote de usuarios para no hacer N llamadas GetUser (p. ej. miembros de
+  // un grupo). Sin ids → lista vacía (no es error); inexistentes se omiten;
+  // tope 200 ids (igual que UsersService.Lookup). Sin orden garantizado.
+  rpc LookupUsers(LookupUsersRequest) returns (LookupUsersResponse);
+
+  // ¿El JWT es válido? Devuelve la identidad autenticada.
+  // Token inválido o expirado = Unauthenticated (no es error de conexión).
+  rpc VerifyToken(VerifyTokenRequest) returns (VerifyTokenResponse);
+
+  // Access token de Google vigente para el usuario y proveedor dados.
+  // El servidor refresca el token si está vencido (igual que
+  // DriveOAuthService/CalendarOAuthService.GetValidAccessToken).
+  // Sin vinculación = NotFound; revocada o inválida = Unauthenticated;
+  // Google caído = Unavailable. Nunca devuelve refresh tokens.
+  rpc GetOAuthToken(GetOAuthTokenRequest) returns (GetOAuthTokenResponse);
+
+  // Avisa que Google rechazó el token de Calendar (401/403) para marcar
+  // revoked_at. Idempotente y sin fuga de existencia: sin fila también es OK.
+  rpc ReportCalendarRevoked(ReportCalendarRevokedRequest) returns (ReportCalendarRevokedResponse);
+}
+
+// Proveedor OAuth (identity.oauth_connections.provider).
+enum Provider {
+  PROVIDER_UNSPECIFIED = 0;
+  PROVIDER_GOOGLE_DRIVE = 1;
+  PROVIDER_GOOGLE_CALENDAR = 2;
+}
+
+message GetUserRequest {
+  string user_id = 1;
+}
+
+message GetUserResponse {
+  string user_id = 1;
+  string email = 2;
+  // Ausente si el usuario no tiene nombre público (model.PublicUser).
+  optional string display_name = 3;
+}
+
+// Usuario público (model.PublicUser): solo user_id/email/display_name.
+message User {
+  string user_id = 1;
+  string email = 2;
+  optional string display_name = 3;
+}
+
+message LookupUsersRequest {
+  repeated string user_ids = 1;
+}
+
+message LookupUsersResponse {
+  // Siempre array (vacío si no hay ids o ninguno existe); nunca null.
+  repeated User users = 1;
+}
+
+message VerifyTokenRequest {
+  // Access token JWT emitido por Auth (tal cual va en Authorization).
+  string token = 1;
+}
+
+message VerifyTokenResponse {
+  // Siempre true en una respuesta OK: la validación ya ocurrió y los fallos
+  // viajan como status gRPC (el cliente no revisa valid=false, captura el
+  // error). Se mantiene por paridad con POST /internal/auth/verify.
+  bool valid = 1;
+  string user_id = 2;
+}
+
+message GetOAuthTokenRequest {
+  string user_id = 1;
+  Provider provider = 2;
+}
+
+message GetOAuthTokenResponse {
+  string access_token = 1;
+  // Vencimiento guardado en identity.oauth_connections (ausente si el
+  // proveedor no lo informó al vincular/refrescar).
+  optional google.protobuf.Timestamp expires_at = 2;
+  // Cuenta de Google vinculada (para mostrar "conectado como ..."; ausente
+  // si no se registró email externo).
+  optional string external_email = 3;
+}
+
+message ReportCalendarRevokedRequest {
+  string user_id = 1;
+}
+
+// Vacía a propósito: la operación es idempotente y no filtra existencia.
+message ReportCalendarRevokedResponse {}

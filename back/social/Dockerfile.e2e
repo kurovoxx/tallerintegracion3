@@ -1,0 +1,20 @@
+# Imagen para el Job de Kubernetes que ejecuta el E2E cruzado (tarea 3_5_10).
+# Se construye desde la raíz del repo: docker build -f back/social/Dockerfile.e2e .
+FROM golang:1.26
+
+# postgresql-client para pg_isready / psql si se necesita depurar la BD.
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client git ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copia todo el monorepo (necesario porque los módulos Go de auth/notes/social/infacadem
+# se importan entre sí vía replace directives o rutas absolutas del módulo).
+COPY . .
+
+# Descarga dependencias de todos los módulos implicados.
+RUN go mod download
+
+# El entrypoint se sobrescribe desde el Job de k8s con las vars de entorno
+# adecuadas (CROSS_SERVICE_MODE=remote, URLs de servicios, DATABASE_URL, etc.).
+ENTRYPOINT ["go", "test", "-tags=crossservice", "./test", "-run", "TestCrossService_FourServiceJourney|TestCrossService_AcademicHealth", "-count=1", "-v"]

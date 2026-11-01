@@ -143,7 +143,7 @@ type createRequest struct {
 // casteo de Postgres y unifica el contrato: recurso mal formado = no encontrado).
 func validateNoteID(c *gin.Context, id string) bool {
 	if !utils.ValidateUUID(id) {
-		utils.RespondError(c, http.StatusNotFound, utils.ErrNotFound, "nota no encontrada")
+		respondNotesError(c, http.StatusNotFound, utils.ErrNotFound, "nota no encontrada")
 		return false
 	}
 	return true
@@ -151,7 +151,7 @@ func validateNoteID(c *gin.Context, id string) bool {
 
 func validateUUIDParam(c *gin.Context, id, resource string) bool {
 	if !utils.ValidateUUID(id) {
-		utils.RespondError(c, http.StatusNotFound, utils.ErrNotFound, resource+" no encontrado")
+		respondNotesError(c, http.StatusNotFound, utils.ErrNotFound, resource+" no encontrado")
 		return false
 	}
 	return true
@@ -167,9 +167,10 @@ func isPayloadTooLarge(err error) bool {
 }
 
 func (h *NoteHandler) Create(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes")()
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
-		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
 		return
 	}
 	var req createRequest
@@ -177,10 +178,10 @@ func (h *NoteHandler) Create(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1048576)
 	if err := c.ShouldBindJSON(&req); err != nil {
 		if isPayloadTooLarge(err) {
-			utils.RespondError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
+			respondNotesError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
 			return
 		}
-		utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "Request inválido")
+		respondNotesError(c, http.StatusBadRequest, utils.ErrBadRequest, "Request inválido")
 		return
 	}
 	idemKey := c.GetHeader("X-Idempotency-Key")
@@ -196,9 +197,10 @@ func (h *NoteHandler) Create(c *gin.Context) {
 
 // GET /notes/{id}
 func (h *NoteHandler) Get(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/:id")()
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
-		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
 		return
 	}
 	id := c.Param("id")
@@ -217,8 +219,9 @@ func (h *NoteHandler) Get(c *gin.Context) {
 		"title":       note.Title,
 		"visibility":  note.Visibility,
 		"likes_count": note.LikesCount,
-		"created_at":  note.CreatedAt,
-		"updated_at":  note.UpdatedAt,
+		"version":     note.Version,
+		"created_at":  note.CreatedAt.UTC().Format(time.RFC3339),
+		"updated_at":  note.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 	if note.SubjectID != nil {
 		resp["subject_id"] = *note.SubjectID
@@ -234,14 +237,25 @@ func (h *NoteHandler) Get(c *gin.Context) {
 	if note.Content != nil {
 		resp["content"] = *note.Content
 	}
+	attachments, err := h.svc.ListAttachments(c.Request.Context(), note.ID)
+	if err != nil {
+		handleServiceError(c, service.ErrInternalDatabase)
+		return
+	}
+	if attachments == nil {
+		resp["attachments"] = []any{}
+	} else {
+		resp["attachments"] = attachments
+	}
 	c.JSON(http.StatusOK, resp)
 }
 
 // GET /notes/me
 func (h *NoteHandler) ListMy(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/me")()
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
-		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
 		return
 	}
 	cursor := c.Query("cursor")
@@ -266,8 +280,9 @@ func (h *NoteHandler) ListMy(c *gin.Context) {
 			"title":       n.Title,
 			"visibility":  n.Visibility,
 			"likes_count": n.LikesCount,
-			"created_at":  n.CreatedAt,
-			"updated_at":  n.UpdatedAt,
+			"version":     n.Version,
+			"created_at":  n.CreatedAt.UTC().Format(time.RFC3339),
+			"updated_at":  n.UpdatedAt.UTC().Format(time.RFC3339),
 		}
 		if n.SubjectID != nil {
 			item["subject_id"] = *n.SubjectID
@@ -285,12 +300,16 @@ type patchRequest struct {
 	Title      *string `json:"title" binding:"omitempty,min=1,max=300"`
 	Visibility *string `json:"visibility" binding:"omitempty,oneof=public private"`
 	Content    *string `json:"content"` // opcional para sync Drive
+	// Version es la precondición de versionado optimista: si se envía, el
+	// cambio solo se aplica cuando la nota sigue en esa versión (409 si no).
+	Version *int64 `json:"version" binding:"omitempty,min=1"`
 }
 
 func (h *NoteHandler) Patch(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/:id")()
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
-		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
 		return
 	}
 	id := c.Param("id")
@@ -301,21 +320,26 @@ func (h *NoteHandler) Patch(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1048576)
 	if err := c.ShouldBindJSON(&req); err != nil {
 		if isPayloadTooLarge(err) {
-			utils.RespondError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
+			respondNotesError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
 			return
 		}
-		utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "Request inválido")
+		respondNotesError(c, http.StatusBadRequest, utils.ErrBadRequest, "Request inválido")
 		return
 	}
 	if req.Title == nil && req.Visibility == nil && req.Content == nil {
-		utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "nada que actualizar")
+		respondNotesError(c, http.StatusBadRequest, utils.ErrBadRequest, "nada que actualizar")
 		return
 	}
 	// Idempotencia opcional: si el cliente envía X-Idempotency-Key, el servicio
-	// responde a los replays de red con el resultado cacheado (TTL 10 min) sin
-	// re-aplicar el cambio en PG/Drive.
+	// responde a los replays de red con el recurso ya actualizado (registro
+	// durable en notes.idempotency_keys, replay 24 h) sin re-aplicar el cambio.
 	idemKey := c.GetHeader("X-Idempotency-Key")
-	updated, err := h.svc.Update(c.Request.Context(), userID, id, req.Title, req.Visibility, req.Content, idemKey)
+	expectedVersion := int64(0)
+	if req.Version != nil {
+		expectedVersion = *req.Version
+	}
+	utils.NotesLogger(c.Request.Context()).InfoContext(c.Request.Context(), "[NOTES] PATCH REQUEST", "expected_version", expectedVersion, "has_title", req.Title != nil, "has_content", req.Content != nil)
+	updated, err := h.svc.UpdateWithExpectedVersion(c.Request.Context(), userID, id, req.Title, req.Visibility, req.Content, expectedVersion, idemKey)
 	if err != nil {
 		handleServiceError(c, err)
 		return
@@ -324,15 +348,17 @@ func (h *NoteHandler) Patch(c *gin.Context) {
 		"id":         updated.ID,
 		"title":      updated.Title,
 		"visibility": updated.Visibility,
-		"updated_at": updated.UpdatedAt,
+		"version":    updated.Version,
+		"updated_at": updated.UpdatedAt.UTC().Format(time.RFC3339),
 	})
 }
 
 // DELETE /notes/{id}
 func (h *NoteHandler) Delete(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/:id")()
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
-		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
 		return
 	}
 	id := c.Param("id")
@@ -346,11 +372,51 @@ func (h *NoteHandler) Delete(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// POST /notes/{id}/attachments
-func (h *NoteHandler) UploadAttachment(c *gin.Context) {
+// POST /notes/reconcile: reconciliación Drive→App de eliminaciones hechas
+// directamente en Google Drive. Solo el missing CONFIRMADO (404 o papelera)
+// elimina metadata (mismo flujo Delete); errores temporales abortan sin
+// borrar. Responde conteos + IDs propios para refresco local, sin secretos.
+func (h *NoteHandler) Reconcile(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/reconcile")()
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
-		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		return
+	}
+	summary, err := h.svc.ReconcileDriveDeletions(c.Request.Context(), userID)
+	if err != nil {
+		handleServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"removed_notes":       summary.RemovedNotes,
+		"removed_attachments": summary.RemovedAttachments,
+		"pending":             summary.Pending,
+		"removed_note_ids":    summary.RemovedNoteIDs,
+	})
+}
+
+// respondMimeValidationError traduce los errores tipados del sniffing estricto
+// de adjuntos a la respuesta HTTP canónica: 415 cuando el contenido real no
+// pertenece a la whitelist (image/jpeg, image/png, application/pdf) y 400
+// cuando el MIME declarado por el cliente no coincide con el contenido.
+func respondMimeValidationError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, drive.ErrUnsupportedMimeType):
+		respondNotesError(c, http.StatusUnsupportedMediaType, utils.ErrUnsupportedMediaType, "Tipo de archivo no permitido: solo image/jpeg, image/png o application/pdf")
+	case errors.Is(err, drive.ErrMimeTypeMismatch):
+		respondNotesError(c, http.StatusBadRequest, utils.ErrBadRequest, "El contenido del archivo no coincide con el tipo declarado")
+	default:
+		respondNotesError(c, http.StatusUnsupportedMediaType, utils.ErrUnsupportedMediaType, utils.MessageForCode(utils.ErrUnsupportedMediaType))
+	}
+}
+
+// POST /notes/{id}/attachments
+func (h *NoteHandler) UploadAttachment(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/:id/attachments")()
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
 		return
 	}
 	noteID := c.Param("id")
@@ -372,14 +438,14 @@ func (h *NoteHandler) UploadAttachment(c *gin.Context) {
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1048576)
 		if err := c.ShouldBindJSON(&body); err != nil {
 			if isPayloadTooLarge(err) {
-				utils.RespondError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
+				respondNotesError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
 			} else {
-				utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "file requerido (external_file_id)")
+				respondNotesError(c, http.StatusBadRequest, utils.ErrBadRequest, "file requerido (external_file_id)")
 			}
 			return
 		}
 		if body.ExternalFileID == nil {
-			utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "external_file_id requerido")
+			respondNotesError(c, http.StatusBadRequest, utils.ErrBadRequest, "external_file_id requerido")
 			return
 		}
 		{
@@ -394,6 +460,13 @@ func (h *NoteHandler) UploadAttachment(c *gin.Context) {
 			fn := ""
 			if body.FileName != nil {
 				fn = *body.FileName
+			}
+			// El registro externo no aporta binario que sniffar: se exige que el
+			// tipo declarado (o resuelto por extensión) pertenezca a la misma
+			// whitelist estricta, para que no sea un bypass del sniffing.
+			if !drive.IsAllowedAttachmentMimeType(drive.DetectMimeType(fn, ft, nil)) {
+				respondNotesError(c, http.StatusUnsupportedMediaType, utils.ErrUnsupportedMediaType, "Tipo de archivo no permitido: solo image/jpeg, image/png o application/pdf")
+				return
 			}
 			att, err := h.svc.AddAttachmentExternal(c.Request.Context(), userID, noteID, *body.ExternalFileID, fn, ft, isInline, body.FileSize)
 			if err != nil {
@@ -412,21 +485,25 @@ func (h *NoteHandler) UploadAttachment(c *gin.Context) {
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
 		if isPayloadTooLarge(err) {
-			utils.RespondError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
+			respondNotesError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
 			return
 		}
-		utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "file requerido (multipart field 'file')")
+		respondNotesError(c, http.StatusBadRequest, utils.ErrBadRequest, "file requerido (multipart field 'file')")
 		return
 	}
 	defer file.Close()
 	data, err := io.ReadAll(file)
 	if err != nil {
-		utils.RespondError(c, http.StatusInternalServerError, utils.ErrInternal, "error leyendo archivo")
+		respondNotesError(c, http.StatusInternalServerError, utils.ErrInternal, "error leyendo archivo")
 		return
 	}
 	// límite 10MB según spec 413
 	if header.Size > 10*1024*1024 || int64(len(data)) > 10*1024*1024 {
-		utils.RespondError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
+		respondNotesError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
+		return
+	}
+	if len(data) == 0 {
+		respondNotesError(c, http.StatusBadRequest, utils.ErrBadRequest, "archivo vacío")
 		return
 	}
 	// también respetar header
@@ -435,7 +512,14 @@ func (h *NoteHandler) UploadAttachment(c *gin.Context) {
 	if fileType == "" {
 		fileType = "application/octet-stream"
 	}
-	att, err := h.svc.AddAttachment(c.Request.Context(), userID, noteID, header.Filename, fileType, data, isInline)
+	// Sniffing estricto: el tipo real (primeros 512 bytes) manda. Se rechaza
+	// 415 si no está en la whitelist y 400 si el MIME declarado lo contradice.
+	sniffedType, mimeErr := drive.ValidateAttachmentMime(fileType, data)
+	if mimeErr != nil {
+		respondMimeValidationError(c, mimeErr)
+		return
+	}
+	att, err := h.svc.AddAttachment(c.Request.Context(), userID, noteID, header.Filename, sniffedType, data, isInline)
 	if err != nil {
 		handleServiceError(c, err)
 		return
@@ -449,9 +533,10 @@ func (h *NoteHandler) UploadAttachment(c *gin.Context) {
 // el cliente puede luego registrarlo con POST /notes/{id}/attachments enviando
 // {external_file_id}. Acepta multipart/form-data con el campo binario 'file'.
 func (h *NoteHandler) UploadFile(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/upload")()
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
-		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
 		return
 	}
 	// Límite anti-DoS 11MB (10MB archivo + overhead multipart).
@@ -459,24 +544,38 @@ func (h *NoteHandler) UploadFile(c *gin.Context) {
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
 		if isPayloadTooLarge(err) {
-			utils.RespondError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
+			respondNotesError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
 			return
 		}
-		utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "file requerido (multipart field 'file')")
+		respondNotesError(c, http.StatusBadRequest, utils.ErrBadRequest, "file requerido (multipart field 'file')")
 		return
 	}
 	defer file.Close()
 	data, err := io.ReadAll(file)
 	if err != nil {
-		utils.RespondError(c, http.StatusInternalServerError, utils.ErrInternal, "error leyendo archivo")
+		respondNotesError(c, http.StatusInternalServerError, utils.ErrInternal, "error leyendo archivo")
 		return
 	}
 	if header.Size > 10*1024*1024 || int64(len(data)) > 10*1024*1024 {
-		utils.RespondError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
+		respondNotesError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
+		return
+	}
+	if len(data) == 0 {
+		respondNotesError(c, http.StatusBadRequest, utils.ErrBadRequest, "archivo vacío")
 		return
 	}
 	fileType := header.Header.Get("Content-Type")
-	up, err := h.svc.UploadToDrive(c.Request.Context(), userID, header.Filename, fileType, data)
+	if strings.TrimSpace(fileType) == "" {
+		fileType = "application/octet-stream"
+	}
+	// Sniffing estricto: el tipo real (primeros 512 bytes) manda. Se rechaza
+	// 415 si no está en la whitelist y 400 si el MIME declarado lo contradice.
+	sniffedType, mimeErr := drive.ValidateAttachmentMime(fileType, data)
+	if mimeErr != nil {
+		respondMimeValidationError(c, mimeErr)
+		return
+	}
+	up, err := h.svc.UploadToDrive(c.Request.Context(), userID, header.Filename, sniffedType, data)
 	if err != nil {
 		handleServiceError(c, err)
 		return
@@ -493,9 +592,10 @@ func (h *NoteHandler) UploadFile(c *gin.Context) {
 
 // DELETE /notes/{id}/attachments/{attachmentId}
 func (h *NoteHandler) DeleteAttachment(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/:id/attachments/:attachment_id")()
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
-		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
 		return
 	}
 	noteID := c.Param("id")
@@ -518,9 +618,10 @@ func (h *NoteHandler) DeleteAttachment(c *gin.Context) {
 
 // POST /notes/{id}/save
 func (h *NoteHandler) Save(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/:id/save")()
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
-		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
 		return
 	}
 	noteID := c.Param("id")
@@ -537,9 +638,10 @@ func (h *NoteHandler) Save(c *gin.Context) {
 
 // POST /notes/{id}/copy
 func (h *NoteHandler) Copy(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/:id/copy")()
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
-		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
 		return
 	}
 	noteID := c.Param("id")
@@ -553,9 +655,9 @@ func (h *NoteHandler) Copy(c *gin.Context) {
 	allowed, hitGlobal := h.copyLimiter.allow(userID)
 	if !allowed {
 		if hitGlobal {
-			utils.RespondError(c, http.StatusTooManyRequests, utils.ErrRateLimited, "Límite global de clonación excedido, intente más tarde")
+			respondNotesError(c, http.StatusTooManyRequests, utils.ErrRateLimited, "Límite global de clonación excedido, intente más tarde")
 		} else {
-			utils.RespondError(c, http.StatusTooManyRequests, utils.ErrRateLimited, "Límite de clonación excedido, intente más tarde")
+			respondNotesError(c, http.StatusTooManyRequests, utils.ErrRateLimited, "Límite de clonación excedido, intente más tarde")
 		}
 		return
 	}
@@ -570,9 +672,10 @@ func (h *NoteHandler) Copy(c *gin.Context) {
 
 // POST /notes/{id}/like
 func (h *NoteHandler) Like(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/:id/like")()
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
-		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
 		return
 	}
 	noteID := c.Param("id")
@@ -588,9 +691,10 @@ func (h *NoteHandler) Like(c *gin.Context) {
 
 // DELETE /notes/{id}/like
 func (h *NoteHandler) Unlike(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/:id/like")()
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
-		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
 		return
 	}
 	noteID := c.Param("id")
@@ -611,9 +715,10 @@ type shareRequest struct {
 }
 
 func (h *NoteHandler) Share(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/:id/share")()
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
-		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
 		return
 	}
 	noteID := c.Param("id")
@@ -624,10 +729,10 @@ func (h *NoteHandler) Share(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1048576)
 	if err := c.ShouldBindJSON(&req); err != nil {
 		if isPayloadTooLarge(err) {
-			utils.RespondError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
+			respondNotesError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
 			return
 		}
-		utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "group_id y access_mode requeridos")
+		respondNotesError(c, http.StatusBadRequest, utils.ErrBadRequest, "group_id y access_mode requeridos")
 		return
 	}
 	shared, err := h.svc.Share(c.Request.Context(), userID, noteID, req.GroupID, req.AccessMode)
@@ -640,9 +745,10 @@ func (h *NoteHandler) Share(c *gin.Context) {
 
 // DELETE /notes/shared/{sharedNoteId}
 func (h *NoteHandler) Unshare(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/shared/:id")()
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
-		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
 		return
 	}
 	sharedID := c.Param("sharedNoteId")
@@ -665,7 +771,14 @@ type unshareAllRequest struct {
 	GroupID string `json:"group_id" binding:"required,uuid"`
 }
 
+// UnshareAll (HTTP) está DEPRECADO en favor del RPC gRPC
+// notes.v1.NotesService/UnshareAll (auth servicio-a-servicio con x-internal-key,
+// sin superficie pública). Se mantiene como fallback dual-serve mientras Social
+// completa la migración; retirar cuando ya no haya consumidores HTTP.
+// El log "[DEPRECATED]" registra cada uso residual para medir la migración.
 func (h *NoteHandler) UnshareAll(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/unshare-all")()
+	log.Printf("[DEPRECATED] POST /notes/unshare-all vía HTTP; usar el RPC gRPC NotesService/UnshareAll")
 	// FIX IDOR: endpoint protegido con JWT de usuario. Solo el propio usuario
 	// o un admin del grupo puede desvincular a user_id de group_id. Sin esta
 	// verificación cualquier usuario autenticado podía desvincular a terceros
@@ -673,21 +786,21 @@ func (h *NoteHandler) UnshareAll(c *gin.Context) {
 	// usar un token de servicio distinto, no el JWT de usuario final.
 	callerID, ok := middleware.GetUserID(c)
 	if !ok {
-		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
 		return
 	}
 	var req unshareAllRequest
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1048576)
 	if err := c.ShouldBindJSON(&req); err != nil {
 		if isPayloadTooLarge(err) {
-			utils.RespondError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
+			respondNotesError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
 			return
 		}
-		utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "user_id y group_id requeridos")
+		respondNotesError(c, http.StatusBadRequest, utils.ErrBadRequest, "user_id y group_id requeridos")
 		return
 	}
 	if callerID != req.UserID && !h.svc.IsGroupAdmin(c.Request.Context(), callerID, req.GroupID) {
-		utils.RespondError(c, http.StatusForbidden, utils.ErrForbidden, "no autorizado")
+		respondNotesError(c, http.StatusForbidden, utils.ErrForbidden, "no autorizado")
 		return
 	}
 	if err := h.svc.UnshareAll(c.Request.Context(), req.UserID, req.GroupID); err != nil {
@@ -698,10 +811,25 @@ func (h *NoteHandler) UnshareAll(c *gin.Context) {
 }
 
 // GET /notes/{id}/access
+//
+// Responde 200 con el contrato de acceso: la autorización de aplicación se
+// resuelve localmente (owner | public | link | restricted) y las banderas de
+// Drive describen el estado remoto sin abortar la petición:
+//   - drive_sync_status: convergencia de notes.drive_managed_permissions
+//     (failed > pending > synced), calculada con GetAccessInfo;
+//   - drive_connection_required: true sólo cuando el autor de una nota no pública
+//     (access_mode=owner) no tiene conexión OAuth vigente para el archivo
+//     (drive.OAuthError). La falta de conexión se informa como metadato, no como
+//     403, para que el cliente pueda ofrecer reconectar Drive.
+//   - drive_access_verified: true sólo cuando Drive confirma el acceso del autor
+//     (VerifyFileAccess sin error). Para link, public y restricted ambas banderas
+//     son false: el archivo se sirve con la autorización de la aplicación, no con
+//     el token del solicitante, así que no se consulta Drive.
 func (h *NoteHandler) GetAccess(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/:id/access")()
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
-		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
 		return
 	}
 	noteID := c.Param("id")
@@ -718,9 +846,10 @@ func (h *NoteHandler) GetAccess(c *gin.Context) {
 
 // GET /groups/{id}/notes
 func (h *NoteHandler) ListGroupNotes(c *gin.Context) {
+	defer traceNotesOperation(c, "/groups/:id/notes")()
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
-		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
 		return
 	}
 	groupID := c.Param("id")
@@ -745,7 +874,8 @@ func (h *NoteHandler) ListGroupNotes(c *gin.Context) {
 		item := gin.H{
 			"id": n.ID, "user_id": n.UserID, "title": n.Title,
 			"visibility": n.Visibility, "likes_count": n.LikesCount,
-			"created_at": n.CreatedAt, "updated_at": n.UpdatedAt,
+			"version":    n.Version,
+			"created_at": n.CreatedAt.UTC().Format(time.RFC3339), "updated_at": n.UpdatedAt.UTC().Format(time.RFC3339),
 		}
 		out = append(out, item)
 	}
@@ -758,10 +888,11 @@ func (h *NoteHandler) ListGroupNotes(c *gin.Context) {
 // evita mapear por casualidad y se garantiza que ninguna traza SQL ni detalle
 // interno de Postgres/Drive llegue al cliente en el body de la respuesta.
 func handleServiceError(c *gin.Context, err error) {
+	c.Set(notesErrorKey, err)
 	// 1. OAuth tipado: *drive.OAuthError => 403 genérico sin filtrar detalles.
 	if drive.IsOAuthError(err) {
 		log.Printf("notes: acceso denegado Drive (OAuthError tipado): %v", err)
-		utils.RespondError(c, http.StatusForbidden, utils.ErrForbidden, "Conecte o renueve su Google Drive")
+		respondNotesError(c, http.StatusForbidden, utils.ErrForbidden, "Conecte o renueve su Google Drive")
 		return
 	}
 
@@ -771,20 +902,20 @@ func handleServiceError(c *gin.Context, err error) {
 		switch {
 		case errors.Is(err, service.ErrDriveUnavailable):
 			log.Printf("notes: upstream de almacenamiento no disponible: %v", err)
-			utils.RespondError(c, http.StatusBadGateway, utils.ErrInternal, "Servicio de almacenamiento no disponible")
+			respondNotesError(c, http.StatusBadGateway, utils.ErrInternal, "Servicio de almacenamiento no disponible")
 		case errors.Is(err, service.ErrSourceAccessDenied):
 			// Zero-knowledge absoluto: el fallo de acceso al archivo origen es
 			// indistinguible de una nota inexistente (404 not_found, mismo
 			// mensaje que notFoundNote del servicio). Nunca se filtra que el
 			// recurso existe pero su origen no es legible.
 			log.Printf("notes: acceso al archivo origen denegado (zero-knowledge): %v", err)
-			utils.RespondError(c, http.StatusNotFound, utils.ErrNotFound, "Nota no encontrada")
+			respondNotesError(c, http.StatusNotFound, utils.ErrNotFound, "Nota no encontrada")
 		case errors.Is(err, service.ErrInternalDatabase), errors.Is(err, service.ErrInternalServer):
 			// Detalle solo al log del servidor; el cliente recibe 500 genérico.
 			log.Printf("notes: error interno: %v", err)
-			utils.RespondError(c, http.StatusInternalServerError, utils.ErrInternal, "Error interno")
+			respondNotesError(c, http.StatusInternalServerError, utils.ErrInternal, "Error interno")
 		default:
-			utils.RespondError(c, utils.StatusForCode(se.Code), se.Code, se.Message)
+			respondNotesError(c, utils.StatusForCode(se.Code), se.Code, se.Message)
 		}
 		return
 	}
@@ -795,17 +926,17 @@ func handleServiceError(c *gin.Context, err error) {
 		switch {
 		case de.Code == http.StatusForbidden || de.Code == http.StatusNotFound:
 			log.Printf("notes: recurso Drive no disponible (code %d): %v", de.Code, err)
-			utils.RespondError(c, http.StatusNotFound, utils.ErrNoteUnavailable, "Nota no disponible en almacenamiento remoto")
+			respondNotesError(c, http.StatusNotFound, utils.ErrNoteUnavailable, "Nota no disponible en almacenamiento remoto")
 		case de.Code == http.StatusRequestEntityTooLarge:
-			utils.RespondError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
+			respondNotesError(c, http.StatusRequestEntityTooLarge, utils.ErrFileTooLarge, utils.MessageForCode(utils.ErrFileTooLarge))
 		default:
 			log.Printf("notes: error de Drive no tipado por el servicio: %v", err)
-			utils.RespondError(c, http.StatusBadGateway, utils.ErrInternal, "Servicio de almacenamiento no disponible")
+			respondNotesError(c, http.StatusBadGateway, utils.ErrInternal, "Servicio de almacenamiento no disponible")
 		}
 		return
 	}
 
 	// 4. Fallback seguro: nunca exponer el error crudo.
 	log.Printf("notes: error interno no tipado: %v", err)
-	utils.RespondError(c, http.StatusInternalServerError, utils.ErrInternal, "Error interno")
+	respondNotesError(c, http.StatusInternalServerError, utils.ErrInternal, "Error interno")
 }

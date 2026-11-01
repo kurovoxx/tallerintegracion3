@@ -10,13 +10,14 @@ import (
 )
 
 type Config struct {
+	SMTPHost           string
+	SMTPPort           string
+	SMTPUsername       string
+	SMTPPassword       string
 	DatabaseURL        string
 	DirectURL          string
-	SupabaseURL        string
-	SupabaseKey        string // SQL_API_KEY / SERVICE_ROLE
 	JWT                string // kid for ES256 (discovery)
 	JWTSecret          string // HS256 secret para access tokens propios
-	DiscoveryURL       string
 	Port               string
 	AccessExpiresIn    int // segundos, default 900
 	RefreshExpiresIn   int // segundos, default 604800 (7d)
@@ -24,6 +25,9 @@ type Config struct {
 	GoogleClientSecret string
 	GoogleRedirectURI  string
 	InternalAPIKey     string // secreto compartido para endpoints servicio-a-servicio (X-Internal-Key)
+	GRPCPort           string // servidor gRPC Identity (IdentityService)
+	SocialGRPCAddr     string // cliente SocialService para el borrado de cuenta
+	NotesGRPCAddr      string // cliente NotesService para el borrado de cuenta
 }
 
 func Load() *Config {
@@ -46,18 +50,43 @@ func Load() *Config {
 	_ = godotenv.Load()
 
 	cfg := &Config{
+		SMTPHost:           os.Getenv("SMTP_HOST"),
+		SMTPPort:           os.Getenv("SMTP_PORT"),
+		SMTPUsername:       os.Getenv("SMTP_USERNAME"),
+		SMTPPassword:       os.Getenv("SMTP_PASSWORD"),
 		DatabaseURL:        os.Getenv("DATABASE_URL"),
 		DirectURL:          os.Getenv("DIRECT_URL"),
-		SupabaseURL:        os.Getenv("SUPABASE_URL"),
-		SupabaseKey:        os.Getenv("SQL_API_KEY"),
 		JWT:                os.Getenv("JWT"),
 		JWTSecret:          os.Getenv("JWT_SECRET"),
-		DiscoveryURL:       os.Getenv("DISCOVERY_URL"),
 		Port:               os.Getenv("PORT"),
 		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
 		GoogleRedirectURI:  os.Getenv("GOOGLE_REDIRECT_URI"),
 		InternalAPIKey:     os.Getenv("INTERNAL_API_KEY"),
+		GRPCPort:           os.Getenv("AUTH_GRPC_PORT"),
+		SocialGRPCAddr:     os.Getenv("SOCIAL_GRPC_ADDR"),
+		NotesGRPCAddr:      os.Getenv("NOTES_GRPC_ADDR"),
+	}
+	if cfg.GRPCPort == "" {
+		cfg.GRPCPort = os.Getenv("GRPC_PORT")
+	}
+	if cfg.GRPCPort == "" {
+		cfg.GRPCPort = "9080"
+	}
+	if cfg.SocialGRPCAddr == "" {
+		cfg.SocialGRPCAddr = "social:9083"
+	}
+	if cfg.NotesGRPCAddr == "" {
+		cfg.NotesGRPCAddr = "notes:9082"
+	}
+	if cfg.SMTPHost == "" {
+		cfg.SMTPHost = "smtp.gmail.com"
+	}
+	if cfg.SMTPPort == "" {
+		cfg.SMTPPort = "587"
+	}
+	if cfg.SMTPUsername == "" {
+		cfg.SMTPUsername = "sigmaacademy.noreply@gmail.com"
 	}
 	if cfg.Port == "" {
 		cfg.Port = "8080"

@@ -19,8 +19,9 @@ import (
 
 // StreamError representa un error de la API de Stream con código HTTP semántico.
 type StreamError struct {
-	Code    int
-	Message string
+	Code         int
+	APIErrorCode int
+	Message      string
 }
 
 func (e *StreamError) Error() string { return fmt.Sprintf("stream %d: %s", e.Code, e.Message) }
@@ -28,9 +29,17 @@ func (e *StreamError) Error() string { return fmt.Sprintf("stream %d: %s", e.Cod
 // Client abstrae el chat en Stream (getstream.io): canales y mensajes.
 // En tests/dev se usa MockClient.
 type Client interface {
-	// CreateChannel crea un canal del tipo dado (ej. "messaging") con el id y nombre indicados.
-	// Idempotente a nivel de llamada: si el canal ya existe en Stream, no es error.
-	CreateChannel(ctx context.Context, channelType, channelID, name string) error
+	// CreateChannel garantiza que exista el canal (get-or-create server-side).
+	// Idempotente: si el canal ya existe en Stream, lo retorna sin modificar
+	// mensajes ni miembros. Nunca elimina ni recrea nada.
+	CreateChannel(ctx context.Context, channelType, channelID, name, createdByID string) error
+	// EnsureMember agrega al usuario como miembro del canal (server-side).
+	// Idempotente: si ya es miembro, no es error. Solo llamarla después de
+	// verificar en nuestra BD que el usuario pertenece al grupo Sigma.
+	EnsureMember(ctx context.Context, channelType, channelID, userID string) error
+	// RemoveMember quita al usuario del canal (server-side). Se llama cuando
+	// deja el grupo Sigma: salida, expulsión, baneo o borrado de cuenta.
+	RemoveMember(ctx context.Context, channelType, channelID, userID string) error
 	// SendMessage publica un mensaje de texto en el canal como el usuario indicado.
 	// En modo server-side el sender no necesita existir previamente en Stream.
 	SendMessage(ctx context.Context, channelType, channelID, senderID, text string) error
@@ -41,18 +50,34 @@ type MockClient struct {
 	mu sync.Mutex
 	// CreateErr, si no es nil, lo retorna CreateChannel (para simular fallos).
 	CreateErr error
+	// EnsureErr, si no es nil, lo retorna EnsureMember (para simular fallos).
+	EnsureErr error
 	// SendErr, si no es nil, lo retorna SendMessage (para simular fallos).
 	SendErr error
+	// RemoveErr, si no es nil, lo retorna RemoveMember (para simular fallos).
+	RemoveErr error
 	// Calls registra los canales creados (para aserciones).
 	Calls []CreateCall
+	// Ensured registra las membresías garantizadas (para aserciones).
+	Ensured []EnsureCall
 	// Messages registra los mensajes enviados (para aserciones).
 	Messages []SendCall
+	// Removed registra las membresías retiradas (para aserciones).
+	Removed []EnsureCall
 }
 
 type CreateCall struct {
 	ChannelType string
 	ChannelID   string
 	Name        string
+	CreatedByID string
+}
+
+// EnsureCall registra una membresía garantizada en un canal.
+type EnsureCall struct {
+	ChannelType string
+	ChannelID   string
+	UserID      string
 }
 
 // SendCall registra un mensaje enviado al mock.
@@ -65,13 +90,23 @@ type SendCall struct {
 
 func NewMockClient() *MockClient { return &MockClient{} }
 
-func (m *MockClient) CreateChannel(ctx context.Context, channelType, channelID, name string) error {
+func (m *MockClient) CreateChannel(ctx context.Context, channelType, channelID, name, createdByID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.CreateErr != nil {
 		return m.CreateErr
 	}
-	m.Calls = append(m.Calls, CreateCall{ChannelType: channelType, ChannelID: channelID, Name: name})
+	m.Calls = append(m.Calls, CreateCall{ChannelType: channelType, ChannelID: channelID, Name: name, CreatedByID: createdByID})
+	return nil
+}
+
+func (m *MockClient) EnsureMember(ctx context.Context, channelType, channelID, userID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.EnsureErr != nil {
+		return m.EnsureErr
+	}
+	m.Ensured = append(m.Ensured, EnsureCall{ChannelType: channelType, ChannelID: channelID, UserID: userID})
 	return nil
 }
 
@@ -83,6 +118,24 @@ func (m *MockClient) SendMessage(ctx context.Context, channelType, channelID, se
 	}
 	m.Messages = append(m.Messages, SendCall{ChannelType: channelType, ChannelID: channelID, SenderID: senderID, Text: text})
 	return nil
+}
+
+func (m *MockClient) RemoveMember(ctx context.Context, channelType, channelID, userID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.RemoveErr != nil {
+		return m.RemoveErr
+	}
+	m.Removed = append(m.Removed, EnsureCall{ChannelType: channelType, ChannelID: channelID, UserID: userID})
+	return nil
+}
+
+// RemovedCalls devuelve una copia de Removed bajo el lock (lectura segura
+// mientras una goroutine best-effort todavía puede escribir).
+func (m *MockClient) RemovedCalls() []EnsureCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]EnsureCall(nil), m.Removed...)
 }
 
 var _ Client = (*MockClient)(nil)
@@ -106,23 +159,49 @@ func NewRESTClient(apiKey, apiSecret string) *RESTClient {
 	}
 }
 
-// serverToken firma un JWT HS256 mínimo para auth server-side de Stream.
-func serverToken(apiSecret string) (string, error) {
+// signJWT firma un payload JSON como JWT HS256 con el API secret.
+func signJWT(apiSecret string, payload []byte) (string, error) {
 	if strings.TrimSpace(apiSecret) == "" {
 		return "", errors.New("api secret vacío")
 	}
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
-	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"server":true}`))
+	encoded := base64.RawURLEncoding.EncodeToString(payload)
 	mac := hmac.New(sha256.New, []byte(apiSecret))
-	mac.Write([]byte(header + "." + payload))
+	mac.Write([]byte(header + "." + encoded))
 	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-	return header + "." + payload + "." + sig, nil
+	return header + "." + encoded + "." + sig, nil
 }
 
-type createChannelRequest struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
-	Name string `json:"name,omitempty"`
+// serverToken firma un JWT HS256 mínimo para auth server-side de Stream.
+func serverToken(apiSecret string) (string, error) {
+	token, err := signJWT(apiSecret, []byte(`{"server":true}`))
+	if err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// SignUserToken firma el token de un usuario final para que el cliente
+// (front) se conecte directo a Stream. Payload mínimo: {"user_id"}.
+// Exportada para el endpoint GET /groups/:id/stream-token y sus tests.
+func SignUserToken(apiSecret, userID string) (string, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return "", errors.New("user_id vacío")
+	}
+	payload, err := json.Marshal(map[string]string{"user_id": userID})
+	if err != nil {
+		return "", err
+	}
+	return signJWT(apiSecret, payload)
+}
+
+// queryChannelRequest es el get-or-create oficial de un canal:
+// POST /channels/{type}/{id}/query. OJO: POST /channels a secas es
+// QueryChannels (búsqueda), NO crea nada aunque responda 200.
+type queryChannelRequest struct {
+	State bool              `json:"state"`
+	Data  map[string]string `json:"data,omitempty"`
 }
 
 // authHeaders valida credenciales, firma el server token y arma headers comunes.
@@ -163,18 +242,107 @@ func (c *RESTClient) postJSON(ctx context.Context, path string, query string, pa
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &StreamError{Code: resp.StatusCode, Message: strings.TrimSpace(string(respBody))}
+		var apiError struct {
+			Code int `json:"code"`
+		}
+		_ = json.Unmarshal(respBody, &apiError)
+		return &StreamError{
+			Code:         resp.StatusCode,
+			APIErrorCode: apiError.Code,
+			Message:      strings.TrimSpace(string(respBody)),
+		}
 	}
 	return nil
 }
 
-func (c *RESTClient) CreateChannel(ctx context.Context, channelType, channelID, name string) error {
+func (c *RESTClient) CreateChannel(ctx context.Context, channelType, channelID, name, createdByID string) error {
 	channelType = strings.TrimSpace(channelType)
 	channelID = strings.TrimSpace(channelID)
 	if channelType == "" || channelID == "" {
 		return errors.New("channel type/id vacíos")
 	}
-	return c.postJSON(ctx, "/channels", "", createChannelRequest{ID: channelID, Type: channelType, Name: name})
+	var data map[string]string
+	if strings.TrimSpace(name) != "" || strings.TrimSpace(createdByID) != "" {
+		data = map[string]string{}
+		if strings.TrimSpace(name) != "" {
+			data["name"] = strings.TrimSpace(name)
+		}
+		if strings.TrimSpace(createdByID) != "" {
+			data["created_by_id"] = strings.TrimSpace(createdByID)
+		}
+	}
+	path := "/channels/" + url.PathEscape(channelType) + "/" + url.PathEscape(channelID) + "/query"
+	return c.postJSON(ctx, path, "", queryChannelRequest{State: true, Data: data})
+}
+
+type updateChannelRequest struct {
+	AddMembers []string `json:"add_members"`
+}
+
+// EnsureMember agrega al usuario como miembro del canal vía update server-side.
+// POST /channels/{type}/{id} {"add_members":[...]} es idempotente en Stream:
+// si el usuario ya es miembro, la llamada tiene éxito sin duplicar.
+func (c *RESTClient) EnsureMember(ctx context.Context, channelType, channelID, userID string) error {
+	channelType = strings.TrimSpace(channelType)
+	channelID = strings.TrimSpace(channelID)
+	userID = strings.TrimSpace(userID)
+	if channelType == "" || channelID == "" {
+		return errors.New("channel type/id vacíos")
+	}
+	if userID == "" {
+		return errors.New("user vacío")
+	}
+	path := "/channels/" + url.PathEscape(channelType) + "/" + url.PathEscape(channelID)
+	err := c.postJSON(ctx, path, "", updateChannelRequest{AddMembers: []string{userID}})
+	var se *StreamError
+	if !errors.As(err, &se) || se.Code != http.StatusBadRequest {
+		return err
+	}
+	// 400 = el usuario aún no existe en Stream: el front lo crea recién en
+	// connectUser, que necesita el token que esta llamada desbloquea. Se crea
+	// server-side (solo id; connectUser luego le pone el nombre) y se reintenta.
+	if uerr := c.postJSON(ctx, "/users", "", upsertUsersRequest{Users: map[string]streamUser{userID: {ID: userID}}}); uerr != nil {
+		return errors.Join(err, uerr)
+	}
+	return c.postJSON(ctx, path, "", updateChannelRequest{AddMembers: []string{userID}})
+}
+
+type removeMembersRequest struct {
+	RemoveMembers []string `json:"remove_members"`
+}
+
+// RemoveMember quita al usuario del canal vía update server-side
+// (POST /channels/{type}/{id} {"remove_members":[...]}). Sin membresía en el
+// canal, el usuario deja de poder leer o escribir aunque conserve su token.
+func (c *RESTClient) RemoveMember(ctx context.Context, channelType, channelID, userID string) error {
+	channelType = strings.TrimSpace(channelType)
+	channelID = strings.TrimSpace(channelID)
+	userID = strings.TrimSpace(userID)
+	if channelType == "" || channelID == "" {
+		return errors.New("channel type/id vacíos")
+	}
+	if userID == "" {
+		return errors.New("user vacío")
+	}
+	path := "/channels/" + url.PathEscape(channelType) + "/" + url.PathEscape(channelID)
+	err := c.postJSON(ctx, path, "", removeMembersRequest{RemoveMembers: []string{userID}})
+	var streamErr *StreamError
+	if errors.As(err, &streamErr) && streamErr.Code == http.StatusNotFound && streamErr.APIErrorCode == 16 {
+		// Stream confirma que el recurso ya no existe: no puede conservar la
+		// membresía solicitada. Los demás errores (incluidos otros 404) siguen
+		// siendo pendientes para permitir reintento.
+		return nil
+	}
+	return err
+}
+
+type streamUser struct {
+	ID string `json:"id"`
+}
+
+// upsertUsersRequest es POST /users (crea o reemplaza usuarios).
+type upsertUsersRequest struct {
+	Users map[string]streamUser `json:"users"`
 }
 
 type sendMessageRequest struct {

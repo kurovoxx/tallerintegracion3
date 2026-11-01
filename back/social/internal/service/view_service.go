@@ -16,12 +16,12 @@ type workspaceGroups interface {
 }
 
 type workspaceTodos interface {
-	ListTodos(ctx context.Context, groupID, status, boardID string) ([]TodoTaskView, error)
+	ListTodos(ctx context.Context, groupID, userID, status, boardID string) ([]TodoTaskView, error)
 }
 
 type workspaceSprint interface {
 	ListSheets(ctx context.Context, groupID string) ([]sqlc.SocialSprintSheet, error)
-	ListSprintTasks(ctx context.Context, groupID, status, priority, sheetID string) ([]SprintTaskView, error)
+	ListSprintTasks(ctx context.Context, groupID, userID, status, priority, sheetID string) ([]SprintTaskView, error)
 }
 
 type workspaceMeetings interface {
@@ -60,7 +60,7 @@ func (s *ViewService) Workspace(ctx context.Context, groupID, userID string) (*W
 	if err != nil {
 		return nil, err
 	}
-	todos, err := s.todos.ListTodos(ctx, groupID, "", "")
+	todos, err := s.todos.ListTodos(ctx, groupID, userID, "", "")
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +68,7 @@ func (s *ViewService) Workspace(ctx context.Context, groupID, userID string) (*W
 	if err != nil {
 		return nil, err
 	}
-	tasks, err := s.sprint.ListSprintTasks(ctx, groupID, "", "", "")
+	tasks, err := s.sprint.ListSprintTasks(ctx, groupID, userID, "", "", "")
 	if err != nil {
 		return nil, err
 	}

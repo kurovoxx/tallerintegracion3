@@ -80,6 +80,13 @@ type SocialMeetingNotification struct {
 	CreatedAt pgtype.Timestamptz
 }
 
+type SocialMeetingAttendee struct {
+	ID        pgtype.UUID
+	MeetingID pgtype.UUID
+	Email     string
+	CreatedAt pgtype.Timestamptz
+}
+
 type SocialDiscordIntegration struct {
 	ID         pgtype.UUID
 	GroupID    pgtype.UUID

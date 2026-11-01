@@ -101,14 +101,14 @@ func TestReconcilePendingNotesSkipsFreshPendingAndFailedSync(t *testing.T) {
 	userID := uuid.NewString()
 
 	// pending_drive reciente: podría ser un Create en vuelo, no debe compensarse.
-	fileFresh, _ := driveMock.CreateFile(ctx, userID, "fresh.md", "x")
-	fresh, err := noteStore.Create(ctx, userID, nil, "fresh", &fileFresh, "private", nil, "pending_drive")
+	fileFresh, _ := driveMock.CreateFile(ctx, userID, "", "fresh.md", "x")
+	fresh, err := noteStore.Create(ctx, "", userID, nil, "fresh", &fileFresh, "private", nil, "pending_drive")
 	if err != nil {
 		t.Fatalf("seed fresh: %v", err)
 	}
 	// failed_sync antiguo: fuera del alcance del reconciliador de pending.
-	fileFailed, _ := driveMock.CreateFile(ctx, userID, "failed.md", "x")
-	failed, err := noteStore.Create(ctx, userID, nil, "failed", &fileFailed, "private", nil, "failed_sync")
+	fileFailed, _ := driveMock.CreateFile(ctx, userID, "", "failed.md", "x")
+	failed, err := noteStore.Create(ctx, "", userID, nil, "failed", &fileFailed, "private", nil, "failed_sync")
 	if err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
@@ -116,8 +116,8 @@ func TestReconcilePendingNotesSkipsFreshPendingAndFailedSync(t *testing.T) {
 	// el TTL de caché (10 min) pero NO el umbral de reconciliación de 15 min;
 	// NO debe compensarse (margen anti-race del reconcilePendingMinAge).
 	mid := time.Now().UTC().Add(-12 * time.Minute)
-	fileMid, _ := driveMock.CreateFile(ctx, userID, "mid.md", "x")
-	midNote, err := noteStore.Create(ctx, userID, nil, "mid", &fileMid, "private", nil, "pending_drive")
+	fileMid, _ := driveMock.CreateFile(ctx, userID, "", "mid.md", "x")
+	midNote, err := noteStore.Create(ctx, "", userID, nil, "mid", &fileMid, "private", nil, "pending_drive")
 	if err != nil {
 		t.Fatalf("seed mid: %v", err)
 	}
@@ -157,8 +157,8 @@ func TestReconcilePendingNotesCompensatesStalePending(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.NewString()
 
-	fileID, _ := driveMock.CreateFile(ctx, userID, "stale.md", "x")
-	n, err := noteStore.Create(ctx, userID, nil, "stale", &fileID, "private", nil, "pending_drive")
+	fileID, _ := driveMock.CreateFile(ctx, userID, "", "stale.md", "x")
+	n, err := noteStore.Create(ctx, "", userID, nil, "stale", &fileID, "private", nil, "pending_drive")
 	if err != nil {
 		t.Fatalf("seed stale: %v", err)
 	}

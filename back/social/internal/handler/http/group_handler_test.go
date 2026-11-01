@@ -121,7 +121,6 @@ func TestUnauthenticatedRequestsGet401(t *testing.T) {
 		{http.MethodPatch, "/groups/" + gid + "/members/" + hMember + "/role"},
 		{http.MethodPost, "/groups/" + gid + "/transfer-admin"},
 		{http.MethodPost, "/groups/" + gid + "/leave"},
-		{http.MethodPost, "/groups/account-deletion"},
 	}
 	for _, r := range routes {
 		expect(t, e.do(r.method, r.path, "", nil), http.StatusUnauthorized)
@@ -302,29 +301,19 @@ func TestLeaveContract(t *testing.T) {
 	path := "/groups/" + gid + "/leave"
 
 	expect(t, e.do(http.MethodPost, path, hStrang, nil), http.StatusForbidden)
-	expect(t, e.do(http.MethodPost, path, hAdmin, nil), http.StatusBadRequest) // único admin con otros miembros
+	expect(t, e.do(http.MethodPost, path, hAdmin, nil), http.StatusNoContent)  // sucesión automática
 	expect(t, e.do(http.MethodPost, path, hMember, nil), http.StatusNoContent) // body vacío permitido
-	expect(t, e.do(http.MethodPost, path, hAdmin, map[string]bool{"cleanup_shared_notes": false}), http.StatusNoContent)
 	if e.store.GroupExists(gid) {
 		t.Fatal("el último miembro al salir elimina el grupo")
 	}
 	expect(t, e.do(http.MethodPost, "/groups/basura/leave", hAdmin, nil), http.StatusNotFound)
 }
 
-// Tarea 2_3_9: la ruta estática no debe ser capturada por /groups/:id/...
-func TestAccountDeletionRoute(t *testing.T) {
+// Contrato v2: la limpieza por borrado de cuenta es solo gRPC
+// (Social.AccountDeletionCleanup), nunca un endpoint HTTP público.
+func TestAccountDeletionNotExposedOverHTTP(t *testing.T) {
 	e := newEnv()
-	gid := e.createGroup(t, hAdmin)
-	e.join(t, gid, hMember)
-
-	expect(t, e.do(http.MethodPost, "/groups/account-deletion", hAdmin, nil), http.StatusNoContent)
-	if r, _ := e.store.GetMemberRole(context.Background(), gid, hMember); r != model.RoleAdmin {
-		t.Fatalf("el miembro más antiguo debe ser el nuevo admin, rol = %q", r)
-	}
-	// idempotente
-	expect(t, e.do(http.MethodPost, "/groups/account-deletion", hAdmin, nil), http.StatusNoContent)
-	// sin membresías: no-op
-	expect(t, e.do(http.MethodPost, "/groups/account-deletion", hStrang, nil), http.StatusNoContent)
+	expect(t, e.do(http.MethodPost, "/groups/account-deletion", hAdmin, nil), http.StatusNotFound)
 }
 
 // Aislamiento extremo a extremo: baneado no reingresa ni lee el grupo.

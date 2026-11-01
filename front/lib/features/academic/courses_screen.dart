@@ -4,17 +4,17 @@ import '../../core/common_widgets.dart';
 import '../../core/services/courses_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import 'academic_api.dart';
+import 'academic_mappers.dart';
+import 'academic_models.dart';
 import 'attendance_screen.dart';
+import 'course_windows.dart';
+import '../notes/all_notes_screen.dart';
 
 const String kSubjectApproved = 'approved';
 const String kSubjectInProgress = 'in_progress';
 const String kSubjectFailed = 'failed';
 const String kSubjectPending = 'pending';
-
-String _formatGrade(num raw) {
-  final v = raw >= 10 ? raw / 10 : raw.toDouble();
-  return v.toStringAsFixed(1);
-}
 
 const List<String> _kWeekDays = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 
@@ -29,8 +29,6 @@ const List<List<String>> _kScheduleBlocks = [
 
 String _blockLabel(List<String> block) => '${block[0]}–${block[1]}';
 
-enum _CourseDetailTab { unidades, materiales, evaluaciones }
-
 class CoursesScreen extends StatefulWidget {
   const CoursesScreen({super.key});
 
@@ -43,9 +41,14 @@ class _CoursesScreenState extends State<CoursesScreen> {
   bool _hasError = false;
 
   String _searchQuery = '';
-  String _statusFilter = 'Todos los estados'; // Todos | Cursando | Pendiente | Finalizado
-  String? _selectedCourseId;
-  _CourseDetailTab _detailTab = _CourseDetailTab.unidades;
+  String _statusFilter =
+      'Todos los estados'; // Todos | Cursando | Pendiente | Finalizado
+
+  // Backend Academic: con sesión se listan/crean materias por API
+  // (fan-out de horarios multi-día); sin sesión rige el mock local.
+  final AcademicApi _academicApi = AcademicApi();
+  bool _backendMode = false;
+  String? _curriculumId;
 
   List<Map<String, dynamic>> get _courses => CoursesService.instance.courses;
 
@@ -63,6 +66,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
   @override
   void dispose() {
     CoursesService.instance.removeListener(_handleCoursesChanged);
+    _academicApi.dispose();
     super.dispose();
   }
 
@@ -73,6 +77,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
     });
     try {
       await Future.delayed(const Duration(milliseconds: 620));
+      await _loadFromBackend();
       if (!mounted) return;
       setState(() => _isLoading = false);
     } catch (_) {
@@ -84,19 +89,106 @@ class _CoursesScreenState extends State<CoursesScreen> {
     }
   }
 
-  Map<String, dynamic>? get _selectedCourse {
-    if (_selectedCourseId == null) return null;
+  /// Lista malla + materias + horarios agregados por materia desde el
+  /// backend y reconstruye el store local. Silencioso ante no_session:
+  /// se conserva el mock.
+  Future<void> _loadFromBackend() async {
     try {
-      return _courses.firstWhere((c) => c['id'] == _selectedCourseId);
-    } catch (_) {
-      return null;
+      final malla = await _academicApi.ensureCurriculum();
+      final subjects = await _academicApi.listSubjects(malla.id);
+      final rebuilt = <Map<String, dynamic>>[];
+      for (final s in subjects) {
+        final slots = await _academicApi.listSchedules(s.id);
+        rebuilt.add(_courseFromBackend(s, slots));
+      }
+      if (!mounted) return;
+      for (final c in List.of(CoursesService.instance.courses)) {
+        final id = c['id'] as String?;
+        if (id != null) CoursesService.instance.removeCourse(id);
+      }
+      for (final c in rebuilt) {
+        CoursesService.instance.addCourse(c);
+      }
+      setState(() {
+        _backendMode = true;
+        _curriculumId = malla.id;
+      });
+    } on AcademicApiException {
+      if (mounted) {
+        setState(() {
+          _backendMode = false;
+          _curriculumId = null;
+        });
+      }
     }
+  }
+
+  /// Materia + slots backend -> mapa de curso (misma forma que el mock).
+  Map<String, dynamic> _courseFromBackend(
+    AcademicSubject s,
+    List<AcademicScheduleSlot> slots,
+  ) {
+    final byBlock = <String, List<int>>{};
+    for (final slot in slots) {
+      final start = _shortTime(slot.startTime);
+      final end = _shortTime(slot.endTime);
+      byBlock.putIfAbsent('$start–$end', () => []).add(slot.dayOfWeek);
+    }
+    final entries = byBlock.entries.map((e) {
+      final days = e.value.toSet().toList()
+        ..sort((a, b) => (a == 0 ? 7 : a).compareTo(b == 0 ? 7 : b));
+      return '${days.map(dayNumberToLabel).join(' / ')} · ${e.key}';
+    }).toList();
+    final status = s.status;
+    return {
+      'id': s.id,
+      'code': s.code ?? '',
+      'name': s.name,
+      'credits': s.credits ?? 5,
+      'status': status,
+      'professor': s.professor ?? 'Por asignar',
+      'schedule': entries.isEmpty ? 'Por definir' : entries.join(' · '),
+      'room': s.room ?? 'Por asignar',
+      'requisite': 'REQ: —',
+      'requisite_alert': false,
+      'progress': status == kSubjectApproved
+          ? 100
+          : (status == kSubjectPending ? 0 : 15),
+      'semester': 'Semestre ${s.semester ?? 6}',
+      'icon': Icons.book_rounded,
+    };
+  }
+
+  /// "HH:MM:SS" de la API -> "HH:MM" para render.
+  String _shortTime(String raw) {
+    final m = hhMmToMinutes(raw);
+    return m == null ? raw : minutesToHhMm(m);
+  }
+
+  /// Texto HORARIO ("A · B · C" con separador '·' también dentro de cada
+  /// entrada) -> entradas individuales "días · bloque".
+  List<String> _splitScheduleEntries(String text) {
+    final parts = text
+        .split('·')
+        .map((p) => p.trim())
+        .where((p) => p.isNotEmpty)
+        .toList();
+    if (parts.length.isOdd) return const [];
+    final out = <String>[];
+    for (var i = 0; i < parts.length; i += 2) {
+      out.add('${parts[i]} · ${parts[i + 1]}');
+    }
+    return out;
   }
 
   List<Map<String, dynamic>> get _filteredCourses {
     return _courses.where((c) {
       final q = _searchQuery.trim().toLowerCase();
-      final matchesSearch = q.isEmpty || (c['name'] as String).toLowerCase().contains(q) || (c['code'] as String).toLowerCase().contains(q) || (c['professor'] as String).toLowerCase().contains(q);
+      final matchesSearch =
+          q.isEmpty ||
+          (c['name'] as String).toLowerCase().contains(q) ||
+          (c['code'] as String).toLowerCase().contains(q) ||
+          (c['professor'] as String).toLowerCase().contains(q);
       if (!matchesSearch) return false;
       switch (_statusFilter) {
         case 'Cursando':
@@ -104,22 +196,32 @@ class _CoursesScreenState extends State<CoursesScreen> {
         case 'Pendiente':
           return c['status'] == kSubjectPending;
         case 'Finalizado':
-          return c['status'] == kSubjectApproved || c['status'] == kSubjectFailed;
+          return c['status'] == kSubjectApproved ||
+              c['status'] == kSubjectFailed;
         default:
           return true;
       }
     }).toList();
   }
 
-  void _openDetail(String id) {
-    setState(() {
-      _selectedCourseId = id;
-      _detailTab = _CourseDetailTab.unidades;
-    });
+  /// Abre el detalle como ruta real, con el mismo patrón que Grupos:
+  /// `Navigator.push(MaterialPageRoute(...))` (transición por defecto).
+  void _openDetail(Map<String, dynamic> course) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            CourseDetailScreen(course: course, onRefresh: _refreshCourse),
+      ),
+    );
   }
 
-  void _backToList() {
-    setState(() => _selectedCourseId = null);
+  /// Recarga la lista y devuelve la versión actualizada de un curso.
+  Future<Map<String, dynamic>?> _refreshCourse(String id) async {
+    await _loadCourses();
+    for (final course in _courses) {
+      if (course['id'] == id) return course;
+    }
+    return null;
   }
 
   Future<void> _showCreateCourseDialog() async {
@@ -129,6 +231,11 @@ class _CoursesScreenState extends State<CoursesScreen> {
     );
 
     if (result == null || !mounted) return;
+
+    if (_backendMode && _curriculumId != null) {
+      await _createCourseBackend(result);
+      return;
+    }
 
     CoursesService.instance.addCourse({
       'id': 'course-${DateTime.now().microsecondsSinceEpoch}',
@@ -144,21 +251,6 @@ class _CoursesScreenState extends State<CoursesScreen> {
       'progress': result['status'] == kSubjectPending ? 0 : 15,
       'semester': 'Semestre 6',
       'icon': Icons.book_rounded,
-      'units': [
-        {
-          'title': 'Unidad 1: Introducción',
-          'badge': 'próximo',
-          'items': [
-            {'title': 'Contenido inicial por definir', 'checked': false, 'tag': 'Clase 1 – 2'},
-          ]
-        },
-      ],
-      'materials': [
-        {'name': 'Sin materiales aún', 'meta': 'Añade PDFs desde el detalle', 'icon': Icons.description_rounded},
-      ],
-      'grades': [
-        {'name': 'Evaluación 1 (100%)', 'weight': 1.0, 'score': null, 'status': 'pending'},
-      ],
     });
 
     ScaffoldMessenger.of(context).showSnackBar(
@@ -169,9 +261,91 @@ class _CoursesScreenState extends State<CoursesScreen> {
     );
   }
 
+  /// Alta por API: POST materia + fan-out de bloques multi-día (un POST
+  /// por día). Falla la materia -> error visible sin alta local. Falla un
+  /// día -> error visible con los días afectados (reintentable sin
+  /// duplicar: el fan-out verifica por GET antes de reintentar).
+  Future<void> _createCourseBackend(Map<String, dynamic> result) async {
+    final messenger = ScaffoldMessenger.of(context);
+    String subjectId;
+    try {
+      subjectId = await _academicApi.createSubject(
+        curriculumId: _curriculumId!,
+        name: (result['name'] as String?) ?? '',
+        code: result['code'] as String?,
+        professor: result['professor'] as String?,
+        room: result['room'] as String?,
+        credits: result['credits'] as int?,
+        status: (result['status'] as String?) ?? kSubjectPending,
+        semester: 6,
+      );
+    } on AcademicApiException catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('No se pudo crear el curso: ${e.message}'),
+          backgroundColor: AppColors.border,
+        ),
+      );
+      return;
+    }
+
+    final failedDays = <String>[];
+    final scheduleText = (result['schedule'] as String?) ?? '';
+    if (scheduleText.trim().isNotEmpty && scheduleText != 'Por definir') {
+      for (final entry in _splitScheduleEntries(scheduleText)) {
+        List<ScheduleDraft> drafts;
+        try {
+          drafts = expandScheduleEntry(entry);
+        } on FormatException {
+          failedDays.add(entry);
+          continue;
+        }
+        if (drafts.isEmpty) continue;
+        final res = await _academicApi.createSchedulesFanOut(
+          subjectId: subjectId,
+          days: drafts.map((d) => d.dayOfWeek).toList(),
+          startTime: drafts.first.startTime,
+          endTime: drafts.first.endTime,
+        );
+        for (final day in res.failed.keys) {
+          failedDays.add(dayNumberToLabel(day));
+        }
+      }
+    }
+
+    if (!mounted) return;
+    CoursesService.instance.addCourse({
+      'id': subjectId,
+      'code': result['code'],
+      'name': result['name'],
+      'credits': result['credits'],
+      'status': result['status'],
+      'professor': result['professor'],
+      'schedule': result['schedule'],
+      'room': result['room'],
+      'requisite': 'REQ: —',
+      'requisite_alert': false,
+      'progress': result['status'] == kSubjectPending ? 0 : 15,
+      'semester': 'Semestre 6',
+      'icon': Icons.book_rounded,
+    });
+
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          failedDays.isEmpty
+              ? 'Curso creado correctamente'
+              : 'Curso creado, pero fallaron horarios: ${failedDays.join(', ')}. Verifica y reintenta.',
+        ),
+        backgroundColor: AppColors.border,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final isDesktop = MediaQuery.of(context).size.width > AppDimens.breakpointDesktop;
+    final isDesktop = context.isExpanded;
     final canPop = Navigator.of(context).canPop();
 
     return Scaffold(
@@ -180,21 +354,26 @@ class _CoursesScreenState extends State<CoursesScreen> {
         child: _hasError
             ? _buildErrorState()
             : SingleChildScrollView(
-                padding: EdgeInsets.symmetric(horizontal: isDesktop ? 48 : 16, vertical: 20),
+                padding: EdgeInsets.symmetric(
+                  horizontal: isDesktop
+                      ? AppDimens.spaceXxl
+                      : AppDimens.spaceLg,
+                  vertical: AppDimens.spaceXl,
+                ),
                 child: Center(
                   child: ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: isDesktop ? 1320 : 640),
+                    constraints: const BoxConstraints(
+                      maxWidth: AppDimens.contentMaxWidth,
+                    ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        _buildHeader(canPop, isDesktop),
-                        const SizedBox(height: 18),
+                        _buildHeader(canPop),
+                        const SizedBox(height: AppDimens.spaceXl),
                         if (_isLoading)
                           _buildLoadingCard()
-                        else if (_selectedCourseId != null)
-                          _buildDetailView(isDesktop)
                         else
-                          _buildListView(isDesktop),
+                          _buildListView(context),
                       ],
                     ),
                   ),
@@ -204,460 +383,811 @@ class _CoursesScreenState extends State<CoursesScreen> {
     );
   }
 
-  Widget _buildHeader(bool canPop, bool isDesktop) {
-    final titleBlock = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(_selectedCourseId != null ? 'DETALLE DEL CURSO' : 'MIS CURSOS', style: TextStyle(color: AppColors.text, fontWeight: FontWeight.w900, fontSize: isDesktop ? 28 : 22, letterSpacing: -0.6)),
-      const SizedBox(height: 3),
-      Text(_selectedCourseId != null ? 'Información, contenidos y evaluaciones del ramo' : 'Planifica y visualiza tu progreso académico · Semestre 6', style: const TextStyle(color: AppColors.muted, fontWeight: FontWeight.w700, fontSize: 12.5)),
-    ]);
+  Widget _buildHeader(bool canPop) {
+    final breakpoint = context.breakpoint;
 
-    final actions = Row(mainAxisSize: MainAxisSize.min, children: [
-      if (_selectedCourseId == null)
-        ElevatedButton.icon(
-          onPressed: _showCreateCourseDialog,
-          style: ElevatedButton.styleFrom(backgroundColor: AppColors.border, foregroundColor: Colors.white, side: const BorderSide(color: AppColors.border, width: 2), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppDimens.radius)), elevation: 0, shadowColor: AppColors.border, padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12)),
-          icon: const Icon(Icons.add_rounded, size: 18),
-          label: const Text('AGREGAR CURSO', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12)),
-        )
-      else
-        _SquareIconButton(icon: Icons.refresh_rounded, tooltip: 'Actualizar', onPressed: _loadCourses),
-    ]);
+    final titleBlock = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'MIS CURSOS',
+          style: TextStyle(
+            color: AppColors.text,
+            fontWeight: FontWeight.w900,
+            fontSize: context.isExpanded ? 28 : 22,
+            letterSpacing: -0.6,
+          ),
+        ),
+        const SizedBox(height: AppDimens.spaceXs),
+        const Text(
+          'Planifica y visualiza tu progreso académico',
+          style: TextStyle(
+            color: AppColors.mutedStrong,
+            fontWeight: FontWeight.w700,
+            fontSize: 12.5,
+          ),
+        ),
+      ],
+    );
 
-    if (isDesktop) {
-      return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        if (canPop || _selectedCourseId != null) ...[
-          _SquareIconButton(
-              icon: Icons.arrow_back_rounded,
-              tooltip: 'Volver',
-              onPressed: () {
-                if (_selectedCourseId != null) {
-                  _backToList();
-                } else if (canPop) {
-                  Navigator.of(context).pop();
-                }
-              }),
-          const SizedBox(width: 12),
+    final back = canPop
+        ? NeobrutalistIconButton(
+            icon: Icons.arrow_back_rounded,
+            tooltip: 'Volver',
+            onPressed: () => Navigator.of(context).pop(),
+          )
+        : null;
+
+    final action = NeobrutalistButton(
+      label: 'Agregar curso',
+      icon: Icons.add_rounded,
+      variant: NeobrutalistButtonVariant.accent,
+      expand: breakpoint == AppBreakpoint.compact,
+      onPressed: _showCreateCourseDialog,
+    );
+
+    if (breakpoint == AppBreakpoint.compact) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (back != null) ...[
+                back,
+                const SizedBox(width: AppDimens.spaceMd),
+              ],
+              Expanded(child: titleBlock),
+            ],
+          ),
+          const SizedBox(height: AppDimens.spaceLg),
+          action,
         ],
-        Expanded(child: titleBlock),
-        const SizedBox(width: 12),
-        actions,
-      ]);
+      );
     }
 
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        if (canPop || _selectedCourseId != null)
-          _SquareIconButton(
-              icon: Icons.arrow_back_rounded,
-              tooltip: 'Volver',
-              onPressed: () {
-                if (_selectedCourseId != null) {
-                  _backToList();
-                } else if (canPop) {
-                  Navigator.of(context).pop();
-                }
-              }),
-        if (canPop || _selectedCourseId != null) const SizedBox(width: 10),
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        if (back != null) ...[back, const SizedBox(width: AppDimens.spaceMd)],
         Expanded(child: titleBlock),
-      ]),
-      const SizedBox(height: 14),
-      actions,
-    ]);
+        const SizedBox(width: AppDimens.spaceMd),
+        action,
+      ],
+    );
   }
 
   // ---------------------------------------------------------------------
   // LISTADO
   // ---------------------------------------------------------------------
-  Widget _buildListView(bool isDesktop) {
+  Widget _buildListView(BuildContext context) {
     final filtered = _filteredCourses;
+    final hasFilters =
+        _searchQuery.isNotEmpty || _statusFilter != 'Todos los estados';
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Container(
-          height: 4,
-          decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(2)),
-        ),
-        const SizedBox(height: 14),
-        // Buscador + filtro
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            SizedBox(
-              width: isDesktop ? 420 : double.infinity,
-              child: TextField(
-                onChanged: (v) => setState(() => _searchQuery = v),
-                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text),
-                decoration: appInputDecoration('Buscar curso en el semestre...').copyWith(
-                  prefixIcon: const Icon(Icons.search_rounded, color: AppColors.muted, size: 20),
-                  filled: true,
-                  fillColor: AppColors.surface,
-                ),
-              ),
-            ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0)]),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  value: _statusFilter,
-                  icon: const Icon(Icons.expand_more_rounded, size: 20, color: AppColors.text),
-                  style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppColors.text),
-                  items: const [
-                    DropdownMenuItem(value: 'Todos los estados', child: Text('Todos los estados')),
-                    DropdownMenuItem(value: 'Cursando', child: Text('Cursando')),
-                    DropdownMenuItem(value: 'Pendiente', child: Text('Pendiente')),
-                    DropdownMenuItem(value: 'Finalizado', child: Text('Finalizado')),
-                  ],
-                  onChanged: (v) {
-                    if (v != null) setState(() => _statusFilter = v);
-                  },
-                ),
-              ),
-            ),
-            if (_searchQuery.isNotEmpty || _statusFilter != 'Todos los estados')
-              ActionChip(
-                label: const Text('LIMPIAR FILTROS', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: AppColors.text)),
-                backgroundColor: AppColors.accentYellow,
-                side: const BorderSide(color: AppColors.border, width: 2),
-                onPressed: () => setState(() {
-                  _searchQuery = '';
-                  _statusFilter = 'Todos los estados';
-                }),
-              ),
-          ],
-        ),
-        const SizedBox(height: 18),
-        if (filtered.isEmpty)
-          Container(
-            padding: const EdgeInsets.all(28),
-            decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius)),
-            child: Column(children: [
-              const Icon(Icons.search_off_rounded, size: 36, color: AppColors.muted),
-              const SizedBox(height: 10),
-              const Text('SIN RESULTADOS', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: AppColors.text)),
-              const SizedBox(height: 6),
-              Text('No hay cursos para "$_statusFilter"${_searchQuery.isNotEmpty ? ' con "$_searchQuery"' : ''}', textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppColors.muted)),
-            ]),
-          )
+        _buildFilters(context),
+        const SizedBox(height: AppDimens.spaceLg),
+        if (_courses.isEmpty)
+          _buildEmptyCourses()
+        else if (filtered.isEmpty)
+          _buildNoResults(hasFilters)
         else
-          LayoutBuilder(builder: (context, c) {
-            final cols = isDesktop ? (c.maxWidth > 900 ? 2 : 2) : 1;
-            final gap = 14.0 * (cols - 1);
-            final w = cols == 1 ? c.maxWidth : (c.maxWidth - gap) / cols;
-            return Wrap(
-              spacing: 14,
-              runSpacing: 14,
-              children: filtered.map((course) => SizedBox(width: w, child: _CourseCard(course: course, onTap: () => _openDetail(course['id'] as String)))).toList(),
-            );
-          }),
+          _buildGrid(context, filtered),
       ],
+    );
+  }
+
+  Widget _buildFilters(BuildContext context) {
+    final hasFilters =
+        _searchQuery.isNotEmpty || _statusFilter != 'Todos los estados';
+
+    final search = TextField(
+      onChanged: (v) => setState(() => _searchQuery = v),
+      style: const TextStyle(
+        fontWeight: FontWeight.w700,
+        fontSize: 13,
+        color: AppColors.text,
+      ),
+      textInputAction: TextInputAction.search,
+      decoration: appInputDecoration('Buscar por nombre, código o profesor…')
+          .copyWith(
+            prefixIcon: const Icon(
+              Icons.search_rounded,
+              color: AppColors.muted,
+              size: 20,
+            ),
+            filled: true,
+            fillColor: AppColors.surface,
+          ),
+    );
+
+    final filter = Container(
+      padding: const EdgeInsets.symmetric(horizontal: AppDimens.spaceMd),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+        boxShadow: AppShadows.badge,
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: _statusFilter,
+          icon: const Icon(
+            Icons.expand_more_rounded,
+            size: 20,
+            color: AppColors.text,
+          ),
+          style: const TextStyle(
+            fontWeight: FontWeight.w800,
+            fontSize: 13,
+            color: AppColors.text,
+          ),
+          items: const [
+            DropdownMenuItem(
+              value: 'Todos los estados',
+              child: Text('Todos los estados'),
+            ),
+            DropdownMenuItem(value: 'Cursando', child: Text('Cursando')),
+            DropdownMenuItem(value: 'Pendiente', child: Text('Pendiente')),
+            DropdownMenuItem(value: 'Finalizado', child: Text('Finalizado')),
+          ],
+          onChanged: (v) {
+            if (v != null) setState(() => _statusFilter = v);
+          },
+        ),
+      ),
+    );
+
+    final clear = hasFilters
+        ? NeobrutalistButton(
+            label: 'Limpiar',
+            icon: Icons.filter_alt_off_rounded,
+            variant: NeobrutalistButtonVariant.secondary,
+            onPressed: () => setState(() {
+              _searchQuery = '';
+              _statusFilter = 'Todos los estados';
+            }),
+          )
+        : null;
+
+    if (context.isCompact) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          search,
+          const SizedBox(height: AppDimens.spaceSm),
+          Row(
+            children: [
+              Expanded(child: filter),
+              if (clear != null) ...[
+                const SizedBox(width: AppDimens.spaceSm),
+                clear,
+              ],
+            ],
+          ),
+        ],
+      );
+    }
+
+    return Row(
+      children: [
+        Expanded(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: search,
+          ),
+        ),
+        const SizedBox(width: AppDimens.spaceMd),
+        filter,
+        if (clear != null) ...[const SizedBox(width: AppDimens.spaceMd), clear],
+      ],
+    );
+  }
+
+  Widget _buildGrid(BuildContext context, List<Map<String, dynamic>> courses) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final cols = switch (context.breakpoint) {
+          AppBreakpoint.compact => 1,
+          AppBreakpoint.medium => 2,
+          AppBreakpoint.expanded => 4,
+        };
+        final gap = AppDimens.gutter;
+        final itemWidth = (width - gap * (cols - 1)) / cols;
+
+        return Wrap(
+          spacing: gap,
+          runSpacing: gap,
+          children: courses
+              .map(
+                (course) => SizedBox(
+                  width: itemWidth,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 214),
+                    child: _CourseCard(
+                      course: course,
+                      onTap: () => _openDetail(course),
+                    ),
+                  ),
+                ),
+              )
+              .toList(),
+        );
+      },
+    );
+  }
+
+  Widget _buildEmptyCourses() {
+    return Container(
+      padding: const EdgeInsets.all(AppDimens.spaceXxl),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+        boxShadow: AppShadows.card,
+      ),
+      child: Column(
+        children: [
+          const Icon(Icons.menu_book_rounded, size: 40, color: AppColors.muted),
+          const SizedBox(height: AppDimens.spaceMd),
+          const Text(
+            'AÚN NO TIENES CURSOS',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+              fontSize: 15,
+              letterSpacing: 0.4,
+              color: AppColors.text,
+            ),
+          ),
+          const SizedBox(height: AppDimens.spaceXs),
+          const Text(
+            'Agrega tu primer curso para ver unidades, materiales, evaluaciones y asistencia.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 12.5,
+              color: AppColors.mutedStrong,
+              height: 1.35,
+            ),
+          ),
+          const SizedBox(height: AppDimens.spaceLg),
+          NeobrutalistButton(
+            label: 'Agregar curso',
+            icon: Icons.add_rounded,
+            variant: NeobrutalistButtonVariant.accent,
+            onPressed: _showCreateCourseDialog,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNoResults(bool hasFilters) {
+    return Container(
+      padding: const EdgeInsets.all(AppDimens.spaceXl),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceLow,
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+      ),
+      child: Column(
+        children: [
+          const Icon(
+            Icons.search_off_rounded,
+            size: 36,
+            color: AppColors.muted,
+          ),
+          const SizedBox(height: AppDimens.spaceSm),
+          const Text(
+            'SIN RESULTADOS',
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+              fontSize: 14,
+              letterSpacing: 0.4,
+              color: AppColors.text,
+            ),
+          ),
+          const SizedBox(height: AppDimens.spaceXs),
+          Text(
+            hasFilters
+                ? 'No hay cursos que coincidan con los filtros actuales.'
+                : 'No hay cursos para mostrar.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 12,
+              color: AppColors.mutedStrong,
+            ),
+          ),
+          if (hasFilters) ...[
+            const SizedBox(height: AppDimens.spaceLg),
+            NeobrutalistButton(
+              label: 'Limpiar filtros',
+              icon: Icons.filter_alt_off_rounded,
+              variant: NeobrutalistButtonVariant.secondary,
+              onPressed: () => setState(() {
+                _searchQuery = '';
+                _statusFilter = 'Todos los estados';
+              }),
+            ),
+          ],
+        ],
+      ),
     );
   }
 
   // ---------------------------------------------------------------------
   // DETALLE
   // ---------------------------------------------------------------------
-  Widget _buildDetailView(bool isDesktop) {
-    final course = _selectedCourse!;
-    final progress = course['progress'] as int;
-    final status = course['status'] as String;
-    final statusLabel = _statusLabel(status);
-    final statusColor = _statusColor(status);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        InkWell(
-          onTap: _backToList,
-          borderRadius: BorderRadius.circular(AppDimens.radius),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0)]),
-            child: Row(mainAxisSize: MainAxisSize.min, children: const [Icon(Icons.arrow_back_rounded, size: 16, color: AppColors.text), SizedBox(width: 6), Text('VOLVER A MIS CURSOS', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.text))]),
-          ),
-        ),
-        const SizedBox(height: 16),
-        // Header detalle (replica pmn view-curso-detalle)
-        Container(
-          padding: EdgeInsets.all(isDesktop ? 22 : 16),
-          decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: 4), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(6, 6), blurRadius: 0)]),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text('${course['code']} · ${course['credits']} CRÉDITOS', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: AppColors.accentBlue, letterSpacing: 0.4)),
-                    const SizedBox(height: 4),
-                    Text((course['name'] as String).toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 20, color: AppColors.text, letterSpacing: -0.4)),
-                  ]),
-                ),
-                const SizedBox(width: 12),
-                Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), decoration: BoxDecoration(color: statusColor, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(4)), child: Text(statusLabel, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10, color: status == kSubjectFailed ? Colors.white : AppColors.text))),
-              ]),
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(color: AppColors.bg, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius)),
-                child: Wrap(
-                  spacing: 16,
-                  runSpacing: 12,
-                  children: [
-                    _DetailMeta(label: 'PROFESOR / DOCENTE', value: course['professor'] as String),
-                    _DetailMeta(label: 'HORARIOS DE CLASE', value: course['schedule'] as String),
-                    _DetailMeta(label: 'SALA / AULA', value: course['room'] as String),
-                    _DetailMeta(label: 'PROGRESO DEL CURSO', value: '$progress% completado'),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('AVANCE GENERAL DEL PROGRAMA', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 11, color: AppColors.muted)), Text('$progress%', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.text))]),
-              const SizedBox(height: 6),
-              Container(height: 12, decoration: BoxDecoration(border: Border.all(color: AppColors.border, width: 2)), child: FractionallySizedBox(alignment: Alignment.centerLeft, widthFactor: progress / 100, child: Container(color: AppColors.accentYellow))),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        // Tabs
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
+  Widget _buildLoadingCard() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final cols = switch (context.breakpoint) {
+          AppBreakpoint.compact => 1,
+          AppBreakpoint.medium => 2,
+          AppBreakpoint.expanded => 4,
+        };
+        final gap = AppDimens.gutter;
+        final itemWidth = (width - gap * (cols - 1)) / cols;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _CourseTabButton(icon: Icons.menu_book_rounded, label: 'Unidades y Contenidos', active: _detailTab == _CourseDetailTab.unidades, onTap: () => setState(() => _detailTab = _CourseDetailTab.unidades)),
-            _CourseTabButton(icon: Icons.description_rounded, label: 'Materiales y Apuntes', active: _detailTab == _CourseDetailTab.materiales, onTap: () => setState(() => _detailTab = _CourseDetailTab.materiales)),
-            _CourseTabButton(icon: Icons.bar_chart_rounded, label: 'Evaluaciones y Notas', active: _detailTab == _CourseDetailTab.evaluaciones, onTap: () => setState(() => _detailTab = _CourseDetailTab.evaluaciones)),
-            _CourseTabButton(icon: Icons.article_rounded, label: 'Apuntes', active: false, onTap: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Módulo de apuntes próximamente'), backgroundColor: AppColors.border))),
-            _CourseTabButton(
-              icon: Icons.fact_check_rounded,
-              label: 'Ver Asistencia',
-              active: false,
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => AttendanceScreen(initialSubjectId: course['id'] as String),
+            const Row(
+              children: [
+                SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.5,
+                    color: AppColors.mutedStrong,
+                  ),
+                ),
+                SizedBox(width: AppDimens.spaceSm),
+                Text(
+                  'CARGANDO CURSOS…',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 11,
+                    letterSpacing: 0.6,
+                    color: AppColors.mutedStrong,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppDimens.spaceMd),
+            Wrap(
+              spacing: gap,
+              runSpacing: gap,
+              children: List.generate(
+                cols * 2,
+                (_) => SizedBox(
+                  width: itemWidth,
+                  child: Container(
+                    height: 190,
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceLow,
+                      border: Border.all(
+                        color: AppColors.border,
+                        width: AppDimens.borderWidth,
+                      ),
+                      borderRadius: BorderRadius.circular(AppDimens.radius),
+                    ),
+                  ),
                 ),
               ),
             ),
           ],
-        ),
-        const SizedBox(height: 16),
-        if (_detailTab == _CourseDetailTab.unidades) _buildUnidadesTab(course),
-        if (_detailTab == _CourseDetailTab.materiales) _buildMaterialesTab(course),
-        if (_detailTab == _CourseDetailTab.evaluaciones) _buildEvaluacionesTab(course),
-      ],
-    );
-  }
-
-  Widget _buildUnidadesTab(Map<String, dynamic> course) {
-    final units = course['units'] as List;
-    return Column(
-      children: units.map<Widget>((u) {
-        final badge = u['badge'] as String;
-        final items = u['items'] as List;
-        Color badgeColor;
-        Color badgeText;
-        switch (badge) {
-          case 'completado':
-            badgeColor = const Color(0xFFDCFCE7);
-            badgeText = const Color(0xFF166534);
-            break;
-          case 'en curso':
-            badgeColor = const Color(0xFFD6E3FF);
-            badgeText = AppColors.accentBlue;
-            break;
-          case 'próximo':
-          default:
-            badgeColor = AppColors.accentBlue;
-            badgeText = Colors.white;
-        }
-        return Container(
-          margin: const EdgeInsets.only(bottom: 12),
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(3, 3), blurRadius: 0)]),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(children: [
-                Expanded(child: Text((u['title'] as String).toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12.5, color: AppColors.text))),
-                const SizedBox(width: 10),
-                Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: badgeColor, border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(4)), child: Text(badge, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10, color: badgeText))),
-              ]),
-              const Divider(color: AppColors.border, thickness: 2, height: 18),
-              ...items.asMap().entries.map((entry) {
-                final idx = entry.key;
-                final it = entry.value as Map;
-                final checked = it['checked'] as bool;
-                return Container(
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  decoration: BoxDecoration(border: idx != items.length - 1 ? const Border(bottom: BorderSide(color: AppColors.border, width: 1, style: BorderStyle.solid)) : null),
-                  child: Row(
-                    children: [
-                      Checkbox(
-                        value: checked,
-                        activeColor: AppColors.accentYellow,
-                        checkColor: AppColors.text,
-                        side: const BorderSide(color: AppColors.border, width: 2),
-                        onChanged: (v) {
-                          setState(() => it['checked'] = v ?? false);
-                        },
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(child: Text(it['title'] as String, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12.5, color: checked ? AppColors.text : AppColors.muted))),
-                      const SizedBox(width: 8),
-                      Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3), decoration: BoxDecoration(color: AppColors.accentYellow, border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(4)), child: Text(it['tag'] as String, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 9, color: AppColors.text))),
-                    ],
-                  ),
-                );
-              }),
-            ],
-          ),
         );
-      }).toList(),
+      },
     );
-  }
-
-  Widget _buildMaterialesTab(Map<String, dynamic> course) {
-    final materials = course['materials'] as List;
-    return LayoutBuilder(builder: (context, c) {
-      final cols = c.maxWidth > 600 ? 3 : 1;
-      final gap = 12.0 * (cols - 1);
-      final w = cols == 1 ? c.maxWidth : (c.maxWidth - gap) / cols;
-      return Wrap(
-        spacing: 12,
-        runSpacing: 12,
-        children: materials.map<Widget>((m) {
-          return SizedBox(
-            width: w,
-            child: Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0)]),
-              child: Row(children: [
-                Container(width: 40, height: 40, alignment: Alignment.center, decoration: BoxDecoration(color: AppColors.bg, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius)), child: Icon(m['icon'] as IconData, size: 20, color: AppColors.text)),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(m['name'] as String, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12.5, color: AppColors.text)),
-                    const SizedBox(height: 2),
-                    Text(m['meta'] as String, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppColors.muted)),
-                  ]),
-                ),
-              ]),
-            ),
-          );
-        }).toList(),
-      );
-    });
-  }
-
-  Widget _buildEvaluacionesTab(Map<String, dynamic> course) {
-    final grades = course['grades'] as List;
-    return Column(
-      children: grades.map<Widget>((g) {
-        final status = g['status'] as String;
-        final score = g['score'] as int?;
-        final weight = g['weight'] as double;
-        final isGraded = status == 'graded';
-        final isPending = status == 'pending';
-        final isExcused = status == 'excused';
-
-        String badgeLabel;
-        Color badgeColor;
-        Color badgeText;
-        if (isGraded) {
-          badgeLabel = 'evaluado';
-          badgeColor = const Color(0xFFDCFCE7);
-          badgeText = const Color(0xFF166534);
-        } else if (isPending) {
-          if (g['date'] != null) {
-            badgeLabel = 'próximo · ${g['date']}';
-            badgeColor = AppColors.accentBlue;
-            badgeText = Colors.white;
-          } else {
-            badgeLabel = 'pendiente';
-            badgeColor = AppColors.accentYellow;
-            badgeText = AppColors.text;
-          }
-        } else if (isExcused) {
-          badgeLabel = 'eximido';
-          badgeColor = AppColors.accentBlue;
-          badgeText = Colors.white;
-        } else {
-          badgeLabel = 'sin registro';
-          badgeColor = AppColors.muted;
-          badgeText = Colors.white;
-        }
-
-        return Container(
-          margin: const EdgeInsets.only(bottom: 10),
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0)]),
-          child: Row(children: [
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: badgeColor, border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(4)), child: Text(badgeLabel, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10, color: badgeText))),
-                const SizedBox(height: 8),
-                Text(g['name'] as String, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppColors.text)),
-                const SizedBox(height: 2),
-                Text('Ponderación ${(weight * 100).toStringAsFixed(0)}%', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppColors.muted)),
-              ]),
-            ),
-            const SizedBox(width: 12),
-            Text(score != null ? _formatGrade(score) : '–', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 24, color: score != null ? AppColors.text : AppColors.muted)),
-          ]),
-        );
-      }).toList(),
-    );
-  }
-
-  String _statusLabel(String s) {
-    switch (s) {
-      case kSubjectInProgress:
-        return 'CURSANDO';
-      case kSubjectPending:
-        return 'PENDIENTE';
-      case kSubjectApproved:
-        return 'FINALIZADO';
-      case kSubjectFailed:
-        return 'ALERTA REQUISITO';
-      default:
-        return s.toUpperCase();
-    }
-  }
-
-  Color _statusColor(String s) {
-    switch (s) {
-      case kSubjectInProgress:
-        return const Color(0xFFDCFCE7);
-      case kSubjectPending:
-        return AppColors.accentYellow;
-      case kSubjectApproved:
-        return const Color(0xFFDCFCE7);
-      case kSubjectFailed:
-        return AppColors.error;
-      default:
-        return AppColors.bg;
-    }
-  }
-
-  Widget _buildLoadingCard() {
-    return Container(height: 260, decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(4, 4), blurRadius: 0)]), child: const Center(child: CircularProgressIndicator(color: AppColors.text)));
   }
 
   Widget _buildErrorState() {
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.error_outline_rounded, size: 48, color: AppColors.text),
-          const SizedBox(height: 12),
-          const Text('NO SE PUDIERON CARGAR TUS CURSOS', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: AppColors.text)),
-          const SizedBox(height: 8),
-          const Text('Intenta nuevamente en unos segundos.', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.muted)),
-          const SizedBox(height: 18),
-          SizedBox(width: 200, child: SubmitButton(text: 'REINTENTAR', onPressed: _loadCourses)),
-        ]),
+        padding: const EdgeInsets.all(AppDimens.spaceXl),
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 520),
+          padding: const EdgeInsets.all(AppDimens.spaceXxl),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            border: Border.all(
+              color: AppColors.border,
+              width: AppDimens.borderWidth,
+            ),
+            borderRadius: BorderRadius.circular(AppDimens.radius),
+            boxShadow: AppShadows.card,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.error_outline_rounded,
+                size: 48,
+                color: AppColors.text,
+              ),
+              const SizedBox(height: AppDimens.spaceMd),
+              const Text(
+                'NO SE PUDIERON CARGAR TUS CURSOS',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 16,
+                  color: AppColors.text,
+                ),
+              ),
+              const SizedBox(height: AppDimens.spaceSm),
+              const Text(
+                'Intenta nuevamente en unos segundos.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                  color: AppColors.mutedStrong,
+                ),
+              ),
+              const SizedBox(height: AppDimens.spaceLg),
+              NeobrutalistButton(
+                label: 'Reintentar',
+                icon: Icons.refresh_rounded,
+                variant: NeobrutalistButtonVariant.primary,
+                onPressed: _loadCourses,
+              ),
+            ],
+          ),
+        ),
       ),
+    );
+  }
+}
+
+/// Detalle del curso como ruta real. Replica el patrón de Grupos:
+/// `Navigator.push(MaterialPageRoute(...))` con la transición por defecto.
+class CourseDetailScreen extends StatefulWidget {
+  const CourseDetailScreen({
+    super.key,
+    required this.course,
+    required this.onRefresh,
+  });
+
+  final Map<String, dynamic> course;
+  final Future<Map<String, dynamic>?> Function(String id) onRefresh;
+
+  @override
+  State<CourseDetailScreen> createState() => _CourseDetailScreenState();
+}
+
+class _CourseDetailScreenState extends State<CourseDetailScreen> {
+  late Map<String, dynamic> _course = widget.course;
+  bool _refreshing = false;
+
+  Future<void> _refresh() async {
+    if (_refreshing) return;
+    setState(() => _refreshing = true);
+    final updated = await widget.onRefresh(_course['id'] as String);
+    if (!mounted) return;
+    setState(() {
+      if (updated != null) _course = updated;
+      _refreshing = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final course = _course;
+    final name = (course['name'] as String?) ?? '';
+    final progress = (course['progress'] as int).clamp(0, 100);
+    final isCompact = context.isCompact;
+
+    return Scaffold(
+      backgroundColor: AppColors.bg,
+      appBar: AppBar(
+        backgroundColor: AppColors.surface,
+        foregroundColor: AppColors.text,
+        leading: const BackButton(),
+        title: Text(
+          'CURSO · ${name.toUpperCase()}',
+          style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15),
+        ),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: AppDimens.spaceSm),
+            child: NeobrutalistIconButton(
+              icon: Icons.refresh_rounded,
+              tooltip: 'Actualizar',
+              onPressed: _refreshing ? null : _refresh,
+            ),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: EdgeInsets.symmetric(
+            horizontal: isCompact ? AppDimens.spaceLg : AppDimens.spaceXxl,
+            vertical: AppDimens.spaceXl,
+          ),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1100),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(
+                      isCompact ? AppDimens.spaceLg : AppDimens.spaceXl,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.surface,
+                      border: Border.all(
+                        color: AppColors.border,
+                        width: AppDimens.borderWidthThick,
+                      ),
+                      borderRadius: BorderRadius.circular(AppDimens.radius),
+                      boxShadow: AppShadows.card,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '${course['code']} · ${course['credits']} CRÉDITOS',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w900,
+                                      fontSize: 11,
+                                      color: AppColors.mutedStrong,
+                                      letterSpacing: 0.6,
+                                    ),
+                                  ),
+                                  const SizedBox(height: AppDimens.spaceXs),
+                                  Text(
+                                    name.toUpperCase(),
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w900,
+                                      fontSize: isCompact ? 19 : 24,
+                                      color: AppColors.text,
+                                      letterSpacing: -0.4,
+                                      height: 1.1,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: AppDimens.spaceMd),
+                            _CourseStatusBadge(
+                              status: course['status'] as String,
+                              isAlert: course['requisite_alert'] == true,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: AppDimens.spaceLg),
+                        Wrap(
+                          spacing: AppDimens.spaceXl,
+                          runSpacing: AppDimens.spaceMd,
+                          children: [
+                            _DetailMeta(
+                              icon: Icons.person_rounded,
+                              label: 'PROFESOR',
+                              value: course['professor'] as String,
+                            ),
+                            _DetailMeta(
+                              icon: Icons.schedule_rounded,
+                              label: 'HORARIO',
+                              value: course['schedule'] as String,
+                            ),
+                            _DetailMeta(
+                              icon: Icons.meeting_room_rounded,
+                              label: 'SALA',
+                              value: course['room'] as String,
+                            ),
+                            _DetailMeta(
+                              icon: Icons.school_rounded,
+                              label: 'CRÉDITOS',
+                              value: '${course['credits']}',
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: AppDimens.spaceLg),
+                        _CourseProgress(progress: progress),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: AppDimens.spaceLg),
+                  _CourseSections(course: course),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CourseProgress extends StatelessWidget {
+  const _CourseProgress({required this.progress});
+
+  final int progress;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text(
+              'AVANCE DEL CURSO',
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                fontSize: 11,
+                letterSpacing: 0.6,
+                color: AppColors.mutedStrong,
+              ),
+            ),
+            Text(
+              '$progress%',
+              style: const TextStyle(
+                fontWeight: FontWeight.w900,
+                fontSize: 12,
+                color: AppColors.text,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: AppDimens.spaceSm),
+        Container(
+          height: 12,
+          decoration: BoxDecoration(
+            color: AppColors.surfaceLow,
+            border: Border.all(
+              color: AppColors.border,
+              width: AppDimens.borderWidth,
+            ),
+          ),
+          child: FractionallySizedBox(
+            alignment: Alignment.centerLeft,
+            widthFactor: progress / 100,
+            child: Container(color: AppColors.accentYellow),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CourseSections extends StatelessWidget {
+  const _CourseSections({required this.course});
+
+  final Map<String, dynamic> course;
+
+  @override
+  Widget build(BuildContext context) {
+    final name = (course['name'] as String?) ?? '';
+    final code = (course['code'] as String?) ?? '';
+    final subjectId = (course['id'] as String?) ?? '';
+    final breakpoint = context.breakpoint;
+
+    final actions =
+        <
+          ({
+            IconData icon,
+            String label,
+            NeobrutalistButtonVariant variant,
+            WidgetBuilder builder,
+          })
+        >[
+          (
+            icon: Icons.menu_book_rounded,
+            label: 'Ver Unidades',
+            variant: NeobrutalistButtonVariant.secondary,
+            builder: (_) =>
+                UnitsWindow(subjectId: subjectId, subjectName: name),
+          ),
+          (
+            icon: Icons.description_rounded,
+            label: 'Ver Materiales',
+            variant: NeobrutalistButtonVariant.secondary,
+            builder: (_) => AllNotesScreen(
+              initialSubjectCode: code,
+              initialSubjectId: subjectId,
+              initialSubjectName: name,
+              showBackButton: true,
+            ),
+          ),
+          (
+            icon: Icons.bar_chart_rounded,
+            label: 'Ver Evaluaciones',
+            variant: NeobrutalistButtonVariant.accent,
+            builder: (_) =>
+                EvaluationsWindow(subjectId: subjectId, subjectName: name),
+          ),
+          (
+            icon: Icons.fact_check_rounded,
+            label: 'Ver Asistencia',
+            variant: NeobrutalistButtonVariant.secondary,
+            builder: (_) => AttendanceScreen(initialSubjectId: subjectId),
+          ),
+        ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          'SECCIONES DEL CURSO',
+          style: TextStyle(
+            fontWeight: FontWeight.w900,
+            fontSize: 12,
+            letterSpacing: 0.6,
+            color: AppColors.mutedStrong,
+          ),
+        ),
+        const SizedBox(height: AppDimens.spaceXs),
+        const Text(
+          'Cada sección se abre en su propia ventana.',
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 12,
+            color: AppColors.mutedStrong,
+          ),
+        ),
+        const SizedBox(height: AppDimens.spaceMd),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final cols = breakpoint == AppBreakpoint.compact
+                ? 1
+                : breakpoint == AppBreakpoint.medium
+                ? 2
+                : 4;
+            final gap = AppDimens.spaceMd;
+            final itemWidth = (constraints.maxWidth - gap * (cols - 1)) / cols;
+
+            return Wrap(
+              spacing: gap,
+              runSpacing: gap,
+              children: actions
+                  .map(
+                    (action) => SizedBox(
+                      width: itemWidth,
+                      child: NeobrutalistButton(
+                        label: action.label,
+                        icon: action.icon,
+                        variant: action.variant,
+                        expand: true,
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(builder: action.builder),
+                        ),
+                      ),
+                    ),
+                  )
+                  .toList(),
+            );
+          },
+        ),
+      ],
     );
   }
 }
@@ -666,141 +1196,233 @@ class _CoursesScreenState extends State<CoursesScreen> {
 // Widgets locales
 // ---------------------------------------------------------------------
 class _CourseCard extends StatelessWidget {
+  const _CourseCard({required this.course, required this.onTap});
+
   final Map<String, dynamic> course;
   final VoidCallback onTap;
-  const _CourseCard({required this.course, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final status = course['status'] as String;
     final isAlert = course['requisite_alert'] == true;
-    final progress = course['progress'] as int;
+    final progress = (course['progress'] as int).clamp(0, 100);
+    final professor = (course['professor'] as String?) ?? 'Sin profesor';
+    final schedule = (course['schedule'] as String?) ?? 'Sin horario';
+    final room = (course['room'] as String?) ?? 'Sin sala';
 
-    Color cardBg = AppColors.surface;
-    if (isAlert) cardBg = const Color(0xFFFFDAD6);
-
-    String badgeText;
-    Color badgeBg;
-    Color badgeTextColor;
-    switch (status) {
-      case kSubjectInProgress:
-        badgeText = 'CURSANDO';
-        badgeBg = const Color(0xFFDCFCE7);
-        badgeTextColor = const Color(0xFF166534);
-        break;
-      case kSubjectPending:
-        badgeText = 'PENDIENTE';
-        badgeBg = AppColors.accentYellow;
-        badgeTextColor = AppColors.text;
-        break;
-      case kSubjectApproved:
-        badgeText = 'AL DÍA';
-        badgeBg = const Color(0xFFDCFCE7);
-        badgeTextColor = const Color(0xFF166534);
-        break;
-      case kSubjectFailed:
-        badgeText = 'ALERTA REQUISITO';
-        badgeBg = Colors.white;
-        badgeTextColor = AppColors.error;
-        break;
-      default:
-        badgeText = status.toUpperCase();
-        badgeBg = AppColors.bg;
-        badgeTextColor = AppColors.text;
-    }
-
-    return InkWell(
-      borderRadius: BorderRadius.circular(AppDimens.radius),
+    return NeobrutalistCard(
       onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(color: cardBg, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(4, 4), blurRadius: 0)]),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      semanticLabel: 'Abrir curso ${course['name']}',
+      padding: const EdgeInsets.all(AppDimens.spaceLg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
               Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text((course['name'] as String).toUpperCase(), style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: isAlert ? AppColors.error : AppColors.text, height: 1.15)),
-                  const SizedBox(height: 3),
-                  Text('${course['code']} · ${course['credits']} créditos', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 11, color: isAlert ? AppColors.error.withValues(alpha: 0.85) : AppColors.muted)),
-                ]),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      (course['name'] as String).toUpperCase(),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 14.5,
+                        color: AppColors.text,
+                        height: 1.15,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
+                    const SizedBox(height: AppDimens.spaceXs),
+                    Text(
+                      '${course['code']} · ${course['credits']} créditos',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 11,
+                        color: AppColors.mutedStrong,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(width: 8),
-              Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: badgeBg, border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(4)), child: Text(badgeText, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 9, color: badgeTextColor))),
-            ]),
-            const SizedBox(height: 12),
-            Wrap(spacing: 12, runSpacing: 6, children: [
-              _InfoLine(label: 'Profesor:', value: course['professor'] as String),
-              _InfoLine(label: 'Horario:', value: course['schedule'] as String),
-              _InfoLine(label: 'Sala:', value: course['room'] as String),
-              Row(mainAxisSize: MainAxisSize.min, children: [
-                const Text('Requisito:', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: AppColors.text)),
-                const SizedBox(width: 6),
-                Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3), decoration: BoxDecoration(color: AppColors.accentBlue, border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(4)), child: Text(course['requisite'] as String, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 9, color: Colors.white))),
-              ]),
-            ]),
-            const SizedBox(height: 14),
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('AVANCE', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: isAlert ? AppColors.error : AppColors.muted)), Text('$progress%', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: isAlert ? AppColors.error : AppColors.text))]),
-            const SizedBox(height: 6),
-            Container(height: 10, decoration: BoxDecoration(border: Border.all(color: AppColors.border, width: 2), color: isAlert ? Colors.white : null), child: FractionallySizedBox(alignment: Alignment.centerLeft, widthFactor: progress / 100, child: Container(color: isAlert ? AppColors.error : AppColors.accentYellow))),
-          ],
-        ),
+              const SizedBox(width: AppDimens.spaceSm),
+              _CourseStatusBadge(status: status, isAlert: isAlert),
+            ],
+          ),
+          const SizedBox(height: AppDimens.spaceMd),
+          _CourseMeta(icon: Icons.person_rounded, text: professor),
+          const SizedBox(height: AppDimens.spaceXs),
+          _CourseMeta(icon: Icons.schedule_rounded, text: schedule),
+          const SizedBox(height: AppDimens.spaceXs),
+          _CourseMeta(icon: Icons.meeting_room_rounded, text: room),
+          const SizedBox(height: AppDimens.spaceMd),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'AVANCE',
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 11,
+                  letterSpacing: 0.5,
+                  color: isAlert ? AppColors.errorDeep : AppColors.mutedStrong,
+                ),
+              ),
+              Text(
+                '$progress%',
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 11,
+                  color: isAlert ? AppColors.errorDeep : AppColors.text,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppDimens.spaceXs),
+          Container(
+            height: 10,
+            decoration: BoxDecoration(
+              color: AppColors.surfaceLow,
+              border: Border.all(
+                color: AppColors.border,
+                width: AppDimens.borderWidth,
+              ),
+            ),
+            child: FractionallySizedBox(
+              alignment: Alignment.centerLeft,
+              widthFactor: progress / 100,
+              child: Container(
+                color: isAlert ? AppColors.errorDeep : AppColors.accentYellow,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-class _InfoLine extends StatelessWidget {
-  final String label;
-  final String value;
-  const _InfoLine({required this.label, required this.value});
+class _CourseStatusBadge extends StatelessWidget {
+  const _CourseStatusBadge({required this.status, required this.isAlert});
+
+  final String status;
+  final bool isAlert;
 
   @override
   Widget build(BuildContext context) {
-    return RichText(
-      text: TextSpan(children: [
-        TextSpan(text: '$label ', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: AppColors.text)),
-        TextSpan(text: value, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppColors.muted)),
-      ]),
+    if (isAlert || status == kSubjectFailed) {
+      return const NeobrutalistBadge(
+        label: 'Alerta requisito',
+        tone: NeobrutalistTone.danger,
+        compact: true,
+      );
+    }
+    switch (status) {
+      case kSubjectInProgress:
+        return const NeobrutalistBadge(
+          label: 'Cursando',
+          tone: NeobrutalistTone.success,
+          compact: true,
+        );
+      case kSubjectPending:
+        return const NeobrutalistBadge(
+          label: 'Pendiente',
+          tone: NeobrutalistTone.accent,
+          compact: true,
+        );
+      case kSubjectApproved:
+        return const NeobrutalistBadge(
+          label: 'Al día',
+          tone: NeobrutalistTone.success,
+          compact: true,
+        );
+      default:
+        return NeobrutalistBadge(
+          label: status,
+          tone: NeobrutalistTone.neutral,
+          compact: true,
+        );
+    }
+  }
+}
+
+class _CourseMeta extends StatelessWidget {
+  const _CourseMeta({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 14, color: AppColors.mutedStrong),
+        const SizedBox(width: AppDimens.spaceXs),
+        Expanded(
+          child: Text(
+            text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 11.5,
+              color: AppColors.mutedStrong,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
 
 class _DetailMeta extends StatelessWidget {
-  final String label;
-  final String value;
-  const _DetailMeta({required this.label, required this.value});
+  const _DetailMeta({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
 
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 160,
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(label, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 10, color: AppColors.muted)),
-        const SizedBox(height: 2),
-        Text(value, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12.5, color: AppColors.text)),
-      ]),
-    );
-  }
-}
-
-class _CourseTabButton extends StatelessWidget {
   final IconData icon;
   final String label;
-  final bool active;
-  final VoidCallback onTap;
-  const _CourseTabButton({required this.icon, required this.label, required this.active, required this.onTap});
+  final String value;
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(AppDimens.radius),
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(color: active ? AppColors.border : AppColors.surface, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: active ? const [BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0)] : null),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, size: 16, color: active ? Colors.white : AppColors.text), const SizedBox(width: 6), Text(label.toUpperCase(), style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: active ? Colors.white : AppColors.text))]),
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 150, maxWidth: 260),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 14, color: AppColors.mutedStrong),
+              const SizedBox(width: AppDimens.spaceXs),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 10,
+                  letterSpacing: 0.5,
+                  color: AppColors.mutedStrong,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppDimens.spaceXs),
+          Text(
+            value,
+            style: const TextStyle(
+              fontWeight: FontWeight.w800,
+              fontSize: 13,
+              color: AppColors.text,
+              height: 1.25,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -859,9 +1481,15 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
       'code': _codeCtrl.text.trim().toUpperCase(),
       'credits': int.tryParse(_creditsCtrl.text) ?? 5,
       'status': _status,
-      'professor': _professorCtrl.text.trim().isEmpty ? 'Por asignar' : _professorCtrl.text.trim(),
-      'schedule': _scheduleCtrl.text.trim().isEmpty ? 'Por definir' : _scheduleCtrl.text.trim(),
-      'room': _roomCtrl.text.trim().isEmpty ? 'Por asignar' : _roomCtrl.text.trim(),
+      'professor': _professorCtrl.text.trim().isEmpty
+          ? 'Por asignar'
+          : _professorCtrl.text.trim(),
+      'schedule': _scheduleCtrl.text.trim().isEmpty
+          ? 'Por definir'
+          : _scheduleCtrl.text.trim(),
+      'room': _roomCtrl.text.trim().isEmpty
+          ? 'Por asignar'
+          : _roomCtrl.text.trim(),
     });
   }
 
@@ -907,7 +1535,11 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
         ),
         title: const Text(
           'CREAR NUEVO CURSO',
-          style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: AppColors.text),
+          style: TextStyle(
+            fontWeight: FontWeight.w900,
+            fontSize: 16,
+            color: AppColors.text,
+          ),
         ),
         content: SingleChildScrollView(
           child: Form(
@@ -920,7 +1552,11 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                 const SizedBox(height: 6),
                 TextFormField(
                   controller: _nameCtrl,
-                  style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: AppColors.text),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                    color: AppColors.text,
+                  ),
                   decoration: appInputDecoration('Sistemas Inteligentes'),
                   validator: (v) {
                     if (v == null || v.trim().isEmpty) return 'Requerido';
@@ -929,71 +1565,112 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                   },
                 ),
                 const SizedBox(height: 12),
-                Row(children: [
-                  Expanded(
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      const AppFieldLabel('CÓDIGO'),
-                      const SizedBox(height: 6),
-                      TextFormField(
-                        controller: _codeCtrl,
-                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text),
-                        decoration: appInputDecoration('INFO-301'),
-                        inputFormatters: [LengthLimitingTextInputFormatter(20)],
-                        validator: (v) {
-                          if (v == null || v.trim().isEmpty) return 'Requerido';
-                          if (!RegExp(r'^[A-Z]{2,5}[- ]?\d{3,4}$').hasMatch(v.trim().toUpperCase())) return 'Ej. INF-301';
-                          return null;
-                        },
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const AppFieldLabel('CÓDIGO'),
+                          const SizedBox(height: 6),
+                          TextFormField(
+                            controller: _codeCtrl,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                              color: AppColors.text,
+                            ),
+                            decoration: appInputDecoration('INFO-301'),
+                            inputFormatters: [
+                              LengthLimitingTextInputFormatter(20),
+                            ],
+                            validator: (v) {
+                              if (!isValidSubjectCode(v)) return 'Requerido';
+                              return null;
+                            },
+                          ),
+                        ],
                       ),
-                    ]),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      const AppFieldLabel('CRÉDITOS'),
-                      const SizedBox(height: 6),
-                      TextFormField(
-                        controller: _creditsCtrl,
-                        keyboardType: TextInputType.number,
-                        inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(2)],
-                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text),
-                        decoration: appInputDecoration('5'),
-                        validator: (v) {
-                          final n = int.tryParse(v ?? '');
-                          if (n == null) return 'Requerido';
-                          if (n < 1 || n > 12) return '1-12';
-                          return null;
-                        },
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const AppFieldLabel('CRÉDITOS'),
+                          const SizedBox(height: 6),
+                          TextFormField(
+                            controller: _creditsCtrl,
+                            keyboardType: TextInputType.number,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly,
+                              LengthLimitingTextInputFormatter(2),
+                            ],
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                              color: AppColors.text,
+                            ),
+                            decoration: appInputDecoration('5'),
+                            validator: (v) {
+                              final n = int.tryParse(v ?? '');
+                              if (n == null) return 'Requerido';
+                              if (n < 1 || n > 12) return '1-12';
+                              return null;
+                            },
+                          ),
+                        ],
                       ),
-                    ]),
-                  ),
-                ]),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 12),
                 const AppFieldLabel('PROFESOR'),
                 const SizedBox(height: 6),
                 TextFormField(
                   controller: _professorCtrl,
-                  style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                    color: AppColors.text,
+                  ),
                   decoration: appInputDecoration('Prof. Apellido'),
                 ),
                 const SizedBox(height: 12),
                 // Selector compacto: un botón abre el popup de horario
                 // (días + bloque), agregando entradas tipo 'Lun / Mié · 10:00–11:30'
                 // que se sincronizan con el campo HORARIO (sigue siendo editable).
-                Row(children: [
-                  const Text('HORARIO SEMANAL', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: AppColors.text, letterSpacing: 0.5)),
-                  const Spacer(),
-                  if (_scheduleEntries.isNotEmpty)
-                    InkWell(
-                      onTap: () {
-                        setState(() {
-                          _scheduleEntries.clear();
-                          _syncScheduleText();
-                        });
-                      },
-                      child: const Text('LIMPIAR', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10, color: AppColors.error)),
+                Row(
+                  children: [
+                    const Text(
+                      'HORARIO SEMANAL',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 11,
+                        color: AppColors.text,
+                        letterSpacing: 0.5,
+                      ),
                     ),
-                ]),
+                    const Spacer(),
+                    if (_scheduleEntries.isNotEmpty)
+                      InkWell(
+                        onTap: () {
+                          setState(() {
+                            _scheduleEntries.clear();
+                            _syncScheduleText();
+                          });
+                        },
+                        child: const Text(
+                          'LIMPIAR',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w900,
+                            fontSize: 10,
+                            color: AppColors.error,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
                 const SizedBox(height: 6),
                 NeobrutalistButton(
                   label: 'SELECCIONAR HORARIO',
@@ -1004,7 +1681,14 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                 ),
                 const SizedBox(height: 8),
                 if (_scheduleEntries.isEmpty)
-                  const Text('Elige días y franjas en el popup para armar el horario.', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 10, color: AppColors.muted))
+                  const Text(
+                    'Elige días y franjas en el popup para armar el horario.',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 10,
+                      color: AppColors.muted,
+                    ),
+                  )
                 else
                   Wrap(
                     spacing: 6,
@@ -1018,31 +1702,47 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                     ],
                   ),
                 const SizedBox(height: 10),
-                Row(children: [
-                  Expanded(
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      const AppFieldLabel('HORARIO'),
-                      const SizedBox(height: 6),
-                      TextFormField(
-                        controller: _scheduleCtrl,
-                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text),
-                        decoration: appInputDecoration('Lun / Mié · 10:00'),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const AppFieldLabel('HORARIO'),
+                          const SizedBox(height: 6),
+                          TextFormField(
+                            controller: _scheduleCtrl,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                              color: AppColors.text,
+                            ),
+                            decoration: appInputDecoration('Lun / Mié · 10:00'),
+                          ),
+                        ],
                       ),
-                    ]),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      const AppFieldLabel('SALA'),
-                      const SizedBox(height: 6),
-                      TextFormField(
-                        controller: _roomCtrl,
-                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.text),
-                        decoration: appInputDecoration('CJP11-204'),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const AppFieldLabel('SALA'),
+                          const SizedBox(height: 6),
+                          TextFormField(
+                            controller: _roomCtrl,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                              color: AppColors.text,
+                            ),
+                            decoration: appInputDecoration('CJP11-204'),
+                          ),
+                        ],
                       ),
-                    ]),
-                  ),
-                ]),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 12),
                 const AppFieldLabel('ESTADO'),
                 const SizedBox(height: 6),
@@ -1057,12 +1757,28 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                     child: DropdownButton<String>(
                       value: _status,
                       isExpanded: true,
-                      style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppColors.text),
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 13,
+                        color: AppColors.text,
+                      ),
                       items: const [
-                        DropdownMenuItem(value: kSubjectInProgress, child: Text('Cursando')),
-                        DropdownMenuItem(value: kSubjectPending, child: Text('Pendiente')),
-                        DropdownMenuItem(value: kSubjectApproved, child: Text('Finalizado · Aprobado')),
-                        DropdownMenuItem(value: kSubjectFailed, child: Text('Finalizado · Reprobado')),
+                        DropdownMenuItem(
+                          value: kSubjectInProgress,
+                          child: Text('Cursando'),
+                        ),
+                        DropdownMenuItem(
+                          value: kSubjectPending,
+                          child: Text('Pendiente'),
+                        ),
+                        DropdownMenuItem(
+                          value: kSubjectApproved,
+                          child: Text('Finalizado · Aprobado'),
+                        ),
+                        DropdownMenuItem(
+                          value: kSubjectFailed,
+                          child: Text('Finalizado · Reprobado'),
+                        ),
                       ],
                       onChanged: (v) {
                         if (v != null) setState(() => _status = v);
@@ -1077,7 +1793,13 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('CANCELAR', style: TextStyle(fontWeight: FontWeight.w800, color: AppColors.muted)),
+            child: const Text(
+              'CANCELAR',
+              style: TextStyle(
+                fontWeight: FontWeight.w800,
+                color: AppColors.muted,
+              ),
+            ),
           ),
           ElevatedButton(
             onPressed: _submit,
@@ -1085,30 +1807,18 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
               backgroundColor: AppColors.accentYellow,
               foregroundColor: AppColors.text,
               side: const BorderSide(color: AppColors.border, width: 2),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppDimens.radius)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(AppDimens.radius),
+              ),
             ),
-            child: const Text('CREAR RAMO', style: TextStyle(fontWeight: FontWeight.w900)),
+            child: const Text(
+              'CREAR RAMO',
+              style: TextStyle(fontWeight: FontWeight.w900),
+            ),
           ),
         ],
       ),
     );
-  }
-}
-
-class _SquareIconButton extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onPressed;
-  final String? tooltip;
-  const _SquareIconButton({required this.icon, required this.onPressed, this.tooltip});
-
-  @override
-  Widget build(BuildContext context) {
-    final btn = InkWell(
-      borderRadius: BorderRadius.circular(AppDimens.radius),
-      onTap: onPressed,
-      child: Container(width: 42, height: 42, alignment: Alignment.center, decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0)]), child: Icon(icon, size: 18, color: AppColors.text)),
-    );
-    return tooltip != null ? Tooltip(message: tooltip!, child: btn) : btn;
   }
 }
 
@@ -1128,19 +1838,70 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
   late final List<String> _added;
   final Set<String> _selectedDays = <String>{};
   String? _selectedBlock;
+  late final TextEditingController _manualStartCtrl;
+  late final TextEditingController _manualEndCtrl;
 
   @override
   void initState() {
     super.initState();
     _added = List<String>.of(widget.initialEntries);
+    _manualStartCtrl = TextEditingController();
+    _manualEndCtrl = TextEditingController();
   }
 
+  @override
+  void dispose() {
+    _manualStartCtrl.dispose();
+    _manualEndCtrl.dispose();
+    super.dispose();
+  }
+
+  /// Bloque manual "HH:MM–HH:MM" normalizado, o null si está incompleto
+  /// o es inválido (ver [_manualErrorText]).
+  List<String>? _manualParts() {
+    final s = _manualStartCtrl.text.trim();
+    final e = _manualEndCtrl.text.trim();
+    if (s.isEmpty && e.isEmpty) return null;
+    return splitTimeBlock('$s–$e');
+  }
+
+  /// Error visible del bloque manual, o null si está incompleto o válido.
+  String? _manualErrorText() {
+    final s = _manualStartCtrl.text.trim();
+    final e = _manualEndCtrl.text.trim();
+    if (s.isEmpty && e.isEmpty) return null;
+    if (_manualParts() != null) return null;
+    final badTime = hhMmToMinutes(s) == null || hhMmToMinutes(e) == null;
+    return badTime
+        ? 'Hora inválida: usa HH:MM (ej. 10:20).'
+        : 'El fin debe ser mayor al inicio.';
+  }
+
+  bool get _hasManualInput =>
+      _manualStartCtrl.text.trim().isNotEmpty ||
+      _manualEndCtrl.text.trim().isNotEmpty;
+
   /// Vista previa de la entrada en construcción, p.ej. 'Lun / Mié · 10:00–11:30'.
+  /// Lo manual manda sobre el bloque estático seleccionado.
   String get _preview {
     final days = _selectedDays.toList()
       ..sort((a, b) => _kWeekDays.indexOf(a).compareTo(_kWeekDays.indexOf(b)));
-    if (days.isEmpty || _selectedBlock == null) return '';
+    if (days.isEmpty) return '';
+    final manual = _manualParts();
+    if (manual != null) {
+      return '${days.join(' / ')} · ${manual[0]}–${manual[1]}';
+    }
+    if (_hasManualInput) return '';
+    if (_selectedBlock == null) return '';
     return '${days.join(' / ')} · $_selectedBlock';
+  }
+
+  void _pickBlock(List<String> block) {
+    setState(() {
+      _selectedBlock = _blockLabel(block);
+      _manualStartCtrl.text = block[0];
+      _manualEndCtrl.text = block[1];
+    });
   }
 
   void _addBlock() {
@@ -1150,6 +1911,8 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
       _added.add(preview);
       _selectedDays.clear();
       _selectedBlock = null;
+      _manualStartCtrl.clear();
+      _manualEndCtrl.clear();
     });
   }
 
@@ -1169,14 +1932,26 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
         ),
         title: const Text(
           'SELECCIONAR HORARIO',
-          style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: AppColors.text),
+          style: TextStyle(
+            fontWeight: FontWeight.w900,
+            fontSize: 14,
+            color: AppColors.text,
+          ),
         ),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text('DÍAS', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10, color: AppColors.muted, letterSpacing: 0.5)),
+              const Text(
+                'DÍAS',
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 10,
+                  color: AppColors.muted,
+                  letterSpacing: 0.5,
+                ),
+              ),
               const SizedBox(height: 6),
               Wrap(
                 spacing: 6,
@@ -1199,7 +1974,15 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                 ],
               ),
               const SizedBox(height: 14),
-              const Text('BLOQUE / HORA', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10, color: AppColors.muted, letterSpacing: 0.5)),
+              const Text(
+                'BLOQUE / HORA',
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 10,
+                  color: AppColors.muted,
+                  letterSpacing: 0.5,
+                ),
+              ),
               const SizedBox(height: 6),
               Wrap(
                 spacing: 6,
@@ -1209,20 +1992,93 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                     _ScheduleDayChip(
                       label: _blockLabel(block),
                       selected: _selectedBlock == _blockLabel(block),
-                      onTap: () => setState(() => _selectedBlock = _blockLabel(block)),
+                      onTap: () => _pickBlock(block),
                     ),
                 ],
               ),
+              const SizedBox(height: 10),
+              const Text(
+                'MANUAL (HH:MM)',
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 10,
+                  color: AppColors.muted,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _manualStartCtrl,
+                      keyboardType: TextInputType.datetime,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
+                        color: AppColors.text,
+                      ),
+                      decoration: appInputDecoration('10:20'),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 8),
+                    child: Text(
+                      '–',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 14,
+                        color: AppColors.text,
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: TextField(
+                      controller: _manualEndCtrl,
+                      keyboardType: TextInputType.datetime,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
+                        color: AppColors.text,
+                      ),
+                      decoration: appInputDecoration('11:50'),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                ],
+              ),
+              if (_manualErrorText() != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  _manualErrorText()!,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 11,
+                    color: AppColors.error,
+                  ),
+                ),
+              ],
               const SizedBox(height: 14),
               if (_preview.isNotEmpty) ...[
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
                   decoration: BoxDecoration(
                     color: AppColors.accentYellow,
                     border: Border.all(color: AppColors.border, width: 2),
                     borderRadius: BorderRadius.circular(AppDimens.radius),
                   ),
-                  child: Text(_preview, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: AppColors.text)),
+                  child: Text(
+                    _preview,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: 11,
+                      color: AppColors.text,
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 8),
               ],
@@ -1235,14 +2091,25 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
               ),
               if (_added.isNotEmpty) ...[
                 const SizedBox(height: 14),
-                const Text('BLOQUES AÑADIDOS', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 10, color: AppColors.muted, letterSpacing: 0.5)),
+                const Text(
+                  'BLOQUES AÑADIDOS',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 10,
+                    color: AppColors.muted,
+                    letterSpacing: 0.5,
+                  ),
+                ),
                 const SizedBox(height: 6),
                 Wrap(
                   spacing: 6,
                   runSpacing: 6,
                   children: [
                     for (var i = 0; i < _added.length; i++)
-                      _ScheduleEntryChip(label: _added[i], onDelete: () => _removeAt(i)),
+                      _ScheduleEntryChip(
+                        label: _added[i],
+                        onDelete: () => _removeAt(i),
+                      ),
                   ],
                 ),
               ],
@@ -1252,7 +2119,13 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('CANCELAR', style: TextStyle(fontWeight: FontWeight.w800, color: AppColors.muted)),
+            child: const Text(
+              'CANCELAR',
+              style: TextStyle(
+                fontWeight: FontWeight.w800,
+                color: AppColors.muted,
+              ),
+            ),
           ),
           NeobrutalistButton(
             label: 'LISTO',
@@ -1285,7 +2158,14 @@ class _ScheduleEntryChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(label, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 10, color: AppColors.text)),
+          Text(
+            label,
+            style: const TextStyle(
+              fontWeight: FontWeight.w900,
+              fontSize: 10,
+              color: AppColors.text,
+            ),
+          ),
           const SizedBox(width: 4),
           InkWell(
             onTap: onDelete,
@@ -1307,7 +2187,11 @@ class _ScheduleDayChip extends StatelessWidget {
   final String label;
   final bool selected;
   final VoidCallback onTap;
-  const _ScheduleDayChip({required this.label, required this.selected, required this.onTap});
+  const _ScheduleDayChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {

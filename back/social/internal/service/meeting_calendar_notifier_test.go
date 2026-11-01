@@ -24,6 +24,10 @@ func (f *fakeMeetingStore) SetCalendarEventID(ctx context.Context, meetingID pgt
 	return sqlc.SocialMeeting{}, f.err
 }
 
+func (f *fakeMeetingStore) ListAttendeesByMeeting(ctx context.Context, meetingID pgtype.UUID) ([]sqlc.SocialMeetingAttendee, error) {
+	return nil, nil
+}
+
 func testMeeting() sqlc.SocialMeeting {
 	var mid, gid, uid pgtype.UUID
 	_ = mid.Scan(uuid.NewString())
