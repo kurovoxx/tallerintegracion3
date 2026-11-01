@@ -15,6 +15,10 @@ Crea una hoja (sprint) en el grupo (microservicio `social`).
 ## Flujo
 - `SprintHandler.CreateSheet` → `writeSheet(update=false)` (`internal/handler/http/sprint_sheets.go:72`) → `SprintService.CreateSprintSheet` (`internal/service/sprint_sheets.go:52`: membresía + `applySheetPatch`) → `CreateSheet` (sqlc).
 
+## Front
+- Cliente: `SocialService.saveSprintSheet` (`front/lib/core/services/social_service.dart:459`) sin `sheetId`; envía `name`, `period_start`, `period_end`; acepta `200`/`201` y lee `data` → `SprintSheetInfo`.
+- Pantalla: `_SprintSheetScreenState` (`front/lib/features/workspace/sprint_sheet_screen.dart:242`, diálogo `_NewSprintDialog`) y `:537` (al guardar una tarea cuando aún no existe hoja).
+
 ## Tests
 - `internal/handler/http/sprint_sheets_test.go`: `TestSprintSheetRoutes`.
 - `internal/service/sprint_sheets_test.go`: `TestSprintSheetsLifecycleAndIsolation`.

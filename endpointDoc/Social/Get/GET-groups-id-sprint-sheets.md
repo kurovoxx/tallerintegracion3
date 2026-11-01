@@ -14,6 +14,10 @@ Lista las hojas (sprints) del grupo (microservicio `social`). Las tareas viven e
 ## Flujo
 - `SprintHandler.ListSheets` (`internal/handler/http/sprint_sheets.go:40`) → `SprintService.ListSprintSheets` (`internal/service/sprint_sheets.go:44`: `sheetAccess` = grupo existe + membresía) → `ListSheetsByGroup` (sqlc).
 
+## Front
+- Cliente: `SocialService.listSprintSheets` (`front/lib/core/services/social_service.dart:443`); lee `data[]` → `SprintSheetInfo` (`id, name, period_start, period_end`).
+- Pantalla: `_SprintSheetScreenState._loadReal` (`front/lib/features/workspace/sprint_sheet_screen.dart:177`), chips de selección de sprint (`_SprintChip`) y calendario de días a partir de `period_start`/`period_end`.
+
 ## Tests
 - `internal/handler/http/sprint_sheets_test.go`: `TestSprintSheetRoutes`.
 - `internal/service/sprint_sheets_test.go`: `TestSprintSheetsLifecycleAndIsolation`.

@@ -14,6 +14,10 @@ Actualización parcial de una tarea Kanban (microservicio `social`).
 ## Flujo
 - `TodoHandler.UpdateTodo` (`todo_handler.go:175-251`) → `TodoService.UpdateTodo` (`internal/service/todo_service.go:344-440`: exige ≥1 campo, `requireGroup` + `requireMembership`, `GetTaskByID` + `requireTaskInGroup`, validación por campo) → `UpdateTask` (`UPDATE social.todo_tasks`, `internal/repository/sqlc/todo.sql.go:198`) + re-lectura del board.
 
+## Front
+- Cliente: `SocialService.updateTodo` (`front/lib/core/services/social_service.dart:395`); envía solo los campos cambiados (`title`, `status`, `assigned_to`); espera `200 {message, data}` y lee `data` → `TodoTask`.
+- Pantalla: `_KanbanScreenState` (`front/lib/features/workspace/kanban_screen.dart:334`) y `:406` (edición de la tarjeta y cambio de columna/estado).
+
 ## Tests
 - `internal/handler/http/martin_unit_test.go`: `TestMartin_TodoPatchDelete_Unit` (parcial, scoping por grupo, nothing-to-patch, 404).
 - `internal/handler/http/martin_integration_test.go`: `TestMartinIntegration_TodoCRUD_PG` (persiste `status=done`).

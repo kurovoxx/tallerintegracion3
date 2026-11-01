@@ -13,6 +13,10 @@ Elimina una tarea Kanban (microservicio `social`).
 ## Flujo
 - `TodoHandler.DeleteTodo` (`internal/handler/http/todo_handler.go:253-305`) → `TodoService.DeleteTodo` (`internal/service/todo_service.go:442-491`: `requireGroup` + `requireMembership`, `GetTaskByID` + `requireTaskInGroup`) → `DeleteTask` (`DELETE FROM social.todo_tasks`, `internal/repository/sqlc/todo.sql.go:239`).
 
+## Front
+- Cliente: `SocialService.deleteTodo` (`front/lib/core/services/social_service.dart:426`); espera `200` y no lee el body.
+- Pantalla: `_KanbanScreenState` (`front/lib/features/workspace/kanban_screen.dart:378`), opción eliminar del menú de la tarjeta (`_CardMenuSheet`).
+
 ## Tests
 - `internal/handler/http/martin_unit_test.go`: `TestMartin_TodoPatchDelete_Unit` (200 + doble delete 404).
 - `internal/handler/http/martin_integration_test.go`: `TestMartinIntegration_TodoCRUD_PG` (la fila desaparece).

@@ -13,6 +13,10 @@ Devuelve la lista mínima de grupos del usuario (id, nombre y rol) (microservici
 ## Flujo
 - `GroupHandler.ListMy` (`internal/handler/http/group_handler.go:130`) → `GroupService.ListMyGroups` (`internal/service/group_service.go:204`, `nil` → `[]`) → `GroupRepository.ListMyGroups` (`JOIN social.groups + social.group_memberships`, orden `created_at DESC`, `internal/repository/group_repository.go:80`).
 
+## Front
+- **El front no llama este endpoint.** Para listar los grupos del usuario usa `GET /me/overview` (`SocialService.getOverview`, `front/lib/core/services/social_service.dart:84`), que devuelve además `sidebar.groups`, `stats` y `member_count` por grupo.
+- Consumidores del overview: `_GroupsScreenState._load` (`front/lib/features/groups/groups_screen.dart:81`, tarjetas de grupo) y el sidebar de `MainShell` (`front/lib/core/widgets/main_shell.dart:111`, primeros 5 grupos y contador).
+
 ## Tests
 - `internal/handler/http/group_handler_test.go`: `TestListMyGroupsContract`.
 - `internal/service/group_service_test.go`: `TestListMyGroups`.

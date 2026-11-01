@@ -15,6 +15,11 @@ Un admin sube a `admin` o baja a `member` a otro integrante (microservicio `soci
 ## Flujo
 - `GroupHandler.ChangeRole` (`internal/handler/http/group_handler.go:241`) → `GroupService.ChangeRole` (`internal/service/group_service.go:481`) → `GroupRepository.ChangeMemberRole` (exige admin primero, valida rol, prohíbe auto-cambio, `UPDATE social.group_memberships.role`; `internal/repository/group_repository.go:347`). No toca `owner_user_id`.
 
+## Front
+- Cliente: `SocialService.changeMemberRole` (`front/lib/core/services/social_service.dart:265`); valida `role` ∈ `admin|member` antes de enviar; espera `200` y no lee el body.
+- Pantalla: `_GroupMembersTabState._confirmRole` (`front/lib/features/groups/group_members_tab.dart:237`) HACER ADMIN (`role: admin`) y `:247` QUITAR ADMIN (`role: member`).
+- Efecto: snackbar `<nombre> ahora es admin|miembro.` y recarga de integrantes.
+
 ## Tests
 - `internal/handler/http/group_handler_test.go`: `TestChangeRoleContract`.
 - `internal/service/group_service_test.go`: `TestChangeRole`.

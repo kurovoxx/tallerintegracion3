@@ -15,6 +15,10 @@ Actualización parcial de una tarea de sprint (microservicio `social`).
 ## Flujo
 - `SprintHandler.UpdateSprintTask` (`sprint_handler.go:176-255`) → `SprintService.UpdateSprintTask` (`internal/service/sprint_service.go:362-469`: `ErrNothingToPatch` si vacío, `requireGroup` + `requireMembership`, `GetTaskByID` + `requireTaskInGroup`, validación por campo) → `UpdateTask` (`UPDATE social.sprint_sheet_tasks`, `internal/repository/sqlc/sprint.sql.go:214`) + re-lectura de la hoja.
 
+## Front
+- Cliente: `SocialService.updateSprintTask` (`front/lib/core/services/social_service.dart:570`); envía solo campos cambiados (`title`, `assigned_to`, `priority`, `status`, `estimated_hours`); espera `200 {message, data}` → `SprintTask`.
+- Pantalla: `_SprintSheetScreenState` (`front/lib/features/workspace/sprint_sheet_screen.dart:682`) y `:1151` (edición de la tarea).
+
 ## Tests
 - `internal/handler/http/martin_unit_test.go`: `TestMartin_SprintPatchDelete_Unit` (parcial, scoping, nothing-to-patch, 404).
 - `internal/handler/http/martin_integration_test.go`: `TestMartinIntegration_SprintCRUD_PG` (persiste `alta`/`en_proceso`).

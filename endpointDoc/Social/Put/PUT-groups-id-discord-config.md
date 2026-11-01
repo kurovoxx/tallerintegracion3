@@ -18,6 +18,11 @@ Crea o reemplaza la integración de Discord del grupo (microservicio `social`). 
 - `DiscordHandler.PutConfig` (`internal/handler/http/discord_handler.go:87`) → `DiscordService.PutConfig` (`internal/service/discord_service.go:105`: valida campos, exige rol `admin`) → `UpsertDiscordConfig` (sqlc; un registro por grupo, el segundo PUT pisa).
 - Consumidor: `DiscordMeetingNotifier` lee el webhook al crear una reunión (`internal/service/meeting_discord_notifier.go`).
 
+## Front
+- Cliente: `SocialService.updateDiscordConfig` (`front/lib/core/services/social_service.dart:696`); envía `server_name`, `invite_url` y `webhook_url` (solo si no está vacío); espera `200` y no lee el body.
+- Pantalla: diálogo CONFIGURAR DISCORD en `_GroupDiscordTabState._openConfigDialog` (`front/lib/features/groups/group_detail_screen.dart:611`); visible solo si `GET /groups/:id` devolvió `role == admin`. El front exige `server_name` e `invite_url` no vacíos.
+- Efecto: guarda la config en estado local (sin releer) y cierra el diálogo; en error snackbar `No se pudo guardar la integración.`.
+
 ## Tests
 - `internal/handler/http/discord_handler_test.go`: `TestPutDiscordConfig_Contrato`.
 - `internal/service/discord_service_test.go`: `TestDiscordPutConfig_AdminGuarda`, `TestDiscordPutConfig_Permisos`, `TestDiscordPutConfig_Validacion`.

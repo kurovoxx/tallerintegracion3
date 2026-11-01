@@ -15,6 +15,12 @@ Crea un grupo y registra al creador como administrador (microservicio `social`).
 ## Flujo
 - `GroupHandler.Create` (`internal/handler/http/group_handler.go:85`) lee el JSON y saca el `userID` del contexto (nunca del body) → `GroupService.Create` (`internal/service/group_service.go:141`: normaliza y valida) → `GroupRepository.CreateWithOwner` (`INSERT INTO social.groups` + membresía `admin` en una transacción, `internal/repository/group_repository.go:26`). Notificación Stream best-effort, no revierte el grupo.
 
+## Front
+- Cliente: `SocialService.createGroup` (`front/lib/core/services/social_service.dart:96`); envía `name` y `description` (solo si no está vacía), ambos con `trim()`.
+- Pantalla: `_GroupsScreenState._openCreateSheet` (`front/lib/features/groups/groups_screen.dart:136`), botón de nuevo grupo → hoja `_NewGroupSheet`.
+- Respuesta: exige `201` y lee solo `group_id` (si falta lanza `missing_group_id`). El id no se muestra: se llama `SocialService.notifyGroupsChanged()` y la pantalla recarga con `getOverview` (lista + sidebar).
+- UI: snackbar `Grupo creado.` o `No se pudo crear el grupo.`.
+
 ## Tests
 - `internal/handler/http/group_handler_test.go`: `TestCreateGroupContract` (201, 400, 401).
 - `internal/service/group_service_test.go`: `TestCreate` (validaciones con dobles).

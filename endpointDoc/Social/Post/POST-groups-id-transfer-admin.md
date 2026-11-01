@@ -14,6 +14,11 @@ Un admin traspasa su rol a otro miembro en una sola transacción (microservicio 
 ## Flujo
 - `GroupHandler.TransferAdmin` (`internal/handler/http/group_handler.go:263`) → `GroupService.TransferAdmin` (`internal/service/group_service.go:488`) → `GroupRepository.TransferAdmin` (lock del grupo, exige admin, destino debe pertenecer, actualiza ambos roles juntos; `internal/repository/group_repository.go:378`). No toca otros admins ni `owner_user_id`.
 
+## Front
+- Cliente: `SocialService.transferAdmin` (`front/lib/core/services/social_service.dart:294`); envía `{new_admin_user_id}`; espera `200`.
+- Pantalla: `_GroupMembersTabState._confirmRole(action: transfer)` (`front/lib/features/groups/group_members_tab.dart:258`), acción TRANSFERIR ADMIN (diálogo en rojo: el usuario pasa a miembro).
+- Efecto: `notifyGroupsChanged()` (cambia el rol propio en la lista/sidebar), snackbar `Administración transferida a <nombre>.` y recarga de integrantes.
+
 ## Tests
 - `internal/handler/http/group_handler_test.go`: `TestTransferAdminContract`.
 - `internal/service/group_service_test.go`: `TestTransferAdmin`.

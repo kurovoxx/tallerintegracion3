@@ -25,6 +25,13 @@ Vista de trabajo del grupo en una sola llamada: kanban, hojas y tareas de sprint
 - `ViewHandler.Workspace` (`internal/handler/http/view_handler.go:44`) → `ViewService.Workspace` (`internal/service/view_service.go:58`): `GroupService.GetGroup` (exige membresía antes de leer nada) → `TodoService.ListTodos` → `SprintService.ListSheets` + `ListSprintTasks` → `MeetingService.ListUpcomingMeetings`. `buildWorkspace` reparte las tareas por `status`.
 - No devuelve el token de Stream; el cliente lo pide aparte en `token_endpoint`.
 
+## Front
+- Cliente: `SocialService.getWorkspace` (`front/lib/core/services/social_service.dart:174`) → `Workspace.fromJson` (`front/lib/core/models/social_models.dart`). Se llama una vez por pestaña, no se comparte entre ellas.
+- KANBAN: `_KanbanScreenState` (`front/lib/features/workspace/kanban_screen.dart:144`) lee `kanban.todo`, `kanban.in_progress` y `kanban.done` como las tres columnas.
+- SPRINT: `_SprintSheetScreenState._loadReal` (`front/lib/features/workspace/sprint_sheet_screen.dart:173`) lee `sprint_sheet.sheets` y `sprint_sheet.tasks`.
+- REUNIONES: `_ScheduleMeetingScreenState._loadUpcoming` (`front/lib/features/workspace/schedule_meeting_screen.dart:125`) lee `meetings.upcoming` para la lista de próximas reuniones (best-effort: si falla, el formulario sigue).
+- `group` y `chat` se parsean pero no se usan: el chat pide su token directo a `GET /groups/:id/stream-token`.
+
 ## Tests
 - `internal/handler/http/view_handler_test.go`: `TestWorkspaceAccessRules`, `TestWorkspaceEmptyGroupHasEmptyArrays`, `TestWorkspacePayload`, `TestWorkspaceSourceErrorIs500`.
 - `test/social_routes_e2e_test.go`: subtest `todo_sprint_hours_and_workspace`.

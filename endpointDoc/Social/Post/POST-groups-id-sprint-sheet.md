@@ -16,6 +16,10 @@ Crea una tarea de sprint (microservicio `social`). Diferencia clave vs todo: `as
 ## Flujo
 - `SprintHandler.CreateSprintTask` (`sprint_handler.go:34-109`) → `SprintService.CreateSprintTask` (`internal/service/sprint_service.go:215-275`: `requireGroup` + `requireMembership` + `requireAssigneeMember`, `resolveSheet` usa la hoja dada o la primera o crea `"Sprint 1"`) → `CreateTask` (`INSERT INTO social.sprint_sheet_tasks`, `internal/repository/sqlc/sprint.sql.go:111`).
 
+## Front
+- Cliente: `SocialService.createSprintTask` (`front/lib/core/services/social_service.dart:534`); envía `title`, `assigned_to` (requerido), `sheet_id`, `priority`, `status`, `estimated_hours`; exige `201` y lee `data` → `SprintTask`.
+- Pantalla: `_SprintSheetScreenState` (`front/lib/features/workspace/sprint_sheet_screen.dart:546`), diálogo `_NewTaskDialog`.
+
 ## Tests
 - `internal/handler/http/martin_unit_test.go`: `TestMartin_SprintCreateList_Unit` (sin `assigned_to` → 400, defaults, horas negativas).
 - `internal/handler/http/martin_integration_test.go`: `TestMartinIntegration_SprintCRUD_PG` (defaults en DB).

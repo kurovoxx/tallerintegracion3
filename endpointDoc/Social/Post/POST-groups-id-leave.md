@@ -15,6 +15,11 @@ Saca al usuario del grupo con sucesión automática (si era el único admin, asu
 - `GroupHandler.LeaveGroup` (`internal/handler/http/group_handler.go:285`: flag + token crudo para Notes) → `GroupService.LeaveGroup` (`internal/service/group_service.go:496`: salida atómica y luego `unshareNotes` en goroutine si `cleanup=true`) → `GroupRepository.LeaveGroup` → `removeUserFromGroup` (lock, borra membresía, promueve por `joined_at, user_id` o borra el grupo, reasigna `owner_user_id` si salió el dueño; `internal/repository/group_repository.go:527,610`).
 - Después de confirmar la salida, `GroupService.removeFromChat` quita al usuario del canal Stream `group-<id>` (best-effort, en segundo plano; un fallo de Stream solo se registra y no cambia el status).
 
+## Front
+- Cliente: `SocialService.leaveGroup` (`front/lib/core/services/social_service.dart:824`); envía `{cleanup_shared_notes}`; acepta `204` o `200`.
+- Pantalla: `_GroupInfoDialogState._leave` (`front/lib/features/groups/groups_screen.dart:603`), botón ABANDONAR en el diálogo INFO, con checkbox de limpiar notas compartidas (marcado por defecto).
+- Efecto: `notifyGroupsChanged()`, cierra el diálogo devolviendo `true` y `GroupsScreen` recarga. Snackbar `Abandonaste el grupo.`.
+
 ## Tests
 - `internal/handler/http/group_handler_test.go`: `TestLeaveContract` (sucesión, último elimina, 403 extraño).
 - `internal/service/group_service_test.go`: `TestLeave`, `TestLeaveCleansSharedNotes`, `TestLeaveWithoutCleanupDoesNotCallNotes`, `TestLeaveSucceedsWhenNotesIsDown`, `TestLeaveSuccessionOrderAndOwner`.

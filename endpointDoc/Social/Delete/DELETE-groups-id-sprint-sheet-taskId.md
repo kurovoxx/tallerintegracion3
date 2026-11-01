@@ -13,6 +13,10 @@ Elimina una tarea de sprint (microservicio `social`).
 ## Flujo
 - `SprintHandler.DeleteSprintTask` (`internal/handler/http/sprint_handler.go:257-309`) → `SprintService.DeleteSprintTask` (`internal/service/sprint_service.go:471-520`: `requireGroup` + `requireMembership`, `GetTaskByID` + `requireTaskInGroup`) → `DeleteTask` (`DELETE FROM social.sprint_sheet_tasks`, `internal/repository/sqlc/sprint.sql.go:259`).
 
+## Front
+- Cliente: `SocialService.deleteSprintTask` (`front/lib/core/services/social_service.dart:605`); espera `200`, no lee el body.
+- Pantalla: `_SprintSheetScreenState` (`front/lib/features/workspace/sprint_sheet_screen.dart:726`), eliminar tarea de la tabla.
+
 ## Tests
 - `internal/handler/http/martin_unit_test.go`: `TestMartin_SprintPatchDelete_Unit` (200 + doble delete 404).
 - `internal/handler/http/martin_integration_test.go`: `TestMartinIntegration_SprintCRUD_PG` (la fila desaparece).

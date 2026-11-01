@@ -14,6 +14,11 @@ Reemplaza el código de invitación del grupo; el anterior deja de servir (micro
 ## Flujo
 - `GroupHandler.RegenerateInvite` (`internal/handler/http/group_handler.go:167`) → `GroupService.RegenerateInvite` (`internal/service/group_service.go:262`) → `GroupRepository.RegenerateInviteToken` (verifica rol `admin`, `UPDATE social.groups SET invite_token = gen_random_uuid()` en transacción; `internal/repository/group_repository.go:156`). No borra miembros.
 
+## Front
+- Cliente: `SocialService.regenerateInvite` (`front/lib/core/services/social_service.dart:147`); lee `new_invite_token` (si viene vacío lanza `missing_invite_token`).
+- Pantalla: `_InviteDialogState._regenerate` (`front/lib/features/groups/groups_screen.dart:816`), botón regenerar del diálogo INVITAR.
+- UI: reemplaza el token mostrado, snackbar `Invitación actualizada.`; el botón copiar entrega `"<group_id> <token>"` (los dos datos que pide UNIRSE A GRUPO).
+
 ## Tests
 - `internal/handler/http/group_handler_test.go`: `TestRegenerateInviteContract` (403 miembro, token distinto, viejo inválido).
 - `internal/service/group_service_test.go`: `TestRegenerateInvite`.

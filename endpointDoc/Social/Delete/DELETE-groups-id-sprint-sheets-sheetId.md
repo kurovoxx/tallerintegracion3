@@ -14,6 +14,10 @@ Elimina una hoja de sprint con sus tareas y horas (microservicio `social`). El g
 ## Flujo
 - `SprintHandler.DeleteSheet` (`internal/handler/http/sprint_sheets.go:59`) → `SprintService.DeleteSprintSheet` (`internal/service/sprint_sheets.go:96`: membresía, hoja del grupo, cuenta hojas y rechaza la última) → `DeleteSheet` (sqlc). Tareas y `sprint_sheet_daily_hours` caen por `ON DELETE CASCADE`.
 
+## Front
+- Cliente: `SocialService.deleteSprintSheet` (`front/lib/core/services/social_service.dart:494`); acepta `200` o `204`; el error del backend (p. ej. último sprint protegido) se muestra tal cual vía `_toError`.
+- Pantalla: `_SprintSheetScreenState` (`front/lib/features/workspace/sprint_sheet_screen.dart:1420`), eliminar sprint.
+
 ## Tests
 - `internal/service/sprint_sheets_test.go`: `TestDeleteSprintSheet`.
 - `internal/handler/http/sprint_sheets_test.go`: `TestSprintSheetRoutes`.

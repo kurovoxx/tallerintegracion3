@@ -15,6 +15,10 @@ Edita nombre y/o rango de una hoja de sprint (microservicio `social`).
 ## Flujo
 - `SprintHandler.UpdateSheet` → `writeSheet(update=true)` (`internal/handler/http/sprint_sheets.go:72`) → `SprintService.UpdateSprintSheet` (`internal/service/sprint_sheets.go:67`: membresía, `resolveSheet` dentro del grupo, aplica el parche sobre el valor actual) → `UpdateSheet` (sqlc, filtra por `id` y `group_id`).
 
+## Front
+- Cliente: `SocialService.saveSprintSheet` (`front/lib/core/services/social_service.dart:459`) con `sheetId`; mismo body y response que la creación (`data` → `SprintSheetInfo`).
+- Pantalla: `_SprintSheetScreenState` (`front/lib/features/workspace/sprint_sheet_screen.dart:242`), edición del sprint desde `_NewSprintDialog`.
+
 ## Tests
 - `internal/handler/http/sprint_sheets_test.go`: `TestSprintSheetRoutes`.
 - `internal/service/sprint_sheets_test.go`: `TestSprintSheetsLifecycleAndIsolation`, `TestLegacySprintAcceptsDatesWithoutReplacingSheet`.

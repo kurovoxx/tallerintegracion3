@@ -16,6 +16,11 @@ Un admin expulsa y prohíbe el reingreso (kick + registro en `banned_users`) (mi
 - `GroupHandler.BanMember` (`internal/handler/http/group_handler.go:219`) → `GroupService.BanMember` (`internal/service/group_service.go:468`) → `GroupRepository.BanMember` (mismas reglas y lock que kick + `INSERT INTO social.banned_users (group_id, user_id, banned_by_user_id)` con `ON CONFLICT DO NOTHING`; `internal/repository/group_repository.go:315`).
 - Después de confirmar la salida, `GroupService.removeFromChat` quita al usuario del canal Stream `group-<id>` (best-effort, en segundo plano; un fallo de Stream solo se registra y no cambia el status).
 
+## Front
+- Cliente: `SocialService.banMember` (`front/lib/core/services/social_service.dart:239`); envía `{cleanup_shared_notes}`; acepta `204` o `200`.
+- Pantalla: `_GroupMembersTabState._confirmModeration(ban: true)` (`front/lib/features/groups/group_members_tab.dart:215`), acción BANEAR; el diálogo avisa que no podrá reingresar ni con enlace válido.
+- Efecto: snackbar `Integrante baneado.` y recarga de la lista.
+
 ## Tests
 - `internal/handler/http/group_handler_test.go`: `TestKickAndBanContract`, `TestBannedUserIsolationEndToEnd`.
 - `internal/service/group_service_test.go`: `TestBan`.
