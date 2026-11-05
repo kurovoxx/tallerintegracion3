@@ -28,6 +28,7 @@ import 'notes_api.dart';
 import 'public_notes_screen.dart';
 import 'saved_notes_screen.dart';
 import 'authenticated_attachment_image.dart';
+import 'latex_support.dart';
 
 /// Base URL del microservicio de notas. En el emulador Android `localhost` es
 /// el propio dispositivo, por eso se usa la alias 10.0.2.2 hacia el host.
@@ -4272,6 +4273,9 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
       );
       c = removeAttachmentReferences(c, resource);
     }
+    // LaTeX: neutraliza macros peligrosos dentro de las fórmulas antes de
+    // guardar (el resto del contenido no cambia).
+    c = sanitizeNoteMarkdown(c);
     setState(() {
       _saving = true;
       _editError = null;
@@ -5257,7 +5261,7 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
     try {
       await widget.onCreate(
         _titleCtrl.text.trim(),
-        _contentCtrl.text.trim(),
+        sanitizeNoteMarkdown(_contentCtrl.text.trim()),
         _visibility,
         List.unmodifiable(_pendingAttachments),
       );
@@ -5792,6 +5796,19 @@ class _AttachmentToolbar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Barra de adjuntos + barra de ayuda LaTeX (ambos editores la usan).
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _buildAttachmentBar(context),
+        const SizedBox(height: 6),
+        LatexToolbar(controller: controller, onChanged: onChanged),
+      ],
+    );
+  }
+
+  Widget _buildAttachmentBar(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
@@ -7359,6 +7376,11 @@ class _ResourceViewerDialog extends StatelessWidget {
 /// Cuerpo de nota renderizado como Markdown visual neobrutalista: encabezados,
 /// negrita/cursiva, listas con bullets sólidos, bloques de código, blockquotes,
 /// imágenes embebidas (archivo local o URL remota) y chips de PDF.
+/// Renderizador Markdown/LaTeX del visor, expuesto solo para tests.
+@visibleForTesting
+Widget debugBuildNoteMarkdown(String content) =>
+    _NeobrutalistMarkdownBody(content: content, onOpenResource: (_) {});
+
 class _NeobrutalistMarkdownBody extends StatelessWidget {
   final String content;
   final List<Map<String, dynamic>> resources;
@@ -7432,6 +7454,47 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
         }
         i++;
         widgets.add(_codeBlock(buf.join('\n')));
+        continue;
+      }
+
+      // Bloque LaTeX $$ ... $$ (una o varias líneas). Sin cierre: aviso y
+      // el resto se sigue mostrando como Markdown normal.
+      if (line.startsWith(r'$$')) {
+        flushParagraph();
+        if (line.length > 4 && line.endsWith(r'$$')) {
+          widgets.add(
+            SafeMath(tex: line.substring(2, line.length - 2), display: true),
+          );
+          i++;
+          continue;
+        }
+        final start = i;
+        final buf = <String>[line.substring(2)];
+        var closed = false;
+        i++;
+        while (i < lines.length) {
+          final t = lines[i].trimRight();
+          if (t.endsWith(r'$$')) {
+            buf.add(t.substring(0, t.length - 2));
+            closed = true;
+            i++;
+            break;
+          }
+          buf.add(lines[i]);
+          i++;
+        }
+        if (closed) {
+          widgets.add(SafeMath(tex: buf.join('\n'), display: true));
+        } else {
+          i = start + 1;
+          widgets.add(
+            const LatexFallback(
+              tex: r'$$',
+              reason: r'Bloque $$ sin cerrar',
+              display: true,
+            ),
+          );
+        }
         continue;
       }
 
@@ -7978,7 +8041,27 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
 
   /// Divide una línea en spans con estilos inline: **negrita**, *cursiva*,
   /// `código`, imágenes `![alt](ruta)` y chips de enlace `[label](archivo.pdf)`.
+  /// Inline: separa primero las fórmulas `$...$` (renderizadas con
+  /// [SafeMath]) y aplica el Markdown inline al resto del texto.
   List<InlineSpan> _parseInlineSpans(String text) {
+    if (!text.contains(r'$')) return _parseInlineMarkdown(text);
+    final spans = <InlineSpan>[];
+    for (final part in splitInlineMath(text)) {
+      if (part.isMath) {
+        spans.add(
+          WidgetSpan(
+            alignment: PlaceholderAlignment.middle,
+            child: SafeMath(tex: part.value),
+          ),
+        );
+      } else {
+        spans.addAll(_parseInlineMarkdown(part.value));
+      }
+    }
+    return spans;
+  }
+
+  List<InlineSpan> _parseInlineMarkdown(String text) {
     final spans = <InlineSpan>[];
     final re = RegExp(
       r'(\*\*.+?\*\*|\*[^*\n]+?\*|!\[[^\]]*\]\([^)\s]+\)|\[[^\]]+\]\([^)\s]+\)|`[^`\n]+`)',
