@@ -17,11 +17,22 @@ Clona una nota legible en el Drive del usuario que copia: crea una nota nueva, p
 **201 Created** (`note_handler.go:670`)
 
 ```json
-{"note_id":"55555555-5555-4555-8555-555555555555","forked_from_note_id":"11111111-1111-4111-8111-111111111111"}
+{
+  "note_id": "55555555-5555-4555-8555-555555555555",
+  "forked_from_note_id": "11111111-1111-4111-8111-111111111111",
+  "user_id": "33333333-3333-4333-8333-333333333333",
+  "title": "Álgebra",
+  "visibility": "private",
+  "sync_status": "synced"
+}
 ```
 
 - `note_id`: UUID del clon.
 - `forked_from_note_id`: el `id` del path (el original).
+- `user_id`: dueño del clon = usuario del JWT (nunca el autor original).
+- `title`, `visibility` (`private` siempre), `sync_status`: metadata del clon para que el cliente lo pinte sin re-sincronizar. Todos los valores son strings; el clon nace siempre con `version` 1.
+
+**Caso "copiar desde Guardados":** el flujo es el mismo para un apunte guardado o público de otro usuario. El contenido Markdown se duplica con `drive.Client.CopyFile` en el Drive del solicitante y se crea una fila nueva en `notes.notes` con `user_id` = solicitante. Los adjuntos no se duplican: el Markdown copiado conserva los enlaces a los adjuntos del original.
 
 **Errores**
 
@@ -29,6 +40,7 @@ Clona una nota legible en el Drive del usuario que copia: crea una nota nueva, p
 | --- | --- | --- |
 | 403 | `forbidden` "Conecte o renueve su Google Drive" | Quien copia no tiene Drive conectado (`note_service.go:1833-1836`) |
 | 404 | `not_found` "nota no encontrada" | Original inexistente, privado sin acceso, sin `external_file_id`, o su archivo no se puede leer en Drive (404/403). Todos indistinguibles (`L1719-1731`, `L1840-1843`) |
+| 410 | `note_deleted` "Apunte no disponible (eliminado por el autor)" | El autor borró el original y el solicitante lo tenía guardado o era público (lápida en `notes.note_tombstones`, `missingNoteError`). No se crea fila ni archivo |
 | 409 | `conflict` | Idempotencia: otra solicitud con la misma clave en curso o con otro original |
 | 429 | `rate_limited` "Límite de clonación excedido, intente más tarde" | Más de 10 copias/min del usuario (`note_handler.go:660`) |
 | 429 | `rate_limited` "Límite global de clonación excedido, intente más tarde" | Más de 100 copias/min en total (`L658`) |

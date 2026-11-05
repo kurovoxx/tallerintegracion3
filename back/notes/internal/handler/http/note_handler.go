@@ -752,7 +752,18 @@ func (h *NoteHandler) Copy(c *gin.Context) {
 		handleServiceError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"note_id": newNote.ID, "forked_from_note_id": noteID})
+	// El clon es del solicitante (user_id del JWT), privado y con su propio
+	// archivo en el Drive del solicitante. Todos los valores son strings
+	// (compatibilidad con clientes que decodifican map[string]string); un
+	// clon siempre nace en version 1.
+	c.JSON(http.StatusCreated, gin.H{
+		"note_id":             newNote.ID,
+		"forked_from_note_id": noteID,
+		"user_id":             newNote.UserID,
+		"title":               newNote.Title,
+		"visibility":          newNote.Visibility,
+		"sync_status":         newNote.SyncStatus,
+	})
 }
 
 // POST /notes/{id}/like

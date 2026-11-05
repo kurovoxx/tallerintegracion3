@@ -44,6 +44,67 @@ class RemoteNote {
   }
 }
 
+/// Mensaje claro para el usuario según el status/código del backend de notas.
+/// Centraliza los casos de guardados, likes, copia y búsqueda por ID para que
+/// todas las pantallas digan lo mismo.
+String notesFriendlyMessage(int? status, String? code, {String? fallback}) {
+  switch (code) {
+    case 'note_deleted':
+      return 'Apunte no disponible: su autor lo eliminó.';
+    case 'note_unavailable':
+      return 'El contenido del apunte no está disponible en Drive.';
+    case 'already_shared':
+      return 'Este apunte ya está compartido en este grupo.';
+    case 'already_saved':
+      return 'Ya tenías este apunte en tus guardados.';
+    case 'already_liked':
+      return 'Ya le diste like a este apunte.';
+    case 'rate_limited':
+      return 'Demasiadas copias seguidas. Espera un minuto e inténtalo de nuevo.';
+  }
+  switch (status) {
+    case -1:
+      return 'Sin conexión con el servidor de apuntes.';
+    case 401:
+      return 'Tu sesión venció. Vuelve a iniciar sesión.';
+    case 403:
+      return 'Conecta o renueva tu Google Drive para continuar.';
+    case 404:
+      return 'El apunte no existe o no tienes permiso para verlo.';
+    case 410:
+      return 'Apunte no disponible: su autor lo eliminó.';
+    case 429:
+      return 'Demasiadas solicitudes. Inténtalo en un momento.';
+    case 502:
+    case 503:
+      return 'Google Drive no respondió. Inténtalo más tarde.';
+  }
+  return fallback ?? 'Ocurrió un error con el servidor de apuntes.';
+}
+
+/// Resultado de POST /notes/{id}/copy: el clon propio del usuario.
+class NoteCopyResult {
+  const NoteCopyResult({
+    required this.noteId,
+    required this.forkedFromNoteId,
+    required this.title,
+    this.version = 1,
+  });
+
+  final String noteId;
+  final String forkedFromNoteId;
+  final String title;
+  final int version;
+
+  factory NoteCopyResult.fromJson(Map<String, dynamic> j, String sourceId) =>
+      NoteCopyResult(
+        noteId: (j['note_id'] as String?) ?? '',
+        forkedFromNoteId: (j['forked_from_note_id'] as String?) ?? sourceId,
+        title: (j['title'] as String?) ?? '',
+        version: (j['version'] as num?)?.toInt() ?? 1,
+      );
+}
+
 class NotesApiException implements Exception {
   NotesApiException(this.message, {this.statusCode, this.code});
 
@@ -108,8 +169,12 @@ class NotesApi {
       message = 'No autorizado (401). Revisa tu sesión.';
       code ??= 'unauthorized';
     }
-    if (res.statusCode == 409 && code == 'already_shared') {
-      message = 'Este apunte ya está compartido en este grupo.';
+    if (res.statusCode != 401 &&
+        (code == 'note_deleted' ||
+            code == 'already_shared' ||
+            code == 'rate_limited' ||
+            res.statusCode == 410)) {
+      message = notesFriendlyMessage(res.statusCode, code, fallback: message);
     }
     return NotesApiException(
       message,
@@ -213,5 +278,49 @@ class NotesApi {
       );
     }
     return id;
+  }
+
+  /// POST /notes/:id/copy -> 201 {note_id, forked_from_note_id, title, ...}.
+  /// Clona el apunte (guardado o público) al Drive y la BD del usuario actual.
+  /// [idempotencyKey] hace seguro el reintento: el backend devuelve el mismo
+  /// clon en vez de duplicarlo.
+  Future<NoteCopyResult> copyNote(
+    String noteId, {
+    String? idempotencyKey,
+  }) async {
+    final nid = noteId.trim();
+    if (nid.isEmpty) {
+      throw NotesApiException('noteId requerido.', code: 'invalid_args');
+    }
+    final headers = _headers();
+    if (idempotencyKey != null && idempotencyKey.isNotEmpty) {
+      headers['X-Idempotency-Key'] = idempotencyKey;
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .post(Uri.parse('$_baseUrl/notes/$nid/copy'), headers: headers)
+          .timeout(const Duration(seconds: 30)),
+    );
+    if (res.statusCode != 201) {
+      final err = _toError(res, 'No se pudo copiar el apunte.');
+      throw NotesApiException(
+        notesFriendlyMessage(res.statusCode, err.code, fallback: err.message),
+        statusCode: res.statusCode,
+        code: err.code,
+      );
+    }
+    final body = jsonDecode(utf8.decode(res.bodyBytes));
+    if (body is! Map) {
+      throw NotesApiException('Respuesta inesperada del servidor.');
+    }
+    final result = NoteCopyResult.fromJson(Map<String, dynamic>.from(body), nid);
+    if (result.noteId.isEmpty) {
+      throw NotesApiException(
+        'El backend no devolvió note_id.',
+        statusCode: res.statusCode,
+        code: 'missing_note_id',
+      );
+    }
+    return result;
   }
 }

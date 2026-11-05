@@ -182,3 +182,37 @@ func TestShareSameGroupTwiceIsConflict(t *testing.T) {
 		t.Fatalf("se esperaban 2 vínculos, hay %d", len(list))
 	}
 }
+
+func TestCopySavedNoteCreatesOwnPrivateCloneInCopierDrive(t *testing.T) {
+	svc, _, _, _, _, _, _, _ := newTestService()
+	ctx := context.Background()
+	author, reader := uuid.NewString(), uuid.NewString()
+	orig, err := svc.Create(ctx, author, "Álgebra lineal", nil, "public", stringPtr("# Matrices\n$A^{-1}$"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Save(ctx, reader, orig.ID); err != nil {
+		t.Fatal(err)
+	}
+	clone, err := svc.Copy(ctx, reader, orig.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clone.ID == orig.ID || clone.UserID != reader || clone.Visibility != "private" {
+		t.Fatalf("clon inválido: %+v", clone)
+	}
+	if clone.ForkedFromNoteID == nil || *clone.ForkedFromNoteID != orig.ID {
+		t.Fatalf("forked_from_note_id incorrecto: %+v", clone.ForkedFromNoteID)
+	}
+	if clone.ExternalFileID == nil || *clone.ExternalFileID == *orig.ExternalFileID {
+		t.Fatalf("el clon debe tener su propio archivo en Drive: %+v", clone.ExternalFileID)
+	}
+	// El contenido viaja con el archivo copiado en el Drive del lector.
+	got, err := svc.Get(ctx, reader, clone.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Content == nil || *got.Content != "# Matrices\n$A^{-1}$" {
+		t.Fatalf("contenido del clon: %v", got.Content)
+	}
+}

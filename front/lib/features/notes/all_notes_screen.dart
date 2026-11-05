@@ -23,6 +23,7 @@ import '../../core/widgets/neobrutalism.dart';
 import '../academic/academic_mappers.dart';
 import 'attachment_resources.dart';
 import 'note_file_picker.dart';
+import 'notes_api.dart';
 import 'authenticated_attachment_image.dart';
 
 /// Base URL del microservicio de notas. En el emulador Android `localhost` es
@@ -1961,38 +1962,34 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     return _EditSaveOutcome.error;
   }
 
-  /// Clona una nota ajena: POST /notes/:id/copy. Con 201 registra el nuevo id
-  /// en _ownedNoteIds y refresca la lista local con la copia.
+  /// Clona una nota ajena (guardada o pública) a la BD y el Drive propios:
+  /// POST /notes/:id/copy vía [NotesApi.copyNote]. Con 201 registra el nuevo
+  /// id en _ownedNoteIds y refresca la lista local con la copia. Si el autor
+  /// borró el original, el backend responde 410 note_deleted.
   Future<_RemoteResult> _cloneFlow(LocalNote note) async {
-    final url = '$notesBaseUrl/notes/${note.id}/copy';
+    final realId = _remoteIds[note.id] ?? note.id;
     try {
-      final res = await AuthedHttp.run(
-        () => http
-            .post(Uri.parse(url), headers: _authHeaders())
-            .timeout(const Duration(seconds: 8)),
+      final copy = await _withNotesClient(
+        (client) => NotesApi(client: client, baseUrl: notesBaseUrl).copyNote(
+          realId,
+          idempotencyKey:
+              'copy-$realId-${DateTime.now().microsecondsSinceEpoch}',
+        ),
       );
-      if (res.statusCode == 201) {
-        try {
-          final data = jsonDecode(utf8.decode(res.bodyBytes));
-          final newId = data['note_id'] as String?;
-          if (newId != null && newId.isNotEmpty) {
-            _ownedNoteIds.add(newId);
-            _versions[newId] = (data['version'] as num?)?.toInt() ?? 1;
-          }
-        } catch (_) {}
-        if (!_useMemoryFallback && _repo != null) {
-          await _syncFromBackend();
-        }
-        await _applySearch(_currentQuery);
-        if (mounted) setState(() {});
-        return _RemoteResult(ok: true, status: res.statusCode);
+      _ownedNoteIds.add(copy.noteId);
+      _versions[copy.noteId] = copy.version;
+      if (!_useMemoryFallback && _repo != null) {
+        await _syncFromBackend();
       }
-      final parsed = _parseBackendError(utf8.decode(res.bodyBytes));
+      await _applySearch(_currentQuery);
+      if (mounted) setState(() {});
+      return const _RemoteResult(ok: true, status: 201);
+    } on NotesApiException catch (e) {
       return _RemoteResult(
         ok: false,
-        status: res.statusCode,
-        code: parsed['code'],
-        message: parsed['message'],
+        status: e.statusCode ?? -1,
+        code: e.code,
+        message: e.message,
       );
     } catch (e) {
       return _RemoteResult(ok: false, status: -1, message: e.toString());
@@ -4166,7 +4163,11 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
 
   String _cloneErrorText(_RemoteResult res) {
     if (res.status == -1) return 'Sin conexión: no se pudo guardar la copia.';
-    return 'No se pudo guardar la copia. Inténtalo más tarde.';
+    return notesFriendlyMessage(
+      res.status,
+      res.code,
+      fallback: 'No se pudo guardar la copia. Inténtalo más tarde.',
+    );
   }
 
   Future<void> _confirmClone() async {
@@ -4938,7 +4939,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                     if (!widget.isMine) ...[
                       _ActionButton(
                         icon: Icons.copy_rounded,
-                        label: _cloning ? '…' : 'Guardar copia',
+                        label: _cloning ? '…' : 'Copiar a mis apuntes',
                         onTap: _cloning ? () {} : _confirmClone,
                       ),
                     ],
