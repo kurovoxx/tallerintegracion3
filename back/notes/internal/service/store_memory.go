@@ -637,6 +637,12 @@ func cloneManagedPermission(p *model.DriveManagedPermission) *model.DriveManaged
 func (m *MemorySharedStore) Create(ctx context.Context, noteID, groupID string, isAdminNote bool, accessMode string, followersSnapshot int) (*model.SharedNote, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Replica UNIQUE (note_id, group_id) de notes.shared_notes.
+	for _, existing := range m.shared {
+		if existing.NoteID == noteID && existing.GroupID == groupID {
+			return nil, repository.ErrAlreadyShared
+		}
+	}
 	id := uuid.NewString()
 	s := &model.SharedNote{
 		ID: id, NoteID: noteID, GroupID: groupID, IsAdminNote: isAdminNote,

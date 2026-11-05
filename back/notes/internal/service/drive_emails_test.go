@@ -119,12 +119,14 @@ func TestRestrictedDedupGoogleEmails(t *testing.T) {
 	}
 }
 
-// TestLinkThenRestrictedKeepsAnyoneAndGrantsGoogle: LINK → RESTRICTED conserva el
-// permiso anyone y añade los correos Google (shares mixtos).
+// TestLinkThenRestrictedKeepsAnyoneAndGrantsGoogle: LINK en un grupo →
+// RESTRICTED en otro conserva el permiso anyone y añade los correos Google
+// (shares mixtos). Un mismo grupo solo admite un vínculo por nota.
 func TestLinkThenRestrictedKeepsAnyoneAndGrantsGoogle(t *testing.T) {
 	svc, d, _, social := newRestrictedService()
 	ctx := context.Background()
-	owner, group := uuid.NewString(), uuid.NewString()
+	owner, linkGroup, group := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	social.AddAdmin(owner, linkGroup)
 	social.AddAdmin(owner, group)
 	svc.SetDriveEmailDirectory(&fakeDriveEmails{
 		byGroup: map[string][]string{group: {"google-member@gmail.com"}},
@@ -133,7 +135,7 @@ func TestLinkThenRestrictedKeepsAnyoneAndGrantsGoogle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Share(ctx, owner, n.ID, group, "link"); err != nil {
+	if _, err := svc.Share(ctx, owner, n.ID, linkGroup, "link"); err != nil {
 		t.Fatalf("share link: %v", err)
 	}
 	if len(d.LinkGrantCalls) != 1 {

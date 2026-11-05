@@ -69,7 +69,7 @@ func mapCode(code string) codes.Code {
 	case utils.ErrConflict:
 		// Versión desactualizada / carrera: ABORTED (reintentable).
 		return codes.Aborted
-	case utils.ErrAlreadySaved, utils.ErrAlreadyLiked:
+	case utils.ErrAlreadySaved, utils.ErrAlreadyLiked, utils.ErrAlreadyShared:
 		return codes.AlreadyExists
 	case utils.ErrRateLimited:
 		return codes.ResourceExhausted

@@ -306,7 +306,9 @@ CREATE TABLE notes.shared_notes (
     access_mode varchar(20) NOT NULL DEFAULT 'link' CHECK (access_mode IN ('link', 'restricted')),
     author_followers_snapshot int NOT NULL DEFAULT 0,
     permission_sync_status text NOT NULL DEFAULT 'pending',
-    shared_at timestamptz NOT NULL DEFAULT now()
+    shared_at timestamptz NOT NULL DEFAULT now(),
+    -- Un vínculo por (nota, grupo): compartir dos veces => 409 already_shared.
+    CONSTRAINT shared_notes_note_id_group_id_key UNIQUE (note_id, group_id)
 );
 
 -- Tombstones block old JWTs after Notes finishes access cleanup. Note content

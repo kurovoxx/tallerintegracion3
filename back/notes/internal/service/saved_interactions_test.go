@@ -153,3 +153,32 @@ func TestSavedNoteBecomesUnavailableWhenMadePrivate(t *testing.T) {
 		t.Fatalf("debía quedar no disponible sin filtrar el título: %+v", items)
 	}
 }
+
+func TestShareSameGroupTwiceIsConflict(t *testing.T) {
+	svc, _, _, _, _, _, shares, social := newTestService()
+	ctx := context.Background()
+	owner, group, other := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	social.AddMember(owner, group)
+	social.AddMember(owner, other)
+	note, err := svc.Create(ctx, owner, "Para el grupo", nil, "private", stringPtr("x"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Share(ctx, owner, note.ID, group, "link"); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"link", "restricted"} {
+		_, err := svc.Share(ctx, owner, note.ID, group, mode)
+		if code := serviceCode(t, err); code != utils.ErrAlreadyShared || utils.StatusForCode(code) != 409 {
+			t.Fatalf("share duplicado (%s): %v", mode, err)
+		}
+	}
+	// Otro grupo sí se permite.
+	if _, err := svc.Share(ctx, owner, note.ID, other, "link"); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := shares.ListByNote(ctx, note.ID)
+	if len(list) != 2 {
+		t.Fatalf("se esperaban 2 vínculos, hay %d", len(list))
+	}
+}

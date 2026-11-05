@@ -2018,6 +2018,15 @@ func (s *NoteService) shareLocked(ctx context.Context, ownerID string, noteID st
 	if err != nil {
 		return nil, ErrInternalDatabase
 	}
+	// Un solo vínculo por (nota, grupo): compartir dos veces en el mismo grupo
+	// es 409 already_shared (también con otro access_mode: para cambiarlo hay
+	// que retirar el share y volver a compartir). La comprobación corre bajo
+	// WithNoteLock y la BD la respalda con UNIQUE (note_id, group_id).
+	for _, sh := range previous {
+		if sh.GroupID == groupID {
+			return nil, newServiceError(utils.ErrAlreadyShared)
+		}
+	}
 	candidate := &model.SharedNote{NoteID: noteID, GroupID: groupID, AccessMode: accessMode}
 	shares := make([]*model.SharedNote, 0, len(previous)+1)
 	shares = append(shares, previous...)
@@ -2032,6 +2041,9 @@ func (s *NoteService) shareLocked(ctx context.Context, ownerID string, noteID st
 	// 1) BD primero: intención durable del share ('pending') y de los permisos.
 	shared, err := s.observedSharedCreate(ctx, noteID, groupID, isAdmin, accessMode, followers)
 	if err != nil {
+		if errors.Is(err, repository.ErrAlreadyShared) {
+			return nil, newServiceError(utils.ErrAlreadyShared)
+		}
 		return nil, ErrInternalDatabase
 	}
 	// 2) Sincronizar Drive; ante fallo queda 'failed' y el reconciliador converge.

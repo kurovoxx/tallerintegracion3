@@ -45,6 +45,8 @@ const (
 	// ErrNoteDeleted: el autor borró el apunte (lápida en notes.note_tombstones).
 	// Se responde 410 Gone solo a quien podía verlo (público o guardado).
 	ErrNoteDeleted = "note_deleted"
+	// ErrAlreadyShared: la nota ya está compartida en ese grupo (409).
+	ErrAlreadyShared = "already_shared"
 	ErrFileTooLarge      = "file_too_large"
 	ErrInvalidAccessMode = "invalid_access_mode"
 	ErrRateLimited       = "rate_limited"
@@ -79,6 +81,8 @@ func MessageForCode(code string) string {
 		return "Nota no disponible en almacenamiento remoto"
 	case ErrNoteDeleted:
 		return "Apunte no disponible (eliminado por el autor)"
+	case ErrAlreadyShared:
+		return "Este apunte ya está compartido en este grupo"
 	case ErrFileTooLarge:
 		return "Archivo muy grande"
 	case ErrRateLimited:
@@ -100,7 +104,7 @@ func StatusForCode(code string) int {
 		return http.StatusForbidden
 	case ErrNotFound, ErrNoteUnavailable:
 		return http.StatusNotFound
-	case ErrConflict, ErrAlreadySaved, ErrAlreadyLiked:
+	case ErrConflict, ErrAlreadySaved, ErrAlreadyLiked, ErrAlreadyShared:
 		return http.StatusConflict
 	case ErrNoteDeleted:
 		return http.StatusGone

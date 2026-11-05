@@ -108,6 +108,9 @@ class NotesApi {
       message = 'No autorizado (401). Revisa tu sesión.';
       code ??= 'unauthorized';
     }
+    if (res.statusCode == 409 && code == 'already_shared') {
+      message = 'Este apunte ya está compartido en este grupo.';
+    }
     return NotesApiException(
       message,
       statusCode: res.statusCode,

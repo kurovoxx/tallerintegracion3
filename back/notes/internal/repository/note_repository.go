@@ -416,6 +416,10 @@ var ErrForbidden = errors.New("forbidden")
 // existe pero su version no coincide con la versión esperada por el writer.
 var ErrConflict = errors.New("conflict")
 
+// ErrAlreadyShared: la nota ya tiene un vínculo con ese grupo
+// (UNIQUE (note_id, group_id) de notes.shared_notes, migración 005).
+var ErrAlreadyShared = errors.New("already_shared")
+
 // EnqueueDriveOperation accepts a transaction so the outbox and local mutation
 // commit together. Empty logical references are stored as NULL.
 func (r *NoteRepository) EnqueueDriveOperation(ctx context.Context, db DBTX, op, noteID, attID, fileID, ownerUserID string, payload map[string]any) error {

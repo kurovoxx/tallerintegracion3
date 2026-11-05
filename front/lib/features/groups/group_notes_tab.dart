@@ -147,7 +147,10 @@ class _GroupNotesTabState extends State<GroupNotesTab> {
     }
     final choice = await showNeobrutalistDialog<_ShareChoice>(
       context: context,
-      dialog: _ShareNoteDialog(notes: mine),
+      dialog: _ShareNoteDialog(
+        notes: mine,
+        alreadyShared: _notes.map((n) => n.noteId).toSet(),
+      ),
     );
     if (choice == null || !mounted) return;
     try {
@@ -575,9 +578,13 @@ class _ShareChoice {
 
 /// Diálogo neobrutalista para elegir la nota propia y el modo de compartición.
 class _ShareNoteDialog extends StatefulWidget {
-  const _ShareNoteDialog({required this.notes});
+  const _ShareNoteDialog({required this.notes, this.alreadyShared = const {}});
 
   final List<MyNoteSummary> notes;
+
+  /// Notas que ya tienen vínculo con este grupo. Se marcan "YA COMPARTIDA":
+  /// el backend responde 409 already_shared si se intenta de nuevo.
+  final Set<String> alreadyShared;
 
   @override
   State<_ShareNoteDialog> createState() => _ShareNoteDialogState();
@@ -645,14 +652,33 @@ class _ShareNoteDialogState extends State<_ShareNoteDialog> {
                           ),
                           const SizedBox(width: AppDimens.spaceSm),
                           Expanded(
-                            child: Text(
-                              n.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w800,
-                                fontSize: 13,
-                              ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  n.title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                                // Debajo del título (no al lado): en 360 px
+                                // con texto al 200 % la fila desbordaba.
+                                if (widget.alreadyShared.contains(n.noteId))
+                                  const Padding(
+                                    padding: EdgeInsets.only(
+                                      top: AppDimens.spaceXs,
+                                    ),
+                                    child: NeobrutalistBadge(
+                                      label: 'Ya compartida',
+                                      tone: NeobrutalistTone.pending,
+                                      compact: true,
+                                    ),
+                                  ),
+                              ],
                             ),
                           ),
                         ],
