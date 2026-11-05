@@ -16,6 +16,7 @@ class NoteLikeSaveBar extends StatefulWidget {
     required this.initial,
     this.onChanged,
     this.compact = false,
+    this.showSave = true,
   });
 
   final NotesApi api;
@@ -26,6 +27,10 @@ class NoteLikeSaveBar extends StatefulWidget {
 
   /// Variante compacta para tarjetas en lista.
   final bool compact;
+
+  /// false oculta el botón de guardar (p. ej. en la lista de guardados, que
+  /// tiene su propio "Quitar de guardados").
+  final bool showSave;
 
   @override
   State<NoteLikeSaveBar> createState() => _NoteLikeSaveBarState();
@@ -155,21 +160,22 @@ class _NoteLikeSaveBarState extends State<NoteLikeSaveBar> {
           semanticLabel: _state.isLiked ? 'Quitar like' : 'Dar like',
           onPressed: _likeBusy ? null : _toggleLike,
         ),
-        NeobrutalistButton(
-          key: Key('save-${_state.noteId}'),
-          label: _state.isSaved
-              ? 'Guardado · ${_state.savesCount}'
-              : 'Guardar · ${_state.savesCount}',
-          icon: _state.isSaved
-              ? Icons.bookmark_rounded
-              : Icons.bookmark_border_rounded,
-          variant: _state.isSaved
-              ? NeobrutalistButtonVariant.accent
-              : NeobrutalistButtonVariant.secondary,
-          padding: padding,
-          semanticLabel: _state.isSaved ? 'Quitar de guardados' : 'Guardar',
-          onPressed: _saveBusy ? null : _toggleSave,
-        ),
+        if (widget.showSave)
+          NeobrutalistButton(
+            key: Key('save-${_state.noteId}'),
+            label: _state.isSaved
+                ? 'Guardado · ${_state.savesCount}'
+                : 'Guardar · ${_state.savesCount}',
+            icon: _state.isSaved
+                ? Icons.bookmark_rounded
+                : Icons.bookmark_border_rounded,
+            variant: _state.isSaved
+                ? NeobrutalistButtonVariant.accent
+                : NeobrutalistButtonVariant.secondary,
+            padding: padding,
+            semanticLabel: _state.isSaved ? 'Quitar de guardados' : 'Guardar',
+            onPressed: _saveBusy ? null : _toggleSave,
+          ),
       ],
     );
   }

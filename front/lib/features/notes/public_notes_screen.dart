@@ -6,6 +6,7 @@ import '../../core/common_widgets.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 import 'note_id_search_screen.dart';
+import 'notes_filter_chips.dart';
 import 'note_interaction_bar.dart';
 import 'notes_api.dart';
 
@@ -199,7 +200,7 @@ class _PublicNotesScreenState extends State<PublicNotesScreen> {
                   ),
                 ),
                 const SizedBox(height: AppDimens.spaceMd),
-                _FilterChips<PublicSavedFilter>(
+                NotesFilterChips<PublicSavedFilter>(
                   value: _filter,
                   options: const {
                     PublicSavedFilter.all: 'Todos',
@@ -378,42 +379,6 @@ class PublicNoteCard extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-/// Fila de chips de filtro neobrutalistas (selección = amarillo resaltador).
-class _FilterChips<T> extends StatelessWidget {
-  const _FilterChips({
-    required this.value,
-    required this.options,
-    required this.onChanged,
-  });
-
-  final T value;
-  final Map<T, String> options;
-  final ValueChanged<T> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Wrap(
-      spacing: AppDimens.spaceSm,
-      runSpacing: AppDimens.spaceSm,
-      children: <Widget>[
-        for (final entry in options.entries)
-          NeobrutalistButton(
-            key: Key('filter-${entry.value}'),
-            label: entry.value,
-            variant: entry.key == value
-                ? NeobrutalistButtonVariant.accent
-                : NeobrutalistButtonVariant.secondary,
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppDimens.spaceMd,
-              vertical: AppDimens.spaceXs + 2,
-            ),
-            onPressed: () => onChanged(entry.key),
-          ),
-      ],
     );
   }
 }

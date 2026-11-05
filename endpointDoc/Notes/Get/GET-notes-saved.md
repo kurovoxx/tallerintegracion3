@@ -63,6 +63,10 @@ Ejemplo: `GET /notes/saved?scope=others&q=integral&availability=available&limit=
 | 500 | `internal_error` | Fallo de Postgres |
 | 401 / 423 / 503 | ver [COMUN §2](../COMUN-notes.md#2-autenticación-http) | Middleware |
 
+## Invocación (Front)
+
+- **Frontend Flutter:** `NotesApi.listSaved` (`front/lib/features/notes/notes_api.dart`) y la sección **Apuntes guardados** (`front/lib/features/notes/saved_notes_screen.dart`, botón "Guardados" en "Todas las notas"): búsqueda, filtros Autor (Todos / De otros / Míos) y Estado (Todos / Disponibles / No disponibles), like con contador, "Ver", "Copiar a mis apuntes" y "Quitar de guardados". Un elemento con `is_available=false` se pinta deshabilitado con la etiqueta "Apunte no disponible (eliminado por el autor)" y solo permite quitarlo (`DELETE /notes/{id}/save`).
+
 ## Flujo
 
 1. `NoteHandler.ListSaved` → `NoteService.ListSaved` (`back/notes/internal/service/saved_interactions.go`).

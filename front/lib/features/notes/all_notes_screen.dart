@@ -26,6 +26,7 @@ import 'note_file_picker.dart';
 import 'note_id_search_screen.dart';
 import 'notes_api.dart';
 import 'public_notes_screen.dart';
+import 'saved_notes_screen.dart';
 import 'authenticated_attachment_image.dart';
 
 /// Base URL del microservicio de notas. En el emulador Android `localhost` es
@@ -3094,6 +3095,17 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       runSpacing: AppDimens.spaceSm,
       children: <Widget>[
         NeobrutalistButton(
+          key: const Key('notes-open-saved'),
+          label: 'Guardados',
+          icon: Icons.bookmarks_rounded,
+          variant: NeobrutalistButtonVariant.accent,
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppDimens.spaceMd,
+            vertical: AppDimens.spaceSm,
+          ),
+          onPressed: _openSavedNotes,
+        ),
+        NeobrutalistButton(
           key: const Key('notes-open-id-search'),
           label: 'Buscar por ID',
           icon: Icons.tag_rounded,
@@ -3116,6 +3128,24 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           onPressed: _openPublicNotes,
         ),
       ],
+    );
+  }
+
+  /// Sección "Apuntes guardados": marcadores propios y de otros, incluidos
+  /// los que su autor eliminó (se muestran como no disponibles).
+  Future<void> _openSavedNotes() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => SavedNotesScreen(
+          api: NotesApi(baseUrl: notesBaseUrl),
+          onNoteCopied: () async {
+            if (!_useMemoryFallback && _repo != null) {
+              await _syncFromBackend();
+            }
+            await _applySearch(_currentQuery);
+          },
+        ),
+      ),
     );
   }
 
