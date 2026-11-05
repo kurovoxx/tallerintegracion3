@@ -61,6 +61,9 @@ func mapCode(code string) codes.Code {
 	switch code {
 	case utils.ErrNotFound, utils.ErrNoteUnavailable:
 		return codes.NotFound
+	case utils.ErrNoteDeleted:
+		// Equivalente gRPC de 410 Gone: el recurso existió y ya no.
+		return codes.FailedPrecondition
 	case utils.ErrForbidden:
 		return codes.PermissionDenied
 	case utils.ErrConflict:

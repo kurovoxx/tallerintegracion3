@@ -18,7 +18,8 @@ func TestHTTPRouterContract(t *testing.T) {
 	r := newHTTPRouter(nil, &config.Config{StorageMode: "mock"}, auth)
 	expected := map[string]bool{
 		"GET /health": true, "GET /health/drive": true,
-		"POST /notes": false, "GET /notes/me": false,
+		"POST /notes": false, "GET /notes/me": false, "GET /notes/saved": false,
+		"DELETE /notes/:id/save": false, "GET /notes/:id/stats": false,
 		"POST /notes/unshare-all": false, "POST /notes/reconcile": false,
 		"POST /notes/upload": false, "GET /notes/:id/access": false,
 		"POST /notes/:id/attachments":                      false,

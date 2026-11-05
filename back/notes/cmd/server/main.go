@@ -193,6 +193,7 @@ func newHTTPRouter(svc *service.NoteService, cfg *config.Config, authMw *middlew
 	{
 		protected.POST("/notes", h.Create)
 		protected.GET("/notes/me", h.ListMy)
+		protected.GET("/notes/saved", h.ListSaved)
 		protected.POST("/notes/unshare-all", h.UnshareAll)
 		protected.POST("/notes/reconcile", h.Reconcile)
 		protected.POST("/notes/upload", h.UploadFile)
@@ -201,6 +202,8 @@ func newHTTPRouter(svc *service.NoteService, cfg *config.Config, authMw *middlew
 		protected.GET("/notes/:id/attachments/:attachmentId/content", h.AttachmentContent)
 		protected.DELETE("/notes/:id/attachments/:attachmentId", h.DeleteAttachment)
 		protected.POST("/notes/:id/save", h.Save)
+		protected.DELETE("/notes/:id/save", h.Unsave)
+		protected.GET("/notes/:id/stats", h.Stats)
 		protected.POST("/notes/:id/copy", h.Copy)
 		protected.POST("/notes/:id/like", h.Like)
 		protected.DELETE("/notes/:id/like", h.Unlike)

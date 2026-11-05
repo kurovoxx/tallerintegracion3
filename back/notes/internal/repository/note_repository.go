@@ -85,6 +85,23 @@ func (r *NoteRepository) GetByID(ctx context.Context, db DBTX, id string) (*mode
 	return &n, nil
 }
 
+// GetTombstone devuelve la lápida de un apunte borrado (nil si no hay).
+func (r *NoteRepository) GetTombstone(ctx context.Context, db DBTX, noteID string) (*model.NoteTombstone, error) {
+	if db == nil {
+		db = r.pool
+	}
+	var t model.NoteTombstone
+	err := db.QueryRow(ctx, `SELECT note_id, owner_user_id, title, subject_id, visibility, deleted_at FROM notes.note_tombstones WHERE note_id = $1`, noteID).
+		Scan(&t.NoteID, &t.OwnerUserID, &t.Title, &t.SubjectID, &t.Visibility, &t.DeletedAt)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get tombstone: %w", err)
+	}
+	return &t, nil
+}
+
 func (r *NoteRepository) ListByUser(ctx context.Context, db DBTX, userID string, cursor string, limit int) ([]*model.Note, string, error) {
 	if db == nil {
 		db = r.pool
@@ -543,7 +560,8 @@ func (r *NoteRepository) DeleteWithDriveCleanup(ctx context.Context, noteID, req
 	// existe; la metadata ya fue capturada arriba para el cleanup de Drive).
 	for _, query := range []string{
 		`DELETE FROM notes.note_attachments WHERE note_id = $1`,
-		`DELETE FROM notes.saved_notes WHERE note_id = $1`,
+		// notes.saved_notes NO se limpia: el guardado sobrevive y se lista
+		// como "no disponible" (migración 004, lápida en note_tombstones).
 		`DELETE FROM notes.note_likes WHERE note_id = $1`,
 		`DELETE FROM notes.shared_notes WHERE note_id = $1`,
 	} {

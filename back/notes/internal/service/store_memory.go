@@ -24,6 +24,35 @@ type MemoryNoteStore struct {
 	// idempotencyKeys replica notes.idempotency_keys para tests sin PG:
 	// clave userID:operation:idempotencyKey.
 	idempotencyKeys map[string]*model.IdempotencyKey
+	// tombstones replica notes.note_tombstones (trigger AFTER DELETE en PG).
+	tombstones map[string]*model.NoteTombstone
+}
+
+// recordTombstoneLocked replica el trigger trg_notes_record_tombstone. Debe
+// llamarse con m.mu tomado y antes de borrar la nota del mapa.
+func (m *MemoryNoteStore) recordTombstoneLocked(n *model.Note) {
+	if n == nil {
+		return
+	}
+	if m.tombstones == nil {
+		m.tombstones = make(map[string]*model.NoteTombstone)
+	}
+	m.tombstones[n.ID] = &model.NoteTombstone{
+		NoteID: n.ID, OwnerUserID: n.UserID, Title: n.Title, SubjectID: n.SubjectID,
+		Visibility: n.Visibility, DeletedAt: time.Now().UTC(),
+	}
+}
+
+// GetTombstone devuelve la lápida de un apunte borrado (nil si no hay).
+func (m *MemoryNoteStore) GetTombstone(ctx context.Context, noteID string) (*model.NoteTombstone, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	t, ok := m.tombstones[noteID]
+	if !ok {
+		return nil, nil
+	}
+	cop := *t
+	return &cop, nil
 }
 
 func NewMemoryNoteStore() *MemoryNoteStore {
@@ -134,9 +163,11 @@ func (m *MemoryNoteStore) Update(ctx context.Context, id string, title *string, 
 func (m *MemoryNoteStore) Delete(ctx context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.notes[id]; !ok {
+	n, ok := m.notes[id]
+	if !ok {
 		return fmt.Errorf("not_found")
 	}
+	m.recordTombstoneLocked(n)
 	delete(m.notes, id)
 	return nil
 }
@@ -409,6 +440,39 @@ func (m *MemorySavedStore) Delete(ctx context.Context, userID, noteID string) er
 	}
 	delete(m.saved, k)
 	return nil
+}
+
+// ListByUser devuelve los guardados del usuario, más recientes primero.
+func (m *MemorySavedStore) ListByUser(ctx context.Context, userID string) ([]*model.SavedNote, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]*model.SavedNote, 0)
+	for _, s := range m.saved {
+		if s.UserID == userID {
+			cop := *s
+			out = append(out, &cop)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].SavedAt.Equal(out[j].SavedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].SavedAt.After(out[j].SavedAt)
+	})
+	return out, nil
+}
+
+// CountByNote devuelve cuántos usuarios guardaron el apunte.
+func (m *MemorySavedStore) CountByNote(ctx context.Context, noteID string) (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	n := 0
+	for _, s := range m.saved {
+		if s.NoteID == noteID {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // Like memory
@@ -1110,6 +1174,7 @@ func (m *MemoryNoteStore) DeleteWithDriveCleanup(ctx context.Context, noteID, re
 			delete(m.attachments.atts, att.ID)
 		}
 	}
+	m.recordTombstoneLocked(note)
 	delete(m.notes, noteID)
 	return result, nil
 }

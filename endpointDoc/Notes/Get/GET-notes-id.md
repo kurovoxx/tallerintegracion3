@@ -28,6 +28,10 @@ Devuelve la metadata de Postgres y el contenido Markdown descargado del Drive de
   "external_file_id": "1AbCdriveFileId",
   "drive_url": "https://drive.google.com/file/d/1AbCdriveFileId/view",
   "content": "# Matrices\n",
+  "saves_count": 2,
+  "is_liked": false,
+  "is_saved": true,
+  "is_own": false,
   "attachments": []
 }
 ```
@@ -38,6 +42,8 @@ Devuelve la metadata de Postgres y el contenido Markdown descargado del Drive de
 | `title`, `visibility` | Metadata (`public` \| `private`) |
 | `likes_count` | Contador mantenido por like/unlike |
 | `version` | Versión para el bloqueo optimista de PATCH |
+| `saves_count`, `is_liked`, `is_saved` | Contadores exactos y estado del solicitante (`NoteService.Interactions`); se omiten solo si su lectura falla |
+| `is_own` | `true` si el solicitante es el autor |
 | `created_at`, `updated_at` | RFC3339 en UTC |
 | `subject_id` | Solo si existe (`L226-228`) |
 | `external_file_id`, `drive_url` | ID del `.md` en Drive y enlace web construido a partir de él; solo si existe (`L229-233`). En la práctica siempre está en un 200, porque sin archivo el servicio responde 404 |
@@ -52,6 +58,7 @@ No incluye `sync_status` (sí lo incluye el RPC).
 | HTTP | `error.code` | Condición |
 | --- | --- | --- |
 | 404 | `not_found` "nota no encontrada" | `id` no UUID, la nota no existe en Postgres, o es privada y el solicitante no tiene acceso. Ambos casos son indistinguibles a propósito (`note_service.go:957-976`) |
+| 410 | `note_deleted` "Apunte no disponible (eliminado por el autor)" | La fila no existe pero hay lápida en `notes.note_tombstones` y el apunte era público o el solicitante lo tenía guardado. Para el propio autor o un privado ajeno se mantiene el 404 |
 | 404 | `note_unavailable` "Nota no disponible en almacenamiento remoto" | La nota existe y es legible, pero no tiene `external_file_id`, o Drive responde 404/403, o el **autor** perdió su conexión OAuth (`L979-1005`) |
 | 502 | `internal_error` "Servicio de almacenamiento no disponible" | Drive caído o timeout (`L1006`) |
 | 500 | `internal_error` "Error interno" | Fallo de Postgres, de Social al comprobar membresía (`L632-635`), o al listar adjuntos (`note_handler.go:240-244`) |

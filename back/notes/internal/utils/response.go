@@ -42,6 +42,9 @@ const (
 	ErrAlreadyLiked      = "already_liked"
 	ErrNotLiked          = "not_liked"
 	ErrNoteUnavailable   = "note_unavailable"
+	// ErrNoteDeleted: el autor borró el apunte (lápida en notes.note_tombstones).
+	// Se responde 410 Gone solo a quien podía verlo (público o guardado).
+	ErrNoteDeleted = "note_deleted"
 	ErrFileTooLarge      = "file_too_large"
 	ErrInvalidAccessMode = "invalid_access_mode"
 	ErrRateLimited       = "rate_limited"
@@ -74,6 +77,8 @@ func MessageForCode(code string) string {
 		return "Nota ya likeada"
 	case ErrNoteUnavailable:
 		return "Nota no disponible en almacenamiento remoto"
+	case ErrNoteDeleted:
+		return "Apunte no disponible (eliminado por el autor)"
 	case ErrFileTooLarge:
 		return "Archivo muy grande"
 	case ErrRateLimited:
@@ -97,6 +102,8 @@ func StatusForCode(code string) int {
 		return http.StatusNotFound
 	case ErrConflict, ErrAlreadySaved, ErrAlreadyLiked:
 		return http.StatusConflict
+	case ErrNoteDeleted:
+		return http.StatusGone
 	case ErrFileTooLarge, ErrPayloadTooLarge:
 		return http.StatusRequestEntityTooLarge
 	case ErrUnsupportedMediaType:
