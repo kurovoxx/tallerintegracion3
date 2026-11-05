@@ -25,6 +25,7 @@ import 'attachment_resources.dart';
 import 'note_file_picker.dart';
 import 'note_id_search_screen.dart';
 import 'notes_api.dart';
+import 'public_notes_screen.dart';
 import 'authenticated_attachment_image.dart';
 
 /// Base URL del microservicio de notas. En el emulador Android `localhost` es
@@ -2153,25 +2154,103 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     await _notesFuture;
   }
 
+  /// Id remoto (UUID) de una nota, o null si solo existe en este equipo.
+  String? _remoteIdOf(LocalNote note) {
+    final id = _remoteIds[note.id] ?? note.id;
+    return _isRemoteNote(id) ? id : null;
+  }
+
+  bool get _hasSession => (SessionManager.token ?? '').isNotEmpty;
+
+  /// Aplica en los mapas locales los contadores confirmados por el servidor.
+  void _applyInteractions(String localId, NoteInteractions s) {
+    _likesCount[localId] = s.likesCount;
+    _isLiked[localId] = s.isLiked;
+    _isSaved[localId] = s.isSaved;
+  }
+
+  /// Relee los contadores reales (GET /notes/:id/stats) antes de abrir el
+  /// detalle de una nota remota. Best-effort: sin red se usan los locales.
+  Future<void> _refreshInteractions(LocalNote note) async {
+    final rid = _remoteIdOf(note);
+    if (rid == null || !_hasSession) return;
+    try {
+      final s = await _withNotesClient(
+        (c) => NotesApi(
+          client: c,
+          baseUrl: notesBaseUrl,
+        ).stats(rid).timeout(const Duration(seconds: 3)),
+      );
+      if (mounted) setState(() => _applyInteractions(note.id, s));
+    } catch (_) {}
+  }
+
+  /// Like con persistencia en el backend para notas remotas: cambio
+  /// optimista, POST/DELETE /notes/:id/like y adopción del contador real; si
+  /// falla, se revierte. Las notas solo locales mantienen el estado en memoria.
   void _toggleLike(LocalNote note) {
+    final wasLiked = _isLiked[note.id] ?? false;
+    final prevCount = _likesCount[note.id] ?? 0;
     setState(() {
-      final liked = _isLiked[note.id] ?? false;
-      final count = _likesCount[note.id] ?? 0;
-      if (liked) {
-        _isLiked[note.id] = false;
-        _likesCount[note.id] = (count - 1).clamp(0, 9999);
-      } else {
-        _isLiked[note.id] = true;
-        _likesCount[note.id] = count + 1;
-      }
+      _isLiked[note.id] = !wasLiked;
+      _likesCount[note.id] = (prevCount + (wasLiked ? -1 : 1)).clamp(
+        0,
+        1 << 30,
+      );
     });
+    final rid = _remoteIdOf(note);
+    if (rid == null || !_hasSession) return;
+    unawaited(() async {
+      try {
+        final s = await _withNotesClient(
+          (c) => NotesApi(
+            client: c,
+            baseUrl: notesBaseUrl,
+          ).setLiked(rid, !wasLiked),
+        );
+        if (mounted) setState(() => _applyInteractions(note.id, s));
+      } catch (e) {
+        if (!mounted) return;
+        setState(() {
+          _isLiked[note.id] = wasLiked;
+          _likesCount[note.id] = prevCount;
+        });
+        _notifySnack(
+          e is NotesApiException ? e.message : notesFriendlyMessage(-1, null),
+          ok: false,
+        );
+      }
+    }());
   }
 
   void _toggleSave(LocalNote note) {
+    final wasSaved = _isSaved[note.id] ?? false;
     setState(() {
-      final saved = _isSaved[note.id] ?? false;
-      _isSaved[note.id] = !saved;
+      _isSaved[note.id] = !wasSaved;
     });
+    final rid = _remoteIdOf(note);
+    if (rid != null && _hasSession) {
+      unawaited(() async {
+        try {
+          final s = await _withNotesClient(
+            (c) => NotesApi(
+              client: c,
+              baseUrl: notesBaseUrl,
+            ).setSaved(rid, !wasSaved),
+          );
+          if (s != null && mounted) {
+            setState(() => _applyInteractions(note.id, s));
+          }
+        } catch (e) {
+          if (!mounted) return;
+          setState(() => _isSaved[note.id] = wasSaved);
+          _notifySnack(
+            e is NotesApiException ? e.message : notesFriendlyMessage(-1, null),
+            ok: false,
+          );
+        }
+      }());
+    }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         backgroundColor: Colors.black,
@@ -2181,7 +2260,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         ),
         content: Text(
           (_isSaved[note.id] ?? false)
-              ? 'Nota guardada localmente'
+              ? (rid != null ? 'Apunte guardado' : 'Nota guardada localmente')
               : 'Nota removida de guardados',
           style: const TextStyle(
             color: Colors.white,
@@ -2400,6 +2479,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     } else {
       debugPrint('[Notes] OPEN id=${note.id} waitSync=false');
     }
+    if (!mounted) return;
+    await _refreshInteractions(target);
     if (!mounted) return;
     final opened = target;
     showModalBottomSheet(
@@ -3023,7 +3104,35 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           ),
           onPressed: () => _openIdSearch(),
         ),
+        NeobrutalistButton(
+          key: const Key('notes-open-public'),
+          label: 'Explorar públicos',
+          icon: Icons.public_rounded,
+          variant: NeobrutalistButtonVariant.secondary,
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppDimens.spaceMd,
+            vertical: AppDimens.spaceSm,
+          ),
+          onPressed: _openPublicNotes,
+        ),
       ],
+    );
+  }
+
+  /// Apuntes públicos de otros usuarios con like/guardar en cada tarjeta.
+  Future<void> _openPublicNotes() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PublicNotesScreen(
+          api: NotesApi(baseUrl: notesBaseUrl),
+          onNoteCopied: () async {
+            if (!_useMemoryFallback && _repo != null) {
+              await _syncFromBackend();
+            }
+            await _applySearch(_currentQuery);
+          },
+        ),
+      ),
     );
   }
 

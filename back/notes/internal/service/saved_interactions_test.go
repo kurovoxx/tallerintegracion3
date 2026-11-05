@@ -216,3 +216,130 @@ func TestCopySavedNoteCreatesOwnPrivateCloneInCopierDrive(t *testing.T) {
 		t.Fatalf("contenido del clon: %v", got.Content)
 	}
 }
+
+func TestListSavedFilters(t *testing.T) {
+	svc, _, _, _, _, _, _, _ := newTestService()
+	ctx := context.Background()
+	me, ana, beto := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	math := uuid.NewString()
+	mk := func(owner, title string, subject *string) string {
+		t.Helper()
+		n, err := svc.Create(ctx, owner, title, subject, "public", stringPtr("x"), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.Save(ctx, me, n.ID); err != nil {
+			t.Fatal(err)
+		}
+		return n.ID
+	}
+	mk(ana, "Integrales dobles", &math)
+	mk(beto, "Redes OSI", nil)
+	mk(me, "Mi resumen de integrales", nil)
+	gone := mk(beto, "Borrador", nil)
+	if err := svc.Delete(ctx, beto, gone); err != nil {
+		t.Fatal(err)
+	}
+
+	count := func(f SavedFilter) int {
+		t.Helper()
+		items, _, err := svc.ListSaved(ctx, me, f, "", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(items)
+	}
+	cases := map[string]struct {
+		f    SavedFilter
+		want int
+	}{
+		"todos":           {SavedFilter{}, 4},
+		"de otros":        {SavedFilter{Scope: "others"}, 3},
+		"propios":         {SavedFilter{Scope: "own"}, 1},
+		"texto":           {SavedFilter{Query: "INTEGRALES"}, 2},
+		"texto de otros":  {SavedFilter{Query: "integrales", Scope: "others"}, 1},
+		"materia":         {SavedFilter{SubjectID: math}, 1},
+		"autor":           {SavedFilter{AuthorID: beto}, 2},
+		"disponibles":     {SavedFilter{Availability: "available"}, 3},
+		"no disponibles":  {SavedFilter{Availability: "unavailable"}, 1},
+		"autor + activos": {SavedFilter{AuthorID: beto, Availability: "available"}, 1},
+	}
+	for name, tc := range cases {
+		if got := count(tc.f); got != tc.want {
+			t.Errorf("%s: got %d, want %d", name, got, tc.want)
+		}
+	}
+	if _, _, err := svc.ListSaved(ctx, me, SavedFilter{Scope: "nope"}, "", 0); serviceCode(t, err) != utils.ErrBadRequest {
+		t.Fatalf("scope inválido: %v", err)
+	}
+}
+
+func TestListSavedPagination(t *testing.T) {
+	svc, _, _, _, _, _, _, _ := newTestService()
+	ctx := context.Background()
+	me, author := uuid.NewString(), uuid.NewString()
+	for i := 0; i < 5; i++ {
+		n, err := svc.Create(ctx, author, "n", nil, "public", stringPtr("x"), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.Save(ctx, me, n.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := map[string]bool{}
+	cursor := ""
+	for page := 0; page < 5; page++ {
+		items, next, err := svc.ListSaved(ctx, me, SavedFilter{}, cursor, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, it := range items {
+			if seen[it.SavedID] {
+				t.Fatalf("elemento repetido entre páginas: %s", it.SavedID)
+			}
+			seen[it.SavedID] = true
+		}
+		if next == "" {
+			break
+		}
+		cursor = next
+	}
+	if len(seen) != 5 {
+		t.Fatalf("se esperaban 5 guardados en total, hubo %d", len(seen))
+	}
+}
+
+func TestListPublicExcludesOwnAndPrivateAndCanBeSaved(t *testing.T) {
+	svc, _, _, _, _, _, _, _ := newTestService()
+	ctx := context.Background()
+	me, ana := uuid.NewString(), uuid.NewString()
+	pub, err := svc.Create(ctx, ana, "Álgebra pública", nil, "public", stringPtr("x"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Create(ctx, ana, "Álgebra privada", nil, "private", stringPtr("x"), ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Create(ctx, me, "Mi álgebra", nil, "public", stringPtr("x"), ""); err != nil {
+		t.Fatal(err)
+	}
+	items, _, err := svc.ListPublic(ctx, me, "álgebra", "", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ID != pub.ID || items[0].IsSaved || items[0].IsLiked {
+		t.Fatalf("listado público inesperado: %+v", items)
+	}
+	// Cualquier público se puede guardar y likear desde la tarjeta.
+	if _, err := svc.Save(ctx, me, pub.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Like(ctx, me, pub.ID); err != nil {
+		t.Fatal(err)
+	}
+	items, _, _ = svc.ListPublic(ctx, me, "", "", "", 0)
+	if len(items) != 1 || !items[0].IsSaved || !items[0].IsLiked || items[0].LikesCount != 1 || items[0].SavesCount != 1 {
+		t.Fatalf("estado tras guardar/likear: %+v", items)
+	}
+}

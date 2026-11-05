@@ -13,6 +13,13 @@ Lista los apuntes que el usuario guardó (marcadores en `notes.saved_notes`), **
 | --- | --- | --- | --- |
 | `limit` | int | 20 (máx. 50) | Tamaño de página |
 | `cursor` | UUID | — | `saved_id` del último elemento de la página anterior (`next_cursor`) |
+| `q` | texto (≤ 300) | — | Busca sin distinguir mayúsculas en el título |
+| `subject_id` | UUID | — | Solo apuntes de esa materia |
+| `author_id` | UUID | — | Solo apuntes de ese autor |
+| `scope` | `all` \| `others` \| `own` | `all` | `others` = solo apuntes guardados **de otros usuarios** |
+| `availability` | `all` \| `available` \| `unavailable` | `all` | Filtra por `is_available` |
+
+Ejemplo: `GET /notes/saved?scope=others&q=integral&availability=available&limit=20`.
 
 - **Body:** no tiene.
 
@@ -51,7 +58,8 @@ Lista los apuntes que el usuario guardó (marcadores en `notes.saved_notes`), **
 
 | HTTP | `error.code` | Condición |
 | --- | --- | --- |
-| 400 | `bad_request` | `cursor` no es UUID |
+| 400 | `bad_request` | `cursor` o `author_id` no son UUID, `scope`/`availability` fuera de los valores admitidos, o `q` > 300 caracteres |
+| 400 | `invalid_subject_id` | `subject_id` no es UUID |
 | 500 | `internal_error` | Fallo de Postgres |
 | 401 / 423 / 503 | ver [COMUN §2](../COMUN-notes.md#2-autenticación-http) | Middleware |
 
@@ -67,4 +75,5 @@ Lista los apuntes que el usuario guardó (marcadores en `notes.saved_notes`), **
 | --- | --- | --- |
 | `back/notes/internal/service/saved_interactions_test.go` | `TestSavedNoteSurvivesOwnerDeletionAsUnavailable` | El guardado sobrevive al borrado y sale `is_available=false`, `deleted` |
 | `back/notes/internal/service/saved_interactions_test.go` | `TestSavedNoteBecomesUnavailableWhenMadePrivate` | `no_access` sin filtrar el título |
+| `back/notes/internal/service/saved_interactions_test.go` | `TestListSavedFilters` / `TestListSavedPagination` | Cada filtro y su combinación; cursor sin repetidos |
 | `back/notes/cmd/server/router_contract_test.go` | `TestHTTPRouterContract` | Ruta registrada; sin token → 401 |

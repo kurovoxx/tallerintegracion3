@@ -102,6 +102,62 @@ func (r *NoteRepository) GetTombstone(ctx context.Context, db DBTX, noteID strin
 	return &t, nil
 }
 
+// likeEscaper escapa los comodines de ILIKE para buscar el texto literal.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// ListPublic lista apuntes públicos de otros usuarios (excluye a
+// excludeUserID), más recientes primero, con búsqueda literal en el título y
+// filtro opcional por materia. cursor = id del último apunte de la página
+// anterior (keyset sobre created_at, id).
+func (r *NoteRepository) ListPublic(ctx context.Context, db DBTX, excludeUserID, query, subjectID, cursor string, limit int) ([]*model.Note, string, error) {
+	if db == nil {
+		db = r.pool
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	pattern := ""
+	if q := strings.TrimSpace(query); q != "" {
+		pattern = "%" + likeEscaper.Replace(q) + "%"
+	}
+	sql := `
+		SELECT id, user_id, subject_id, title, external_file_id, visibility, likes_count, forked_from_note_id, sync_status, version, created_at, updated_at
+		FROM notes.notes
+		WHERE visibility = 'public' AND user_id <> $1::uuid
+		  AND external_file_id IS NOT NULL
+		  AND ($2::text = '' OR title ILIKE $2::text ESCAPE '\')
+		  AND ($3::text = '' OR subject_id = NULLIF($3::text, '')::uuid)`
+	args := []any{excludeUserID, pattern, subjectID}
+	if cursor != "" {
+		sql += ` AND (created_at, id) < ((SELECT created_at FROM notes.notes WHERE id = $4::uuid), $4::uuid)`
+		args = append(args, cursor)
+	}
+	args = append(args, limit+1)
+	sql += fmt.Sprintf(" ORDER BY created_at DESC, id DESC LIMIT $%d", len(args))
+	rows, err := db.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, "", fmt.Errorf("list public notes: %w", err)
+	}
+	defer rows.Close()
+	var notes []*model.Note
+	for rows.Next() {
+		var n model.Note
+		if err := rows.Scan(&n.ID, &n.UserID, &n.SubjectID, &n.Title, &n.ExternalFileID, &n.Visibility, &n.LikesCount, &n.ForkedFromNoteID, &n.SyncStatus, &n.Version, &n.CreatedAt, &n.UpdatedAt); err != nil {
+			return nil, "", fmt.Errorf("scan public note: %w", err)
+		}
+		notes = append(notes, &n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	next := ""
+	if len(notes) > limit {
+		notes = notes[:limit]
+		next = notes[limit-1].ID
+	}
+	return notes, next, nil
+}
+
 func (r *NoteRepository) ListByUser(ctx context.Context, db DBTX, userID string, cursor string, limit int) ([]*model.Note, string, error) {
 	if db == nil {
 		db = r.pool

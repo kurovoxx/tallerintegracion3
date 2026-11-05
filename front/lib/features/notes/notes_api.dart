@@ -163,6 +163,177 @@ class NoteDetail {
   );
 }
 
+/// Contadores exactos de un apunte y estado del usuario (GET /notes/{id}/stats).
+class NoteInteractions {
+  const NoteInteractions({
+    required this.noteId,
+    this.likesCount = 0,
+    this.savesCount = 0,
+    this.isLiked = false,
+    this.isSaved = false,
+  });
+
+  final String noteId;
+  final int likesCount;
+  final int savesCount;
+  final bool isLiked;
+  final bool isSaved;
+
+  factory NoteInteractions.fromJson(Map<String, dynamic> j, String noteId) =>
+      NoteInteractions(
+        noteId: (j['note_id'] as String?) ?? noteId,
+        likesCount: (j['likes_count'] as num?)?.toInt() ?? 0,
+        savesCount: (j['saves_count'] as num?)?.toInt() ?? 0,
+        isLiked: j['is_liked'] == true,
+        isSaved: j['is_saved'] == true,
+      );
+
+  NoteInteractions copyWith({
+    int? likesCount,
+    int? savesCount,
+    bool? isLiked,
+    bool? isSaved,
+  }) => NoteInteractions(
+    noteId: noteId,
+    likesCount: likesCount ?? this.likesCount,
+    savesCount: savesCount ?? this.savesCount,
+    isLiked: isLiked ?? this.isLiked,
+    isSaved: isSaved ?? this.isSaved,
+  );
+}
+
+/// Página de un listado con cursor (`{items, next_cursor}`).
+class NotesPage<T> {
+  const NotesPage(this.items, this.nextCursor);
+
+  final List<T> items;
+  final String nextCursor;
+
+  bool get hasMore => nextCursor.isNotEmpty;
+}
+
+/// Apunte público de otro usuario (GET /notes/public).
+class PublicNoteSummary {
+  const PublicNoteSummary({
+    required this.id,
+    required this.userId,
+    required this.title,
+    required this.interactions,
+    this.subjectId,
+    this.updatedAt,
+  });
+
+  final String id;
+  final String userId;
+  final String title;
+  final String? subjectId;
+  final DateTime? updatedAt;
+  final NoteInteractions interactions;
+
+  factory PublicNoteSummary.fromJson(Map<String, dynamic> j) {
+    final id = (j['id'] as String?) ?? '';
+    return PublicNoteSummary(
+      id: id,
+      userId: (j['user_id'] as String?) ?? '',
+      title: (j['title'] as String?) ?? 'Sin título',
+      subjectId: j['subject_id'] as String?,
+      updatedAt: DateTime.tryParse(j['updated_at']?.toString() ?? ''),
+      interactions: NoteInteractions.fromJson(j, id),
+    );
+  }
+}
+
+/// Filtros de GET /notes/saved. `scope`: all | others | own;
+/// `availability`: all | available | unavailable.
+class SavedNotesFilter {
+  const SavedNotesFilter({
+    this.query = '',
+    this.scope = 'all',
+    this.availability = 'all',
+    this.subjectId,
+    this.authorId,
+  });
+
+  final String query;
+  final String scope;
+  final String availability;
+  final String? subjectId;
+  final String? authorId;
+
+  Map<String, String> toQuery() => <String, String>{
+    if (query.trim().isNotEmpty) 'q': query.trim(),
+    if (scope != 'all') 'scope': scope,
+    if (availability != 'all') 'availability': availability,
+    if ((subjectId ?? '').isNotEmpty) 'subject_id': subjectId!,
+    if ((authorId ?? '').isNotEmpty) 'author_id': authorId!,
+  };
+
+  SavedNotesFilter copyWith({
+    String? query,
+    String? scope,
+    String? availability,
+  }) => SavedNotesFilter(
+    query: query ?? this.query,
+    scope: scope ?? this.scope,
+    availability: availability ?? this.availability,
+    subjectId: subjectId,
+    authorId: authorId,
+  );
+}
+
+/// Elemento de GET /notes/saved. Si [isAvailable] es false, el apunte original
+/// fue eliminado por su autor (`deleted`) o ya no es accesible (`no_access`):
+/// solo se permite quitarlo de guardados.
+class SavedNoteItem {
+  const SavedNoteItem({
+    required this.savedId,
+    required this.noteId,
+    required this.title,
+    required this.isAvailable,
+    required this.interactions,
+    this.unavailableReason,
+    this.authorId,
+    this.subjectId,
+    this.isOwn = false,
+    this.savedAt,
+    this.updatedAt,
+    this.deletedAt,
+  });
+
+  final String savedId;
+  final String noteId;
+  final String title;
+  final bool isAvailable;
+  final String? unavailableReason;
+  final String? authorId;
+  final String? subjectId;
+  final bool isOwn;
+  final DateTime? savedAt;
+  final DateTime? updatedAt;
+  final DateTime? deletedAt;
+  final NoteInteractions interactions;
+
+  bool get isDeleted => unavailableReason == 'deleted';
+
+  factory SavedNoteItem.fromJson(Map<String, dynamic> j) {
+    final noteId = (j['note_id'] as String?) ?? '';
+    return SavedNoteItem(
+      savedId: (j['saved_id'] as String?) ?? '',
+      noteId: noteId,
+      title: (j['title'] as String?) ?? 'Apunte',
+      isAvailable: j['is_available'] == true,
+      unavailableReason: j['unavailable_reason'] as String?,
+      authorId: j['user_id'] as String?,
+      subjectId: j['subject_id'] as String?,
+      isOwn: j['is_own'] == true,
+      savedAt: DateTime.tryParse(j['saved_at']?.toString() ?? ''),
+      updatedAt: DateTime.tryParse(j['updated_at']?.toString() ?? ''),
+      deletedAt: DateTime.tryParse(j['deleted_at']?.toString() ?? ''),
+      interactions: NoteInteractions.fromJson(j, noteId),
+    );
+  }
+}
+
 /// Resultado de POST /notes/{id}/copy: el clon propio del usuario.
 class NoteCopyResult {
   const NoteCopyResult({
@@ -257,11 +428,7 @@ class NotesApi {
             res.statusCode == 410)) {
       message = notesFriendlyMessage(res.statusCode, code, fallback: message);
     }
-    return NotesApiException(
-      message,
-      statusCode: res.statusCode,
-      code: code,
-    );
+    return NotesApiException(message, statusCode: res.statusCode, code: code);
   }
 
   /// GET /notes/me del usuario con sesión.
@@ -320,7 +487,11 @@ class NotesApi {
     final body = jsonDecode(res.body) as Map<String, dynamic>;
     final id = (body['note_id'] as String?) ?? (body['id'] as String?) ?? '';
     if (id.isEmpty) {
-      throw NotesApiException('El backend no devolvió note_id.', statusCode: res.statusCode, code: 'missing_note_id');
+      throw NotesApiException(
+        'El backend no devolvió note_id.',
+        statusCode: res.statusCode,
+        code: 'missing_note_id',
+      );
     }
     return id;
   }
@@ -334,7 +505,10 @@ class NotesApi {
     final nid = noteId.trim();
     final gid = groupId.trim();
     if (nid.isEmpty || gid.isEmpty) {
-      throw NotesApiException('noteId y groupId requeridos.', code: 'invalid_args');
+      throw NotesApiException(
+        'noteId y groupId requeridos.',
+        code: 'invalid_args',
+      );
     }
     final res = await AuthedHttp.run(
       () => _client
@@ -348,9 +522,12 @@ class NotesApi {
           )
           .timeout(const Duration(seconds: 10)),
     );
-    if (res.statusCode != 201) throw _toError(res, 'No se pudo compartir la nota.');
+    if (res.statusCode != 201) {
+      throw _toError(res, 'No se pudo compartir la nota.');
+    }
     final body = jsonDecode(res.body) as Map<String, dynamic>;
-    final id = (body['shared_note_id'] as String?) ?? (body['id'] as String?) ?? '';
+    final id =
+        (body['shared_note_id'] as String?) ?? (body['id'] as String?) ?? '';
     if (id.isEmpty) {
       throw NotesApiException(
         'El backend no devolvió shared_note_id.',
@@ -394,7 +571,10 @@ class NotesApi {
     if (body is! Map) {
       throw NotesApiException('Respuesta inesperada del servidor.');
     }
-    final result = NoteCopyResult.fromJson(Map<String, dynamic>.from(body), nid);
+    final result = NoteCopyResult.fromJson(
+      Map<String, dynamic>.from(body),
+      nid,
+    );
     if (result.noteId.isEmpty) {
       throw NotesApiException(
         'El backend no devolvió note_id.',
@@ -434,5 +614,146 @@ class NotesApi {
       throw NotesApiException('Respuesta inesperada del servidor.');
     }
     return NoteDetail.fromJson(Map<String, dynamic>.from(body));
+  }
+
+  NotesApiException _friendly(http.Response res, String fallback) {
+    final err = _toError(res, fallback);
+    return NotesApiException(
+      notesFriendlyMessage(res.statusCode, err.code, fallback: err.message),
+      statusCode: res.statusCode,
+      code: err.code,
+    );
+  }
+
+  Future<http.Response> _send(
+    String method,
+    String path, {
+    Map<String, String>? query,
+  }) {
+    final uri = Uri.parse(
+      '$_baseUrl$path',
+    ).replace(queryParameters: (query == null || query.isEmpty) ? null : query);
+    return AuthedHttp.run(() {
+      final headers = _headers();
+      final Future<http.Response> req;
+      switch (method) {
+        case 'POST':
+          req = _client.post(uri, headers: headers);
+          break;
+        case 'DELETE':
+          req = _client.delete(uri, headers: headers);
+          break;
+        default:
+          req = _client.get(uri, headers: headers);
+      }
+      return req.timeout(const Duration(seconds: 15));
+    });
+  }
+
+  Map<String, dynamic> _decodeMap(http.Response res) {
+    final body = jsonDecode(utf8.decode(res.bodyBytes));
+    if (body is! Map) {
+      throw NotesApiException('Respuesta inesperada del servidor.');
+    }
+    return Map<String, dynamic>.from(body);
+  }
+
+  /// GET /notes/:id/stats — contadores exactos sin descargar el contenido.
+  Future<NoteInteractions> stats(String noteId) async {
+    final res = await _send('GET', '/notes/$noteId/stats');
+    if (res.statusCode != 200) {
+      throw _friendly(res, 'No se pudieron leer los contadores.');
+    }
+    return NoteInteractions.fromJson(_decodeMap(res), noteId);
+  }
+
+  /// Da (liked=true) o quita (false) el like. Idempotente desde el cliente:
+  /// el 409 already_liked y el 204 de quitar se resuelven releyendo los
+  /// contadores, así que el resultado siempre es el estado real del servidor.
+  Future<NoteInteractions> setLiked(String noteId, bool liked) async {
+    final res = await _send(liked ? 'POST' : 'DELETE', '/notes/$noteId/like');
+    if (liked && res.statusCode == 201 && res.body.isNotEmpty) {
+      return NoteInteractions.fromJson(_decodeMap(res), noteId);
+    }
+    final ok = liked
+        ? (res.statusCode == 201 || res.statusCode == 409)
+        : res.statusCode == 204;
+    if (!ok) throw _friendly(res, 'No se pudo actualizar el like.');
+    return stats(noteId);
+  }
+
+  /// Guarda (saved=true) o quita de guardados (false). Idempotente igual que
+  /// [setLiked]. Quitar funciona aunque el original ya no exista; en ese
+  /// caso no hay contadores que releer y se devuelve null.
+  Future<NoteInteractions?> setSaved(String noteId, bool saved) async {
+    final res = await _send(saved ? 'POST' : 'DELETE', '/notes/$noteId/save');
+    if (saved && res.statusCode == 201 && res.body.isNotEmpty) {
+      return NoteInteractions.fromJson(_decodeMap(res), noteId);
+    }
+    final ok = saved
+        ? (res.statusCode == 201 || res.statusCode == 409)
+        : res.statusCode == 204;
+    if (!ok) throw _friendly(res, 'No se pudo actualizar el guardado.');
+    try {
+      return await stats(noteId);
+    } on NotesApiException {
+      if (!saved) return null;
+      rethrow;
+    }
+  }
+
+  /// GET /notes/public — apuntes públicos de otros usuarios.
+  Future<NotesPage<PublicNoteSummary>> listPublic({
+    String query = '',
+    String? subjectId,
+    String? cursor,
+    int limit = 20,
+  }) async {
+    final res = await _send(
+      'GET',
+      '/notes/public',
+      query: <String, String>{
+        if (query.trim().isNotEmpty) 'q': query.trim(),
+        if ((subjectId ?? '').isNotEmpty) 'subject_id': subjectId!,
+        if ((cursor ?? '').isNotEmpty) 'cursor': cursor!,
+        'limit': '$limit',
+      },
+    );
+    if (res.statusCode != 200) {
+      throw _friendly(res, 'No se pudieron cargar los apuntes públicos.');
+    }
+    final body = _decodeMap(res);
+    final items = (body['items'] as List? ?? const [])
+        .whereType<Map>()
+        .map((e) => PublicNoteSummary.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+    return NotesPage(items, (body['next_cursor'] as String?) ?? '');
+  }
+
+  /// GET /notes/saved — guardados del usuario con filtros, incluidos los
+  /// "no disponibles" (is_available=false).
+  Future<NotesPage<SavedNoteItem>> listSaved({
+    SavedNotesFilter filter = const SavedNotesFilter(),
+    String? cursor,
+    int limit = 20,
+  }) async {
+    final res = await _send(
+      'GET',
+      '/notes/saved',
+      query: <String, String>{
+        ...filter.toQuery(),
+        if ((cursor ?? '').isNotEmpty) 'cursor': cursor!,
+        'limit': '$limit',
+      },
+    );
+    if (res.statusCode != 200) {
+      throw _friendly(res, 'No se pudieron cargar tus guardados.');
+    }
+    final body = _decodeMap(res);
+    final items = (body['items'] as List? ?? const [])
+        .whereType<Map>()
+        .map((e) => SavedNoteItem.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+    return NotesPage(items, (body['next_cursor'] as String?) ?? '');
   }
 }

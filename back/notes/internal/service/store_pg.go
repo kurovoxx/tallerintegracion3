@@ -34,6 +34,9 @@ func (p *PGNoteStore) Update(ctx context.Context, id string, title *string, visi
 func (p *PGNoteStore) Delete(ctx context.Context, id string) error {
 	return p.repo.Delete(ctx, nil, id)
 }
+func (p *PGNoteStore) ListPublic(ctx context.Context, excludeUserID, query, subjectID, cursor string, limit int) ([]*model.Note, string, error) {
+	return p.repo.ListPublic(ctx, nil, excludeUserID, query, subjectID, cursor, limit)
+}
 func (p *PGNoteStore) GetTombstone(ctx context.Context, noteID string) (*model.NoteTombstone, error) {
 	return p.repo.GetTombstone(ctx, nil, noteID)
 }

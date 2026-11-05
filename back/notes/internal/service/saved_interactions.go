@@ -15,6 +15,12 @@ type NoteTombstoneReader interface {
 	GetTombstone(ctx context.Context, noteID string) (*model.NoteTombstone, error)
 }
 
+// PublicNoteLister es implementado por los NoteStore que pueden listar
+// apuntes públicos de otros usuarios (GET /notes/public).
+type PublicNoteLister interface {
+	ListPublic(ctx context.Context, excludeUserID, query, subjectID, cursor string, limit int) ([]*model.Note, string, error)
+}
+
 const (
 	savedListDefaultLimit = 20
 	savedListMaxLimit     = 50
@@ -267,6 +273,49 @@ func (s *NoteService) ListSaved(ctx context.Context, userID string, filter Saved
 			break
 		}
 		out = append(out, view)
+	}
+	return out, next, nil
+}
+
+// ListPublic implementa GET /notes/public: apuntes públicos de OTROS usuarios
+// (los propios ya están en "Mis apuntes") con contadores y estado del
+// solicitante, para poder darles like o guardarlos desde la tarjeta.
+func (s *NoteService) ListPublic(ctx context.Context, requesterID, query, subjectID, cursor string, limit int) ([]*model.PublicNoteView, string, error) {
+	if limit <= 0 {
+		limit = savedListDefaultLimit
+	}
+	if limit > savedListMaxLimit {
+		limit = savedListMaxLimit
+	}
+	if cursor != "" && !utils.ValidateUUID(cursor) {
+		return nil, "", newServiceErrorMsg(utils.ErrBadRequest, "cursor inválido")
+	}
+	if subjectID != "" && !utils.ValidateUUID(subjectID) {
+		return nil, "", newServiceError(utils.ErrInvalidSubjectID)
+	}
+	if len(query) > 300 {
+		return nil, "", newServiceErrorMsg(utils.ErrBadRequest, "q demasiado largo")
+	}
+	lister, ok := s.notes.(PublicNoteLister)
+	if !ok {
+		return []*model.PublicNoteView{}, "", nil
+	}
+	notes, next, err := lister.ListPublic(ctx, requesterID, query, subjectID, cursor, limit)
+	if err != nil {
+		return nil, "", ErrInternalDatabase
+	}
+	out := make([]*model.PublicNoteView, 0, len(notes))
+	for _, n := range notes {
+		stats, err := s.interactionsFor(ctx, requesterID, n)
+		if err != nil {
+			return nil, "", err
+		}
+		out = append(out, &model.PublicNoteView{
+			ID: n.ID, UserID: n.UserID, Title: n.Title, SubjectID: n.SubjectID,
+			Visibility: n.Visibility, LikesCount: stats.LikesCount,
+			SavesCount: stats.SavesCount, IsLiked: stats.IsLiked, IsSaved: stats.IsSaved,
+			CreatedAt: n.CreatedAt, UpdatedAt: n.UpdatedAt,
+		})
 	}
 	return out, next, nil
 }

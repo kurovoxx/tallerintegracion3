@@ -43,6 +43,54 @@ func (m *MemoryNoteStore) recordTombstoneLocked(n *model.Note) {
 	}
 }
 
+// ListPublic replica NoteRepository.ListPublic: públicos de otros usuarios
+// con archivo en Drive, más recientes primero, búsqueda literal en el título
+// (sin distinguir mayúsculas) y filtro opcional por materia.
+func (m *MemoryNoteStore) ListPublic(ctx context.Context, excludeUserID, query, subjectID, cursor string, limit int) ([]*model.Note, string, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	q := strings.ToLower(strings.TrimSpace(query))
+	m.mu.RLock()
+	out := make([]*model.Note, 0)
+	for _, n := range m.notes {
+		if n.Visibility != "public" || n.UserID == excludeUserID || n.ExternalFileID == nil {
+			continue
+		}
+		if q != "" && !strings.Contains(strings.ToLower(n.Title), q) {
+			continue
+		}
+		if subjectID != "" && (n.SubjectID == nil || *n.SubjectID != subjectID) {
+			continue
+		}
+		cop := *n
+		out = append(out, &cop)
+	}
+	m.mu.RUnlock()
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if cursor != "" {
+		start := len(out)
+		for i, n := range out {
+			if n.ID == cursor {
+				start = i + 1
+				break
+			}
+		}
+		out = out[start:]
+	}
+	next := ""
+	if len(out) > limit {
+		out = out[:limit]
+		next = out[limit-1].ID
+	}
+	return out, next, nil
+}
+
 // GetTombstone devuelve la lápida de un apunte borrado (nil si no hay).
 func (m *MemoryNoteStore) GetTombstone(ctx context.Context, noteID string) (*model.NoteTombstone, error) {
 	m.mu.RLock()

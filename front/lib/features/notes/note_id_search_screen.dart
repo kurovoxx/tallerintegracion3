@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../../core/common_widgets.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import 'note_interaction_bar.dart';
 import 'notes_api.dart';
 
 /// Buscador de apuntes por ID exacto (GET /notes/{id}).
@@ -129,7 +130,8 @@ class _NoteIdSearchScreenState extends State<NoteIdSearchScreen> {
     try {
       await _api.copyNote(
         note.id,
-        idempotencyKey: 'copy-${note.id}-${DateTime.now().microsecondsSinceEpoch}',
+        idempotencyKey:
+            'copy-${note.id}-${DateTime.now().microsecondsSinceEpoch}',
       );
       widget.onNoteCopied?.call();
       _snack('Copia guardada en tus apuntes y en tu Drive.');
@@ -267,6 +269,26 @@ class _NoteIdSearchScreenState extends State<NoteIdSearchScreen> {
       return NoteSearchResultCard(
         note: note,
         copying: _copying,
+        actions: <Widget>[
+          NoteLikeSaveBar(
+            api: _api,
+            initial: NoteInteractions(
+              noteId: note.id,
+              likesCount: note.likesCount,
+              savesCount: note.savesCount,
+              isLiked: note.isLiked,
+              isSaved: note.isSaved,
+            ),
+            onChanged: (s) => setState(
+              () => _result = note.copyWith(
+                likesCount: s.likesCount,
+                savesCount: s.savesCount,
+                isLiked: s.isLiked,
+                isSaved: s.isSaved,
+              ),
+            ),
+          ),
+        ],
         onCopy: note.isOwn ? null : () => _copyToMine(note),
         onCopyId: () {
           Clipboard.setData(ClipboardData(text: note.id));

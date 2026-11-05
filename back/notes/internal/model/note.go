@@ -103,6 +103,22 @@ type SavedNoteView struct {
 	DeletedAt         *time.Time `json:"deleted_at,omitempty"`
 }
 
+// PublicNoteView es un elemento de GET /notes/public: apunte público de otro
+// usuario con sus contadores y el estado del solicitante.
+type PublicNoteView struct {
+	ID         string    `json:"id"`
+	UserID     string    `json:"user_id"`
+	Title      string    `json:"title"`
+	SubjectID  *string   `json:"subject_id,omitempty"`
+	Visibility string    `json:"visibility"`
+	LikesCount int       `json:"likes_count"`
+	SavesCount int       `json:"saves_count"`
+	IsLiked    bool      `json:"is_liked"`
+	IsSaved    bool      `json:"is_saved"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
 type NoteLike struct {
 	ID        string    `json:"id"`
 	NoteID    string    `json:"note_id"`

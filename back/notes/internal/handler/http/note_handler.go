@@ -719,9 +719,43 @@ func (h *NoteHandler) ListSaved(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": items, "next_cursor": next})
 }
 
-// savedFilterFromQuery traduce los query params de GET /notes/saved.
+// savedFilterFromQuery traduce los query params de GET /notes/saved:
+// q (texto en el título), subject_id, author_id, scope (all|others|own) y
+// availability (all|available|unavailable). El servicio los valida.
 func savedFilterFromQuery(c *gin.Context) service.SavedFilter {
-	return service.SavedFilter{}
+	return service.SavedFilter{
+		Query:        strings.TrimSpace(c.Query("q")),
+		SubjectID:    strings.ToLower(strings.TrimSpace(c.Query("subject_id"))),
+		AuthorID:     strings.ToLower(strings.TrimSpace(c.Query("author_id"))),
+		Scope:        strings.TrimSpace(c.Query("scope")),
+		Availability: strings.TrimSpace(c.Query("availability")),
+	}
+}
+
+// GET /notes/public — apuntes públicos de otros usuarios (q, subject_id,
+// cursor, limit) con contadores e is_liked/is_saved del solicitante.
+func (h *NoteHandler) ListPublic(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/public")()
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		return
+	}
+	limit := 0
+	if v, err := strconv.Atoi(c.Query("limit")); err == nil {
+		limit = v
+	}
+	items, next, err := h.svc.ListPublic(
+		c.Request.Context(), userID,
+		strings.TrimSpace(c.Query("q")),
+		strings.ToLower(strings.TrimSpace(c.Query("subject_id"))),
+		c.Query("cursor"), limit,
+	)
+	if err != nil {
+		handleServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items, "next_cursor": next})
 }
 
 // POST /notes/{id}/copy
