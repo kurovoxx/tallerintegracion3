@@ -82,6 +82,87 @@ String notesFriendlyMessage(int? status, String? code, {String? fallback}) {
   return fallback ?? 'Ocurrió un error con el servidor de apuntes.';
 }
 
+final RegExp _uuidPattern = RegExp(
+  r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}',
+);
+
+/// Extrae el ID (UUID) de un apunte desde lo que el usuario pegue: el ID solo,
+/// con espacios o mayúsculas, o un enlace `.../notes/<id>`. Devuelve el UUID en
+/// minúsculas o null si no hay ninguno.
+String? extractNoteId(String input) {
+  final match = _uuidPattern.firstMatch(input.trim());
+  return match?.group(0)?.toLowerCase();
+}
+
+/// Apunte completo de GET /notes/{id}: metadata, contenido (desde Drive) y
+/// contadores/estado del solicitante.
+class NoteDetail {
+  const NoteDetail({
+    required this.id,
+    required this.userId,
+    required this.title,
+    required this.content,
+    required this.visibility,
+    this.subjectId,
+    this.likesCount = 0,
+    this.savesCount = 0,
+    this.isLiked = false,
+    this.isSaved = false,
+    this.isOwn = false,
+    this.updatedAt,
+  });
+
+  final String id;
+  final String userId;
+  final String title;
+  final String content;
+  final String visibility;
+  final String? subjectId;
+  final int likesCount;
+  final int savesCount;
+  final bool isLiked;
+  final bool isSaved;
+  final bool isOwn;
+  final DateTime? updatedAt;
+
+  bool get isPublic => visibility == 'public';
+
+  factory NoteDetail.fromJson(Map<String, dynamic> j) => NoteDetail(
+    id: (j['id'] as String?) ?? '',
+    userId: (j['user_id'] as String?) ?? '',
+    title: (j['title'] as String?) ?? 'Sin título',
+    content: (j['content'] as String?) ?? '',
+    visibility: (j['visibility'] as String?) ?? 'private',
+    subjectId: j['subject_id'] as String?,
+    likesCount: (j['likes_count'] as num?)?.toInt() ?? 0,
+    savesCount: (j['saves_count'] as num?)?.toInt() ?? 0,
+    isLiked: j['is_liked'] == true,
+    isSaved: j['is_saved'] == true,
+    isOwn: j['is_own'] == true,
+    updatedAt: DateTime.tryParse(j['updated_at']?.toString() ?? ''),
+  );
+
+  NoteDetail copyWith({
+    int? likesCount,
+    int? savesCount,
+    bool? isLiked,
+    bool? isSaved,
+  }) => NoteDetail(
+    id: id,
+    userId: userId,
+    title: title,
+    content: content,
+    visibility: visibility,
+    subjectId: subjectId,
+    likesCount: likesCount ?? this.likesCount,
+    savesCount: savesCount ?? this.savesCount,
+    isLiked: isLiked ?? this.isLiked,
+    isSaved: isSaved ?? this.isSaved,
+    isOwn: isOwn,
+    updatedAt: updatedAt,
+  );
+}
+
 /// Resultado de POST /notes/{id}/copy: el clon propio del usuario.
 class NoteCopyResult {
   const NoteCopyResult({
@@ -322,5 +403,36 @@ class NotesApi {
       );
     }
     return result;
+  }
+
+  /// GET /notes/:id — búsqueda directa por ID exacto. Respeta permisos en el
+  /// backend: 404 si no existe o no tienes acceso (indistinguibles), 410 si
+  /// el autor lo eliminó, 404 note_unavailable si Drive no lo entrega.
+  Future<NoteDetail> getNote(String noteIdOrLink) async {
+    final nid = extractNoteId(noteIdOrLink);
+    if (nid == null) {
+      throw NotesApiException(
+        'Eso no parece un ID de apunte válido.',
+        code: 'invalid_id',
+      );
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .get(Uri.parse('$_baseUrl/notes/$nid'), headers: _headers())
+          .timeout(const Duration(seconds: 20)),
+    );
+    if (res.statusCode != 200) {
+      final err = _toError(res, 'No se pudo abrir el apunte.');
+      throw NotesApiException(
+        notesFriendlyMessage(res.statusCode, err.code, fallback: err.message),
+        statusCode: res.statusCode,
+        code: err.code,
+      );
+    }
+    final body = jsonDecode(utf8.decode(res.bodyBytes));
+    if (body is! Map) {
+      throw NotesApiException('Respuesta inesperada del servidor.');
+    }
+    return NoteDetail.fromJson(Map<String, dynamic>.from(body));
   }
 }

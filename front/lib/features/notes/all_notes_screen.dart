@@ -23,6 +23,7 @@ import '../../core/widgets/neobrutalism.dart';
 import '../academic/academic_mappers.dart';
 import 'attachment_resources.dart';
 import 'note_file_picker.dart';
+import 'note_id_search_screen.dart';
 import 'notes_api.dart';
 import 'authenticated_attachment_image.dart';
 
@@ -2540,6 +2541,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                       ),
                     ),
                   ],
+                  if (extractNoteId(_currentQuery) != null) ...<Widget>[
+                    const SizedBox(height: 8),
+                    _buildIdSearchHint(),
+                  ],
+                  const SizedBox(height: 12),
+                  _buildCommunityActions(),
                   const SizedBox(height: 12),
                   _buildFilterChips(),
                   const SizedBox(height: 16),
@@ -2976,6 +2983,75 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           fontSize: 14,
           color: AppColors.text,
         ),
+      ),
+    );
+  }
+
+  /// Abre el buscador de apuntes por ID exacto (propios, públicos o
+  /// compartidos). Tras copiar uno a los propios se refresca la lista.
+  Future<void> _openIdSearch({String? initialQuery}) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => NoteIdSearchScreen(
+          api: NotesApi(baseUrl: notesBaseUrl),
+          initialQuery: initialQuery,
+          onNoteCopied: () async {
+            if (!_useMemoryFallback && _repo != null) {
+              await _syncFromBackend();
+            }
+            await _applySearch(_currentQuery);
+          },
+        ),
+      ),
+    );
+  }
+
+  /// Acciones de comunidad sobre apuntes de otros usuarios.
+  Widget _buildCommunityActions() {
+    return Wrap(
+      spacing: AppDimens.spaceSm,
+      runSpacing: AppDimens.spaceSm,
+      children: <Widget>[
+        NeobrutalistButton(
+          key: const Key('notes-open-id-search'),
+          label: 'Buscar por ID',
+          icon: Icons.tag_rounded,
+          variant: NeobrutalistButtonVariant.secondary,
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppDimens.spaceMd,
+            vertical: AppDimens.spaceSm,
+          ),
+          onPressed: () => _openIdSearch(),
+        ),
+      ],
+    );
+  }
+
+  /// Aviso cuando la búsqueda general contiene un ID de apunte: la búsqueda
+  /// de texto solo mira apuntes locales, así que se ofrece buscarlo por ID.
+  Widget _buildIdSearchHint() {
+    return NeobrutalistCard(
+      key: const Key('notes-id-search-hint'),
+      padding: const EdgeInsets.all(AppDimens.spaceMd),
+      shadow: AppShadows.hard2,
+      backgroundColor: AppColors.accentYellow,
+      onTap: () => _openIdSearch(initialQuery: _currentQuery),
+      child: const Row(
+        children: <Widget>[
+          Icon(Icons.tag_rounded, color: AppColors.text, size: 18),
+          SizedBox(width: AppDimens.spaceSm),
+          Expanded(
+            child: Text(
+              'Eso parece el ID de un apunte. Toca aquí para buscarlo directamente.',
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w800,
+                color: AppColors.text,
+              ),
+            ),
+          ),
+          Icon(Icons.arrow_forward_rounded, color: AppColors.text, size: 18),
+        ],
       ),
     );
   }

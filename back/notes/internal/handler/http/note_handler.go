@@ -203,7 +203,10 @@ func (h *NoteHandler) Get(c *gin.Context) {
 		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
 		return
 	}
-	id := c.Param("id")
+	// Búsqueda por ID: un UUID pegado en mayúsculas o con espacios es el mismo
+	// apunte (Postgres compara uuid sin distinguir mayúsculas; el store en
+	// memoria no), así que se normaliza antes de validar.
+	id := strings.ToLower(strings.TrimSpace(c.Param("id")))
 	if !validateNoteID(c, id) {
 		return
 	}
