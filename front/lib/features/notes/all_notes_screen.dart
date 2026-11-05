@@ -29,6 +29,7 @@ import 'public_notes_screen.dart';
 import 'saved_notes_screen.dart';
 import 'authenticated_attachment_image.dart';
 import 'latex_support.dart';
+import 'note_live_editor.dart';
 
 /// Base URL del microservicio de notas. En el emulador Android `localhost` es
 /// el propio dispositivo, por eso se usa la alias 10.0.2.2 hacia el host.
@@ -4942,13 +4943,23 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                     decoration: appInputDecoration('Título'),
                   ),
                   const SizedBox(height: 12),
-                  const AppFieldLabel('CONTENIDO MARKDOWN'),
+                  const AppFieldLabel('CONTENIDO MARKDOWN / LATEX'),
                   const SizedBox(height: 4),
-                  TextField(
-                    controller: _contentCtrl,
-                    maxLines: 6,
-                    decoration: appInputDecoration('Contenido Markdown'),
-                  ),
+                  if (_contentCtrl != null)
+                    MarkdownLiveEditor(
+                      controller: _contentCtrl!,
+                      editor: TextField(
+                        controller: _contentCtrl,
+                        minLines: 6,
+                        maxLines: 14,
+                        decoration: appInputDecoration('Contenido Markdown'),
+                      ),
+                      previewBuilder: (text) => _NeobrutalistMarkdownBody(
+                        content: text,
+                        resources: _mergedResources,
+                        onOpenResource: _showResourceDialog,
+                      ),
+                    ),
                   const SizedBox(height: 8),
                   if (_contentCtrl != null) ...[
                     _AttachmentToolbar(
@@ -5300,6 +5311,9 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
   Widget build(BuildContext context) {
     return NeobrutalistDialog(
       title: 'NUEVA NOTA',
+      // Ancho del editor de notas: en escritorio permite el split-view
+      // editor + vista previa; en móvil la pantalla lo limita igual.
+      maxWidth: _noteEditorMaxWidth,
       cancelLabel: 'CANCELAR',
       confirmLabel: _submitting ? 'GUARDANDO…' : 'GUARDAR',
       closeOnConfirm: false,
@@ -5323,12 +5337,21 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
             ),
           ),
           const SizedBox(height: 12),
-          const AppFieldLabel('CONTENIDO MARKDOWN'),
+          const AppFieldLabel('CONTENIDO MARKDOWN / LATEX'),
           const SizedBox(height: 4),
-          TextField(
+          MarkdownLiveEditor(
             controller: _contentCtrl,
-            maxLines: 4,
-            decoration: appInputDecoration('Contenido Markdown'),
+            previewMaxHeight: 280,
+            editor: TextField(
+              controller: _contentCtrl,
+              minLines: 4,
+              maxLines: 10,
+              decoration: appInputDecoration('Contenido Markdown'),
+            ),
+            previewBuilder: (text) => _NeobrutalistMarkdownBody(
+              content: text,
+              onOpenResource: _showResource,
+            ),
           ),
           const SizedBox(height: 8),
           _AttachmentToolbar(

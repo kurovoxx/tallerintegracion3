@@ -507,7 +507,10 @@ void main() {
           .map((field) => field.controller?.text ?? '')
           .firstWhere((value) => value.contains('attachment-pending://'));
       expect(resourcesFromMarkdown(markdown).single['type'], 'image');
-      await tester.tap(find.text('foto'));
+      // A 1440 px el editor muestra además la vista previa en vivo (que
+      // también pinta "foto"); el chip de REFERENCIAS va después en el árbol.
+      expect(find.byKey(const Key('live-editor-split')), findsOneWidget);
+      await tester.tap(find.text('foto').last);
       await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.textContaining('Archivo preparado'), findsWidgets);
