@@ -156,8 +156,14 @@ class NotesSharingService {
         code ??= 'not_found';
         break;
       case 409:
-        message = 'Conflicto (409).';
-        code ??= 'conflict';
+        // already_shared: la nota ya tiene vínculo con este grupo (UNIQUE
+        // note_id+group_id en el backend). Mensaje claro, no "Conflicto".
+        if (code == 'already_shared') {
+          message = 'Este apunte ya está compartido en este grupo.';
+        } else {
+          message = 'Conflicto (409).';
+          code ??= 'conflict';
+        }
         break;
     }
     return NotesApiException(message, statusCode: res.statusCode, code: code);

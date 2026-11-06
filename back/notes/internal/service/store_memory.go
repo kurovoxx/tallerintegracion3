@@ -24,6 +24,83 @@ type MemoryNoteStore struct {
 	// idempotencyKeys replica notes.idempotency_keys para tests sin PG:
 	// clave userID:operation:idempotencyKey.
 	idempotencyKeys map[string]*model.IdempotencyKey
+	// tombstones replica notes.note_tombstones (trigger AFTER DELETE en PG).
+	tombstones map[string]*model.NoteTombstone
+}
+
+// recordTombstoneLocked replica el trigger trg_notes_record_tombstone. Debe
+// llamarse con m.mu tomado y antes de borrar la nota del mapa.
+func (m *MemoryNoteStore) recordTombstoneLocked(n *model.Note) {
+	if n == nil {
+		return
+	}
+	if m.tombstones == nil {
+		m.tombstones = make(map[string]*model.NoteTombstone)
+	}
+	m.tombstones[n.ID] = &model.NoteTombstone{
+		NoteID: n.ID, OwnerUserID: n.UserID, Title: n.Title, SubjectID: n.SubjectID,
+		Visibility: n.Visibility, DeletedAt: time.Now().UTC(),
+	}
+}
+
+// ListPublic replica NoteRepository.ListPublic: públicos de otros usuarios
+// con archivo en Drive, más recientes primero, búsqueda literal en el título
+// (sin distinguir mayúsculas) y filtro opcional por materia.
+func (m *MemoryNoteStore) ListPublic(ctx context.Context, excludeUserID, query, subjectID, cursor string, limit int) ([]*model.Note, string, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	q := strings.ToLower(strings.TrimSpace(query))
+	m.mu.RLock()
+	out := make([]*model.Note, 0)
+	for _, n := range m.notes {
+		if n.Visibility != "public" || n.UserID == excludeUserID || n.ExternalFileID == nil {
+			continue
+		}
+		if q != "" && !strings.Contains(strings.ToLower(n.Title), q) {
+			continue
+		}
+		if subjectID != "" && (n.SubjectID == nil || *n.SubjectID != subjectID) {
+			continue
+		}
+		cop := *n
+		out = append(out, &cop)
+	}
+	m.mu.RUnlock()
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if cursor != "" {
+		start := len(out)
+		for i, n := range out {
+			if n.ID == cursor {
+				start = i + 1
+				break
+			}
+		}
+		out = out[start:]
+	}
+	next := ""
+	if len(out) > limit {
+		out = out[:limit]
+		next = out[limit-1].ID
+	}
+	return out, next, nil
+}
+
+// GetTombstone devuelve la lápida de un apunte borrado (nil si no hay).
+func (m *MemoryNoteStore) GetTombstone(ctx context.Context, noteID string) (*model.NoteTombstone, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	t, ok := m.tombstones[noteID]
+	if !ok {
+		return nil, nil
+	}
+	cop := *t
+	return &cop, nil
 }
 
 func NewMemoryNoteStore() *MemoryNoteStore {
@@ -134,9 +211,11 @@ func (m *MemoryNoteStore) Update(ctx context.Context, id string, title *string, 
 func (m *MemoryNoteStore) Delete(ctx context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.notes[id]; !ok {
+	n, ok := m.notes[id]
+	if !ok {
 		return fmt.Errorf("not_found")
 	}
+	m.recordTombstoneLocked(n)
 	delete(m.notes, id)
 	return nil
 }
@@ -411,6 +490,39 @@ func (m *MemorySavedStore) Delete(ctx context.Context, userID, noteID string) er
 	return nil
 }
 
+// ListByUser devuelve los guardados del usuario, más recientes primero.
+func (m *MemorySavedStore) ListByUser(ctx context.Context, userID string) ([]*model.SavedNote, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]*model.SavedNote, 0)
+	for _, s := range m.saved {
+		if s.UserID == userID {
+			cop := *s
+			out = append(out, &cop)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].SavedAt.Equal(out[j].SavedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].SavedAt.After(out[j].SavedAt)
+	})
+	return out, nil
+}
+
+// CountByNote devuelve cuántos usuarios guardaron el apunte.
+func (m *MemorySavedStore) CountByNote(ctx context.Context, noteID string) (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	n := 0
+	for _, s := range m.saved {
+		if s.NoteID == noteID {
+			n++
+		}
+	}
+	return n, nil
+}
+
 // Like memory
 type MemoryLikeStore struct {
 	mu    sync.Mutex
@@ -573,6 +685,12 @@ func cloneManagedPermission(p *model.DriveManagedPermission) *model.DriveManaged
 func (m *MemorySharedStore) Create(ctx context.Context, noteID, groupID string, isAdminNote bool, accessMode string, followersSnapshot int) (*model.SharedNote, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Replica UNIQUE (note_id, group_id) de notes.shared_notes.
+	for _, existing := range m.shared {
+		if existing.NoteID == noteID && existing.GroupID == groupID {
+			return nil, repository.ErrAlreadyShared
+		}
+	}
 	id := uuid.NewString()
 	s := &model.SharedNote{
 		ID: id, NoteID: noteID, GroupID: groupID, IsAdminNote: isAdminNote,
@@ -1110,6 +1228,7 @@ func (m *MemoryNoteStore) DeleteWithDriveCleanup(ctx context.Context, noteID, re
 			delete(m.attachments.atts, att.ID)
 		}
 	}
+	m.recordTombstoneLocked(note)
 	delete(m.notes, noteID)
 	return result, nil
 }

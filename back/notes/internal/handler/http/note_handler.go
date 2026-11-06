@@ -203,7 +203,10 @@ func (h *NoteHandler) Get(c *gin.Context) {
 		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
 		return
 	}
-	id := c.Param("id")
+	// Búsqueda por ID: un UUID pegado en mayúsculas o con espacios es el mismo
+	// apunte (Postgres compara uuid sin distinguir mayúsculas; el store en
+	// memoria no), así que se normaliza antes de validar.
+	id := strings.ToLower(strings.TrimSpace(c.Param("id")))
 	if !validateNoteID(c, id) {
 		return
 	}
@@ -237,6 +240,14 @@ func (h *NoteHandler) Get(c *gin.Context) {
 	if note.Content != nil {
 		resp["content"] = *note.Content
 	}
+	// Contadores exactos y estado del solicitante (likes/guardados).
+	if stats, statsErr := h.svc.Interactions(c.Request.Context(), userID, note.ID); statsErr == nil {
+		resp["likes_count"] = stats.LikesCount
+		resp["saves_count"] = stats.SavesCount
+		resp["is_liked"] = stats.IsLiked
+		resp["is_saved"] = stats.IsSaved
+	}
+	resp["is_own"] = note.UserID == userID
 	attachments, err := h.svc.ListAttachments(c.Request.Context(), note.ID)
 	if err != nil {
 		handleServiceError(c, service.ErrInternalDatabase)
@@ -633,7 +644,118 @@ func (h *NoteHandler) Save(c *gin.Context) {
 		handleServiceError(c, err)
 		return
 	}
-	c.Status(http.StatusCreated)
+	h.respondInteractions(c, http.StatusCreated, userID, noteID)
+}
+
+// DELETE /notes/{id}/save — idempotente; válido aunque el original ya no exista.
+func (h *NoteHandler) Unsave(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/:id/save")()
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		return
+	}
+	noteID := c.Param("id")
+	if !validateNoteID(c, noteID) {
+		return
+	}
+	if err := h.svc.Unsave(c.Request.Context(), userID, noteID); err != nil {
+		handleServiceError(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// GET /notes/{id}/stats — contadores exactos sin descargar contenido de Drive.
+func (h *NoteHandler) Stats(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/:id/stats")()
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		return
+	}
+	noteID := c.Param("id")
+	if !validateNoteID(c, noteID) {
+		return
+	}
+	stats, err := h.svc.Interactions(c.Request.Context(), userID, noteID)
+	if err != nil {
+		handleServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, stats)
+}
+
+// respondInteractions responde status con los contadores actualizados. Si la
+// lectura de contadores falla tras una escritura exitosa, la escritura no se
+// reporta como error: se responde el status sin cuerpo.
+func (h *NoteHandler) respondInteractions(c *gin.Context, status int, userID, noteID string) {
+	stats, err := h.svc.Interactions(c.Request.Context(), userID, noteID)
+	if err != nil {
+		c.Status(status)
+		return
+	}
+	c.JSON(status, stats)
+}
+
+// GET /notes/saved — guardados del usuario, incluidos los "no disponibles".
+func (h *NoteHandler) ListSaved(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/saved")()
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		return
+	}
+	limit := 0
+	if v, err := strconv.Atoi(c.Query("limit")); err == nil {
+		limit = v
+	}
+	filter := savedFilterFromQuery(c)
+	items, next, err := h.svc.ListSaved(c.Request.Context(), userID, filter, c.Query("cursor"), limit)
+	if err != nil {
+		handleServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items, "next_cursor": next})
+}
+
+// savedFilterFromQuery traduce los query params de GET /notes/saved:
+// q (texto en el título), subject_id, author_id, scope (all|others|own) y
+// availability (all|available|unavailable). El servicio los valida.
+func savedFilterFromQuery(c *gin.Context) service.SavedFilter {
+	return service.SavedFilter{
+		Query:        strings.TrimSpace(c.Query("q")),
+		SubjectID:    strings.ToLower(strings.TrimSpace(c.Query("subject_id"))),
+		AuthorID:     strings.ToLower(strings.TrimSpace(c.Query("author_id"))),
+		Scope:        strings.TrimSpace(c.Query("scope")),
+		Availability: strings.TrimSpace(c.Query("availability")),
+	}
+}
+
+// GET /notes/public — apuntes públicos de otros usuarios (q, subject_id,
+// cursor, limit) con contadores e is_liked/is_saved del solicitante.
+func (h *NoteHandler) ListPublic(c *gin.Context) {
+	defer traceNotesOperation(c, "/notes/public")()
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		return
+	}
+	limit := 0
+	if v, err := strconv.Atoi(c.Query("limit")); err == nil {
+		limit = v
+	}
+	items, next, err := h.svc.ListPublic(
+		c.Request.Context(), userID,
+		strings.TrimSpace(c.Query("q")),
+		strings.ToLower(strings.TrimSpace(c.Query("subject_id"))),
+		c.Query("cursor"), limit,
+	)
+	if err != nil {
+		handleServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items, "next_cursor": next})
 }
 
 // POST /notes/{id}/copy
@@ -667,7 +789,18 @@ func (h *NoteHandler) Copy(c *gin.Context) {
 		handleServiceError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"note_id": newNote.ID, "forked_from_note_id": noteID})
+	// El clon es del solicitante (user_id del JWT), privado y con su propio
+	// archivo en el Drive del solicitante. Todos los valores son strings
+	// (compatibilidad con clientes que decodifican map[string]string); un
+	// clon siempre nace en version 1.
+	c.JSON(http.StatusCreated, gin.H{
+		"note_id":             newNote.ID,
+		"forked_from_note_id": noteID,
+		"user_id":             newNote.UserID,
+		"title":               newNote.Title,
+		"visibility":          newNote.Visibility,
+		"sync_status":         newNote.SyncStatus,
+	})
 }
 
 // POST /notes/{id}/like
@@ -686,7 +819,7 @@ func (h *NoteHandler) Like(c *gin.Context) {
 		handleServiceError(c, err)
 		return
 	}
-	c.Status(http.StatusCreated)
+	h.respondInteractions(c, http.StatusCreated, userID, noteID)
 }
 
 // DELETE /notes/{id}/like

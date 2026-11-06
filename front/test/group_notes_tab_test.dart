@@ -287,4 +287,92 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets('diálogo: nota YA COMPARTIDA queda deshabilitada', (
+    tester,
+  ) async {
+    const otherId = '33333333-3333-4333-8333-333333333333';
+    final posts = <String>[];
+    http.Response json(int code, Object body) => http.Response(
+      jsonEncode(body),
+      code,
+      headers: {'content-type': 'application/json'},
+    );
+    final service = NotesSharingService(
+      client: MockClient((req) async {
+        final p = req.url.servicePath;
+        if (req.method == 'GET' && p.endsWith('/groups/$_gid/notes')) {
+          return json(200, {
+            'notes': [
+              {'id': _noteId, 'title': 'Ya en el grupo', 'user_id': 'u'},
+            ],
+            'next_cursor': '',
+          });
+        }
+        if (req.method == 'GET' && p.endsWith('/notes/me')) {
+          return json(200, {
+            'notes': [
+              {'id': _noteId, 'title': 'Ya en el grupo'},
+              {'id': otherId, 'title': 'Nota libre'},
+            ],
+            'next_cursor': '',
+          });
+        }
+        if (req.method == 'POST' && p.endsWith('/share')) {
+          posts.add(p);
+          return json(201, {'shared_note_id': 's2'});
+        }
+        return http.Response('not found', 404);
+      }),
+    );
+    addTearDown(service.dispose);
+    await _pumpTab(tester, service);
+    await tester.tap(find.text('COMPARTIR UNA NOTA'));
+    await tester.pumpAndSettle();
+
+    final sharedTile = find.byKey(const Key('share-note-tile-$_noteId'));
+    expect(sharedTile, findsOneWidget);
+    expect(
+      find.descendant(of: sharedTile, matching: find.text('YA COMPARTIDA')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: sharedTile,
+        matching: find.byIcon(Icons.block_rounded),
+      ),
+      findsOneWidget,
+    );
+    // La selección inicial es la primera nota libre.
+    final freeTile = find.byKey(const Key('share-note-tile-$otherId'));
+    expect(
+      find.descendant(
+        of: freeTile,
+        matching: find.byIcon(Icons.radio_button_checked_rounded),
+      ),
+      findsOneWidget,
+    );
+
+    // Tocar la ya compartida no la selecciona.
+    await tester.tap(find.text('Ya en el grupo').last);
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+        of: sharedTile,
+        matching: find.byIcon(Icons.radio_button_checked_rounded),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: freeTile,
+        matching: find.byIcon(Icons.radio_button_checked_rounded),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text('COMPARTIR'));
+    await tester.pumpAndSettle();
+    expect(posts, ['/notes/$otherId/share']);
+  });
 }

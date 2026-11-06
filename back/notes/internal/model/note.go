@@ -52,6 +52,73 @@ type SavedNote struct {
 	SavedAt time.Time `json:"saved_at"`
 }
 
+// NoteTombstone es la lápida de un apunte borrado (notes.note_tombstones):
+// metadata mínima para distinguir "eliminado por el autor" (410) de "nunca
+// existió" (404) y para titular los guardados que quedaron huérfanos.
+type NoteTombstone struct {
+	NoteID      string    `json:"note_id"`
+	OwnerUserID string    `json:"owner_user_id"`
+	Title       string    `json:"title"`
+	SubjectID   *string   `json:"subject_id,omitempty"`
+	Visibility  string    `json:"visibility"`
+	DeletedAt   time.Time `json:"deleted_at"`
+}
+
+// NoteInteractions son los contadores exactos y el estado del solicitante
+// sobre un apunte (likes y guardados).
+type NoteInteractions struct {
+	NoteID     string `json:"note_id"`
+	LikesCount int    `json:"likes_count"`
+	SavesCount int    `json:"saves_count"`
+	IsLiked    bool   `json:"is_liked"`
+	IsSaved    bool   `json:"is_saved"`
+}
+
+// Motivos por los que un guardado deja de estar disponible.
+const (
+	UnavailableDeleted  = "deleted"   // el autor borró el apunte
+	UnavailableNoAccess = "no_access" // el autor lo volvió privado / retiró el share
+)
+
+// SavedNoteView es un elemento de GET /notes/saved: el guardado más la
+// metadata del apunte original. Si el original ya no es accesible,
+// IsAvailable=false y UnavailableReason explica por qué; la referencia se
+// conserva para que el usuario pueda quitarla de sus guardados.
+type SavedNoteView struct {
+	SavedID           string     `json:"saved_id"`
+	NoteID            string     `json:"note_id"`
+	SavedAt           time.Time  `json:"saved_at"`
+	IsAvailable       bool       `json:"is_available"`
+	UnavailableReason string     `json:"unavailable_reason,omitempty"`
+	Title             string     `json:"title"`
+	AuthorID          string     `json:"user_id,omitempty"`
+	SubjectID         *string    `json:"subject_id,omitempty"`
+	Visibility        string     `json:"visibility,omitempty"`
+	LikesCount        int        `json:"likes_count"`
+	SavesCount        int        `json:"saves_count"`
+	IsLiked           bool       `json:"is_liked"`
+	IsSaved           bool       `json:"is_saved"`
+	IsOwn             bool       `json:"is_own"`
+	UpdatedAt         *time.Time `json:"updated_at,omitempty"`
+	DeletedAt         *time.Time `json:"deleted_at,omitempty"`
+}
+
+// PublicNoteView es un elemento de GET /notes/public: apunte público de otro
+// usuario con sus contadores y el estado del solicitante.
+type PublicNoteView struct {
+	ID         string    `json:"id"`
+	UserID     string    `json:"user_id"`
+	Title      string    `json:"title"`
+	SubjectID  *string   `json:"subject_id,omitempty"`
+	Visibility string    `json:"visibility"`
+	LikesCount int       `json:"likes_count"`
+	SavesCount int       `json:"saves_count"`
+	IsLiked    bool      `json:"is_liked"`
+	IsSaved    bool      `json:"is_saved"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
 type NoteLike struct {
 	ID        string    `json:"id"`
 	NoteID    string    `json:"note_id"`

@@ -73,6 +73,16 @@ func (r *SavedRepository) ListByUser(ctx context.Context, db DBTX, userID string
 	return out, rows.Err()
 }
 
+// CountByNote devuelve cuántos usuarios tienen guardado el apunte (saves_count).
+func (r *SavedRepository) CountByNote(ctx context.Context, db DBTX, noteID string) (int, error) {
+	if db == nil {
+		db = r.pool
+	}
+	var cnt int
+	err := db.QueryRow(ctx, `SELECT count(*) FROM notes.saved_notes WHERE note_id=$1`, noteID).Scan(&cnt)
+	return cnt, err
+}
+
 func isUniqueViolation(err error) bool {
 	if err == nil {
 		return false
