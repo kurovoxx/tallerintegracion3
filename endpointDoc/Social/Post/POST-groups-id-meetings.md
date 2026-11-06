@@ -19,6 +19,11 @@ Agenda una reunión del grupo y dispara notificaciones best-effort (microservici
 3. `MeetingRepository.CreateMeetingWithNotifications` → transacción: `INSERT INTO social.meetings` + `INSERT INTO social.meeting_attendees` + fan-out `INSERT INTO social.meeting_notifications` a miembros excepto creador (`internal/repository/sqlc/meetings.sql.go:10,109,206`).
 4. Post-commit best-effort en background (`GoBestEffort`, `meeting_service.go:212-214`): `MultiMeetingNotifier` (`cmd/server/main.go:88-93`) → Calendar (mock/real), Discord webhook, mensaje Stream. Un fallo no revierte la reunión ni cambia el `201`.
 
+## Front
+- Cliente: `SocialService.createMeeting` (`front/lib/core/services/social_service.dart:723`); envía `title`, `description?`, `attendees` (correos en minúscula, sin duplicados, máx. 50, validados con `normalizeMeetingAttendees`) y `scheduled_at` en UTC ISO-8601. No envía `notify_discord`.
+- Pantalla: `_ScheduleMeetingScreenState` (`front/lib/features/workspace/schedule_meeting_screen.dart:342`), pestaña REUNIONES; los asistentes se eligen entre los integrantes (`GET /groups/:id/members`, `front/lib/features/workspace/schedule_meeting_screen.dart:138`).
+- Respuesta: exige `201` y lee solo `meeting_id` (si falta lanza `missing_meeting_id`).
+
 ## Tests
 - `internal/handler/http/martin_unit_test.go`: `TestMartin_MeetingCreate_Unit` (201 + fecha/invitados inválidos, 401/403/404).
 - `internal/handler/http/martin_integration_test.go`: `TestMartinIntegration_MeetingCreate_PG` (filas en `meetings` + `attendees` + 1 notificación al miembro).

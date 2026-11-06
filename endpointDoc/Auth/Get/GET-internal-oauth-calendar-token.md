@@ -1,19 +1,29 @@
 # GET /internal/oauth/calendar-token
 
-## Req
-- Método: `GET`, ruta: `/internal/oauth/calendar-token` (interna servicio-a-servicio; `back/auth/cmd/server/main.go:105`; grupo `/internal` con `RequireInternalKey`).
-- Headers requeridos: `X-Internal-Key: <clave-compartida>`. Sin JWT de usuario.
-- Query: `?user_id=<uuid>` (requerido).
+Entrega tokens OAuth descifrados de Google Calendar para que el microservicio Social pueda interactuar con la Google Calendar API.
 
-## Res
-- `200`: `{"access_token":"<token>"}` (el service refresca si está vencido).
-- `400`: `{"error":{"code":"bad_request","message":"user_id requerido"}}` (sin `user_id`).
-- `401`: `{"error":{"code":"unauthorized","message":"..."}}` (sin `X-Internal-Key` o clave errónea).
-- `404`: `{"error":{"code":"not_connected","message":"..."}}` / `403` `calendar_connection_invalid` / `502` `google_unavailable` (ramas del handler, no todas cubiertas por tests nuevos).
+## 1. Req (Petición)
+- **Método y Ruta:** `GET /internal/oauth/calendar-token` (Servicio-a-servicio; `back/auth/cmd/server/main.go:116`).
+- **Headers Requeridos:** `X-Internal-Key: <INTERNAL_API_KEY>`.
+- **Query Params:** `user_id=<UUID>`.
 
-## Flujo
-- `back/auth/internal/handler/http/internal_oauth_handler.go` (`GetCalendarToken`) → `back/auth/internal/service/calendar_oauth_service.go` (`GetValidAccessToken`) → `back/auth/internal/repository/oauth_repository.go`; auth vía `back/auth/internal/middleware/` (`RequireInternalKey`).
+## 2. Res (Respuestas y Códigos HTTP)
+- **`200 OK`:** `{"access_token":"ya29...","expires_at":"2026-10-31T..."}`.
+- **`401 Unauthorized`:** `X-Internal-Key` inválida o ausente.
+- **`404 Not Found`:** El usuario no tiene vinculado Google Calendar.
 
-## Tests
-- `back/auth/internal/handler/http/auth_extra_coverage_test.go`: `TestCoverage_Internas_SinKey_401` (sin key 401 en las 3 rutas internas; lookup con key 200 `[]`).
-- `back/auth/internal/handler/http/e2e_full_flow_test.go`: `TestE2E_OAuthPerfilInternasHealth` (con key 200 con `access_token`; sin `user_id` 400).
+## 3. Invocación (Front / Otros Servicios)
+- **Microservicio Social:**
+  - Cliente: `back/social/internal/service/calendar_gateway.go:55` (`GetCalendarToken`).
+  - Uso: Crear eventos en el Google Calendar del usuario al agendar una reunión en un grupo.
+
+## 4. Flujo Técnico (Paso a Paso)
+1. `RequireInternalKey` valida la clave compartida.
+2. Lee `user_id` del query param.
+3. Consulta `identity.oauth_connections` para `provider = 'google_calendar'`.
+4. Descifra el token de acceso con AES-256-GCM.
+5. Si el token está expirado, utiliza el refresh token para refrescarlo en Google antes de devolverlo.
+
+## 5. Dependencias y Datos Afectados
+- **Tablas PostgreSQL:** `identity.oauth_connections`.
+- **Seguridad:** Bloqueado en Nginx Gateway (`location /api-auth/internal/ { return 404; }`).

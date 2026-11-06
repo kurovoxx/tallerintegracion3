@@ -26,6 +26,10 @@
 3. `SprintService.UpdateSprintSheet` valida membresía, IDs y campos; `SprintRepository.UpdateSheet` delega a sqlc (`back/social/internal/service/sprint_sheets.go:67-89`; `back/social/internal/repository/sprint_repository.go:66-68`).
 4. `Queries.UpdateSheet` actualiza la fila por hoja y grupo (`back/social/internal/repository/sqlc/sprint.sql.go:295-300`). El handler responde `200` con `sheetJSON`; `_manageSprint` procesa el `data` y recarga la hoja (`back/social/internal/handler/http/sprint_sheets.go:12-22,83-96`; `front/lib/features/workspace/sprint_sheet_screen.dart:230-253`). No hay llamada externa.
 
+## Front
+- Cliente: `SocialService.saveSprintSheet` (`front/lib/core/services/social_service.dart:459`) con `sheetId`; mismo body y response que la creación (`data` → `SprintSheetInfo`).
+- Pantalla: `_SprintSheetScreenState` (`front/lib/features/workspace/sprint_sheet_screen.dart:242`), edición del sprint desde `_NewSprintDialog`.
+
 ## Tests
 
 - `back/social/internal/handler/http/sprint_sheets_test.go:13`, `TestSprintSheetRoutes`.

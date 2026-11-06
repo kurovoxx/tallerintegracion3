@@ -1,32 +1,22 @@
 # `GET /internal/users/lookup`
 
 
-## Req
+Permite consultar en lote (batch) la información pública de múltiples usuarios por sus IDs.
 
-- `GET /internal/users/lookup`?ids=<uuid>,<uuid>, registrado en el grupo RequireInternalKey: `back/auth/cmd/server/main.go:135-138`.
-- Requiere header X-Internal-Key válido. No usa JWT de usuario. ids es query opcional separado por comas; vacío produce lista vacía. El servicio limita el lote a 200.
-- No tiene body. No es ruta pública para Flutter; nginx bloquea `/api`-auth/internal/ en `front/nginx.conf:10-11`.
+## 1. Req (Petición)
+- **Método y Ruta:** `GET /internal/users/lookup` (Servicio-a-servicio; `back/auth/cmd/server/main.go:118`).
+- **Headers:** `X-Internal-Key: <INTERNAL_API_KEY>`.
+- **Query Params:** `ids=uuid1,uuid2,uuid3` (hasta 200 IDs).
 
-## Res
+## 2. Res (Respuestas y Códigos HTTP)
+- **`200 OK`:** Lista de usuarios encontrados `[{"id":"uuid1",...},{"id":"uuid2",...}]`.
 
-- `200`: array de objetos {user_id,email,display_name?}; siempre array, nunca null. IDs inexistentes se omiten.
-- 500 ante error interno.
-- No devuelve hashes ni tokens. El handler existente sigue registrado en esta versión.
-- El contrato gRPC equivalente de lectura masiva es `auth.v1.IdentityService/LookupUsers`. Social utiliza gRPC en producción; no se encontró consumidor productivo del endpoint HTTP Lookup actualmente.
+## 3. Invocación (Front / Otros Servicios)
+- **Microservicio Social:**
+  - Cliente: `back/social/internal/service/user_directory.go:70` (`LookupUsers`).
+  - Uso: Evitar N llamadas individuales al listar los miembros de un grupo o asistentes de una reunión.
 
-## Invocación (Front / Otros Servicios)
-
-- No se encontró consumidor de producción de esta ruta HTTP en `back/social` ni en Flutter. Social usa el RPC `LookupUsers` mediante `GRPCUserDirectory.LookupUsers` (`back/social/internal/identity/grpc_directory.go:28-45`); la similitud de datos no convierte ese RPC en consumidor de este endpoint.
-- Social resuelve datos de miembros mediante LookupUsers gRPC: `back/social/internal/identity/grpc_directory.go:28` y `main.go` configura el directorio en `back/social/cmd/server/main.go:104`.
-
-## Flujo
-
-1. `main()` registra `GET /internal/users/lookup` bajo `RequireInternalKey` (`back/auth/cmd/server/main.go:137`).
-2. `InternalUsersHandler.Lookup` valida y parsea la lista de IDs (`back/auth/internal/handler/http/internal_users_handler.go:26-58`).
-3. `UsersService.Lookup` limpia IDs, aplica el límite y delega en `UserRepository.GetPublicByIDs` (`back/auth/internal/service/users_service.go:30-53`; `back/auth/internal/repository/user_repository.go:188-219`).
-4. `InternalUsersHandler.Lookup` serializa el array de usuarios públicos (`back/auth/internal/handler/http/internal_users_handler.go:26-58`).
-
-## Tests
-
-- `back/auth/internal/handler/http/internal_users_handler_test.go:24`, `TestInternalUsers_Lookup_200`; :46, sin IDs devuelve vacío.
-- El consumo productivo migrado se prueba por separado en `back/auth/internal/handler/grpc/identity_server_test.go:172`, `TestIdentityServer_LookupUsers` y `back/social/internal/identity/grpc_directory_test.go:13`.
+## 4. Flujo Técnico (Paso a Paso)
+1. Valida `X-Internal-Key`.
+2. Parsea la lista de UUIDs.
+3. Ejecuta `SELECT u.id, u.email, p.display_name, p.photo_url FROM identity.users u JOIN identity.profiles p ON u.id = p.user_id WHERE u.id = ANY($1)`.

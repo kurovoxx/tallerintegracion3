@@ -27,6 +27,11 @@
 3. `GroupService.TransferAdmin` protege al usuario destino durante borrado; `GroupRepository.TransferAdmin` verifica que sea miembro y actualiza ambos roles dentro de una transacción (`back/social/internal/service/group_service.go:568-575`; `back/social/internal/repository/group_repository.go:383-421`).
 4. El handler devuelve `200` sin body, y `_confirmRole` recarga la lista tras `SocialService.transferAdmin` (`back/social/internal/handler/http/group_handler.go:273-278`; `front/lib/core/services/social_service.dart:291-314`; `front/lib/features/groups/group_members_tab.dart:230-280`).
 
+## Front
+- Cliente: `SocialService.transferAdmin` (`front/lib/core/services/social_service.dart:294`); envía `{new_admin_user_id}`; espera `200`.
+- Pantalla: `_GroupMembersTabState._confirmRole(action: transfer)` (`front/lib/features/groups/group_members_tab.dart:258`), acción TRANSFERIR ADMIN (diálogo en rojo: el usuario pasa a miembro).
+- Efecto: `notifyGroupsChanged()` (cambia el rol propio en la lista/sidebar), snackbar `Administración transferida a <nombre>.` y recarga de integrantes.
+
 ## Tests
 
 - `back/social/internal/handler/http/group_handler_test.go:280`, `TestTransferAdminContract`.

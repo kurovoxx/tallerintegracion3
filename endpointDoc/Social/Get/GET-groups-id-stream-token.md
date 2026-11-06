@@ -21,6 +21,12 @@ Emite el token de usuario de Stream Chat y el canal del grupo para que el client
 ## Notas
 - El token no tiene `exp`. Lo que corta el acceso es la membresía del canal: al salir, ser expulsado, baneado o borrar la cuenta, Social quita al usuario del canal en Stream (best-effort). Si eso falla, queda registrado en el log `stream sync: remove-member` y el exmiembro conserva acceso: no hay reintento automático.
 
+## Front
+- Cliente: `SocialService.getStreamToken` (`front/lib/core/services/social_service.dart:320`) → `StreamToken` (`token`, `channel_id`, `api_key?`); si `token` viene vacío lanza `missing_stream_token`.
+- Pantalla: `_GroupChatScreenState._connect` (`front/lib/features/chat/group_chat_screen.dart:120`), pestaña CHAT del grupo.
+- Uso: pasa `api_key`, `token` y `channel_id` más el `user_id` de la sesión al conector de Stream para abrir el canal en vivo. El token no se muestra ni se registra.
+- Errores → mensaje en pantalla: `401` sesión vencida, `403` `No perteneces a este grupo.`, `404` `El grupo ya no existe.`, `503`/otros `El chat no está disponible en este momento.`.
+
 ## Tests
 - `internal/handler/http/stream_handler_test.go`: `TestStreamToken_Contrato`, `TestStreamToken_SinSecret_503`, `TestStreamToken_SyncFalla_503`.
 - `internal/service/stream_token_provision_test.go`: `TestProvision_*` (canal existente, huérfano, idempotencia, ajeno sin llamadas a Stream).

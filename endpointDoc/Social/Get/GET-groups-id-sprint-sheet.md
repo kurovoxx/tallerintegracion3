@@ -13,6 +13,11 @@ Lista tareas de sprint con filtros (microservicio `social`).
 ## Flujo
 - `SprintHandler.ListSprintTasks` (`internal/handler/http/sprint_handler.go:111-166`) → `SprintService.ListSprintTasks` (`internal/service/sprint_service.go:289-360`: valida filtros, `requireGroup` + `requireMembership`, `resolveSheet` solo si se filtra por `sheet_id`) → `ListTasksByGroup` (`JOIN social.sprint_sheet_tasks + social.sprint_sheets`, `internal/repository/sqlc/sprint.sql.go:153`).
 
+## Front
+- Cliente: `SocialService.listSprintTasks` (`front/lib/core/services/social_service.dart:512`); no envía filtros (`status`, `priority`, `sheet_id`): lee `data[]` → `SprintTask` (`id, group_id, sheet_id, sheet_name, title, assigned_to, priority, status, estimated_hours`).
+- Pantalla: `_SprintSheetScreenState._loadReal` (`front/lib/features/workspace/sprint_sheet_screen.dart:178`), tabla de tareas del sprint; filtra por hoja en el cliente.
+- Las tareas también llegan dentro de `GET /groups/:id/workspace` (`sprint_sheet.tasks`).
+
 ## Tests
 - `internal/handler/http/martin_unit_test.go`: `TestMartin_SprintCreateList_Unit` (filtros, 400s, 403).
 - `internal/handler/http/martin_integration_test.go`: `TestMartinIntegration_SprintCRUD_PG` (filtro `priority=media` → 1).

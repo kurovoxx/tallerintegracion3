@@ -1,7 +1,11 @@
 name: build-images
 
-# Compila auth, notes, social y front y los sube a GHCR (ghcr.io/<owner>/tallerintegracion3-<servicio>).
-# No despliega: para actualizar pillan, reiniciar los deployments (kubectl rollout restart).
+# Compila auth, notes, social, infacadem y front y los sube a GHCR
+# (ghcr.io/<owner>/tallerintegracion3-<servicio>). No despliega: para
+# actualizar pillan, reiniciar los deployments (kubectl rollout restart).
+#
+# Gate de deploy: el job build necesita que validate-migrations pase
+# (migraciones versionadas aplican limpiamente contra Postgres real).
 on:
   push:
     branches: [Development]
@@ -13,7 +17,34 @@ permissions:
   packages: write
 
 jobs:
+  validate-migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validar migraciones versionadas antes del build
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres?sslmode=disable
+        run: |
+          chmod +x scripts/validate-migrations.sh
+          scripts/validate-migrations.sh
+
   build:
+    needs: [validate-migrations]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

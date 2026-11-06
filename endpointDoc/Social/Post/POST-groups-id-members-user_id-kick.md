@@ -26,6 +26,11 @@
 3. `GroupService.KickMember` protege la operación con `withTargetAccount`, y `GroupRepository.KickMember` verifica permisos y retira la membresía (`back/social/internal/service/group_service.go:522-539`; `back/social/internal/repository/group_repository.go:293-316`).
 4. `removeFromChat` solicita la retirada Stream best-effort; si se activó `cleanup_shared_notes`, `unshareNotes` llama Notes gRPC y conserva el fallback HTTP legacy (`back/social/internal/service/group_service.go:133-151,595-619`). El handler devuelve `204` sin esperar esa limpieza. El borrado de cuenta usa el RPC durable por separado (`back/social/internal/service/account_deletion.go:76-139`).
 
+## Front
+- Cliente: `SocialService.kickMember` (`front/lib/core/services/social_service.dart:213`); envía `{cleanup_shared_notes}`; acepta `204` o `200`.
+- Pantalla: `_GroupMembersTabState._confirmModeration(ban: false)` (`front/lib/features/groups/group_members_tab.dart:220`), acción EXPULSAR sobre un integrante; diálogo con checkbox de limpiar notas (marcado por defecto).
+- Efecto: snackbar `Integrante expulsado.` y recarga de la lista de integrantes.
+
 ## Tests
 
 - `back/social/internal/handler/http/group_handler_test.go:235`, `TestKickAndBanContract` recorre no admin, actor extraño, target y body.

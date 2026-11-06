@@ -27,6 +27,11 @@
 3. `GroupService.LeaveGroup` ejecuta la salida; `GroupRepository.LeaveGroup` delega en `removeUserFromGroup`, que en transacción aplica sucesión o elimina el grupo si era el último miembro (`back/social/internal/service/group_service.go:577-593`; `back/social/internal/repository/group_repository.go:533-618`).
 4. Después de confirmar la membresía, `removeFromChat` y `unshareNotes` se ejecutan best-effort/asíncronos; el fallback HTTP de Notes solo ocurre si falla el RPC (`back/social/internal/service/group_service.go:133-151,577-619`). El handler devuelve `204`; `_leave` cierra el detalle tras éxito (`back/social/internal/handler/http/group_handler.go:299-304`; `front/lib/features/groups/groups_screen.dart:567-624`).
 
+## Front
+- Cliente: `SocialService.leaveGroup` (`front/lib/core/services/social_service.dart:824`); envía `{cleanup_shared_notes}`; acepta `204` o `200`.
+- Pantalla: `_GroupInfoDialogState._leave` (`front/lib/features/groups/groups_screen.dart:603`), botón ABANDONAR en el diálogo INFO, con checkbox de limpiar notas compartidas (marcado por defecto).
+- Efecto: `notifyGroupsChanged()`, cierra el diálogo devolviendo `true` y `GroupsScreen` recarga. Snackbar `Abandonaste el grupo.`.
+
 ## Tests
 
 - `back/social/internal/handler/http/group_handler_test.go:297`, `TestLeaveContract`.

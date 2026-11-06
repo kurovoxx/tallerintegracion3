@@ -19,6 +19,10 @@ Crea una tarea del tablero Kanban (microservicio `social`).
 ## Flujo
 - `TodoHandler.CreateTodo` (`todo_handler.go:34-112`) valida `id` uuid + JSON + formatos → `TodoService.CreateTodo` (`internal/service/todo_service.go:222-277`: `requireGroup` + `requireMembership` + `requireAssigneeMember`, `resolveBoard` usa el tablero dado o el primero o crea `"General"`) → `TodoRepository.CreateTask` (`INSERT INTO social.todo_tasks`, `internal/repository/sqlc/todo.sql.go:102`).
 
+## Front
+- Cliente: `SocialService.createTodo` (`front/lib/core/services/social_service.dart:364`); envía `title`, `status` y `assigned_to` (los dos últimos solo si hay valor); exige `201` y lee `data` → `TodoTask`. No envía `board_id` ni `due_date`.
+- Pantalla: `_KanbanScreenState` (`front/lib/features/workspace/kanban_screen.dart:250`), hoja `_NewTaskSheet` (nueva tarjeta en una columna).
+
 ## Tests
 - `internal/handler/http/martin_unit_test.go`: `TestMartin_TodoCreateList_Unit` (201 + 401/403/400/404).
 - `internal/handler/http/martin_integration_test.go`: `TestMartinIntegration_TodoCRUD_PG` (fila + board auto-creado en Postgres).

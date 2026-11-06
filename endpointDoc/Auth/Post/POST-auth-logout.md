@@ -1,33 +1,45 @@
 # `POST /auth/logout`
 
 
-## Req
+Cierra la sesión del usuario revocando de forma inmediata su Refresh Token en la base de datos.
 
-- `POST /auth/logout`, ruta pública sin JWT: `back/auth/cmd/server/main.go:120`.
-- `Content-Type`: application/json.
-- Body requerido: {"refresh_token":"<refresh>"}.
-- Ruta de servicio; con gateway Flutter se antepone la base configurada, normalmente `/api-auth`, que nginx retira (`front/nginx.conf:23-27`).
+## 1. Req (Petición)
+- **Método y Ruta:** `POST /auth/logout` (Ruta con revocación por token; `back/auth/cmd/server/main.go:88`).
+- **Headers Requeridos:** `Content-Type: application/json`.
+- **Cuerpo (Body):**
+  ```json
+  {
+    "refresh_token": "3a1b2c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1b2c"
+  }
+  ```
 
-## Res
+## 2. Res (Respuestas y Códigos HTTP)
+- **`200 OK`:** Operación exitosa.
+  ```json
+  {
+    "message": "Sesión cerrada exitosamente"
+  }
+  ```
+- **Errores Posibles:**
+  - `400 Bad Request`: `bad_request` (JSON inválido o sin token).
+  - *(Nota: Si el token ya estaba revocado o no existe, responde 200 de forma idempotente para permitir limpieza segura en el cliente).*
 
-- 204 sin body si revoca el refresh. También devuelve 204 si no existe, ya estaba revocado o está vencido; no revela si el token existía.
-- 400 si el JSON es inválido o refresh_token está vacío.
-- 500 ante un fallo interno.
-- No emite access ni refresh tokens. La revocación se registra en Identity.
+## 3. Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/core/services/auth_service.dart:20` (`logoutPath = '/auth/logout'`) y método `logout()`.
+  - UI: `front/lib/features/academic/profile_screen.dart` (botón de "Cerrar Sesión").
 
-## Invocación (Front / Otros Servicios)
+## 4. Flujo Técnico (Paso a Paso)
+1. **Handler (`internal/handler/http/auth_handler.go:115`):**
+   - Recibe el token y valida formato.
+2. **Service (`internal/service/auth_service.go:220`):**
+   - Calcula el hash SHA-256 del token.
+3. **Repository (`internal/repository/refresh_token_repository.go:70`):**
+   - Ejecuta `UPDATE identity.refresh_tokens SET revoked = true WHERE token_hash = $1`.
 
-- `front/lib/features/academic/profile_screen.dart:472-478`, `_handleLogout` guarda el refresh actual, limpia la sesión y llama `AuthService.logout`. `front/lib/core/services/auth_service.dart:112` construye el POST; la revocación no bloquea la navegación al login.
-- No se encontró consumidor de producción de otro microservicio.
+## 5. Dependencias y Datos Afectados
+- **Tablas PostgreSQL:** `identity.refresh_tokens`.
 
-## Flujo
-
-1. `main()` registra `POST /auth/logout` como ruta pública (`back/auth/cmd/server/main.go:120`).
-2. `AuthHandler.Logout` valida `refresh_token` y llama al servicio (`back/auth/internal/handler/http/auth_handler.go:130-164`).
-3. `AuthService.Logout` busca el token y solicita su revocación (`back/auth/internal/service/auth_service.go:294-316`); `RefreshTokenRepository.Revoke` persiste `revoked=true` (`back/auth/internal/repository/refresh_token_repository.go:160-165`).
-4. `AuthHandler.Logout` devuelve `204` sin contenido (`back/auth/internal/handler/http/auth_handler.go:130-164`). Flutter llama `AuthService.logout` (`front/lib/core/services/auth_service.dart:112-138`) desde `_handleLogout` (`front/lib/features/academic/profile_screen.dart:472-478`) y limpia su sesión local aunque el endpoint sea idempotente.
-
-## Tests
-
-- `back/auth/internal/handler/http/auth_handler_test.go:569`, `TestAuthHandler_Logout_Activo_204`; :620, TestAuthHandler_Logout_YaRevocado_204; :664, token inexistente; :688, token vencido.
-- `back/auth/internal/service/auth_service_test.go:627`, `TestLogout_Activo_204_Revocado`; :643, TestLogout_YaRevocado_204; :660, token inexistente; :675, expirado.
+## 6. Tests Asociados
+- **Integración:** `back/auth/internal/service/auth_integration_test.go` (`TestAuthIntegration_Logout`).
+- **E2E:** `back/auth/internal/handler/http/e2e_full_flow_test.go` (`TestE2E_RegisterLoginMeRefreshLogout`).

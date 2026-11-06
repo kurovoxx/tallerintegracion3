@@ -26,6 +26,11 @@
 3. `GroupService.BanMember` protege la operación con `withTargetAccount`, persiste expulsión/ban vía `GroupRepository.BanMember` y agenda la retirada Stream (`back/social/internal/service/group_service.go:541-556`; `back/social/internal/repository/group_repository.go:318-350`; `back/social/internal/service/group_service.go:133-151`).
 4. Con `cleanup_shared_notes=true`, `unshareNotes` ejecuta `NotesService/UnshareAll` por gRPC y usa HTTP legacy como fallback; es best-effort y en segundo plano. El handler responde `204` sin esperar esos proveedores (`back/social/internal/service/group_service.go:595-619`; `back/social/internal/handler/http/group_handler.go:228-234`).
 
+## Front
+- Cliente: `SocialService.banMember` (`front/lib/core/services/social_service.dart:239`); envía `{cleanup_shared_notes}`; acepta `204` o `200`.
+- Pantalla: `_GroupMembersTabState._confirmModeration(ban: true)` (`front/lib/features/groups/group_members_tab.dart:215`), acción BANEAR; el diálogo avisa que no podrá reingresar ni con enlace válido.
+- Efecto: snackbar `Integrante baneado.` y recarga de la lista.
+
 ## Tests
 
 - `back/social/internal/handler/http/group_handler_test.go:235`, `TestKickAndBanContract`.

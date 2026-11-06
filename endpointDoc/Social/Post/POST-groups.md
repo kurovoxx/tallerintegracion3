@@ -26,6 +26,12 @@
 3. `GroupService.Create` normaliza y valida los datos; `GroupRepository.CreateWithOwner` guarda el grupo y su membresía de admin en una transacción (`back/social/internal/service/group_service.go:212-238`; `back/social/internal/repository/group_repository.go:23-58`).
 4. El handler responde `201` con `group_id`; la notificación de canal Stream se ejecuta best-effort (`back/social/internal/handler/http/group_handler.go:96-103`; `back/social/internal/service/group_service.go:233-235`). `_openCreateSheet` recarga la lista tras éxito (`front/lib/features/groups/groups_screen.dart:123-159`).
 
+## Front
+- Cliente: `SocialService.createGroup` (`front/lib/core/services/social_service.dart:96`); envía `name` y `description` (solo si no está vacía), ambos con `trim()`.
+- Pantalla: `_GroupsScreenState._openCreateSheet` (`front/lib/features/groups/groups_screen.dart:136`), botón de nuevo grupo → hoja `_NewGroupSheet`.
+- Respuesta: exige `201` y lee solo `group_id` (si falta lanza `missing_group_id`). El id no se muestra: se llama `SocialService.notifyGroupsChanged()` y la pantalla recarga con `getOverview` (lista + sidebar).
+- UI: snackbar `Grupo creado.` o `No se pudo crear el grupo.`.
+
 ## Tests
 
 - `back/social/internal/handler/http/group_handler_test.go:131`, `TestCreateGroupContract`.

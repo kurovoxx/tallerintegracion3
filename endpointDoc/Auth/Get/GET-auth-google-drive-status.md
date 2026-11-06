@@ -1,32 +1,30 @@
 # `GET /auth/google-drive/status`
 
 
-## Req
+Verifica si el usuario tiene una conexión activa y válida con Google Drive.
 
-- `GET /auth/google-drive/status`; ruta protegida con JWT: `back/auth/cmd/server/main.go:125-126`.
-- Sin body, path ni query; `Authorization`: Bearer <access JWT>.
-- Ruta Auth sin prefijo. En la web el base habitual `/api-auth` se reescribe a / antes de llegar al servicio: `front/nginx.conf:23-27`.
+## 1. Req (Petición)
+- **Método y Ruta:** `GET /auth/google-drive/status` (Protegida con JWT; `back/auth/cmd/server/main.go:111`).
+- **Headers:** `Authorization: Bearer <access_token>`.
 
-## Res
+## 2. Res (Respuestas y Códigos HTTP)
+- **`200 OK`:**
+  ```json
+  {
+    "connected": true,
+    "provider": "google_drive",
+    "scope": "https://www.googleapis.com/auth/drive.file"
+  }
+  ```
 
-- `200`: {"connected":true|false,"reconnect_required":true|false}; `Cache-Control`: private, no-store. No incluye secretos/tokens.
-- connected indica si hay conexión utilizable; reconnect_required indica si el vínculo fue marcado inválido/revocado.
-- 401 por sesión no válida; 500 si no se puede consultar almacenamiento.
-- La consulta está limitada al user_id del JWT.
+## 3. Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/core/services/profile_service.dart:45` y `front/lib/features/auth/google_drive_service.dart`.
+  - Pantalla: `front/lib/features/academic/profile_screen.dart` (muestra el switch o badge de estado de Drive).
 
-## Invocación (Front / Otros Servicios)
+## 4. Flujo Técnico (Paso a Paso)
+1. Consulta `identity.oauth_connections` buscando `provider = 'google_drive'` para el `user_id`.
+2. Si existe fila no revocada, retorna `connected: true`. De lo contrario, `connected: false`.
 
-- `front/lib/core/services/profile_service.dart:39`, `getDriveStatus` envía la consulta y devuelve connected. `front/lib/features/academic/profile_screen.dart:131`, `_restoreDriveStatus`, refleja el resultado en Perfil.
-- No se encontró invocación HTTP de producción desde otros servicios. Notes solicita credenciales mediante `GRPCOAuthTokenProvider.GetValidAccessToken` (`back/notes/internal/drive/oauth_grpc.go:62-89`), que llama al RPC `GetOAuthToken`.
-
-## Flujo
-
-1. `main()` registra `GET /auth/google-drive/status` bajo autenticación (`back/auth/cmd/server/main.go:126`).
-2. `DriveHandler.Status` toma `user_id` del JWT y llama al servicio (`back/auth/internal/handler/http/drive_handler.go:88-107`).
-3. `DriveOAuthService.GetGoogleDriveConnectionStatus` consulta `OAuthRepository.GetByUserIDAndProvider` (`back/auth/internal/service/drive_oauth_service.go:462-476`; `back/auth/internal/repository/oauth_repository.go:130-143`) sin llamar a Google.
-4. `DriveHandler.Status` devuelve el estado sanitizado y no almacenable en caché (`back/auth/internal/handler/http/drive_handler.go:88-107`).
-
-## Tests
-
-- `back/auth/internal/handler/http/drive_handler_test.go:350`, `TestDriveStatusIsAuthenticatedAndScoped`.
-- `back/auth/internal/service/drive_oauth_service_test.go:867`, `sin` conexión; :879, conectada; :889, revocada; :899, no hace HTTP.
+## 5. Dependencias y Datos Afectados
+- **Tablas PostgreSQL:** `identity.oauth_connections` (lectura).

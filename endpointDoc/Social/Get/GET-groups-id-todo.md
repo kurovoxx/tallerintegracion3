@@ -13,6 +13,10 @@ Lista las tareas Kanban del grupo (microservicio `social`).
 ## Flujo
 - `TodoHandler.ListTodos` (`internal/handler/http/todo_handler.go:114-166`) → `TodoService.ListTodos` (`internal/service/todo_service.go:279-342`: valida filtros, `requireGroup` + `requireMembership`) → `ListTasksByGroup` (`JOIN social.todo_tasks + social.todo_boards`, `internal/repository/sqlc/todo.sql.go:141`).
 
+## Front
+- Cliente: `SocialService.listTodos` (`front/lib/core/services/social_service.dart:347`) existe pero **ninguna pantalla lo llama**. El Kanban carga sus columnas desde `GET /groups/:id/workspace` (`kanban.todo|in_progress|done`).
+- Si se usara: lee `data[]` → `TodoTask` (`id, group_id, board_id, board_name, title, status, assigned_to, due_date, created_at, updated_at`); el cliente no envía `status` ni `board_id`.
+
 ## Tests
 - `internal/handler/http/martin_unit_test.go`: `TestMartin_TodoCreateList_Unit` (filtros, lista vacía, 401/403/400/404).
 - `internal/handler/http/martin_integration_test.go`: `TestMartinIntegration_TodoCRUD_PG` (lee 1 fila real).

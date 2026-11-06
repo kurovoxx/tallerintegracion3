@@ -26,6 +26,11 @@
 3. `GroupService.JoinGroup` valida IDs; `GroupRepository.JoinWithInviteToken` comprueba token y ban, luego inserta la membresía dentro de una transacción (`back/social/internal/service/group_service.go:348-361`; `back/social/internal/repository/group_repository.go:111-163`).
 4. El handler responde `201` sin cuerpo. `_openJoinDialog` espera el POST y vuelve a cargar el resumen (`back/social/internal/handler/http/group_handler.go:158-164`; `front/lib/features/groups/groups_screen.dart:179-251`).
 
+## Front
+- Cliente: `SocialService.joinGroup` (`front/lib/core/services/social_service.dart:850`); envía `{invite_token}`; acepta `200` o `201` y no lee el body.
+- Pantalla: `_GroupsScreenState._openJoinDialog` (`front/lib/features/groups/groups_screen.dart:233`), diálogo UNIRSE A GRUPO con dos campos: identificador del grupo (`:id` de la ruta) y código de invitación (`invite_token`). No hay flujo de solo código.
+- Efecto: `notifyGroupsChanged()` → recarga lista y sidebar. Snackbar `Te uniste al grupo.`; en error muestra el mensaje del backend.
+
 ## Tests
 
 - `back/social/internal/handler/http/group_handler_test.go:184`, `TestJoinContract` cubre creación, token inválido/malformado, body ausente y ban.

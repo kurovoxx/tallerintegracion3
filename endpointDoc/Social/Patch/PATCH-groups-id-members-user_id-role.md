@@ -26,6 +26,11 @@
 3. `GroupService.ChangeRole` comprueba la acción y bloquea cambios al objetivo que esté en borrado; `GroupRepository.ChangeMemberRole` persiste el nuevo rol (`back/social/internal/service/group_service.go:559-566`; `back/social/internal/repository/group_repository.go:352-380`).
 4. El handler responde `200` sin body; `SocialService.changeMemberRole` acepta ese status y `_confirmRole` recarga los miembros (`back/social/internal/handler/http/group_handler.go:251-256`; `front/lib/core/services/social_service.dart:265-289`; `front/lib/features/groups/group_members_tab.dart:230-280`).
 
+## Front
+- Cliente: `SocialService.changeMemberRole` (`front/lib/core/services/social_service.dart:265`); valida `role` ∈ `admin|member` antes de enviar; espera `200` y no lee el body.
+- Pantalla: `_GroupMembersTabState._confirmRole` (`front/lib/features/groups/group_members_tab.dart:237`) HACER ADMIN (`role: admin`) y `:247` QUITAR ADMIN (`role: member`).
+- Efecto: snackbar `<nombre> ahora es admin|miembro.` y recarga de integrantes.
+
 ## Tests
 
 - `back/social/internal/handler/http/group_handler_test.go:266`, `TestChangeRoleContract` cubre admin, no admin, target y rol.

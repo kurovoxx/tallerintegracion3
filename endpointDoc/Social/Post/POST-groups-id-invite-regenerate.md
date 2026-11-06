@@ -26,6 +26,11 @@
 3. `GroupService.RegenerateInvite` valida el UUID y `GroupRepository.RegenerateInviteToken` comprueba el rol admin y guarda el nuevo token (`back/social/internal/service/group_service.go:334-346`; `back/social/internal/repository/group_repository.go:165-198`).
 4. El handler devuelve `200` con `new_invite_token`; `_InviteDialogState._regenerate` actualiza el valor mostrado (`back/social/internal/handler/http/group_handler.go:172-179`; `front/lib/features/groups/groups_screen.dart:812-836`).
 
+## Front
+- Cliente: `SocialService.regenerateInvite` (`front/lib/core/services/social_service.dart:147`); lee `new_invite_token` (si viene vacío lanza `missing_invite_token`).
+- Pantalla: `_InviteDialogState._regenerate` (`front/lib/features/groups/groups_screen.dart:816`), botón regenerar del diálogo INVITAR.
+- UI: reemplaza el token mostrado, snackbar `Invitación actualizada.`; el botón copiar entrega `"<group_id> <token>"` (los dos datos que pide UNIRSE A GRUPO).
+
 ## Tests
 
 - `back/social/internal/handler/http/group_handler_test.go:202`, `TestRegenerateInviteContract` verifica que no admin no puede, el token cambia y el viejo deja de admitir un ingreso.

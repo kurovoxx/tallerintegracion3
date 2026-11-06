@@ -1,16 +1,36 @@
 # GET /auth/me
 
-## Req
-- Método: `GET`, ruta: `/auth/me` (protegida; `back/auth/cmd/server/main.go:115`; grupo con `RequireAuth`).
-- Headers requeridos: `Authorization: Bearer <access_token>`.
+Devuelve los datos de identidad básicos del usuario autenticado (ID y correo) a partir del JWT.
 
-## Res
-- `200`: `{"user_id":"<uuid>"}` (user_id inyectado por el middleware desde el JWT).
-- `401`: `{"error":{"code":"unauthorized","message":"..."}}` (sin token, token inválido/expirado o con esquema erróneo).
+## 1. Req (Petición)
+- **Método y Ruta:** `GET /auth/me` (Protegida con JWT; `back/auth/cmd/server/main.go:104`).
+- **Headers Requeridos:** `Authorization: Bearer <access_token>`.
 
-## Flujo
-- `back/auth/cmd/server/main.go` (closure inline) ← `back/auth/internal/middleware/` (`RequireAuth`, `GetUserID`; firma + expiración JWT vía `back/auth/internal/service/jwt_service.go`). Sin repository (no consulta BD).
+## 2. Res (Respuestas y Códigos HTTP)
+- **`200 OK`:**
+  ```json
+  {
+    "id": "e4a2d3c1-1111-4444-8888-abcdef123456",
+    "email": "usuario@estudiantes.uct.cl"
+  }
+  ```
+- **Errores Posibles:**
+  - `401 Unauthorized`: token ausente, expirado o con firma inválida.
+  - `404 Not Found`: el usuario del token ya no existe en la base de datos.
 
-## Tests
-- `back/auth/internal/handler/http/auth_extra_coverage_test.go`: `TestCoverage_Me_ConToken_200`, `TestCoverage_Me_SinToken_401` (monta `/auth/me` igual que `main.go`: middleware real + closure).
-- `back/auth/internal/handler/http/e2e_full_flow_test.go`: `TestE2E_RegisterLoginMeRefreshLogout` (sin token 401, con token 200 y `user_id` coherente), `TestE2E_OAuthPerfilInternasHealth` (token inválido 401).
+## 3. Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/core/services/auth_service.dart` (método de verificación de sesión activa).
+
+## 4. Flujo Técnico (Paso a Paso)
+1. **Middleware (`internal/middleware/auth_middleware.go`):** Valida el JWT y deposita el `user_id` en el contexto.
+2. **Handler (`cmd/server/main.go:104`):**
+   - Lee `user_id` del contexto.
+   - Llama a `userRepo.GetByID(ctx, userID)`.
+   - Responde con ID y Email.
+
+## 5. Dependencias y Datos Afectados
+- **Tablas PostgreSQL:** `identity.users` (lectura).
+
+## 6. Tests Asociados
+- **Unitarios:** `back/auth/internal/handler/http/auth_handler_test.go` (`TestAuthMe_Success`).

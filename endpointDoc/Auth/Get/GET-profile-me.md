@@ -1,33 +1,38 @@
 # `GET /profile/me`
 
 
-## Req
+Obtiene el perfil extendido y datos personales del usuario autenticado.
 
-- `GET /profile/me`, dentro del grupo protegido de Auth: `back/auth/cmd/server/main.go:145-151`.
-- Requiere `Authorization`: Bearer <access JWT> válido. No tiene body, path ni query.
-- La identidad se obtiene del JWT; el cliente no puede seleccionar otro usuario.
-- Con el frontend web el base URL habitual agrega `/api-auth`; nginx retira ese prefijo antes de Auth (`front/nginx.conf:23-27`).
+## 1. Req (Petición)
+- **Método y Ruta:** `GET /profile/me` (Protegida con JWT; `back/auth/cmd/server/main.go:107`).
+- **Headers Requeridos:** `Authorization: Bearer <access_token>`.
 
-## Res
+## 2. Res (Respuestas y Códigos HTTP)
+- **`200 OK`:**
+  ```json
+  {
+    "display_name": "Juan Pérez",
+    "photo_url": "https://...",
+    "phone": "+56912345678",
+    "institution": "Universidad Católica de Temuco",
+    "description": "Estudiante de Ingeniería",
+    "visibility": "private"
+  }
+  ```
+- **Errores:** `401 Unauthorized` (sesión inválida), `404 Not Found` (perfil inexistente).
 
-- `200`: objeto con display_name, photo_url, phone, institution, description, visibility y email opcional. Los campos nullable se serializan como null; email se omite si no se resolvió.
-- 401 sin identidad/token válido; 404 si no existe el perfil; 500 ante error interno.
-- Lectura solamente: no modifica perfil.
+## 3. Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/core/services/profile_service.dart:94` (`getProfile()`).
+  - Pantalla: `front/lib/features/academic/profile_screen.dart:161` (`_loadProfileData`).
 
-## Invocación (Front / Otros Servicios)
+## 4. Flujo Técnico (Paso a Paso)
+1. `ProfileHandler.GetProfile` (`internal/handler/http/profile_handler.go:46`) extrae `user_id` del JWT.
+2. `ProfileService.GetProfile` (`internal/service/profile_service.go:28`) invoca al repositorio.
+3. `ProfileRepository.GetByUserID`: `SELECT display_name, photo_url, phone, institution, description, visibility FROM identity.profiles WHERE user_id = $1`.
 
-- `front/lib/features/academic/profile_screen.dart:163`, `_loadProfile` carga la vista de perfil.
-- `front/lib/core/services/profile_service.dart:95`, `getProfile` envía GET con el JWT, analiza el JSON y actualiza el notifier `ProfileService.current`.
-- No se encontró invocación de producción desde otro microservicio.
+## 5. Dependencias y Datos Afectados
+- **Tablas PostgreSQL:** `identity.profiles`.
 
-## Flujo
-
-1. `main()` registra `GET /profile/me` con `AuthMiddleware.RequireAuth` (`back/auth/cmd/server/main.go:151`).
-2. `ProfileHandler.GetProfile` toma `user_id` del contexto autenticado y llama al servicio (`back/auth/internal/handler/http/profile_handler.go:67-104`).
-3. `ProfileService.GetProfile` solicita el perfil y completa el correo (`back/auth/internal/service/profile_service.go:55-68`); `ProfileRepository.GetByUserID` lee `identity.profiles` (`back/auth/internal/repository/profile_repository.go:25-39`), y `ProfileService.fillEmail` usa `UserRepository.GetEmailByID` (`back/auth/internal/service/profile_service.go:42-51`; `back/auth/internal/repository/user_repository.go:169-182`).
-4. `ProfileHandler.GetProfile` serializa `profileResponse` y devuelve `200` (`back/auth/internal/handler/http/profile_handler.go:96-104`). Flutter llama `ProfileService.getProfile` (`front/lib/core/services/profile_service.dart:95`) desde `ProfileScreen._loadProfile` (`front/lib/features/academic/profile_screen.dart:163-178`) para rellenar la cuenta activa.
-
-## Tests
-
-- `back/auth/internal/handler/http/profile_handler_test.go:104`, `TestProfileHandler_GetProfile_200`; :132, perfil inexistente; :149, falta de autenticación.
-- `back/auth/internal/service/profile_service_test.go:87`, `TestProfileService_GetProfile_Existente`; :109, inexistente.
+## 6. Tests Asociados
+- **Unitarios:** `back/auth/internal/handler/http/profile_handler_test.go` (`TestGetProfile_Success`).

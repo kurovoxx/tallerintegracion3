@@ -25,6 +25,10 @@
 3. `GroupService.ListMyGroups` consulta al repositorio (`back/social/internal/service/group_service.go:276-285`; `back/social/internal/repository/group_repository.go:80-108`).
 4. El handler responde el arreglo JSON, incluso vacío (`back/social/internal/handler/http/group_handler.go:135-140`). El consumidor Flutter documentado arriba usa `/me/overview`, no esta ruta.
 
+## Front
+- **El front no llama este endpoint.** Para listar los grupos del usuario usa `GET /me/overview` (`SocialService.getOverview`, `front/lib/core/services/social_service.dart:84`), que devuelve además `sidebar.groups`, `stats` y `member_count` por grupo.
+- Consumidores del overview: `_GroupsScreenState._load` (`front/lib/features/groups/groups_screen.dart:81`, tarjetas de grupo) y el sidebar de `MainShell` (`front/lib/core/widgets/main_shell.dart:111`, primeros 5 grupos y contador).
+
 ## Tests
 
 - `back/social/internal/handler/http/group_handler_test.go:144`, `TestListMyGroupsContract` comprueba array vacío y forma de cada elemento.

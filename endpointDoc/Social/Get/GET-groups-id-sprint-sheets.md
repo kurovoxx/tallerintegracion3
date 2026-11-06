@@ -25,6 +25,10 @@
 3. `SprintService.ListSprintSheets` valida grupo y membresía (`back/social/internal/service/sprint_sheets.go:40-50`) y `SprintRepository.ListSheetsByGroup` consulta sqlc (`back/social/internal/repository/sprint_repository.go:38-40`). `Queries.ListSheetsByGroup` ejecuta la consulta ordenada por período (`back/social/internal/repository/sqlc/sprint.sql.go:24-52`).
 4. `sheetJSON` adapta cada fila al JSON de respuesta (`back/social/internal/handler/http/sprint_sheets.go:12-22`); `SprintHandler.ListSheets` responde `200` (`back/social/internal/handler/http/sprint_sheets.go:40-55`). Flutter convierte ese `data` en hojas y actualiza la pantalla en `_loadReal` (`front/lib/core/services/social_service.dart:443-457`; `front/lib/features/workspace/sprint_sheet_screen.dart:161-196`).
 
+## Front
+- Cliente: `SocialService.listSprintSheets` (`front/lib/core/services/social_service.dart:443`); lee `data[]` → `SprintSheetInfo` (`id, name, period_start, period_end`).
+- Pantalla: `_SprintSheetScreenState._loadReal` (`front/lib/features/workspace/sprint_sheet_screen.dart:177`), chips de selección de sprint (`_SprintChip`) y calendario de días a partir de `period_start`/`period_end`.
+
 ## Tests
 
 - `back/social/internal/handler/http/sprint_sheets_test.go:13`, `TestSprintSheetRoutes`.

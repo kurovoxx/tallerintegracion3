@@ -1,34 +1,39 @@
 # `PATCH /profile/me`
 
 
-## Req
+Actualiza parcialmente los campos del perfil personal del usuario autenticado.
 
-- `PATCH /profile/me`, grupo protegido: `back/auth/cmd/server/main.go:145-152`. Requiere JWT Bearer.
-- JSON parcial con display_name, photo_url, phone, institution, description y/o visibility. Campos omitidos no cambian. Body vacío se rechaza.
-- user_id está prohibido incluso si coincide con el JWT. ProfileService valida display_name de 1-100 caracteres, photo_url hasta 500, phone hasta 30 e institution hasta 200; description se recorta sin límite. visibility acepta public/private.
-- Base Flutter habitual `/api-auth` se elimina en el gateway; la ruta Gin es `/profile/me.`
+## 1. Req (Petición)
+- **Método y Ruta:** `PATCH /profile/me` (Protegida con JWT; `back/auth/cmd/server/main.go:108`).
+- **Headers Requeridos:** `Authorization: Bearer <access_token>`, `Content-Type: application/json`.
+- **Cuerpo (Body - campos opcionales):**
+  ```json
+  {
+    "display_name": "Juan P.",
+    "phone": "+56987654321",
+    "description": "Nueva descripción de perfil",
+    "visibility": "public"
+  }
+  ```
+- **Validaciones:** `display_name` 1-100 caracteres si está presente; `visibility` debe ser `public` o `private`.
 
-## Res
+## 2. Res (Respuestas y Códigos HTTP)
+- **`200 OK`:** Perfil completo actualizado.
+- **`400 Bad Request`:** `invalid_body` o visibilidad no permitida.
+- **`401 Unauthorized`:** Token ausente o expirado.
 
-- `200`: perfil actualizado con display_name, photo_url, phone, institution, description, visibility y email opcional.
-- 400 por JSON/body vacío, user_id, visibilidad o campo inválido.
-- 401 por JWT ausente/inválido; 404 si no existe perfil; 500 ante error interno.
-- La fila del perfil se actualiza antes de responder. No se actualiza otro user_id elegido por cliente.
+## 3. Invocación (Front / Otros Servicios)
+- **Frontend Flutter:**
+  - Cliente API: `front/lib/core/services/profile_service.dart:111` (`updateProfile(patch)`).
+  - Pantalla: `front/lib/features/academic/profile_screen.dart:222` (`_saveProfileChanges`).
 
-## Invocación (Front / Otros Servicios)
+## 4. Flujo Técnico (Paso a Paso)
+1. `ProfileHandler.PatchProfile` (`profile_handler.go:80`) valida payload JSON.
+2. `ProfileService.UpdateProfile` sanitiza strings y valida rangos.
+3. `ProfileRepository.Update`: ejecuta `UPDATE identity.profiles SET ... WHERE user_id = $1 RETURNING ...`.
 
-- `front/lib/features/academic/profile_screen.dart:224`, `_handleSave` reúne campos editados.
-- `front/lib/core/services/profile_service.dart:113`, `patchProfile` envía PATCH autenticado, analiza el perfil devuelto y reemplaza current.
-- No se encontró consumidor de producción de otro microservicio.
+## 5. Dependencias y Datos Afectados
+- **Tablas PostgreSQL:** `identity.profiles`.
 
-## Flujo
-
-1. `main()` registra `PATCH /profile/me` bajo `RequireAuth` (`back/auth/cmd/server/main.go:152`).
-2. `ProfileHandler.PatchProfile` toma el user ID autenticado, enlaza el body y rechaza cambios de `user_id` (`back/auth/internal/handler/http/profile_handler.go:108-148`).
-3. `ProfileService.UpdateProfile` valida los campos (`back/auth/internal/service/profile_service.go:86-166`) y `ProfileRepository.Update` persiste el PATCH para ese user ID (`back/auth/internal/repository/profile_repository.go:57-139`).
-4. `ProfileHandler.PatchProfile` devuelve el perfil actualizado (`back/auth/internal/handler/http/profile_handler.go:173-184`). En Flutter, `ProfileService.patchProfile` envía la modificación y reemplaza el perfil en memoria (`front/lib/core/services/profile_service.dart:113-137`), a partir de `ProfileScreen._handleSave` (`front/lib/features/academic/profile_screen.dart:224-260`).
-
-## Tests
-
-- `back/auth/internal/handler/http/profile_handler_test.go:180`, `actualizaci`ón parcial; :202, varios campos; :221, visibility inválida; :240, body vacío; :258, user_id prohibido; :405, entrada inválida no aplica cambios parciales.
-- `back/auth/internal/service/profile_service_test.go:135` y :154 cubren actualización parcial y múltiple; :174 cubre visibility inválida.
+## 6. Tests Asociados
+- **Unitarios:** `back/auth/internal/handler/http/profile_handler_test.go` (`TestPatchProfile_Success`).

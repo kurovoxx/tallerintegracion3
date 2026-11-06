@@ -27,6 +27,15 @@
 4. `GroupService.enrichMembers` consulta datos públicos con `GRPCUserDirectory.LookupUsers` (`back/social/internal/service/group_service.go:468-484`; `back/social/internal/identity/grpc_directory.go:28-45`). Auth resuelve el RPC en `IdentityServer.LookupUsers` y `UsersService.Lookup` (`back/auth/internal/handler/grpc/identity_server.go:76-99`; `back/auth/internal/service/users_service.go:30-53`). Si falla esa consulta, Social conserva la lista base.
 5. El handler responde `200`; `SocialService.listMembers` convierte el array a modelos Flutter (`front/lib/core/services/social_service.dart:191-207`) y las pantallas citadas arriba lo usan para miembros, responsables o conteos.
 
+## Front
+- Cliente: `SocialService.listMembers` (`front/lib/core/services/social_service.dart:191`) → `List<GroupMember>` (acepta el array JSON directo; campos `id, group_id, user_id, role, joined_at, display_name?, email?`).
+- Pestaña INTEGRANTES: `_GroupMembersTabState._load` (`front/lib/features/groups/group_members_tab.dart:80`); ordena admins primero y luego por nombre; la ficha muestra nombre, correo, rol, fecha `joined_at` e ID.
+- Tarjetas de grupo: `_GroupsScreenState._loadInitials` (`front/lib/features/groups/groups_screen.dart:108`); toma los 4 primeros para las iniciales del avatar-stack.
+- Cabecera del grupo: `_loadHeader` (`front/lib/features/groups/group_detail_screen.dart:126`); usa solo `members.length` como conteo.
+- Selectores de asignado/asistentes: Kanban (`front/lib/features/workspace/kanban_screen.dart:154`, `:180`), Sprint (`front/lib/features/workspace/sprint_sheet_screen.dart:202`, `:414`), Reunión (`front/lib/features/workspace/schedule_meeting_screen.dart:138`).
+- Chat: `_GroupChatScreenState._loadMemberNames` (`front/lib/features/chat/group_chat_screen.dart:180`); mapa `user_id → displayLabel` para nombrar mensajes.
+- `displayLabel` = `display_name` → `email` → id corto; nunca muestra un UUID completo.
+
 ## Tests
 
 - `back/social/internal/handler/http/group_handler_test.go:219`, `TestMembersContract` valida acceso y forma base.

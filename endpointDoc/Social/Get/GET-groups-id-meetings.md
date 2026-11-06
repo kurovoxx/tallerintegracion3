@@ -13,6 +13,10 @@ Ventana "próximas reuniones" del grupo (Social, tarea 3_5_14).
 ## Flujo
 - `MeetingHandler.ListMeetings` → `MeetingService.ListUpcomingMeetings` (existente: `requireGroup` + `requireMembership`, filtra `scheduled_at >= now`) → `ListMeetingsByGroup`.
 
+## Front
+- Cliente: `SocialService.listMeetings` (`front/lib/core/services/social_service.dart:763`) existe pero **ninguna pantalla lo llama**. Las próximas reuniones se leen de `GET /groups/:id/workspace` (`meetings.upcoming`) en `_loadUpcoming` (`front/lib/features/workspace/schedule_meeting_screen.dart:125`).
+- Si se usara: `data[]` → `MeetingItem` (`id, title, description?, scheduled_at`).
+
 ## Tests
 - `notification_handler_test.go`: `TestMeetings_List_Unit` (solo futura, forma, 403/401/404).
 - `notification_integration_test.go`: `TestNotifPG_FlowLectura` (1 próxima real).

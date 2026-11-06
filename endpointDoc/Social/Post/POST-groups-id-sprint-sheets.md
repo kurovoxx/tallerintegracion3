@@ -27,6 +27,10 @@
 4. `SprintRepository.CreateSheet` delega en sqlc (`back/social/internal/repository/sprint_repository.go:42-44`); `Queries.CreateSheet` ejecuta el `INSERT INTO social.sprint_sheets` (`back/social/internal/repository/sqlc/sprint.sql.go:61-85`).
 5. `SprintHandler.writeSheet` responde `201` con `data` usando `sheetJSON` (`back/social/internal/handler/http/sprint_sheets.go:12-20,83-97`). `_SprintSheetScreenState._manageSprint` toma el ID y recarga la hoja creada (`front/lib/features/workspace/sprint_sheet_screen.dart:230-253`).
 
+## Front
+- Cliente: `SocialService.saveSprintSheet` (`front/lib/core/services/social_service.dart:459`) sin `sheetId`; envía `name`, `period_start`, `period_end`; acepta `200`/`201` y lee `data` → `SprintSheetInfo`.
+- Pantalla: `_SprintSheetScreenState` (`front/lib/features/workspace/sprint_sheet_screen.dart:242`, diálogo `_NewSprintDialog`) y `:537` (al guardar una tarea cuando aún no existe hoja).
+
 ## Tests
 
 - `back/social/internal/handler/http/sprint_sheets_test.go:13`, `TestSprintSheetRoutes`.
