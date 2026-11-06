@@ -28,7 +28,7 @@ una Postgres real (gate de deploy previo a `build-images`).
 | Archivo | Contenido |
 |---|---|
 | `back/infacadem/db/migrations/001_initial_schema.sql` | Esquema inicial del servicio académico (infacadem) en schema `academic`: `curricula`, `subjects`, `schedules`, `contents`, `grades`, `grade_requirements`, `absences`. Idempotente (`CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS`), con `CREATE SCHEMA IF NOT EXISTS academic` al inicio para que sea autónoma contra una Postgres vacía. |
-| `scripts/validate-migrations.sh` | Script Bash que, dado un `DATABASE_URL`, crea los schemas `identity`, `academic`, `notes`, `social`, `ai` si no existen y aplica todas las migraciones de `auth`, `notes`, `social`, `infacadem` en orden numérico con `psql -v ON_ERROR_STOP=1`. Sale con error si cualquiera falla. |
+| `scripts/validate-migrations.sh` | Script Bash que, dado un `DATABASE_URL`, primero aplica `docker/postgres/init.sql` (esquema base: `identity.users` y tablas de todos los servicios) y luego aplica todas las migraciones versionadas de `auth`, `notes`, `social`, `infacadem` en orden numérico con `psql -v ON_ERROR_STOP=1`. Acepta `INIT_SQL_PATH` para sobrescribir la ruta del `init.sql`. Sale con error si cualquiera falla. |
 | `.github/workflows/test-migrations.yml` | Workflow independiente de GitHub Actions: levanta `postgres:16-alpine` como service container, ejecuta `scripts/validate-migrations.sh`. Se dispara en push/PR a `Development` cuando cambian archivos bajo `back/**/db/migrations/**`, `docker/postgres/init.sql` o el propio workflow. |
 
 ### Archivos modificados
@@ -50,6 +50,7 @@ una Postgres real (gate de deploy previo a `build-images`).
 
 ### Convenciones
 
+- El validador aplica primero `docker/postgres/init.sql` (esquema base con `identity.users` y tablas de todos los servicios) y luego las migraciones versionadas encima. Las migraciones de auth/notes/social asumen que esas tablas base ya existen.
 - Formato de archivo SQL: comentario inicial descriptivo, `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, schema explícito (`academic.`, `identity.`, etc.), `user_id` es referencia lógica sin FK física.
 - Numeración secuencial: `001` antes que `002`, nunca reordenar ni editar migraciones ya aplicadas en producción; se crea una nueva `NNN` para corregir.
 - `CREATE SCHEMA IF NOT EXISTS <schema>` al inicio de cada migración inicial para que sea autónoma.
@@ -58,6 +59,7 @@ una Postgres real (gate de deploy previo a `build-images`).
 
 - Migración `infacadem 001` aplicada contra `postgres:16-alpine` vacía: 7 tablas creadas (`absences`, `contents`, `curricula`, `grade_requirements`, `grades`, `schedules`, `subjects`), sin errores.
 - Segunda ejecución de la misma migración: idempotente (NOTICE "already exists", sin fallar).
+- Gate completo (init.sql + migraciones de auth/notes/social/infacedadem) probado contra `postgres:16-alpine` vacía: todos los SQL aplican sin errores, código de salida 0.
 - `go build ./...` + `go vet ./...` en `back/infacadem`: OK (sin cambios de Go, solo archivos SQL nuevos).
 - YAMLs de ambos workflows: parsean correctamente (`yaml.safe_load`).
 - `docker compose config`: no se modificó, sigue válido.

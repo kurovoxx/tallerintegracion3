@@ -11,6 +11,7 @@ set -euo pipefail
 
 DATABASE_URL="${DATABASE_URL:?Falta DATABASE_URL (postgresql://...)}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+INIT_SQL_PATH="${INIT_SQL_PATH:-${REPO_ROOT}/docker/postgres/init.sql}"
 
 # Servicios que tienen carpeta de migraciones versionadas.
 SERVICES=(auth notes social infacadem)
@@ -18,18 +19,13 @@ SERVICES=(auth notes social infacadem)
 echo "== Validando migraciones versionadas (gate de deploy) =="
 echo "Base de datos: ${DATABASE_URL}"
 
-# Asegurar que existan los schemas de todos los servicios antes de aplicar
-# sus migraciones (una Postgres limpia no los tiene; init.sql los crea en
-# compose, pero el gate de deploy corre contra una DB vacía).
-echo "[schemas] Creando schemas identity, academic, notes, social, ai si no existen"
-PGPASSWORD="${PGPASSWORD:-}" psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
-CREATE SCHEMA IF NOT EXISTS identity;
-CREATE SCHEMA IF NOT EXISTS academic;
-CREATE SCHEMA IF NOT EXISTS notes;
-CREATE SCHEMA IF NOT EXISTS social;
-CREATE SCHEMA IF NOT EXISTS ai;
-SQL
+# 1. Esquema base: aplicar docker/postgres/init.sql primero. Las migraciones
+#    versionadas de auth/notes/social asumen que tablas base como
+#    identity.users ya existen (creadas por init.sql), y añaden sobre ellas.
+echo "[base] Aplicando docker/postgres/init.sql (esquema base de todos los servicios)"
+PGPASSWORD="${PGPASSWORD:-}" psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$INIT_SQL_PATH" >/dev/null
 
+# 2. Migraciones versionadas por servicio (se aplican encima del esquema base).
 for svc in "${SERVICES[@]}"; do
   MIGRATIONS_DIR="${REPO_ROOT}/back/${svc}/db/migrations"
   if [ ! -d "$MIGRATIONS_DIR" ]; then
