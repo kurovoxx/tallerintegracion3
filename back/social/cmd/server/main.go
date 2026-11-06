@@ -49,25 +49,43 @@ func main() {
 	cfg := config.Load()
 	log.Printf("config social: DATABASE_URL set=%v PORT=%s", cfg.DatabaseURL != "", cfg.Port)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	pool, err := repository.NewPool(ctx, cfg.DatabaseURL)
+	// Espera a que Postgres acepte conexiones (retry con backoff lineal).
+	// Al desplegar en k8s el contenedor puede arrancar antes que Postgres;
+	// sin esto el servicio muere con log.Fatalf al primer intento.
+	var pool *pgxpool.Pool
+	var err error
+	const maxDBIntents = 30
+	for i := 0; i < maxDBIntents; i++ {
+		ctxInt, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		pool, err = repository.NewPool(ctxInt, cfg.DatabaseURL)
+		if err == nil {
+			err = pool.Ping(ctxInt)
+		}
+		cancel()
+		if err == nil {
+			break
+		}
+		if pool != nil {
+			pool.Close()
+		}
+		log.Printf("social: esperando a Postgres (intento %d/%d): %v", i+1, maxDBIntents, err)
+		time.Sleep(time.Duration(i+1) * time.Second)
+	}
 	if err != nil {
-		log.Fatalf("No se pudo conectar a Postgres: %v", err)
+		log.Fatalf("social: no se pudo conectar a Postgres tras %d intentos: %v", maxDBIntents, err)
 	}
 	defer pool.Close()
 	log.Println("Postgres conectado OK (social)")
 
 	var cnt int
-	if err := pool.QueryRow(ctx, "select count(*) from social.groups").Scan(&cnt); err != nil {
+	if err := pool.QueryRow(context.Background(), "select count(*) from social.groups").Scan(&cnt); err != nil {
 		log.Printf("check social.groups: %v (schema puede no existir aún — corre agentSql.md)", err)
 	} else {
 		log.Printf("DB check: social.groups count=%d", cnt)
 	}
 	// Sin estas tablas el gate rechaza toda petición autenticada (503) y el
 	// borrado de cuenta queda pending para siempre: mejor no arrancar.
-	if err := repository.VerifyAccountDeletionSchema(ctx, pool); err != nil {
+	if err := repository.VerifyAccountDeletionSchema(context.Background(), pool); err != nil {
 		log.Fatalf("%v", err)
 	}
 
