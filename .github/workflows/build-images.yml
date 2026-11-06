@@ -54,6 +54,7 @@ jobs:
           - {name: notes, context: back/notes}
           - {name: social, context: back/social}
           - {name: infacadem, context: back/infacadem}
+          - {name: ai, context: back/ai}
           # El front en pillan usa rutas relativas: nginx reenvia /api-* a los servicios del cluster.
           - name: front
             context: front

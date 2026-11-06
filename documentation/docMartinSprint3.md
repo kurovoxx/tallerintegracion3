@@ -111,6 +111,64 @@ Que k8s sepa cuándo cada servicio está listo para recibir tráfico (readiness)
 ### Verificación
 
 - `go build ./...` + `go vet ./...` en auth, notes, social, infacadem: OK en los 4.
-- `k8s/manifests.yaml`: 10 documentos YAML válidos; los 4 deployments de servicios Go tienen `readinessProbe` y `livenessProbe`.
+- `k8s/manifests.yaml`: 12 documentos YAML válidos; los 5 deployments de servicios Go (incluido `ai`) tienen `readinessProbe` y `livenessProbe`.
 - `/health` ya existía en los 4 servicios (responde `{"status":"UP"}`); se reusa para ambos probes sin cambios de handler.
 - No se modificó `docker-compose.yml` (compose ya espera que Postgres esté up vía `depends_on` implícito o el contenedor simplemente arranca; el retry de DB cubre el caso de que Postgres acepte conexiones más tarde).
+
+## 4_5_5 — Microservicio IA: scaffold + API
+
+### Objetivo
+
+Levantar `back/ai` como un microservicio Go independiente, con su propio puerto, API REST y estructura de capas (`handler → service → model`), siguiendo el mismo patrón que los demás servicios (`auth`, `notes`, `social`, `infacadem`). Sin dependencia obligatoria de Postgres (modo tolerante/scaffold). La integración real con Gemini (PDF→Markdown) se conecta en la tarea 4_5_6.
+
+### Archivos creados
+
+| Archivo | Contenido |
+|---|---|
+| `back/ai/go.mod` | Módulo Go independiente (`github.com/kurovoxx/tallerintegracion3/back/ai`, Go 1.26) con `gin` + `godotenv`. |
+| `back/ai/internal/config/config.go` | `Config{Port, AIPort, GeminiAPIKey, InternalAPIKey, DatabaseURL}` con carga de `.env` y defaults. Puerto por defecto `8084`. |
+| `back/ai/internal/model/ai_models.go` | `GenerateRequest{Input, Operation}`, `GenerateResponse{Output, ID, Provider}`, `HealthResponse{Status, Service}`. |
+| `back/ai/internal/service/ai_service.go` | Interfaz `AIService{Generate}` + `MockAIService` (respuesta simulada, sin proveedor externo). |
+| `back/ai/internal/handler/http/health_handler.go` | `GET /health` → `{"status":"UP","service":"ai-service"}`. |
+| `back/ai/internal/handler/http/ai_handler.go` | `POST /ai/generate` → recibe `GenerateRequest`, llama al servicio, devuelve `GenerateResponse`. |
+| `back/ai/cmd/server/main.go` | Servidor Gin con `/health`, `/health/db` y `/ai/generate`. Apagado gracioso con SIGINT/SIGTERM. |
+| `back/ai/Dockerfile` | Multistage (golang:1.26-alpine → alpine:3.19), expone `:8084`. |
+
+### Archivos modificados
+
+| Archivo | Cambio |
+|---|---|
+| `docker-compose.yml` | Agregado servicio `ai` (puerto 8084, `GEMINI_API_KEY`, `INTERNAL_API_KEY`, `DATABASE_URL` opcional, `depends_on: postgres`). |
+| `.env.example` | Agregado `AI_PORT=8084` y `GEMINI_API_KEY=` (placeholder). |
+| `.github/workflows/build-images.yml` | Agregado `{name: ai, context: back/ai}` a la matriz de build. |
+| `k8s/manifests.yaml` | Agregado Deployment `ai` (puerto 8084, `readinessProbe` + `livenessProbe` en `/health`) y Service `ai` (puerto 8084). |
+
+### Endpoints de la API
+
+| Método | Ruta | Responde |
+|---|---|---|
+| `GET` | `/health` | `{"status":"UP","service":"ai-service"}` |
+| `GET` | `/health/db` | `{"status":"UP","service":"ai-service","note":"sin dependencia obligatoria de Postgres (scaffold)"}` |
+| `POST` | `/ai/generate` | Recibe `{"input","operation"}`, devuelve `{"output","id","provider"}`. Modo mock devuelve respuesta simulada. |
+
+### Cómo interactúa con el resto del proyecto
+
+- Con **4_5_1**: `back/ai` no tiene migraciones propias en esta tarea (no usa Postgres obligatoriamente). Si en el futuro persiste datos, se agregarán bajo `back/ai/db/migrations/` y se validarán en el gate de deploy.
+- Con **4_5_2**: `back/ai` lleva `readinessProbe`/`livenessProbe` en k8s (igual que los demás servicios). No tiene retry de DB porque no depende de Postgres obligatoriamente.
+- Con **4_5_6** (Gemini PDF→Markdown): `MockAIService` se reemplazará por una implementación real que llame a Gemini. El endpoint `POST /ai/generate` es el punto de entrada para esa integración.
+- Con **front**: el front puede llamar a `/ai/generate` vía el gateway de nginx (prefijo `/api-ai` por definir) una vez exista el endpoint real.
+
+### Verificación
+
+- `go build ./...` + `go vet ./...` en `back/ai`: OK.
+- Servidor arranca en `:8084` y responde `/health`, `/health/db`, `/ai/generate` correctamente (modo mock).
+- `docker-compose.yml`: parsea correctamente, servicio `ai` con `depends_on: postgres`.
+- `k8s/manifests.yaml`: 12 documentos YAML válidos; deployment `ai` tiene ambos probes.
+- `.github/workflows/build-images.yml`: `ai` incluido en la matriz de build.
+
+### No entra
+
+- Integración real con Gemini (tarea 4_5_6).
+- Persistencia en Postgres (opcional, `DatabaseURL` está en config pero no se usa aún en el scaffold).
+- Auth/JWT en endpoints de IA (por ahora público; se añadirá cuando sea necesario).
+- `db/migrations/` para `ai` (no hay esquema de BD aún).

@@ -146,6 +146,26 @@ services:
       - ti3-net
     restart: unless-stopped
 
+  ai:
+    build:
+      context: ./back/ai
+      dockerfile: Dockerfile
+    container_name: ti3-ai
+    ports:
+      - "8084:8084" # HTTP (Gin): microservicio IA
+    environment:
+      PORT: 8084
+      AI_PORT: 8084
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ti3-net
+    restart: unless-stopped
+
   infacadem:
     build:
       context: ./back/infacadem
