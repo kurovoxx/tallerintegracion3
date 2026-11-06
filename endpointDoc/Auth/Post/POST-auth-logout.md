@@ -1,4 +1,5 @@
-# POST /auth/logout
+# `POST /auth/logout`
+
 
 Cierra la sesión del usuario revocando de forma inmediata su Refresh Token en la base de datos.
 

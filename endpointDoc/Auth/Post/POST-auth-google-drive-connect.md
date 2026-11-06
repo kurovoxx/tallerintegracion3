@@ -1,4 +1,5 @@
-# POST /auth/google-drive/connect
+# `POST /auth/google-drive/connect`
+
 
 Intercambia el código de autorización OAuth devuelto por Google por tokens de acceso/refresco y los almacena cifrados para el usuario.
 

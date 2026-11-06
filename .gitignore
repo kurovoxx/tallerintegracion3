@@ -12,3 +12,4 @@ CLAUDE.md
 # Reportes generados por scripts/load-test.sh
 reports/
 __pycache__/
+backups/

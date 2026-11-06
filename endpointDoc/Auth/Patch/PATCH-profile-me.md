@@ -1,4 +1,5 @@
-# PATCH /profile/me
+# `PATCH /profile/me`
+
 
 Actualiza parcialmente los campos del perfil personal del usuario autenticado.
 

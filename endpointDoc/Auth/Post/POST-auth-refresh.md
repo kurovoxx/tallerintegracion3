@@ -1,4 +1,4 @@
-# POST /auth/refresh
+# `POST /auth/refresh`
 
 Renueva un Access Token expirado utilizando un Refresh Token activo e implementa **rotación de tokens** (revoca el token usado y emite uno nuevo para detectar reutilizaciones no autorizadas).
 

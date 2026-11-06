@@ -1,4 +1,5 @@
-# GET /auth/google-calendar/status
+# `GET /auth/google-calendar/status`
+
 
 Verifica si el usuario tiene vinculada su cuenta de Google Calendar.
 

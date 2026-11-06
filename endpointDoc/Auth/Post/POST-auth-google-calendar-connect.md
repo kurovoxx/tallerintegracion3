@@ -1,4 +1,5 @@
-# POST /auth/google-calendar/connect
+# `POST /auth/google-calendar/connect`
+
 
 Conecta la cuenta de Google Calendar del usuario mediante OAuth para permitir la sincronización automática de reuniones de grupo.
 

@@ -1,4 +1,5 @@
-# GET /profile/me
+# `GET /profile/me`
+
 
 Obtiene el perfil extendido y datos personales del usuario autenticado.
 
