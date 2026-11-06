@@ -49,6 +49,17 @@ void main() {
     });
     test('extrae el UUID de un enlace', () {
       expect(extractNoteId('https://ti3.example/notes/$_id?x=1'), _id);
+      expect(
+        extractNoteId(
+          'Mira este apunte: https://app/#/notes/${_id.toUpperCase()} !',
+        ),
+        _id,
+      );
+    });
+    test('extrae el UUID de un enlace codificado', () {
+      final encoded = 'https://app/notes/${_id.replaceAll('-', '%2D')}';
+      expect(extractNoteId(encoded), _id);
+      expect(extractNoteId('https://app/%ZZ'), isNull);
     });
     test('rechaza texto sin UUID', () {
       expect(extractNoteId('calculo integral'), isNull);

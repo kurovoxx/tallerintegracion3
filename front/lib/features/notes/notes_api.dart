@@ -87,11 +87,21 @@ final RegExp _uuidPattern = RegExp(
 );
 
 /// Extrae el ID (UUID) de un apunte desde lo que el usuario pegue: el ID solo,
-/// con espacios o mayúsculas, o un enlace `.../notes/<id>`. Devuelve el UUID en
-/// minúsculas o null si no hay ninguno.
+/// con espacios o mayúsculas, o un enlace/URL completo que lo contenga
+/// (`https://.../notes/<id>?x=1`, también codificado: `%2D` en vez de `-`).
+/// Devuelve el UUID en minúsculas o null si no hay ninguno.
 String? extractNoteId(String input) {
-  final match = _uuidPattern.firstMatch(input.trim());
-  return match?.group(0)?.toLowerCase();
+  final text = input.trim();
+  final direct = _uuidPattern.firstMatch(text);
+  if (direct != null) return direct.group(0)!.toLowerCase();
+  if (!text.contains('%')) return null;
+  String decoded;
+  try {
+    decoded = Uri.decodeFull(text);
+  } catch (_) {
+    return null;
+  }
+  return _uuidPattern.firstMatch(decoded)?.group(0)?.toLowerCase();
 }
 
 /// Apunte completo de GET /notes/{id}: metadata, contenido (desde Drive) y

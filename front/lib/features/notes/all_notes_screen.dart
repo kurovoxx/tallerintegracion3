@@ -2075,7 +2075,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   }
 
   void _onSearchChanged(String query) {
+    final hadId = extractNoteId(_currentQuery) != null;
     _currentQuery = query;
+    // El aviso "Buscar por ID" aparece/desaparece al instante al pegar un
+    // UUID o un enlace que lo contenga, sin esperar el debounce del FTS.
+    if (hadId != (extractNoteId(query) != null)) setState(() {});
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 300), () {
       _applySearch(query);
@@ -3176,14 +3180,15 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       padding: const EdgeInsets.all(AppDimens.spaceMd),
       shadow: AppShadows.hard2,
       backgroundColor: AppColors.accentYellow,
-      onTap: () => _openIdSearch(initialQuery: _currentQuery),
+      // Se abre el buscador solo con el UUID extraído (no la URL completa).
+      onTap: () => _openIdSearch(initialQuery: extractNoteId(_currentQuery)),
       child: const Row(
         children: <Widget>[
           Icon(Icons.tag_rounded, color: AppColors.text, size: 18),
           SizedBox(width: AppDimens.spaceSm),
           Expanded(
             child: Text(
-              'Eso parece el ID de un apunte. Toca aquí para buscarlo directamente.',
+              'Eso parece el ID (o enlace) de un apunte. Toca aquí para buscarlo directamente.',
               style: TextStyle(
                 fontSize: 12.5,
                 fontWeight: FontWeight.w800,

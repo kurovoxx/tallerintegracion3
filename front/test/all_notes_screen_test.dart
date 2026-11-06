@@ -64,6 +64,37 @@ void main() {
     }
   }
 
+  testWidgets(
+    'pegar un enlace con UUID muestra el aviso y abre el buscador solo con el ID',
+    (tester) async {
+      const id = '0f8e2c1a-5b6d-4c7e-9a8b-1c2d3e4f5a6b';
+      await pumpNotes(tester, const Size(1440, 900));
+      expect(find.byKey(const Key('notes-id-search-hint')), findsNothing);
+
+      // Texto normal: sin aviso.
+      await tester.enterText(find.byType(TextField).first, 'integrales');
+      await tester.pump();
+      expect(find.byKey(const Key('notes-id-search-hint')), findsNothing);
+
+      // URL completa con el UUID (en mayúsculas): el aviso aparece al instante.
+      await tester.enterText(
+        find.byType(TextField).first,
+        'https://ti3-brojas.dev.censei.cl/notes/${id.toUpperCase()}?ref=chat',
+      );
+      await tester.pump();
+      expect(find.byKey(const Key('notes-id-search-hint')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('notes-id-search-hint')));
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(milliseconds: 400));
+      final field = tester.widget<TextField>(
+        find.byKey(const Key('note-id-search-field')),
+      );
+      expect(field.controller!.text, id);
+      await tester.pump(const Duration(seconds: 1));
+    },
+  );
+
   testWidgets('renderiza y alterna la vista de la grilla en desktop', (
     tester,
   ) async {
