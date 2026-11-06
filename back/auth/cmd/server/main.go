@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/config"
 	identityv1 "github.com/kurovoxx/tallerintegracion3/back/auth/internal/gen/identityv1"
 	grpchandler "github.com/kurovoxx/tallerintegracion3/back/auth/internal/handler/grpc"
@@ -24,23 +25,41 @@ func main() {
 	cfg := config.Load()
 	log.Printf("config: DATABASE_URL set=%v JWT_SECRET set=%v", cfg.DatabaseURL != "", cfg.JWTSecret != "")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	pool, err := repository.NewPool(ctx, cfg.DatabaseURL)
+	// Espera a que Postgres acepte conexiones (retry con backoff lineal).
+	// Al desplegar en k8s el contenedor puede arrancar antes que Postgres;
+	// sin esto el servicio muere con log.Fatalf al primer intento.
+	var pool *pgxpool.Pool
+	var err error
+	const maxDBIntents = 30
+	for i := 0; i < maxDBIntents; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		pool, err = repository.NewPool(ctx, cfg.DatabaseURL)
+		if err == nil {
+			err = pool.Ping(ctx)
+		}
+		cancel()
+		if err == nil {
+			break
+		}
+		if pool != nil {
+			pool.Close()
+		}
+		log.Printf("auth: esperando a Postgres (intento %d/%d): %v", i+1, maxDBIntents, err)
+		time.Sleep(time.Duration(i+1) * time.Second)
+	}
 	if err != nil {
-		log.Fatalf("No se pudo conectar a Postgres (DATABASE_URL): %v", err)
+		log.Fatalf("auth: no se pudo conectar a Postgres tras %d intentos: %v", maxDBIntents, err)
 	}
 	defer pool.Close()
 	log.Println("PostgreSQL conectado OK (pgxpool Ping)")
 
 	// Verificación rápida de schemas críticos Sprint 1
 	var cnt int
-	if err := pool.QueryRow(ctx, "select count(*) from identity.users").Scan(&cnt); err != nil {
+	if err := pool.QueryRow(context.Background(), "select count(*) from identity.users").Scan(&cnt); err != nil {
 		log.Fatalf("query identity.users: %v", err)
 	}
 	log.Printf("DB check: identity.users count=%d", cnt)
-	if err := repository.VerifyAccountDeletionSchema(ctx, pool); err != nil {
+	if err := repository.VerifyAccountDeletionSchema(context.Background(), pool); err != nil {
 		log.Fatalf("%v", err)
 	}
 

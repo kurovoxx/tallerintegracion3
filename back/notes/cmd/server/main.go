@@ -33,9 +33,6 @@ func main() {
 	cfg := config.Load()
 	log.Printf("config notes: DATABASE_URL set=%v PORT=%s STORAGE=%s", cfg.DatabaseURL != "", cfg.Port, cfg.StorageMode)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
 	if cfg.DatabaseURL == "" {
 		log.Println("notes: DATABASE_URL vacío — levantando con stores en memoria (modo mock)")
 		if strings.EqualFold(strings.TrimSpace(cfg.StorageMode), "drive") {
@@ -45,21 +42,42 @@ func main() {
 		return
 	}
 
-	p, err := repository.NewPool(ctx, cfg.DatabaseURL)
+	// Espera a que Postgres acepte conexiones (retry con backoff lineal).
+	// Al desplegar en k8s el contenedor puede arrancar antes que Postgres;
+	// sin esto el servicio muere con log.Fatalf al primer intento.
+	var p *pgxpool.Pool
+	var err error
+	const maxDBIntents = 30
+	for i := 0; i < maxDBIntents; i++ {
+		ctxInt, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		p, err = repository.NewPool(ctxInt, cfg.DatabaseURL)
+		if err == nil {
+			err = p.Ping(ctxInt)
+		}
+		cancel()
+		if err == nil {
+			break
+		}
+		if p != nil {
+			p.Close()
+		}
+		log.Printf("notes: esperando a Postgres (intento %d/%d): %v", i+1, maxDBIntents, err)
+		time.Sleep(time.Duration(i+1) * time.Second)
+	}
 	if err != nil {
-		log.Fatalf("No se pudo conectar a Postgres: %v", err)
+		log.Fatalf("notes: no se pudo conectar a Postgres tras %d intentos: %v", maxDBIntents, err)
 	}
 	defer p.Close()
 	log.Println("Postgres conectado OK (notes)")
 	var cnt int
-	if err := p.QueryRow(ctx, "select count(*) from notes.notes").Scan(&cnt); err != nil {
+	if err := p.QueryRow(context.Background(), "select count(*) from notes.notes").Scan(&cnt); err != nil {
 		log.Printf("check notes.notes: %v (schema puede no existir aún)", err)
 	} else {
 		log.Printf("DB check: notes.notes count=%d", cnt)
 	}
 	// Sin estas tablas el gate rechaza toda petición autenticada (503) y el
 	// borrado de cuenta queda pending para siempre: mejor no arrancar.
-	if err := repository.VerifyAccountDeletionSchema(ctx, p); err != nil {
+	if err := repository.VerifyAccountDeletionSchema(context.Background(), p); err != nil {
 		log.Fatalf("%v", err)
 	}
 	runServer(p, selectDriveClient(p, cfg), cfg)

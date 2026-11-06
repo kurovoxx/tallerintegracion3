@@ -66,7 +66,51 @@ una Postgres real (gate de deploy previo a `build-images`).
 
 ### No entra
 
-- Migrator automático al arrancar cada servicio (el `cmd/server/main.go` de infacadem sigue sin aplicar migraciones solas; solo hace check best-effort de `academic.curricula`). Queda para una tarea posterior o para 4_5_2 (retry de DB).
-- `initContainer` en `k8s/manifests.yaml` para aplicar migraciones antes de los deployments: k8s sigue sin probes ni initContainers en los servicios (tema de 4_5_2).
+- Migrator automático al arrancar cada servicio (el `cmd/server/main.go` de infacadem sigue sin aplicar migraciones solas; solo hace check best-effort de `academic.curricula`). Queda para una tarea posterior.
+- `initContainer` en `k8s/manifests.yaml` para aplicar migraciones antes de los deployments: no se agregó; los servicios confían en que el esquema base ya exista (vía `docker/postgres/init.sql` en compose o aplicado manualmente en pillan).
 - Migraciones nuevas para `realtime`: no tiene esquema propio definido aún.
 - Cambios en migraciones existentes de `auth`, `notes`, `social`: no se modificaron, solo se validan en el gate.
+
+## 4_5_2 — Readiness/liveness probes + retry de DB al arrancar
+
+### Objetivo
+
+Que k8s sepa cuándo cada servicio está listo para recibir tráfico (readiness) y cuándo está vivo (liveness), y que cada servicio no falle si Postgres aún no está lista al arrancar (retry con backoff en lugar de `log.Fatalf` al primer intento).
+
+### Archivos modificados
+
+| Archivo | Cambio |
+|---|---|
+| `back/auth/cmd/server/main.go` | `NewPool` + `Ping` envueltos en loop de retry (máx. 30 intentos, backoff lineal 1s/2s/3s…). Si tras todos los intentos falla → `log.Fatalf`. Se agregó import de `pgxpool`. |
+| `back/notes/cmd/server/main.go` | Igual que auth. Respeta el modo memoria cuando `DATABASE_URL` está vacío. |
+| `back/social/cmd/server/main.go` | Igual que auth. |
+| `back/infacadem/cmd/server/main.go` | Igual patrón de retry, pero se mantiene el comportamiento tolerante: si tras todos los intentos falla, `pool = nil` (sin `log.Fatalf`) y `/health/db` responde 503. |
+| `k8s/manifests.yaml` | Agregado `readinessProbe` y `livenessProbe` (httpGet a `/health`) a los 4 deployments de servicios Go (auth, notes, social, infacadem). El front no lleva probes (nginx estático, sin DB). |
+
+### Detalles de los probes (k8s)
+
+| Probe | Path | Puerto | initialDelaySeconds | periodSeconds | failureThreshold |
+|---|---|---|---|---|---|
+| readiness | `/health` | HTTP del servicio | 10 | 5 | 3 |
+| liveness | `/health` | HTTP del servicio | 15 | 10 | 5 |
+
+### Detalles del retry de DB
+
+- Máximo 30 intentos.
+- Backoff lineal: `time.Duration(i+1) * time.Second` (1s, 2s, 3s… 30s).
+- Cada intento: `NewPool` con contexto de 5s + `Ping` con mismo contexto.
+- Si `NewPool` o `Ping` falla, se cierra el pool parcial (si existe) y se reintenta.
+- Si agota los intentos: `log.Fatalf` en auth/notes/social; `pool = nil` (advertencia) en infacadem.
+
+### Cómo interactúa con el resto del proyecto
+
+- Con **4_5_1**: el gate de deploy valida que las migraciones aplican; el retry de DB asegura que el servicio no muera si Postgres tarda en estar lista al desplegar. Son complementarios.
+- Con **front**: los probes evitan que nginx/k8s envíe tráfico a pods que aún no están listos, reduciendo 503 en el front durante despliegues o reinicios.
+- Con **4_5_5** (microservicio IA): cuando se cree `back/ai`, debería llevar el mismo patrón de retry de DB y probes si usa Postgres.
+
+### Verificación
+
+- `go build ./...` + `go vet ./...` en auth, notes, social, infacadem: OK en los 4.
+- `k8s/manifests.yaml`: 10 documentos YAML válidos; los 4 deployments de servicios Go tienen `readinessProbe` y `livenessProbe`.
+- `/health` ya existía en los 4 servicios (responde `{"status":"UP"}`); se reusa para ambos probes sin cambios de handler.
+- No se modificó `docker-compose.yml` (compose ya espera que Postgres esté up vía `depends_on` implícito o el contenedor simplemente arranca; el retry de DB cubre el caso de que Postgres acepte conexiones más tarde).
