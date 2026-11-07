@@ -126,6 +126,7 @@ CREATE TABLE academic.schedules (
     start_time time NOT NULL,
     end_time time NOT NULL,
     modality varchar(50),
+    room varchar(100),
     CHECK (end_time > start_time)
 );
 
