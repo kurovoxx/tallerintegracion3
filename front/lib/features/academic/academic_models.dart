@@ -99,6 +99,7 @@ class AcademicScheduleSlot {
     required this.startTime,
     required this.endTime,
     this.modality,
+    this.room,
   });
 
   final String id;
@@ -111,6 +112,7 @@ class AcademicScheduleSlot {
   final String startTime;
   final String endTime;
   final String? modality;
+  final String? room;
 
   factory AcademicScheduleSlot.fromJson(Map<String, dynamic> j) {
     int day = 0;
@@ -127,6 +129,7 @@ class AcademicScheduleSlot {
       startTime: (j['start_time'] as String?) ?? '',
       endTime: (j['end_time'] as String?) ?? '',
       modality: _opt(j, 'modality'),
+      room: _opt(j, 'room'),
     );
   }
 

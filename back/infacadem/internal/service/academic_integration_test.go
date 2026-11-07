@@ -58,6 +58,7 @@ CREATE TABLE academic.schedules (
     start_time time NOT NULL,
     end_time time NOT NULL,
     modality varchar(50),
+    room varchar(100),
     CHECK (end_time > start_time)
 );
 CREATE TABLE academic.contents (
@@ -157,12 +158,16 @@ func TestAcademicIntegration_CRUDCascada(t *testing.T) {
 	if mat.Credits == nil || *mat.Credits != 10 || mat.Status != "in_progress" {
 		t.Fatalf("subject: %+v", mat)
 	}
-	hor, err := schSvc.Create(ctx, intUserA, mat.ID, 3, "14:00", "15:30", nil)
+	room := "Lab-3"
+	hor, err := schSvc.Create(ctx, intUserA, mat.ID, 3, "14:00", "15:30", nil, &room)
 	if err != nil {
 		t.Fatalf("create schedule: %v", err)
 	}
 	if hor.StartTime.Format("15:04") != "14:00" {
 		t.Fatalf("start: %v", hor.StartTime)
+	}
+	if hor.Room == nil || *hor.Room != "Lab-3" {
+		t.Fatalf("room: %+v", hor)
 	}
 
 	// Propiedad cruzada a nivel SQL: todo 404.

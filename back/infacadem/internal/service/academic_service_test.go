@@ -217,7 +217,7 @@ func (f *fakeSchedules) ownedSubjectLocked(subjectID, userID string) bool {
 	return ok && c.UserID == userID
 }
 
-func (f *fakeSchedules) Create(_ context.Context, userID, subjectID string, day int, start, end time.Time, modality *string) (*model.Schedule, error) {
+func (f *fakeSchedules) Create(_ context.Context, userID, subjectID string, day int, start, end time.Time, modality, room *string) (*model.Schedule, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sub.mu.Lock()
@@ -225,7 +225,7 @@ func (f *fakeSchedules) Create(_ context.Context, userID, subjectID string, day 
 	if !f.ownedSubjectLocked(subjectID, userID) {
 		return nil, nil
 	}
-	s := &model.Schedule{ID: uuid.NewString(), SubjectID: subjectID, DayOfWeek: day, StartTime: start, EndTime: end, Modality: modality}
+	s := &model.Schedule{ID: uuid.NewString(), SubjectID: subjectID, DayOfWeek: day, StartTime: start, EndTime: end, Modality: modality, Room: room}
 	f.items[s.ID] = s
 	cp := *s
 	return &cp, nil
@@ -430,7 +430,7 @@ func TestSchedule_CRUD_Validaciones(t *testing.T) {
 	malla, _ := NewCurriculumService(cur).Create(ctx, userA, "Malla")
 	mat, _ := subSvc.Create(ctx, userA, malla.ID, SubjectInput{Name: strPtr("Física")})
 
-	s, err := schSvc.Create(ctx, userA, mat.ID, 1, "08:00", "09:30", nil)
+	s, err := schSvc.Create(ctx, userA, mat.ID, 1, "08:00", "09:30", nil, nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -438,28 +438,28 @@ func TestSchedule_CRUD_Validaciones(t *testing.T) {
 		t.Fatalf("horas: %+v", s)
 	}
 	for _, day := range []int{-1, 7} {
-		if _, err := schSvc.Create(ctx, userA, mat.ID, day, "08:00", "09:00", nil); err == nil {
+		if _, err := schSvc.Create(ctx, userA, mat.ID, day, "08:00", "09:00", nil, nil); err == nil {
 			t.Fatalf("day %d debe ser 400", day)
 		} else {
 			mustCode(t, err, "invalid_day_of_week")
 		}
 	}
-	if _, err := schSvc.Create(ctx, userA, mat.ID, 1, "09:00", "09:00", nil); err == nil {
+	if _, err := schSvc.Create(ctx, userA, mat.ID, 1, "09:00", "09:00", nil, nil); err == nil {
 		t.Fatal("end==start debe ser 400")
 	} else {
 		mustCode(t, err, "invalid_time_range")
 	}
-	if _, err := schSvc.Create(ctx, userA, mat.ID, 1, "10:00", "09:00", nil); err == nil {
+	if _, err := schSvc.Create(ctx, userA, mat.ID, 1, "10:00", "09:00", nil, nil); err == nil {
 		t.Fatal("end<start debe ser 400")
 	} else {
 		mustCode(t, err, "invalid_time_range")
 	}
-	if _, err := schSvc.Create(ctx, userA, mat.ID, 1, "mañana", "09:00", nil); err == nil {
+	if _, err := schSvc.Create(ctx, userA, mat.ID, 1, "mañana", "09:00", nil, nil); err == nil {
 		t.Fatal("formato malo debe ser 400")
 	} else {
 		mustCode(t, err, "invalid_time_format")
 	}
-	if _, err := schSvc.Create(ctx, userB, mat.ID, 1, "08:00", "09:00", nil); err == nil {
+	if _, err := schSvc.Create(ctx, userB, mat.ID, 1, "08:00", "09:00", nil, nil); err == nil {
 		t.Fatal("materia ajena debe ser 404")
 	} else {
 		mustCode(t, err, "not_found")

@@ -86,11 +86,13 @@ void main() {
       days: drafts.map((d) => d.dayOfWeek).toList(),
       startTime: '10:00',
       endTime: '11:30',
+      room: ' Lab-3 ',
     );
     expect(res.hasFailures, isFalse);
     expect(res.createdIds, ['h1', 'h2']);
     expect(posts.map((p) => p['day_of_week']), [1, 3]);
     expect(posts.first['start_time'], '10:00');
+    expect(posts.map((p) => p['room']), ['Lab-3', 'Lab-3']);
   });
 
   test(
@@ -204,8 +206,19 @@ void main() {
       'day_of_week': 3,
       'start_time': '10:00:00',
       'end_time': '11:30:00',
+      'room': 'Lab-3',
     });
     expect(hhMmToMinutes(slot.startTime), 600);
     expect(slot.modality, isNull);
+    expect(slot.room, 'Lab-3');
+    final blankRoom = AcademicScheduleSlot.fromJson({
+      'id': 'h2',
+      'subject_id': 's1',
+      'day_of_week': 4,
+      'start_time': '10:00',
+      'end_time': '11:30',
+      'room': '   ',
+    });
+    expect(blankRoom.room, isNull);
   });
 }

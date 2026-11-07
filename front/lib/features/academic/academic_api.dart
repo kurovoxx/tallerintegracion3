@@ -296,6 +296,7 @@ class AcademicApi {
     required String startTime,
     required String endTime,
     String? modality,
+    String? room,
   }) async {
     final res = await AuthedHttp.run(
       () => _client
@@ -308,6 +309,7 @@ class AcademicApi {
               'end_time': endTime,
               if (modality != null && modality.trim().isNotEmpty)
                 'modality': modality.trim(),
+              if (room != null && room.trim().isNotEmpty) 'room': room.trim(),
             }),
           )
           .timeout(const Duration(seconds: 10)),
@@ -331,6 +333,7 @@ class AcademicApi {
     required String startTime,
     required String endTime,
     String? modality,
+    String? room,
     bool skipExisting = true,
   }) async {
     final created = <String>[];
@@ -366,6 +369,7 @@ class AcademicApi {
             startTime: startTime,
             endTime: endTime,
             modality: modality,
+            room: room,
           ),
         );
       } on AcademicApiException catch (e) {

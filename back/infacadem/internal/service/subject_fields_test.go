@@ -85,7 +85,7 @@ func TestSchedule_Modality_Create(t *testing.T) {
 	mat, _ := subSvc.Create(ctx, userA, malla.ID, SubjectInput{Name: strPtr("S")})
 
 	mod := "  Cátedra "
-	s, err := schSvc.Create(ctx, userA, mat.ID, 1, "08:00", "09:30", &mod)
+	s, err := schSvc.Create(ctx, userA, mat.ID, 1, "08:00", "09:30", &mod, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestSchedule_Modality_Create(t *testing.T) {
 
 	// Vacía/nil = NULL.
 	for _, m := range []*string{nil, strPtr(""), strPtr("   ")} {
-		s, err := schSvc.Create(ctx, userA, mat.ID, 2, "10:00", "11:30", m)
+		s, err := schSvc.Create(ctx, userA, mat.ID, 2, "10:00", "11:30", m, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -117,5 +117,45 @@ func TestSchedule_Modality_Create(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("modality en list: %+v", list)
+	}
+}
+
+func TestSchedule_Room_Create(t *testing.T) {
+	ctx := context.Background()
+	_, subSvc, schSvc, cur, _, _ := newFixture()
+	malla, _ := NewCurriculumService(cur).Create(ctx, userA, "M")
+	mat, _ := subSvc.Create(ctx, userA, malla.ID, SubjectInput{Name: strPtr("S")})
+
+	room := "  Lab-3 "
+	s, err := schSvc.Create(ctx, userA, mat.ID, 1, "08:00", "09:30", nil, &room)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Room == nil || *s.Room != "Lab-3" {
+		t.Fatalf("room trim: %+v", s)
+	}
+
+	for _, r := range []*string{nil, strPtr(""), strPtr("   ")} {
+		s, err := schSvc.Create(ctx, userA, mat.ID, 2, "10:00", "11:30", nil, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.Room != nil {
+			t.Fatalf("room NULL: %+v", s)
+		}
+	}
+
+	list, err := schSvc.List(ctx, userA, mat.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, h := range list {
+		if h.Room != nil && *h.Room == "Lab-3" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("room en list: %+v", list)
 	}
 }

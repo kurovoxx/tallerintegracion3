@@ -242,7 +242,7 @@ func (f *fakeSchedules) ownedSubjectLocked(subjectID, userID string) bool {
 	return ok && c.UserID == userID
 }
 
-func (f *fakeSchedules) Create(_ context.Context, userID, subjectID string, day int, start, end time.Time, modality *string) (*model.Schedule, error) {
+func (f *fakeSchedules) Create(_ context.Context, userID, subjectID string, day int, start, end time.Time, modality, room *string) (*model.Schedule, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sub.mu.Lock()
@@ -250,7 +250,7 @@ func (f *fakeSchedules) Create(_ context.Context, userID, subjectID string, day 
 	if !f.ownedSubjectLocked(subjectID, userID) {
 		return nil, nil
 	}
-	s := &model.Schedule{ID: uuid.NewString(), SubjectID: subjectID, DayOfWeek: day, StartTime: start, EndTime: end, Modality: modality}
+	s := &model.Schedule{ID: uuid.NewString(), SubjectID: subjectID, DayOfWeek: day, StartTime: start, EndTime: end, Modality: modality, Room: room}
 	f.items[s.ID] = s
 	cp := *s
 	return &cp, nil

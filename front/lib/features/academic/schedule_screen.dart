@@ -298,7 +298,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
               dayOfWeek: slot.dayOfWeek,
               startMinutes: start,
               endMinutes: end,
-              room: s.room ?? 'Por asignar',
+              room: slot.room ?? s.room ?? 'Por asignar',
               professor: s.professor ?? 'Por asignar',
               modality: slot.modality ?? 'Cátedra',
             ),
