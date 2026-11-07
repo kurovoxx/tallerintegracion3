@@ -29,6 +29,21 @@ const List<List<String>> _kScheduleBlocks = [
 
 String _blockLabel(List<String> block) => '${block[0]}–${block[1]}';
 
+String? _realRoom(String? raw) {
+  final value = raw?.trim();
+  if (value == null || value.isEmpty || value.toLowerCase() == 'por asignar') {
+    return null;
+  }
+  return value;
+}
+
+class _ScheduleEntry {
+  const _ScheduleEntry({required this.label, this.room});
+
+  final String label;
+  final String? room;
+}
+
 class CoursesScreen extends StatefulWidget {
   const CoursesScreen({super.key});
 
@@ -267,6 +282,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
   /// duplicar: el fan-out verifica por GET antes de reintentar).
   Future<void> _createCourseBackend(Map<String, dynamic> result) async {
     final messenger = ScaffoldMessenger.of(context);
+    final courseRoom = _realRoom(result['room'] as String?);
     String subjectId;
     try {
       subjectId = await _academicApi.createSubject(
@@ -274,7 +290,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
         name: (result['name'] as String?) ?? '',
         code: result['code'] as String?,
         professor: result['professor'] as String?,
-        room: result['room'] as String?,
+        room: courseRoom,
         credits: result['credits'] as int?,
         status: (result['status'] as String?) ?? kSubjectPending,
         semester: 6,
@@ -292,6 +308,10 @@ class _CoursesScreenState extends State<CoursesScreen> {
 
     final failedDays = <String>[];
     final scheduleText = (result['schedule'] as String?) ?? '';
+    final rawRooms = result['schedule_rooms'];
+    final scheduleRooms = rawRooms is Map
+        ? Map<String, String?>.from(rawRooms)
+        : const <String, String?>{};
     if (scheduleText.trim().isNotEmpty && scheduleText != 'Por definir') {
       for (final entry in _splitScheduleEntries(scheduleText)) {
         List<ScheduleDraft> drafts;
@@ -302,11 +322,13 @@ class _CoursesScreenState extends State<CoursesScreen> {
           continue;
         }
         if (drafts.isEmpty) continue;
+        final entryRoom = _realRoom(scheduleRooms[entry.trim()]);
         final res = await _academicApi.createSchedulesFanOut(
           subjectId: subjectId,
           days: drafts.map((d) => d.dayOfWeek).toList(),
           startTime: drafts.first.startTime,
           endTime: drafts.first.endTime,
+          room: entryRoom ?? courseRoom,
         );
         for (final day in res.failed.keys) {
           failedDays.add(dayNumberToLabel(day));
@@ -1449,8 +1471,9 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
   late final TextEditingController _scheduleCtrl;
   late final TextEditingController _roomCtrl;
   String _status = kSubjectInProgress;
-  // Bloques de horario añadidos, p.ej. 'Lun / Mié · 10:00–11:30'.
-  final List<String> _scheduleEntries = [];
+  // Bloques de horario añadidos, p.ej. 'Lun / Mié · 10:00–11:30', con su
+  // sala opcional (la sala del curso se usa como fallback al enviar).
+  final List<_ScheduleEntry> _scheduleEntries = [];
 
   @override
   void initState() {
@@ -1487,6 +1510,9 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
       'schedule': _scheduleCtrl.text.trim().isEmpty
           ? 'Por definir'
           : _scheduleCtrl.text.trim(),
+      'schedule_rooms': <String, String?>{
+        for (final entry in _scheduleEntries) entry.label: entry.room,
+      },
       'room': _roomCtrl.text.trim().isEmpty
           ? 'Por asignar'
           : _roomCtrl.text.trim(),
@@ -1495,7 +1521,7 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
 
   /// Sincroniza el campo HORARIO con los bloques añadidos.
   void _syncScheduleText() {
-    _scheduleCtrl.text = _scheduleEntries.join(' · ');
+    _scheduleCtrl.text = _scheduleEntries.map((e) => e.label).join(' · ');
   }
 
   void _removeScheduleEntry(int index) {
@@ -1508,10 +1534,10 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
   /// Abre el popup compacto de horario (días + bloque) que devuelve la
   /// lista final de entradas añadidas.
   Future<void> _openSchedulePicker() async {
-    final result = await showDialog<List<String>>(
+    final result = await showDialog<List<_ScheduleEntry>>(
       context: context,
       builder: (_) => _SchedulePickerDialog(
-        initialEntries: List<String>.of(_scheduleEntries),
+        initialEntries: List<_ScheduleEntry>.of(_scheduleEntries),
       ),
     );
     if (result == null) return;
@@ -1696,7 +1722,8 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                     children: [
                       for (var i = 0; i < _scheduleEntries.length; i++)
                         _ScheduleEntryChip(
-                          label: _scheduleEntries[i],
+                          label: _scheduleEntries[i].label,
+                          room: _scheduleEntries[i].room,
                           onDelete: () => _removeScheduleEntry(i),
                         ),
                     ],
@@ -1727,7 +1754,7 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const AppFieldLabel('SALA'),
+                          const AppFieldLabel('SALA (POR DEFECTO)'),
                           const SizedBox(height: 6),
                           TextFormField(
                             controller: _roomCtrl,
@@ -1827,7 +1854,7 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
 /// botón 'AÑADIR BLOQUE' y la lista de bloques ya añadidos. Devuelve la
 /// lista final de entradas cuando se confirma con 'LISTO'.
 class _SchedulePickerDialog extends StatefulWidget {
-  final List<String> initialEntries;
+  final List<_ScheduleEntry> initialEntries;
   const _SchedulePickerDialog({required this.initialEntries});
 
   @override
@@ -1835,24 +1862,27 @@ class _SchedulePickerDialog extends StatefulWidget {
 }
 
 class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
-  late final List<String> _added;
+  late final List<_ScheduleEntry> _added;
   final Set<String> _selectedDays = <String>{};
   String? _selectedBlock;
   late final TextEditingController _manualStartCtrl;
   late final TextEditingController _manualEndCtrl;
+  late final TextEditingController _roomCtrl;
 
   @override
   void initState() {
     super.initState();
-    _added = List<String>.of(widget.initialEntries);
+    _added = List<_ScheduleEntry>.of(widget.initialEntries);
     _manualStartCtrl = TextEditingController();
     _manualEndCtrl = TextEditingController();
+    _roomCtrl = TextEditingController();
   }
 
   @override
   void dispose() {
     _manualStartCtrl.dispose();
     _manualEndCtrl.dispose();
+    _roomCtrl.dispose();
     super.dispose();
   }
 
@@ -1908,11 +1938,14 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
     final preview = _preview;
     if (preview.isEmpty) return;
     setState(() {
-      _added.add(preview);
+      _added.add(
+        _ScheduleEntry(label: preview, room: _realRoom(_roomCtrl.text)),
+      );
       _selectedDays.clear();
       _selectedBlock = null;
       _manualStartCtrl.clear();
       _manualEndCtrl.clear();
+      _roomCtrl.clear();
     });
   }
 
@@ -2059,6 +2092,27 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                   ),
                 ),
               ],
+              const SizedBox(height: 10),
+              const Text(
+                'SALA DEL BLOQUE (OPCIONAL)',
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 10,
+                  color: AppColors.muted,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              const SizedBox(height: 6),
+              TextField(
+                controller: _roomCtrl,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                  color: AppColors.text,
+                ),
+                decoration: appInputDecoration('CJP11-204'),
+                onChanged: (_) => setState(() {}),
+              ),
               const SizedBox(height: 14),
               if (_preview.isNotEmpty) ...[
                 Container(
@@ -2071,13 +2125,27 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                     border: Border.all(color: AppColors.border, width: 2),
                     borderRadius: BorderRadius.circular(AppDimens.radius),
                   ),
-                  child: Text(
-                    _preview,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w900,
-                      fontSize: 11,
-                      color: AppColors.text,
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _preview,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w900,
+                          fontSize: 11,
+                          color: AppColors.text,
+                        ),
+                      ),
+                      if (_realRoom(_roomCtrl.text) != null)
+                        Text(
+                          'SALA ${_realRoom(_roomCtrl.text)}',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 10,
+                            color: AppColors.muted,
+                          ),
+                        ),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -2107,7 +2175,8 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                   children: [
                     for (var i = 0; i < _added.length; i++)
                       _ScheduleEntryChip(
-                        label: _added[i],
+                        label: _added[i].label,
+                        room: _added[i].room,
                         onDelete: () => _removeAt(i),
                       ),
                   ],
@@ -2131,7 +2200,8 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
             label: 'LISTO',
             icon: Icons.check_rounded,
             variant: NeobrutalistButtonVariant.primary,
-            onPressed: () => Navigator.of(context).pop(List<String>.of(_added)),
+            onPressed: () =>
+                Navigator.of(context).pop(List<_ScheduleEntry>.of(_added)),
           ),
         ],
       ),
@@ -2143,8 +2213,13 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
 /// y una 'X' para eliminarla.
 class _ScheduleEntryChip extends StatelessWidget {
   final String label;
+  final String? room;
   final VoidCallback onDelete;
-  const _ScheduleEntryChip({required this.label, required this.onDelete});
+  const _ScheduleEntryChip({
+    required this.label,
+    this.room,
+    required this.onDelete,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -2158,13 +2233,28 @@ class _ScheduleEntryChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            label,
-            style: const TextStyle(
-              fontWeight: FontWeight.w900,
-              fontSize: 10,
-              color: AppColors.text,
-            ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 10,
+                  color: AppColors.text,
+                ),
+              ),
+              if (_realRoom(room) != null)
+                Text(
+                  'SALA ${_realRoom(room)}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 9,
+                    color: AppColors.muted,
+                  ),
+                ),
+            ],
           ),
           const SizedBox(width: 4),
           InkWell(

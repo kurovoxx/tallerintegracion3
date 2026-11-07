@@ -111,3 +111,36 @@ func TestHandler_ScheduleModality_Roundtrip(t *testing.T) {
 		t.Fatalf("modality null en list: %s", body)
 	}
 }
+
+func TestHandler_ScheduleRoom_Roundtrip(t *testing.T) {
+	f := newHTTPFixture()
+	tok := mintToken(t, testUserA, testSecret, time.Hour)
+
+	w := f.do(t, "POST", "/curricula", `{"name":"M"}`, tok)
+	malla := decodeID(t, w)
+	w = f.do(t, "POST", "/curricula/"+malla+"/subjects", `{"name":"S"}`, tok)
+	mat := decodeID(t, w)
+
+	w = f.do(t, "POST", "/subjects/"+mat+"/schedules",
+		`{"day_of_week":1,"start_time":"10:00","end_time":"11:30","room":"  Lab-3 "}`, tok)
+	if w.Code != 201 {
+		t.Fatalf("schedule 201: %d %s", w.Code, w.Body.String())
+	}
+	w = f.do(t, "POST", "/subjects/"+mat+"/schedules",
+		`{"day_of_week":3,"start_time":"10:00","end_time":"11:30"}`, tok)
+	if w.Code != 201 {
+		t.Fatalf("schedule sin room 201: %d %s", w.Code, w.Body.String())
+	}
+
+	w = f.do(t, "GET", "/subjects/"+mat+"/schedules", "", tok)
+	if w.Code != 200 {
+		t.Fatalf("list 200: %d %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"room":"Lab-3"`) {
+		t.Fatalf("room en list: %s", body)
+	}
+	if !strings.Contains(body, `"room":null`) {
+		t.Fatalf("room null en list: %s", body)
+	}
+}
