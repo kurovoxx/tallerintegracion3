@@ -142,6 +142,122 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
     }
   }
 
+  // Abre el diálogo para editar nombre y descripción del grupo (solo admin).
+  Future<void> _openEditGroupDialog() async {
+    if (_detail == null || !_hasGroup) return;
+
+    final nameCtrl = TextEditingController(text: _detail!.name);
+    final descCtrl = TextEditingController(text: _detail!.description ?? '');
+    var saving = false;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setD) => AlertDialog(
+          title: const Text(
+            'EDITAR GRUPO',
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+              color: Color(0xFF1A1A1A),
+            ),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('NOMBRE', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Color(0xFF555555))),
+              const SizedBox(height: 4),
+              TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(),
+                  hintText: 'Nombre del grupo',
+                ),
+                maxLength: 200,
+              ),
+              const SizedBox(height: 16),
+              const Text('DESCRIPCIÓN', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Color(0xFF555555))),
+              const SizedBox(height: 4),
+              TextField(
+                controller: descCtrl,
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(),
+                  hintText: 'Descripción (opcional)',
+                ),
+                maxLines: 3,
+                maxLength: 500,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.of(ctx).pop(false),
+              child: const Text('CANCELAR'),
+            ),
+            ElevatedButton(
+              onPressed: saving
+                  ? null
+                  : () async {
+                      final newName = nameCtrl.text.trim();
+                      if (newName.isEmpty) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('El nombre no puede estar vacío.'),
+                          ),
+                        );
+                        return;
+                      }
+                      setD(() => saving = true);
+                      try {
+                        final updated = await _service.updateGroup(
+                          groupId: _detail!.id,
+                          name: newName,
+                          description: descCtrl.text.trim().isEmpty
+                              ? null
+                              : descCtrl.text.trim(),
+                        );
+                        if (!mounted) return;
+                        setState(() => _detail = updated);
+                        if (ctx.mounted) Navigator.of(ctx).pop(true);
+                      } on SocialApiException catch (_) {
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('No se pudo editar el grupo.'),
+                            backgroundColor: AppColors.error,
+                          ),
+                        );
+                        setD(() => saving = false);
+                      }
+                    },
+              child: Text(saving ? 'Guardando...' : 'Guardar'),
+            ),
+          ],
+        ),
+      ),
+    );
+    nameCtrl.dispose();
+    descCtrl.dispose();
+
+    if (saved == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Grupo actualizado.'),
+          backgroundColor: AppColors.border,
+        ),
+      );
+      // Forzar recarga del header para mostrar los nuevos datos.
+      _loadedForId = null;
+      _detail = null;
+      _loadHeader();
+      SocialService.notifyGroupsChanged();
+    }
+  }
+
+  bool get _hasGroup {
+    final id = widget.group['id']?.toString().trim() ?? '';
+    return id.isNotEmpty;
+  }
+
   void _maybeLoadHeader() {
     final id = _realGroupId();
     if (id == null) return;
@@ -304,6 +420,14 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: _buildHeaderTitle(groupId),
+        actions: [
+          if (_detail != null && _detail!.role == 'admin')
+            IconButton(
+              icon: const Icon(Icons.edit_rounded, color: Color(0xFF1A1A1A)),
+              onPressed: _openEditGroupDialog,
+              tooltip: 'Editar grupo',
+            ),
+        ],
       ),
       body: Column(
         children: [

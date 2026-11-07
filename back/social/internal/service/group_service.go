@@ -59,6 +59,8 @@ type GroupStore interface {
 	CountAdmins(ctx context.Context, groupID string) (int, error)
 	RemoveMember(ctx context.Context, groupID, userID string) error
 	DeleteGroup(ctx context.Context, groupID string) error
+	// UpdateGroup modifica nombre y descripción. Solo admins.
+	UpdateGroup(ctx context.Context, groupID, userID string, name string, description *string) (*model.Group, error)
 	// HandleAccountDeletion saca al usuario de todos sus grupos aplicando la
 	// sucesión automática de admin. Es idempotente.
 	HandleAccountDeletion(ctx context.Context, userID string) ([]model.SuccessionResult, error)
@@ -572,6 +574,36 @@ func (s *GroupService) TransferAdmin(ctx context.Context, groupID, currentAdminI
 	return s.withTargetAccount(ctx, newAdminID, func() error {
 		return mapStoreErr(s.groups.TransferAdmin(ctx, groupID, currentAdminID, newAdminID))
 	})
+}
+
+// UpdateGroup modifica nombre y descripción del grupo. Solo admins.
+func (s *GroupService) UpdateGroup(ctx context.Context, groupID, userID string, name string, description *string) (*model.Group, error) {
+	if userID == "" {
+		return nil, ErrUnauthorized
+	}
+	if !utils.ValidateUUID(groupID) {
+		return nil, ErrNotFound
+	}
+
+	name = utils.NormalizeName(name)
+	if err := validateName(name); err != nil {
+		return nil, err
+	}
+
+	if description != nil {
+		trimmed := strings.TrimSpace(*description)
+		if trimmed == "" {
+			description = nil
+		} else {
+			description = &trimmed
+		}
+	}
+
+	group, err := s.groups.UpdateGroup(ctx, groupID, userID, name, description)
+	if err != nil {
+		return nil, mapStoreErr(err)
+	}
+	return group, nil
 }
 
 // LeaveGroup realiza la salida y sucesión atómicas antes del cleanup best-effort.

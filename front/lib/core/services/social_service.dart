@@ -142,6 +142,36 @@ class SocialService {
     return GroupDetail.fromJson(body);
   }
 
+  // PATCH /groups/:id {name, description?} -> 200 {id, name, description}.
+  // Solo admin. Ver back/social/internal/handler/http/group_handler.go EditGroup.
+  Future<GroupDetail> updateGroup({
+    required String groupId,
+    required String name,
+    String? description,
+  }) async {
+    final gid = groupId.trim();
+    if (gid.isEmpty) {
+      throw SocialApiException('groupId vacío.', code: 'invalid_group_id');
+    }
+    final payload = <String, dynamic>{
+      'name': name.trim(),
+      if (description != null && description.trim().isNotEmpty)
+        'description': description.trim(),
+    };
+    final res = await AuthedHttp.run(
+      () => _client
+          .patch(
+            Uri.parse('$baseUrl/groups/$gid'),
+            headers: _headers(json: true),
+            body: jsonEncode(payload),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) throw _toError(res);
+    final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    return GroupDetail.fromJson(body);
+  }
+
   // POST /groups/:id/invite/regenerate -> 200 {new_invite_token}.
   // Solo admin. Invalida enlaces anteriores.
   Future<String> regenerateInvite(String groupId) async {

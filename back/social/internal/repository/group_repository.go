@@ -2,8 +2,9 @@ package repository
 
 import (
 	"context"
-	"errors" // <--- Añade esta línea aquí
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -488,6 +489,46 @@ func (r *GroupRepository) DeleteGroup(ctx context.Context, groupID string) error
 		return errors.New("group_not_found")
 	}
 	return nil
+}
+
+// UpdateGroup modifica nombre y descripción del grupo. Solo admins.
+func (r *GroupRepository) UpdateGroup(ctx context.Context, groupID, userID string, name string, description *string) (*model.Group, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Solo admins pueden editar el grupo (requiereAdminTx hace FOR UPDATE
+	// y valida existencia del grupo y rol admin).
+	if err := requireAdminTx(ctx, tx, groupID, userID); err != nil {
+		return nil, err
+	}
+
+	if strings.TrimSpace(name) == "" {
+		return nil, errors.New("invalid_name")
+	}
+
+	var g model.Group
+	err = tx.QueryRow(ctx, `
+		UPDATE social.groups 
+		SET name = $1, description = $2 
+		WHERE id = $3 
+		RETURNING id, name, description, owner_user_id, notes_restricted_to_staff, invite_token, created_at
+	`, name, description, groupID).Scan(
+		&g.ID, &g.Name, &g.Description, &g.OwnerUserID, &g.NotesRestrictedToStaff, &g.InviteToken, &g.CreatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, errors.New("group_not_found")
+		}
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return &g, nil
 }
 
 // HandleAccountDeletion saca al usuario de todos sus grupos con sucesión
