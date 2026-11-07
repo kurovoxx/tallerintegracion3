@@ -85,6 +85,79 @@ func (r *NoteRepository) GetByID(ctx context.Context, db DBTX, id string) (*mode
 	return &n, nil
 }
 
+// GetTombstone devuelve la lápida de un apunte borrado (nil si no hay).
+func (r *NoteRepository) GetTombstone(ctx context.Context, db DBTX, noteID string) (*model.NoteTombstone, error) {
+	if db == nil {
+		db = r.pool
+	}
+	var t model.NoteTombstone
+	err := db.QueryRow(ctx, `SELECT note_id, owner_user_id, title, subject_id, visibility, deleted_at FROM notes.note_tombstones WHERE note_id = $1`, noteID).
+		Scan(&t.NoteID, &t.OwnerUserID, &t.Title, &t.SubjectID, &t.Visibility, &t.DeletedAt)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get tombstone: %w", err)
+	}
+	return &t, nil
+}
+
+// likeEscaper escapa los comodines de ILIKE para buscar el texto literal.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// ListPublic lista apuntes públicos de otros usuarios (excluye a
+// excludeUserID), más recientes primero, con búsqueda literal en el título y
+// filtro opcional por materia. cursor = id del último apunte de la página
+// anterior (keyset sobre created_at, id).
+func (r *NoteRepository) ListPublic(ctx context.Context, db DBTX, excludeUserID, query, subjectID, cursor string, limit int) ([]*model.Note, string, error) {
+	if db == nil {
+		db = r.pool
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	pattern := ""
+	if q := strings.TrimSpace(query); q != "" {
+		pattern = "%" + likeEscaper.Replace(q) + "%"
+	}
+	sql := `
+		SELECT id, user_id, subject_id, title, external_file_id, visibility, likes_count, forked_from_note_id, sync_status, version, created_at, updated_at
+		FROM notes.notes
+		WHERE visibility = 'public' AND user_id <> $1::uuid
+		  AND external_file_id IS NOT NULL
+		  AND ($2::text = '' OR title ILIKE $2::text ESCAPE '\')
+		  AND ($3::text = '' OR subject_id = NULLIF($3::text, '')::uuid)`
+	args := []any{excludeUserID, pattern, subjectID}
+	if cursor != "" {
+		sql += ` AND (created_at, id) < ((SELECT created_at FROM notes.notes WHERE id = $4::uuid), $4::uuid)`
+		args = append(args, cursor)
+	}
+	args = append(args, limit+1)
+	sql += fmt.Sprintf(" ORDER BY created_at DESC, id DESC LIMIT $%d", len(args))
+	rows, err := db.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, "", fmt.Errorf("list public notes: %w", err)
+	}
+	defer rows.Close()
+	var notes []*model.Note
+	for rows.Next() {
+		var n model.Note
+		if err := rows.Scan(&n.ID, &n.UserID, &n.SubjectID, &n.Title, &n.ExternalFileID, &n.Visibility, &n.LikesCount, &n.ForkedFromNoteID, &n.SyncStatus, &n.Version, &n.CreatedAt, &n.UpdatedAt); err != nil {
+			return nil, "", fmt.Errorf("scan public note: %w", err)
+		}
+		notes = append(notes, &n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	next := ""
+	if len(notes) > limit {
+		notes = notes[:limit]
+		next = notes[limit-1].ID
+	}
+	return notes, next, nil
+}
+
 func (r *NoteRepository) ListByUser(ctx context.Context, db DBTX, userID string, cursor string, limit int) ([]*model.Note, string, error) {
 	if db == nil {
 		db = r.pool
@@ -399,6 +472,10 @@ var ErrForbidden = errors.New("forbidden")
 // existe pero su version no coincide con la versión esperada por el writer.
 var ErrConflict = errors.New("conflict")
 
+// ErrAlreadyShared: la nota ya tiene un vínculo con ese grupo
+// (UNIQUE (note_id, group_id) de notes.shared_notes, migración 005).
+var ErrAlreadyShared = errors.New("already_shared")
+
 // EnqueueDriveOperation accepts a transaction so the outbox and local mutation
 // commit together. Empty logical references are stored as NULL.
 func (r *NoteRepository) EnqueueDriveOperation(ctx context.Context, db DBTX, op, noteID, attID, fileID, ownerUserID string, payload map[string]any) error {
@@ -543,7 +620,8 @@ func (r *NoteRepository) DeleteWithDriveCleanup(ctx context.Context, noteID, req
 	// existe; la metadata ya fue capturada arriba para el cleanup de Drive).
 	for _, query := range []string{
 		`DELETE FROM notes.note_attachments WHERE note_id = $1`,
-		`DELETE FROM notes.saved_notes WHERE note_id = $1`,
+		// notes.saved_notes NO se limpia: el guardado sobrevive y se lista
+		// como "no disponible" (migración 004, lápida en note_tombstones).
 		`DELETE FROM notes.note_likes WHERE note_id = $1`,
 		`DELETE FROM notes.shared_notes WHERE note_id = $1`,
 	} {

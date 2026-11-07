@@ -41,6 +41,7 @@ Comparte una nota propia con un grupo de Social en modo `link` o `restricted`. P
 | 400 | `bad_request` "group_id y access_mode requeridos" | Body inválido o fuera del binding (`note_handler.go:730-737`) |
 | 403 | `forbidden` "Acceso denegado" | No es el autor (`note_service.go:1986-1988`) o no es miembro del grupo (`L1994-1996`) |
 | 404 | `not_found` "nota no encontrada" | `id` no UUID o nota inexistente (`L1983-1985`) |
+| 409 | `already_shared` "Este apunte ya está compartido en este grupo" | Ya existe un vínculo `(note_id, group_id)`, con cualquier `access_mode`. Se comprueba bajo el lock por nota (`shareLocked`) y lo respalda `UNIQUE (note_id, group_id)` (migración `005_shared_notes_unique_group.sql`; una carrera que choque con el índice también responde 409). Para cambiar el modo: `DELETE /notes/shared/{sharedNoteId}` y volver a compartir |
 | 413 | `file_too_large` | Body > 1 MiB |
 | 500 | `internal_error` | Social no responde al comprobar membresía (`L1990-1993`), no se pudo calcular el estado deseado (directorio de miembros o correos caído; `restricted` falla cerrado, `L2008-2013`, `L2048-2051`), o fallo de Postgres |
 | 401 / 423 / 503 | ver [COMUN §2](../COMUN-notes.md#2-autenticación-http) | Middleware |
@@ -85,6 +86,10 @@ Ciclo completo de permisos: [COMUN §5](../COMUN-notes.md#5-ciclo-de-vida-de-los
 8. Respuesta 201.
 
 Finalmente devuelve `201 {shared_note_id}`, y la pestaña de notas del grupo utiliza ese resultado para recordar (solo en memoria) qué vínculo creó el usuario, permitir "Dejar de compartir" y recargar la lista del grupo.
+
+### Duplicados (409 en vez de no-op)
+
+Se eligió `409 Conflict` controlado y no un no-op silencioso por coherencia con el contrato (`agentApiContract2.md` §3 usa 409 para "ya guardado" / "ya likeado"): el cliente recibe `{"error":{"code":"already_shared","message":"Este apunte ya está compartido en este grupo"}}` y lo muestra tal cual. No se crea fila ni se tocan permisos de Drive. En gRPC (`ShareNote`) el mismo caso es `codes.AlreadyExists`.
 
 ## Tests
 

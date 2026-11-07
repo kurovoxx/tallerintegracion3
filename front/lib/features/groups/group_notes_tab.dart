@@ -147,7 +147,10 @@ class _GroupNotesTabState extends State<GroupNotesTab> {
     }
     final choice = await showNeobrutalistDialog<_ShareChoice>(
       context: context,
-      dialog: _ShareNoteDialog(notes: mine),
+      dialog: _ShareNoteDialog(
+        notes: mine,
+        alreadyShared: _notes.map((n) => n.noteId).toSet(),
+      ),
     );
     if (choice == null || !mounted) return;
     try {
@@ -575,16 +578,24 @@ class _ShareChoice {
 
 /// Diálogo neobrutalista para elegir la nota propia y el modo de compartición.
 class _ShareNoteDialog extends StatefulWidget {
-  const _ShareNoteDialog({required this.notes});
+  const _ShareNoteDialog({required this.notes, this.alreadyShared = const {}});
 
   final List<MyNoteSummary> notes;
+
+  /// Notas que ya tienen vínculo con este grupo. Se marcan "YA COMPARTIDA":
+  /// el backend responde 409 already_shared si se intenta de nuevo.
+  final Set<String> alreadyShared;
 
   @override
   State<_ShareNoteDialog> createState() => _ShareNoteDialogState();
 }
 
 class _ShareNoteDialogState extends State<_ShareNoteDialog> {
-  late String _noteId = widget.notes.first.noteId;
+  /// Primera nota que aún no está en el grupo; null si todas ya lo están.
+  late String? _noteId = widget.notes
+      .where((n) => !widget.alreadyShared.contains(n.noteId))
+      .map((n) => n.noteId)
+      .firstOrNull;
   String _accessMode = NotesSharingService.accessModeLink;
 
   @override
@@ -594,8 +605,11 @@ class _ShareNoteDialogState extends State<_ShareNoteDialog> {
       cancelLabel: 'Cancelar',
       confirmLabel: 'Compartir',
       closeOnConfirm: false,
-      onConfirm: () =>
-          Navigator.of(context).pop(_ShareChoice(_noteId, _accessMode)),
+      // Sin nota seleccionable (todas ya compartidas) el botón queda inactivo.
+      onConfirm: _noteId == null
+          ? null
+          : () =>
+                Navigator.of(context).pop(_ShareChoice(_noteId!, _accessMode)),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -616,46 +630,91 @@ class _ShareNoteDialogState extends State<_ShareNoteDialog> {
               itemCount: widget.notes.length,
               itemBuilder: (_, i) {
                 final n = widget.notes[i];
-                final selected = n.noteId == _noteId;
+                // YA COMPARTIDA: tile deshabilitado, no se puede marcar
+                // (el backend respondería 409 already_shared).
+                final disabled = widget.alreadyShared.contains(n.noteId);
+                final selected = !disabled && n.noteId == _noteId;
                 return Padding(
                   padding: const EdgeInsets.only(bottom: AppDimens.spaceSm),
-                  child: GestureDetector(
-                    onTap: () => setState(() => _noteId = n.noteId),
-                    child: Container(
-                      padding: const EdgeInsets.all(AppDimens.spaceMd),
-                      decoration: BoxDecoration(
-                        color: selected
-                            ? AppColors.accentYellow
-                            : AppColors.surface,
-                        border: Border.all(
-                          color: AppColors.border,
-                          width: AppDimens.borderWidth,
-                        ),
-                        borderRadius: BorderRadius.circular(AppDimens.radius),
-                        boxShadow: selected ? AppShadows.badge : null,
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            selected
-                                ? Icons.radio_button_checked_rounded
-                                : Icons.radio_button_unchecked_rounded,
-                            size: 18,
-                            color: AppColors.text,
-                          ),
-                          const SizedBox(width: AppDimens.spaceSm),
-                          Expanded(
-                            child: Text(
-                              n.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w800,
-                                fontSize: 13,
-                              ),
+                  child: Semantics(
+                    key: Key('share-note-tile-${n.noteId}'),
+                    enabled: !disabled,
+                    selected: selected,
+                    child: MouseRegion(
+                      cursor: disabled
+                          ? SystemMouseCursors.forbidden
+                          : SystemMouseCursors.click,
+                      child: GestureDetector(
+                        onTap: disabled
+                            ? null
+                            : () => setState(() => _noteId = n.noteId),
+                        child: Container(
+                          padding: const EdgeInsets.all(AppDimens.spaceMd),
+                          decoration: BoxDecoration(
+                            color: disabled
+                                ? AppColors.surfaceLow
+                                : selected
+                                ? AppColors.accentYellow
+                                : AppColors.surface,
+                            border: Border.all(
+                              color: AppColors.border,
+                              width: AppDimens.borderWidth,
                             ),
+                            borderRadius: BorderRadius.circular(
+                              AppDimens.radius,
+                            ),
+                            boxShadow: selected ? AppShadows.badge : null,
                           ),
-                        ],
+                          child: Row(
+                            children: [
+                              Icon(
+                                disabled
+                                    ? Icons.block_rounded
+                                    : selected
+                                    ? Icons.radio_button_checked_rounded
+                                    : Icons.radio_button_unchecked_rounded,
+                                size: 18,
+                                color: disabled
+                                    ? AppColors.mutedStrong
+                                    : AppColors.text,
+                              ),
+                              const SizedBox(width: AppDimens.spaceSm),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      n.title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                        fontSize: 13,
+                                        color: disabled
+                                            ? AppColors.mutedStrong
+                                            : AppColors.text,
+                                      ),
+                                    ),
+                                    // Debajo del título (no al lado): en 360 px
+                                    // con texto al 200 % la fila desbordaba.
+                                    if (disabled)
+                                      const Padding(
+                                        padding: EdgeInsets.only(
+                                          top: AppDimens.spaceXs,
+                                        ),
+                                        child: NeobrutalistBadge(
+                                          label: 'Ya compartida',
+                                          tone: NeobrutalistTone.pending,
+                                          compact: true,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
                   ),

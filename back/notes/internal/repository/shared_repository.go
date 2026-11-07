@@ -2,9 +2,11 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/model"
 )
@@ -82,6 +84,10 @@ func (r *SharedRepository) Create(ctx context.Context, db DBTX, noteID, groupID 
 		&s.ID, &s.NoteID, &s.GroupID, &s.IsAdminNote, &s.AccessMode, &s.AuthorFollowersSnapshot, &s.PermissionSyncStatus, &s.SharedAt,
 	)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, ErrAlreadyShared
+		}
 		return nil, fmt.Errorf("create shared: %w", err)
 	}
 	return &s, nil

@@ -463,6 +463,11 @@ type SavedStore interface {
 	Save(ctx context.Context, userID, noteID string) (*model.SavedNote, error)
 	Exists(ctx context.Context, userID, noteID string) (bool, error)
 	Delete(ctx context.Context, userID, noteID string) error
+	// ListByUser devuelve todos los guardados del usuario (más recientes
+	// primero), incluidos los de apuntes ya borrados por su autor.
+	ListByUser(ctx context.Context, userID string) ([]*model.SavedNote, error)
+	// CountByNote es el saves_count exacto del apunte.
+	CountByNote(ctx context.Context, noteID string) (int, error)
 }
 
 type LikeStore interface {
@@ -962,7 +967,8 @@ func (s *NoteService) Get(ctx context.Context, requesterID string, noteID string
 		return nil, ErrInternalDatabase
 	}
 	if note == nil {
-		return nil, notFoundNote()
+		// 410 si el autor la borró y el solicitante podía verla; 404 si no.
+		return nil, s.missingNoteError(ctx, requesterID, noteID)
 	}
 	// Zero-knowledge: nota privada de otro autor sin share vigente o sin
 	// membresía en los grupos restricted => 404 idéntico al inexistente
@@ -1657,7 +1663,7 @@ func (s *NoteService) Save(ctx context.Context, userID string, noteID string) (*
 		return nil, ErrInternalDatabase
 	}
 	if note == nil {
-		return nil, notFoundNote()
+		return nil, s.missingNoteError(ctx, userID, noteID)
 	}
 	// Zero-knowledge: privada sin acceso => 404 (nunca 403) para no revelar
 	// la existencia del recurso.
@@ -1688,8 +1694,17 @@ func (s *NoteService) Save(ctx context.Context, userID string, noteID string) (*
 	return saved, nil
 }
 
+// Unsave quita un guardado. Es idempotente (quitar algo no guardado responde
+// igual que quitarlo) y funciona aunque el apunte original ya no exista: es
+// la única acción permitida sobre un guardado "no disponible".
 func (s *NoteService) Unsave(ctx context.Context, userID string, noteID string) error {
-	return s.saved.Delete(ctx, userID, noteID)
+	if !utils.ValidateUUID(noteID) {
+		return notFoundNote()
+	}
+	if err := s.saved.Delete(ctx, userID, noteID); err != nil {
+		return ErrInternalDatabase
+	}
+	return nil
 }
 
 // Copy: clona apunte de tercero, crea metadata en PG con sync_status='pending_drive',
@@ -1717,7 +1732,9 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 	// encontrada"), nunca 403 ni note_unavailable, para no filtrar existencia
 	// ni estado del recurso.
 	if orig == nil {
-		return nil, notFoundNote()
+		// Apunte borrado por su autor: 410 "ya no está disponible" para quien
+		// lo tenía guardado o era público; 404 en cualquier otro caso.
+		return nil, s.missingNoteError(ctx, userID, noteID)
 	}
 	allowed, err := s.hasReadAccess(ctx, orig, userID)
 	if err != nil {
@@ -1909,7 +1926,7 @@ func (s *NoteService) Like(ctx context.Context, userID string, noteID string) er
 		return ErrInternalDatabase
 	}
 	if note == nil {
-		return newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
+		return s.missingNoteError(ctx, userID, noteID)
 	}
 	// Check access before likes so neither existence nor a previous like leaks.
 	allowed, err := s.hasReadAccess(ctx, note, userID)
@@ -2001,6 +2018,15 @@ func (s *NoteService) shareLocked(ctx context.Context, ownerID string, noteID st
 	if err != nil {
 		return nil, ErrInternalDatabase
 	}
+	// Un solo vínculo por (nota, grupo): compartir dos veces en el mismo grupo
+	// es 409 already_shared (también con otro access_mode: para cambiarlo hay
+	// que retirar el share y volver a compartir). La comprobación corre bajo
+	// WithNoteLock y la BD la respalda con UNIQUE (note_id, group_id).
+	for _, sh := range previous {
+		if sh.GroupID == groupID {
+			return nil, newServiceError(utils.ErrAlreadyShared)
+		}
+	}
 	candidate := &model.SharedNote{NoteID: noteID, GroupID: groupID, AccessMode: accessMode}
 	shares := make([]*model.SharedNote, 0, len(previous)+1)
 	shares = append(shares, previous...)
@@ -2015,6 +2041,9 @@ func (s *NoteService) shareLocked(ctx context.Context, ownerID string, noteID st
 	// 1) BD primero: intención durable del share ('pending') y de los permisos.
 	shared, err := s.observedSharedCreate(ctx, noteID, groupID, isAdmin, accessMode, followers)
 	if err != nil {
+		if errors.Is(err, repository.ErrAlreadyShared) {
+			return nil, newServiceError(utils.ErrAlreadyShared)
+		}
 		return nil, ErrInternalDatabase
 	}
 	// 2) Sincronizar Drive; ante fallo queda 'failed' y el reconciliador converge.

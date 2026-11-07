@@ -241,16 +241,43 @@ CREATE TABLE notes.note_attachments (
 CREATE INDEX idx_note_attachments_note_id ON notes.note_attachments(note_id);
 
 -- Referencia (no copia): "guardar" un apunte de otro usuario para verlo después.
--- Si el original se borra, la fila desaparece sola (CASCADE) sin lógica especial.
+-- note_id es una referencia LÓGICA (sin FK): si el autor borra el original, el
+-- guardado sobrevive y se lista como "no disponible" (is_available = false).
+-- Ver back/notes/db/migrations/004_saved_notes_unavailable.sql.
 CREATE TABLE notes.saved_notes (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id uuid NOT NULL, -- ref lógica a identity.users.id (quien guarda)
-    note_id uuid NOT NULL REFERENCES notes.notes(id) ON DELETE CASCADE,
+    note_id uuid NOT NULL, -- ref lógica a notes.notes.id (puede ya no existir)
     saved_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (user_id, note_id)
 );
 
 CREATE INDEX idx_saved_notes_user_id ON notes.saved_notes(user_id);
+CREATE INDEX idx_saved_notes_note_id ON notes.saved_notes(note_id);
+
+-- Lápida de apuntes borrados: permite responder 410 "no disponible (eliminado
+-- por el autor)" y titular los guardados huérfanos. La llena un trigger.
+CREATE TABLE notes.note_tombstones (
+    note_id uuid PRIMARY KEY,
+    owner_user_id uuid NOT NULL,
+    title varchar(300) NOT NULL,
+    subject_id uuid,
+    visibility varchar(20) NOT NULL,
+    deleted_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE OR REPLACE FUNCTION notes.record_note_tombstone() RETURNS trigger AS $$
+BEGIN
+    INSERT INTO notes.note_tombstones (note_id, owner_user_id, title, subject_id, visibility)
+    VALUES (OLD.id, OLD.user_id, OLD.title, OLD.subject_id, OLD.visibility)
+    ON CONFLICT (note_id) DO UPDATE SET deleted_at = now();
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_notes_record_tombstone
+    AFTER DELETE ON notes.notes
+    FOR EACH ROW EXECUTE FUNCTION notes.record_note_tombstone();
 
 -- Un like por usuario por apunte; likes_count en notes.notes se actualiza
 -- en la misma transacción que el insert/delete aquí
@@ -279,7 +306,9 @@ CREATE TABLE notes.shared_notes (
     access_mode varchar(20) NOT NULL DEFAULT 'link' CHECK (access_mode IN ('link', 'restricted')),
     author_followers_snapshot int NOT NULL DEFAULT 0,
     permission_sync_status text NOT NULL DEFAULT 'pending',
-    shared_at timestamptz NOT NULL DEFAULT now()
+    shared_at timestamptz NOT NULL DEFAULT now(),
+    -- Un vínculo por (nota, grupo): compartir dos veces => 409 already_shared.
+    CONSTRAINT shared_notes_note_id_group_id_key UNIQUE (note_id, group_id)
 );
 
 -- Tombstones block old JWTs after Notes finishes access cleanup. Note content

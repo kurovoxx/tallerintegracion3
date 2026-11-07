@@ -23,7 +23,13 @@ import '../../core/widgets/neobrutalism.dart';
 import '../academic/academic_mappers.dart';
 import 'attachment_resources.dart';
 import 'note_file_picker.dart';
+import 'note_id_search_screen.dart';
+import 'notes_api.dart';
+import 'public_notes_screen.dart';
+import 'saved_notes_screen.dart';
 import 'authenticated_attachment_image.dart';
+import 'latex_support.dart';
+import 'note_live_editor.dart';
 
 /// Base URL del microservicio de notas. En el emulador Android `localhost` es
 /// el propio dispositivo, por eso se usa la alias 10.0.2.2 hacia el host.
@@ -1961,38 +1967,34 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     return _EditSaveOutcome.error;
   }
 
-  /// Clona una nota ajena: POST /notes/:id/copy. Con 201 registra el nuevo id
-  /// en _ownedNoteIds y refresca la lista local con la copia.
+  /// Clona una nota ajena (guardada o pública) a la BD y el Drive propios:
+  /// POST /notes/:id/copy vía [NotesApi.copyNote]. Con 201 registra el nuevo
+  /// id en _ownedNoteIds y refresca la lista local con la copia. Si el autor
+  /// borró el original, el backend responde 410 note_deleted.
   Future<_RemoteResult> _cloneFlow(LocalNote note) async {
-    final url = '$notesBaseUrl/notes/${note.id}/copy';
+    final realId = _remoteIds[note.id] ?? note.id;
     try {
-      final res = await AuthedHttp.run(
-        () => http
-            .post(Uri.parse(url), headers: _authHeaders())
-            .timeout(const Duration(seconds: 8)),
+      final copy = await _withNotesClient(
+        (client) => NotesApi(client: client, baseUrl: notesBaseUrl).copyNote(
+          realId,
+          idempotencyKey:
+              'copy-$realId-${DateTime.now().microsecondsSinceEpoch}',
+        ),
       );
-      if (res.statusCode == 201) {
-        try {
-          final data = jsonDecode(utf8.decode(res.bodyBytes));
-          final newId = data['note_id'] as String?;
-          if (newId != null && newId.isNotEmpty) {
-            _ownedNoteIds.add(newId);
-            _versions[newId] = (data['version'] as num?)?.toInt() ?? 1;
-          }
-        } catch (_) {}
-        if (!_useMemoryFallback && _repo != null) {
-          await _syncFromBackend();
-        }
-        await _applySearch(_currentQuery);
-        if (mounted) setState(() {});
-        return _RemoteResult(ok: true, status: res.statusCode);
+      _ownedNoteIds.add(copy.noteId);
+      _versions[copy.noteId] = copy.version;
+      if (!_useMemoryFallback && _repo != null) {
+        await _syncFromBackend();
       }
-      final parsed = _parseBackendError(utf8.decode(res.bodyBytes));
+      await _applySearch(_currentQuery);
+      if (mounted) setState(() {});
+      return const _RemoteResult(ok: true, status: 201);
+    } on NotesApiException catch (e) {
       return _RemoteResult(
         ok: false,
-        status: res.statusCode,
-        code: parsed['code'],
-        message: parsed['message'],
+        status: e.statusCode ?? -1,
+        code: e.code,
+        message: e.message,
       );
     } catch (e) {
       return _RemoteResult(ok: false, status: -1, message: e.toString());
@@ -2073,7 +2075,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   }
 
   void _onSearchChanged(String query) {
+    final hadId = extractNoteId(_currentQuery) != null;
     _currentQuery = query;
+    // El aviso "Buscar por ID" aparece/desaparece al instante al pegar un
+    // UUID o un enlace que lo contenga, sin esperar el debounce del FTS.
+    if (hadId != (extractNoteId(query) != null)) setState(() {});
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 300), () {
       _applySearch(query);
@@ -2155,25 +2161,103 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     await _notesFuture;
   }
 
+  /// Id remoto (UUID) de una nota, o null si solo existe en este equipo.
+  String? _remoteIdOf(LocalNote note) {
+    final id = _remoteIds[note.id] ?? note.id;
+    return _isRemoteNote(id) ? id : null;
+  }
+
+  bool get _hasSession => (SessionManager.token ?? '').isNotEmpty;
+
+  /// Aplica en los mapas locales los contadores confirmados por el servidor.
+  void _applyInteractions(String localId, NoteInteractions s) {
+    _likesCount[localId] = s.likesCount;
+    _isLiked[localId] = s.isLiked;
+    _isSaved[localId] = s.isSaved;
+  }
+
+  /// Relee los contadores reales (GET /notes/:id/stats) antes de abrir el
+  /// detalle de una nota remota. Best-effort: sin red se usan los locales.
+  Future<void> _refreshInteractions(LocalNote note) async {
+    final rid = _remoteIdOf(note);
+    if (rid == null || !_hasSession) return;
+    try {
+      final s = await _withNotesClient(
+        (c) => NotesApi(
+          client: c,
+          baseUrl: notesBaseUrl,
+        ).stats(rid).timeout(const Duration(seconds: 3)),
+      );
+      if (mounted) setState(() => _applyInteractions(note.id, s));
+    } catch (_) {}
+  }
+
+  /// Like con persistencia en el backend para notas remotas: cambio
+  /// optimista, POST/DELETE /notes/:id/like y adopción del contador real; si
+  /// falla, se revierte. Las notas solo locales mantienen el estado en memoria.
   void _toggleLike(LocalNote note) {
+    final wasLiked = _isLiked[note.id] ?? false;
+    final prevCount = _likesCount[note.id] ?? 0;
     setState(() {
-      final liked = _isLiked[note.id] ?? false;
-      final count = _likesCount[note.id] ?? 0;
-      if (liked) {
-        _isLiked[note.id] = false;
-        _likesCount[note.id] = (count - 1).clamp(0, 9999);
-      } else {
-        _isLiked[note.id] = true;
-        _likesCount[note.id] = count + 1;
-      }
+      _isLiked[note.id] = !wasLiked;
+      _likesCount[note.id] = (prevCount + (wasLiked ? -1 : 1)).clamp(
+        0,
+        1 << 30,
+      );
     });
+    final rid = _remoteIdOf(note);
+    if (rid == null || !_hasSession) return;
+    unawaited(() async {
+      try {
+        final s = await _withNotesClient(
+          (c) => NotesApi(
+            client: c,
+            baseUrl: notesBaseUrl,
+          ).setLiked(rid, !wasLiked),
+        );
+        if (mounted) setState(() => _applyInteractions(note.id, s));
+      } catch (e) {
+        if (!mounted) return;
+        setState(() {
+          _isLiked[note.id] = wasLiked;
+          _likesCount[note.id] = prevCount;
+        });
+        _notifySnack(
+          e is NotesApiException ? e.message : notesFriendlyMessage(-1, null),
+          ok: false,
+        );
+      }
+    }());
   }
 
   void _toggleSave(LocalNote note) {
+    final wasSaved = _isSaved[note.id] ?? false;
     setState(() {
-      final saved = _isSaved[note.id] ?? false;
-      _isSaved[note.id] = !saved;
+      _isSaved[note.id] = !wasSaved;
     });
+    final rid = _remoteIdOf(note);
+    if (rid != null && _hasSession) {
+      unawaited(() async {
+        try {
+          final s = await _withNotesClient(
+            (c) => NotesApi(
+              client: c,
+              baseUrl: notesBaseUrl,
+            ).setSaved(rid, !wasSaved),
+          );
+          if (s != null && mounted) {
+            setState(() => _applyInteractions(note.id, s));
+          }
+        } catch (e) {
+          if (!mounted) return;
+          setState(() => _isSaved[note.id] = wasSaved);
+          _notifySnack(
+            e is NotesApiException ? e.message : notesFriendlyMessage(-1, null),
+            ok: false,
+          );
+        }
+      }());
+    }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         backgroundColor: Colors.black,
@@ -2183,7 +2267,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         ),
         content: Text(
           (_isSaved[note.id] ?? false)
-              ? 'Nota guardada localmente'
+              ? (rid != null ? 'Apunte guardado' : 'Nota guardada localmente')
               : 'Nota removida de guardados',
           style: const TextStyle(
             color: Colors.white,
@@ -2403,6 +2487,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       debugPrint('[Notes] OPEN id=${note.id} waitSync=false');
     }
     if (!mounted) return;
+    await _refreshInteractions(target);
+    if (!mounted) return;
     final opened = target;
     showModalBottomSheet(
       context: context,
@@ -2543,6 +2629,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                       ),
                     ),
                   ],
+                  if (extractNoteId(_currentQuery) != null) ...<Widget>[
+                    const SizedBox(height: 8),
+                    _buildIdSearchHint(),
+                  ],
+                  const SizedBox(height: 12),
+                  _buildCommunityActions(),
                   const SizedBox(height: 12),
                   _buildFilterChips(),
                   const SizedBox(height: 16),
@@ -2979,6 +3071,133 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           fontSize: 14,
           color: AppColors.text,
         ),
+      ),
+    );
+  }
+
+  /// Abre el buscador de apuntes por ID exacto (propios, públicos o
+  /// compartidos). Tras copiar uno a los propios se refresca la lista.
+  Future<void> _openIdSearch({String? initialQuery}) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => NoteIdSearchScreen(
+          api: NotesApi(baseUrl: notesBaseUrl),
+          initialQuery: initialQuery,
+          onNoteCopied: () async {
+            if (!_useMemoryFallback && _repo != null) {
+              await _syncFromBackend();
+            }
+            await _applySearch(_currentQuery);
+          },
+        ),
+      ),
+    );
+  }
+
+  /// Acciones de comunidad sobre apuntes de otros usuarios.
+  Widget _buildCommunityActions() {
+    return Wrap(
+      spacing: AppDimens.spaceSm,
+      runSpacing: AppDimens.spaceSm,
+      children: <Widget>[
+        NeobrutalistButton(
+          key: const Key('notes-open-saved'),
+          label: 'Guardados',
+          icon: Icons.bookmarks_rounded,
+          variant: NeobrutalistButtonVariant.accent,
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppDimens.spaceMd,
+            vertical: AppDimens.spaceSm,
+          ),
+          onPressed: _openSavedNotes,
+        ),
+        NeobrutalistButton(
+          key: const Key('notes-open-id-search'),
+          label: 'Buscar por ID',
+          icon: Icons.tag_rounded,
+          variant: NeobrutalistButtonVariant.secondary,
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppDimens.spaceMd,
+            vertical: AppDimens.spaceSm,
+          ),
+          onPressed: () => _openIdSearch(),
+        ),
+        NeobrutalistButton(
+          key: const Key('notes-open-public'),
+          label: 'Explorar públicos',
+          icon: Icons.public_rounded,
+          variant: NeobrutalistButtonVariant.secondary,
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppDimens.spaceMd,
+            vertical: AppDimens.spaceSm,
+          ),
+          onPressed: _openPublicNotes,
+        ),
+      ],
+    );
+  }
+
+  /// Sección "Apuntes guardados": marcadores propios y de otros, incluidos
+  /// los que su autor eliminó (se muestran como no disponibles).
+  Future<void> _openSavedNotes() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => SavedNotesScreen(
+          api: NotesApi(baseUrl: notesBaseUrl),
+          onNoteCopied: () async {
+            if (!_useMemoryFallback && _repo != null) {
+              await _syncFromBackend();
+            }
+            await _applySearch(_currentQuery);
+          },
+        ),
+      ),
+    );
+  }
+
+  /// Apuntes públicos de otros usuarios con like/guardar en cada tarjeta.
+  Future<void> _openPublicNotes() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PublicNotesScreen(
+          api: NotesApi(baseUrl: notesBaseUrl),
+          onNoteCopied: () async {
+            if (!_useMemoryFallback && _repo != null) {
+              await _syncFromBackend();
+            }
+            await _applySearch(_currentQuery);
+          },
+        ),
+      ),
+    );
+  }
+
+  /// Aviso cuando la búsqueda general contiene un ID de apunte: la búsqueda
+  /// de texto solo mira apuntes locales, así que se ofrece buscarlo por ID.
+  Widget _buildIdSearchHint() {
+    return NeobrutalistCard(
+      key: const Key('notes-id-search-hint'),
+      padding: const EdgeInsets.all(AppDimens.spaceMd),
+      shadow: AppShadows.hard2,
+      backgroundColor: AppColors.accentYellow,
+      // Se abre el buscador solo con el UUID extraído (no la URL completa).
+      onTap: () => _openIdSearch(initialQuery: extractNoteId(_currentQuery)),
+      child: const Row(
+        children: <Widget>[
+          Icon(Icons.tag_rounded, color: AppColors.text, size: 18),
+          SizedBox(width: AppDimens.spaceSm),
+          Expanded(
+            child: Text(
+              'Eso parece el ID (o enlace) de un apunte. Toca aquí para buscarlo directamente.',
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w800,
+                color: AppColors.text,
+              ),
+            ),
+          ),
+          Icon(Icons.arrow_forward_rounded, color: AppColors.text, size: 18),
+        ],
       ),
     );
   }
@@ -4060,6 +4279,9 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
       );
       c = removeAttachmentReferences(c, resource);
     }
+    // LaTeX: neutraliza macros peligrosos dentro de las fórmulas antes de
+    // guardar (el resto del contenido no cambia).
+    c = sanitizeNoteMarkdown(c);
     setState(() {
       _saving = true;
       _editError = null;
@@ -4166,7 +4388,11 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
 
   String _cloneErrorText(_RemoteResult res) {
     if (res.status == -1) return 'Sin conexión: no se pudo guardar la copia.';
-    return 'No se pudo guardar la copia. Inténtalo más tarde.';
+    return notesFriendlyMessage(
+      res.status,
+      res.code,
+      fallback: 'No se pudo guardar la copia. Inténtalo más tarde.',
+    );
   }
 
   Future<void> _confirmClone() async {
@@ -4722,13 +4948,23 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                     decoration: appInputDecoration('Título'),
                   ),
                   const SizedBox(height: 12),
-                  const AppFieldLabel('CONTENIDO MARKDOWN'),
+                  const AppFieldLabel('CONTENIDO MARKDOWN / LATEX'),
                   const SizedBox(height: 4),
-                  TextField(
-                    controller: _contentCtrl,
-                    maxLines: 6,
-                    decoration: appInputDecoration('Contenido Markdown'),
-                  ),
+                  if (_contentCtrl != null)
+                    MarkdownLiveEditor(
+                      controller: _contentCtrl!,
+                      editor: TextField(
+                        controller: _contentCtrl,
+                        minLines: 6,
+                        maxLines: 14,
+                        decoration: appInputDecoration('Contenido Markdown'),
+                      ),
+                      previewBuilder: (text) => _NeobrutalistMarkdownBody(
+                        content: text,
+                        resources: _mergedResources,
+                        onOpenResource: _showResourceDialog,
+                      ),
+                    ),
                   const SizedBox(height: 8),
                   if (_contentCtrl != null) ...[
                     _AttachmentToolbar(
@@ -4938,7 +5174,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                     if (!widget.isMine) ...[
                       _ActionButton(
                         icon: Icons.copy_rounded,
-                        label: _cloning ? '…' : 'Guardar copia',
+                        label: _cloning ? '…' : 'Copiar a mis apuntes',
                         onTap: _cloning ? () {} : _confirmClone,
                       ),
                     ],
@@ -5041,7 +5277,7 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
     try {
       await widget.onCreate(
         _titleCtrl.text.trim(),
-        _contentCtrl.text.trim(),
+        sanitizeNoteMarkdown(_contentCtrl.text.trim()),
         _visibility,
         List.unmodifiable(_pendingAttachments),
       );
@@ -5080,6 +5316,9 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
   Widget build(BuildContext context) {
     return NeobrutalistDialog(
       title: 'NUEVA NOTA',
+      // Ancho del editor de notas: en escritorio permite el split-view
+      // editor + vista previa; en móvil la pantalla lo limita igual.
+      maxWidth: _noteEditorMaxWidth,
       cancelLabel: 'CANCELAR',
       confirmLabel: _submitting ? 'GUARDANDO…' : 'GUARDAR',
       closeOnConfirm: false,
@@ -5103,12 +5342,21 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
             ),
           ),
           const SizedBox(height: 12),
-          const AppFieldLabel('CONTENIDO MARKDOWN'),
+          const AppFieldLabel('CONTENIDO MARKDOWN / LATEX'),
           const SizedBox(height: 4),
-          TextField(
+          MarkdownLiveEditor(
             controller: _contentCtrl,
-            maxLines: 4,
-            decoration: appInputDecoration('Contenido Markdown'),
+            previewMaxHeight: 280,
+            editor: TextField(
+              controller: _contentCtrl,
+              minLines: 4,
+              maxLines: 10,
+              decoration: appInputDecoration('Contenido Markdown'),
+            ),
+            previewBuilder: (text) => _NeobrutalistMarkdownBody(
+              content: text,
+              onOpenResource: _showResource,
+            ),
           ),
           const SizedBox(height: 8),
           _AttachmentToolbar(
@@ -5576,6 +5824,19 @@ class _AttachmentToolbar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Barra de adjuntos + barra de ayuda LaTeX (ambos editores la usan).
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _buildAttachmentBar(context),
+        const SizedBox(height: 6),
+        LatexToolbar(controller: controller, onChanged: onChanged),
+      ],
+    );
+  }
+
+  Widget _buildAttachmentBar(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
@@ -7143,6 +7404,11 @@ class _ResourceViewerDialog extends StatelessWidget {
 /// Cuerpo de nota renderizado como Markdown visual neobrutalista: encabezados,
 /// negrita/cursiva, listas con bullets sólidos, bloques de código, blockquotes,
 /// imágenes embebidas (archivo local o URL remota) y chips de PDF.
+/// Renderizador Markdown/LaTeX del visor, expuesto solo para tests.
+@visibleForTesting
+Widget debugBuildNoteMarkdown(String content) =>
+    _NeobrutalistMarkdownBody(content: content, onOpenResource: (_) {});
+
 class _NeobrutalistMarkdownBody extends StatelessWidget {
   final String content;
   final List<Map<String, dynamic>> resources;
@@ -7216,6 +7482,47 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
         }
         i++;
         widgets.add(_codeBlock(buf.join('\n')));
+        continue;
+      }
+
+      // Bloque LaTeX $$ ... $$ (una o varias líneas). Sin cierre: aviso y
+      // el resto se sigue mostrando como Markdown normal.
+      if (line.startsWith(r'$$')) {
+        flushParagraph();
+        if (line.length > 4 && line.endsWith(r'$$')) {
+          widgets.add(
+            SafeMath(tex: line.substring(2, line.length - 2), display: true),
+          );
+          i++;
+          continue;
+        }
+        final start = i;
+        final buf = <String>[line.substring(2)];
+        var closed = false;
+        i++;
+        while (i < lines.length) {
+          final t = lines[i].trimRight();
+          if (t.endsWith(r'$$')) {
+            buf.add(t.substring(0, t.length - 2));
+            closed = true;
+            i++;
+            break;
+          }
+          buf.add(lines[i]);
+          i++;
+        }
+        if (closed) {
+          widgets.add(SafeMath(tex: buf.join('\n'), display: true));
+        } else {
+          i = start + 1;
+          widgets.add(
+            const LatexFallback(
+              tex: r'$$',
+              reason: r'Bloque $$ sin cerrar',
+              display: true,
+            ),
+          );
+        }
         continue;
       }
 
@@ -7762,7 +8069,27 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
 
   /// Divide una línea en spans con estilos inline: **negrita**, *cursiva*,
   /// `código`, imágenes `![alt](ruta)` y chips de enlace `[label](archivo.pdf)`.
+  /// Inline: separa primero las fórmulas `$...$` (renderizadas con
+  /// [SafeMath]) y aplica el Markdown inline al resto del texto.
   List<InlineSpan> _parseInlineSpans(String text) {
+    if (!text.contains(r'$')) return _parseInlineMarkdown(text);
+    final spans = <InlineSpan>[];
+    for (final part in splitInlineMath(text)) {
+      if (part.isMath) {
+        spans.add(
+          WidgetSpan(
+            alignment: PlaceholderAlignment.middle,
+            child: SafeMath(tex: part.value),
+          ),
+        );
+      } else {
+        spans.addAll(_parseInlineMarkdown(part.value));
+      }
+    }
+    return spans;
+  }
+
+  List<InlineSpan> _parseInlineMarkdown(String text) {
     final spans = <InlineSpan>[];
     final re = RegExp(
       r'(\*\*.+?\*\*|\*[^*\n]+?\*|!\[[^\]]*\]\([^)\s]+\)|\[[^\]]+\]\([^)\s]+\)|`[^`\n]+`)',

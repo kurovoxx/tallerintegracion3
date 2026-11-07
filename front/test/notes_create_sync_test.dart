@@ -239,8 +239,18 @@ void main() {
     expect(find.text('hola remoto'), findsWidgets);
     expect(calls, contains('POST /notes'));
     expect(calls, contains('GET /notes/$realId'));
+    // Contadores (GET /notes/<uuid>/stats) también usan el UUID real.
     expect(
-      calls.where((c) => c.startsWith('GET /notes/') && c != 'GET /notes/me'),
+      calls.where((c) => c.endsWith('/stats')),
+      everyElement('GET /notes/$realId/stats'),
+    );
+    expect(
+      calls.where(
+        (c) =>
+            c.startsWith('GET /notes/') &&
+            c != 'GET /notes/me' &&
+            !c.endsWith('/stats'),
+      ),
       everyElement('GET /notes/$realId'),
     );
     await t.pumpWidget(const SizedBox());
@@ -309,7 +319,8 @@ void main() {
           (c) =>
               c.startsWith('GET /notes/') &&
               c != 'GET /notes/me' &&
-              !c.endsWith('/content'),
+              !c.endsWith('/content') &&
+              !c.endsWith('/stats'),
         )
         .toList();
     expect(noteGets, isNotEmpty);

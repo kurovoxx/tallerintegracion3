@@ -1,6 +1,6 @@
 # POST /notes/{id}/save
 
-Guarda una referencia (marcador) a una nota legible en `notes.saved_notes`, sin copiar el archivo. Ruta interna del backend Notes (`:8082`). Desde el navegador: `POST https://ti3-brojas.dev.censei.cl/api-notes/notes/<id>/save` ([prefijos](../COMUN-notes.md#1-rutas-internas-y-prefijos-externos)). No tiene equivalente gRPC ni ruta para quitar el guardado (`NoteService.Unsave` existe en `back/notes/internal/service/note_service.go:1691-1693`, pero ninguna ruta lo expone).
+Guarda una referencia (marcador) a una nota legible en `notes.saved_notes`, sin copiar el archivo. Ruta interna del backend Notes (`:8082`). Desde el navegador: `POST https://ti3-brojas.dev.censei.cl/api-notes/notes/<id>/save` ([prefijos](../COMUN-notes.md#1-rutas-internas-y-prefijos-externos)). No tiene equivalente gRPC. Para quitarlo: [`DELETE /notes/{id}/save`](../Delete/DELETE-notes-id-save.md); para listarlos: [`GET /notes/saved`](../Get/GET-notes-saved.md).
 
 ## Req
 
@@ -12,18 +12,27 @@ Guarda una referencia (marcador) a una nota legible en `notes.saved_notes`, sin 
 
 ## Res
 
-**201 Created**, sin body (`note_handler.go:636`).
+**201 Created** con contadores (`NoteHandler.Save` → `respondInteractions`).
+
+```json
+{ "note_id": "…", "likes_count": 0, "saves_count": 1, "is_liked": false, "is_saved": true }
+```
+
+El body son los contadores exactos tras la escritura (igual que [`GET /notes/{id}/stats`](../Get/GET-notes-id-stats.md)). Si releerlos fallara, se responde `201` sin body: la escritura ya quedó hecha.
+
+**Idempotencia:** repetir la operación nunca duplica la fila ni el contador (`UNIQUE` en BD + comprobación previa + revalidación tras carrera). La repetición responde el `409` del contrato (`agentApiContract2.md` §3); el cliente debe tratarlo como "ya estaba en ese estado".
 
 **Errores**
 
 | HTTP | `error.code` | Condición |
 | --- | --- | --- |
 | 404 | `not_found` "nota no encontrada" | No existe o es privada sin acceso (indistinguibles) (`note_service.go:1659-1670`) |
+| 410 | `note_deleted` | El autor lo borró y era público (o ya estaba guardado) |
 | 409 | `already_saved` "Nota ya guardada" | Ya existe la fila (comprobación previa o carrera revalidada) (`L1674-1685`) |
 | 500 | `internal_error` | Fallo de Postgres, o de Social al comprobar membresía (`L632-635`) |
 | 401 / 423 / 503 | ver [COMUN §2](../COMUN-notes.md#2-autenticación-http) | Middleware |
 
-**Efectos:** una fila en `notes.saved_notes (user_id, note_id)` (`back/notes/internal/repository/saved_repository.go:20-37`). No toca Drive ni crea permisos. Si la nota se borra, la fila se elimina en la misma transacción del borrado (`repository/note_repository.go:546`). Nada en segundo plano.
+**Efectos:** una fila en `notes.saved_notes (user_id, note_id)` (`back/notes/internal/repository/saved_repository.go:20-37`). No toca Drive ni crea permisos. Si el autor borra la nota, **la fila sobrevive** (migración `004_saved_notes_unavailable.sql`: `saved_notes.note_id` sin FK y lápida en `notes.note_tombstones`) y aparece en `GET /notes/saved` con `is_available=false`. Nada en segundo plano.
 
 ## Invocación (Front / Otros Servicios)
 
@@ -38,7 +47,7 @@ Guarda una referencia (marcador) a una nota legible en `notes.saved_notes`, sin 
 3. `NoteService.Save` (`note_service.go:1651`): `GetByID`, `hasReadAccess` (para shares `restricted`, Social `IsMember` por gRPC, `service/social_grpc_adapter.go:57`), `SavedStore.Exists` (`service/store_pg.go:81`), `SavedStore.Save` (`store_pg.go:78` → `saved_repository.go:20`).
 4. Respuesta 201.
 
-Finalmente devuelve `201` sin body; hoy ningún cliente de producción consume ese resultado.
+Finalmente devuelve `201` con los contadores actualizados.
 
 ## Tests
 
