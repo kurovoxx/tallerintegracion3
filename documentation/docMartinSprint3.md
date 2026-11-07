@@ -235,3 +235,59 @@ Integrar el microservicio IA con la API de Google Gemini para convertir archivos
 - Subir el Markdown a Google Drive (pospuesto).
 - Auth/JWT en el endpoint (por ahora público; se añadirá cuando sea necesario).
 - SDK oficial de Google: se usa la API REST directamente con `net/http`.
+
+## 4_5_X — Editar grupo: nombre y descripción (backend + front)
+
+> **Nota:** Esta tarea pertenecía originalmente al ámbito de Benji (Social) y fue asignada a Martín por intercambio de tareas del sprint.
+
+### Objetivo
+
+Permitir que un administrador de grupo edite el nombre y la descripción de un grupo existente, tanto en el backend (Social) como en el front (Flutter).
+
+### Alcance
+
+| Parte | Qué se hace |
+|-------|-------------|
+| **Backend (Social)** | Endpoint `PATCH /groups/:id` que recibe `{name, description?}` y valida que el solicitante sea admin del grupo. |
+| **Front (Flutter)** | Botón "Editar grupo" en `GroupDetailScreen` (solo visible para admins) que abre un diálogo con campos de texto para nombre y descripción. |
+
+### Archivos creados
+
+Ninguno nuevo (todo es modificación de existentes).
+
+### Archivos modificados
+
+| Archivo | Cambio |
+|---------|--------|
+| `back/social/internal/service/group_service.go` | Agregado `UpdateGroup` a la interfaz `GroupStore` y implementado en `GroupService` (valida UUID, normaliza nombre, llama al store). |
+| `back/social/internal/repository/group_repository.go` | Agregado `UpdateGroup` en `GroupRepository` (UPDATE SQL con `FOR UPDATE`, valida que el usuario es admin vía `requireAdminTx`). |
+| `back/social/internal/service/store_memory.go` | Agregado `UpdateGroup` en `MemoryGroupStore` para tests (valida admin vía `requireAdminLocked`). |
+| `back/social/internal/handler/http/group_handler.go` | Agregado tipo `updateGroupRequest`, handler `EditGroup` y ruta `PATCH /groups/:id` en `RegisterRoutes`. |
+| `front/lib/core/services/social_service.dart` | Agregado método `updateGroup({groupId, name, description})` que llama a `PATCH /groups/:id`. |
+| `front/lib/features/groups/group_detail_screen.dart` | Agregado botón "Editar grupo" (ícono de lápiz) en el AppBar, visible solo cuando el usuario es admin. Abre `AlertDialog` con campos de nombre y descripción. |
+| `documentation/docMartinSprint3.md` | Esta sección. |
+
+### Endpoints de la API
+
+| Método | Ruta | Body | Responde |
+|--------|------|------|----------|
+| `PATCH` | `/groups/:id` | `{name: string, description?: string}` | `200 {id, name, description}` / `403` si no es admin / `404` si no existe / `400` si nombre vacío |
+
+### Cómo interactúa con el resto del proyecto
+
+- Con **4_5_4** (Política solo-admins de Benji): el endpoint respeta el mismo modelo de permisos (solo admin puede editar).
+- Con **front**: el botón solo aparece para administradores del grupo, consistente con otras acciones de administración (regenerar invite, kick, ban, etc.).
+- Con **grupos existentes**: el cambio se refleja inmediatamente en `GET /groups/:id` y `GET /groups/me`.
+
+### Verificación
+
+- `go build ./...` + `go vet ./...` en `back/social`: OK.
+- `go test ./...` en `back/social`: todos los tests pasan.
+- `flutter analyze` en los archivos del front tocados: sin errores nuevos (solo warnings preexistentes).
+- El endpoint reusa la validación de nombre existente (`utils.ValidateName`, `utils.NormalizeName`) y la autorización de admin existente (`requireAdminTx`).
+
+### No entra
+
+- Editar otros campos del grupo (owner, notes_restricted_to_staff, invite_token).
+- Historial de cambios de nombre/descripción.
+- Notificar a miembros cuando el grupo es editado.

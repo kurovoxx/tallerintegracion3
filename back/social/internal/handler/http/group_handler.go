@@ -34,6 +34,7 @@ func (h *GroupHandler) RegisterRoutes(r gin.IRoutes) {
 	r.PATCH("/groups/:id/members/:user_id/role", h.ChangeRole)
 	r.POST("/groups/:id/transfer-admin", h.TransferAdmin)
 	r.POST("/groups/:id/leave", h.LeaveGroup)
+	r.PATCH("/groups/:id", h.EditGroup)
 	// La sucesión por borrado de cuenta es solo gRPC (Social.AccountDeletionCleanup).
 }
 
@@ -82,6 +83,13 @@ type createGroupRequest struct {
 	Description *string `json:"description"`
 }
 
+// PATCH /groups/:id
+// Body: {name, description?} — solo admins pueden editar
+type updateGroupRequest struct {
+	Name        string  `json:"name" binding:"required"`
+	Description *string `json:"description"`
+}
+
 func (h *GroupHandler) Create(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
@@ -100,6 +108,33 @@ func (h *GroupHandler) Create(c *gin.Context) {
 	}
 	// Contrato: 201 {group_id}
 	c.JSON(http.StatusCreated, gin.H{"group_id": group.ID})
+}
+
+// PATCH /groups/:id
+// Edita nombre y descripción del grupo. Solo admins.
+func (h *GroupHandler) EditGroup(c *gin.Context) {
+	userID, ok := requireUser(c)
+	if !ok {
+		return
+	}
+
+	var req updateGroupRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Request inválido: " + err.Error()})
+		return
+	}
+
+	group, err := h.svc.UpdateGroup(c.Request.Context(), c.Param("id"), userID, req.Name, req.Description)
+	if err != nil {
+		respondGroupError(c, err, "Acceso denegado: solo los administradores pueden editar el grupo")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":          group.ID,
+		"name":        group.Name,
+		"description": group.Description,
+	})
 }
 
 func handleServiceError(c *gin.Context, err error) {

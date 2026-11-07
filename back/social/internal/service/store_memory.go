@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -256,6 +257,25 @@ func (m *MemoryGroupStore) DeleteGroup(_ context.Context, groupID string) error 
 	}
 	m.deleteGroupLocked(groupID)
 	return nil
+}
+
+func (m *MemoryGroupStore) UpdateGroup(_ context.Context, groupID, userID string, name string, description *string) (*model.Group, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.requireAdminLocked(groupID, userID); err != nil {
+		return nil, err
+	}
+	g, ok := m.groups[groupID]
+	if !ok {
+		return nil, errors.New("group_not_found")
+	}
+	if strings.TrimSpace(name) == "" {
+		return nil, errors.New("invalid_name")
+	}
+	g.Name = name
+	g.Description = description
+	cp := *g
+	return &cp, nil
 }
 
 // HandleAccountDeletion replica la sucesión de repository.removeUserFromGroup.
