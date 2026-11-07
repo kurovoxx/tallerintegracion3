@@ -19,9 +19,16 @@ func main() {
 	cfg := config.Load()
 	log.Printf("config: PORT=%s GEMINI_API_KEY set=%v INTERNAL_API_KEY set=%v", cfg.Port, cfg.GeminiAPIKey != "", cfg.InternalAPIKey != "")
 
-	// Servicio de IA: modo mock por defecto (scaffold).
-	// La integración real con Gemini se conecta en la tarea 4_5_6.
-	aiSvc := service.NewMockAIService()
+	// Servicio de IA: si GEMINI_API_KEY está configurada, usa Gemini;
+	// de lo contrario, usa MockAIService (modo mock para desarrollo/sin clave).
+	var aiSvc service.AIService
+	if cfg.GeminiAPIKey != "" {
+		aiSvc = service.NewGeminiAIService(cfg)
+		log.Print("IA: modo Gemini activado (GEMINI_API_KEY configurada)")
+	} else {
+		aiSvc = service.NewMockAIService()
+		log.Print("IA: modo mock activado (GEMINI_API_KEY no configurada)")
+	}
 
 	r := gin.Default()
 
@@ -39,6 +46,7 @@ func main() {
 	ai := r.Group("/ai")
 	{
 		ai.POST("/generate", httpHandler.NewAIHandler(aiSvc).Generate)
+		ai.POST("/pdf-to-markdown", httpHandler.NewPDFHandler(aiSvc).ConvertPDFToMarkdown)
 	}
 
 	addr := ":" + cfg.Port
