@@ -172,3 +172,66 @@ Levantar `back/ai` como un microservicio Go independiente, con su propio puerto,
 - Persistencia en Postgres (opcional, `DatabaseURL` está en config pero no se usa aún en el scaffold).
 - Auth/JWT en endpoints de IA (por ahora público; se añadirá cuando sea necesario).
 - `db/migrations/` para `ai` (no hay esquema de BD aún).
+
+## 4_5_6 — Gemini PDF→Markdown (integración + límites)
+
+### Objetivo
+
+Integrar el microservicio IA con la API de Google Gemini para convertir archivos PDF a Markdown. El usuario sube un PDF, el servicio lo envía a Gemini (`gemini-1.5-flash`), recibe el Markdown y se lo devuelve al cliente. No guarda la nota en Notes/Drive todavía (eso se pospone para una tarea posterior).
+
+### Alcance acordado
+
+| Aspecto | Valor |
+|---------|-------|
+| Endpoint | `POST /ai/pdf-to-markdown` (multipart/form-data, campo `file`) |
+| Modelo Gemini | `gemini-1.5-flash` (nivel gratuito en Google AI Studio) |
+| Tamaño máximo PDF | 10 MB |
+| Rate limit | 5 conversiones por hora por identificador (archivo/IP) |
+| Timeout de llamada | 60 segundos |
+| Reintentos | 2 (backoff: 2s, 4s ante 429/503) |
+| Guardar en Notes | Pospuesto (solo convierte y devuelve el texto) |
+
+### Archivos creados
+
+| Archivo | Contenido |
+|---------|-----------|
+| `back/ai/internal/service/gemini_ai_service.go` | Implementación real de `AIService` que llama a la API REST de Gemini. Incluye validación de tamaño (10 MB), rate limit en memoria, reintentos (2) y timeout (60s). |
+| `back/ai/internal/handler/http/pdf_handler.go` | Handler `POST /ai/pdf-to-markdown`. Recibe `multipart/form-data`, valida que sea PDF, llama al servicio y devuelve `{markdown, filename, size_bytes, provider}`. |
+
+### Archivos modificados
+
+| Archivo | Cambio |
+|---------|--------|
+| `back/ai/internal/config/config.go` | Agregado `GeminiModel`, `GeminiMaxFileSizeMB` (default 10), `GeminiRateLimit` (default 5). |
+| `back/ai/internal/service/ai_service.go` | Agregado `ConvertPDFToMarkdown(pdfData []byte, filename string) (string, error)` a la interfaz `AIService`. Implementado en `MockAIService` (respuesta simulada) y `GeminiAIService` (llamada real a Gemini). |
+| `back/ai/cmd/server/main.go` | Wire: si `GEMINI_API_KEY` está configurada, usa `GeminiAIService`; si no, `MockAIService`. Registrada ruta `POST /ai/pdf-to-markdown`. |
+| `.env.example` | Agregado `GEMINI_MODEL=gemini-1.5-flash`, `GEMINI_MAX_FILE_SIZE_MB=10`, `GEMINI_RATE_LIMIT=5`. |
+| `docker-compose.yml` | Ya tenía `GEMINI_API_KEY` en el servicio `ai`; no requiere cambios adicionales. |
+| `k8s/manifests.yaml` | Ya tenía `GEMINI_API_KEY` desde el secret `ti3-secrets`; no requiere cambios adicionales. |
+
+### Endpoints de la API
+
+| Método | Ruta | Responde |
+|--------|------|----------|
+| `POST` | `/ai/pdf-to-markdown` | Recibe archivo PDF (multipart). Devuelve `{markdown, filename, size_bytes, provider}`. Rechaza si no es PDF, si excede 10 MB, o si se supera el rate limit. |
+
+### Cómo interactúa con el resto del proyecto
+
+- Con **4_5_5**: `back/ai` ya existe; esta tarea agrega la integración real con Gemini sobre el scaffold existente.
+- Con **front**: el front puede llamar a `POST /ai/pdf-to-markdown` vía el gateway de nginx (prefijo `/api-ai` por definir).
+- Con **Notes/Drive**: por ahora no hay integración. El Markdown se devuelve al cliente; el guardado como nota en Notes/Drive se pospone.
+
+### Verificación
+
+- `go build ./...` + `go vet ./...` en `back/ai`: OK.
+- Servidor arranca en `:8084` y responde `/health`, `/health/db`, `/ai/generate`, `/ai/pdf-to-markdown`.
+- Validación de archivo: rechaza archivos no-PDF con 400, requiere campo `file`.
+- Modo mock: si no hay `GEMINI_API_KEY`, usa `MockAIService` (respuesta simulada sin llamar a Gemini).
+- Modo Gemini: si hay `GEMINI_API_KEY`, llama a la API REST de Gemini con reintentos y timeout.
+
+### No entra
+
+- Guardar el Markdown como nota en Notes (pospuesto).
+- Subir el Markdown a Google Drive (pospuesto).
+- Auth/JWT en el endpoint (por ahora público; se añadirá cuando sea necesario).
+- SDK oficial de Google: se usa la API REST directamente con `net/http`.
