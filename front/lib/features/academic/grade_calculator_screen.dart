@@ -783,7 +783,49 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         .toDouble();
   }
 
-  /// Dos componentes complementarios: final 70/examen 30, o viceversa.
+  /// La última nota del grupo es la única que se recalcula cuando se edita
+  /// el peso de otra. Se resuelve con `.last` para que agregar/eliminar
+  /// notas mueva el rol dinámicamente.
+  _GradeItem? get _lastNormalGrade =>
+      _normalGrades.isEmpty ? null : _normalGrades.last;
+
+  _GradeItem? _lastChildOf(_GradeItem parent) =>
+      parent.children.isEmpty ? null : parent.children.last;
+
+  void _setWeightText(_GradeItem item, double value) {
+    final text = _formatWeight(value);
+    item.weightController.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+  }
+
+  /// Deja fijo el peso de una nota y asigna al resto del grupo únicamente
+  /// el peso residual de la última nota.
+  double _residualForLast(
+    List<_GradeItem> items,
+    _GradeItem changed,
+    _GradeItem last,
+  ) {
+    final fixed = items
+        .where((item) => item != changed && item != last)
+        .fold<double>(0, (sum, item) => sum + _readWeight(item));
+    return (100 - _readWeight(changed) - fixed).clamp(0.0, 100.0).toDouble();
+  }
+
+  /// Recalcula solo la última nota del grupo a partir del resto.
+  void _applyResidualWeight(List<_GradeItem> items) {
+    if (items.isEmpty) return;
+    final last = items.last;
+    final fixed = items
+        .where((item) => item != last)
+        .fold<double>(0, (sum, item) => sum + _readWeight(item));
+    _setWeightText(last, (100 - fixed).clamp(0.0, 100.0).toDouble());
+  }
+
+  /// Nota final + examen: el examen es la última nota, así que absorbe el
+  /// cambio cuando se edita la nota final. Editar el examen no reescribe la
+  /// nota final, de modo que se pueden fijar ambos porcentajes libremente.
   void _changeFinalWeight() {
     final finalItem = _finalGrade;
     final examItem = _exam;
@@ -793,16 +835,8 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       _isRedistributing = true;
       try {
         final finalWeight = _readWeight(finalItem);
-        final textF = _formatWeight(finalWeight);
-        final textE = _formatWeight(100 - finalWeight);
-        finalItem.weightController.value = TextEditingValue(
-          text: textF,
-          selection: TextSelection.collapsed(offset: textF.length),
-        );
-        examItem.weightController.value = TextEditingValue(
-          text: textE,
-          selection: TextSelection.collapsed(offset: textE.length),
-        );
+        _setWeightText(finalItem, finalWeight);
+        _setWeightText(examItem, 100 - finalWeight);
       } finally {
         _isRedistributing = false;
       }
@@ -811,24 +845,13 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
   }
 
   void _changeExamWeight() {
-    final finalItem = _finalGrade;
     final examItem = _exam;
-    if (_isRedistributing || finalItem == null || examItem == null) return;
+    if (_isRedistributing || examItem == null) return;
 
     setState(() {
       _isRedistributing = true;
       try {
-        final examWeight = _readWeight(examItem);
-        final textE = _formatWeight(examWeight);
-        final textF = _formatWeight(100 - examWeight);
-        examItem.weightController.value = TextEditingValue(
-          text: textE,
-          selection: TextSelection.collapsed(offset: textE.length),
-        );
-        finalItem.weightController.value = TextEditingValue(
-          text: textF,
-          selection: TextSelection.collapsed(offset: textF.length),
-        );
+        _setWeightText(examItem, _readWeight(examItem));
       } finally {
         _isRedistributing = false;
       }
@@ -836,109 +859,41 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     });
   }
 
-  /// Peso normal: el elemento editado queda fijo y el restante se reparte
-  /// entre los demás. Ejemplo: 20% -> el resto pasa a sumar 80%.
+  /// El elemento editado queda fijo; solo la última nota normal se recalcula.
   void _changeNormalWeight(_GradeItem changed) {
     if (_isRedistributing) return;
-
-    setState(() {
-      _redistributeNormalWeights(changed);
-      _resetResult();
-    });
-  }
-
-  void _redistributeNormalWeights(_GradeItem changed) {
-    if (_normalGrades.isEmpty) return;
-
-    _isRedistributing = true;
-    try {
-      final changedWeight = _readWeight(changed);
-      final tChanged = _formatWeight(changedWeight);
-      changed.weightController.value = TextEditingValue(
-        text: tChanged,
-        selection: TextSelection.collapsed(offset: tChanged.length),
-      );
-
-      final otherGrades = _normalGrades
-          .where((item) => item != changed)
-          .toList();
-      if (otherGrades.isEmpty) return;
-
-      final remaining = 100 - changedWeight;
-      final previousTotal = otherGrades.fold<double>(
-        0,
-        (sum, item) => sum + _readWeight(item),
-      );
-
-      if (previousTotal == 0) {
-        final equalWeight = remaining / otherGrades.length;
-        for (final item in otherGrades) {
-          final t = _formatWeight(equalWeight);
-          item.weightController.value = TextEditingValue(
-            text: t,
-            selection: TextSelection.collapsed(offset: t.length),
-          );
-        }
-      } else {
-        for (final item in otherGrades) {
-          final proportionalWeight =
-              remaining * _readWeight(item) / previousTotal;
-          final t = _formatWeight(proportionalWeight);
-          item.weightController.value = TextEditingValue(
-            text: t,
-            selection: TextSelection.collapsed(offset: t.length),
-          );
-        }
-      }
-    } finally {
-      _isRedistributing = false;
-    }
-  }
-
-  /// Pesos dentro de una nota subdividida suman 100% relativo al padre.
-  void _changeChildWeight(_GradeItem parent, _GradeItem changed) {
-    if (_isRedistributing || parent.children.isEmpty) return;
+    final last = _lastNormalGrade;
+    if (last == null) return;
 
     setState(() {
       _isRedistributing = true;
       try {
-        final changedWeight = _readWeight(changed);
-        final tChanged = _formatWeight(changedWeight);
-        changed.weightController.value = TextEditingValue(
-          text: tChanged,
-          selection: TextSelection.collapsed(offset: tChanged.length),
-        );
+        _setWeightText(changed, _readWeight(changed));
+        if (!identical(changed, last)) {
+          _setWeightText(last, _residualForLast(_normalGrades, changed, last));
+        }
+      } finally {
+        _isRedistributing = false;
+      }
+      _resetResult();
+    });
+  }
 
-        final others = parent.children
-            .where((item) => item != changed)
-            .toList();
-        if (others.isEmpty) return;
+  /// Pesos dentro de una nota subdividida: la última subnota es la residual.
+  void _changeChildWeight(_GradeItem parent, _GradeItem changed) {
+    if (_isRedistributing || parent.children.isEmpty) return;
+    final last = _lastChildOf(parent);
+    if (last == null) return;
 
-        final remaining = 100 - changedWeight;
-        final previousTotal = others.fold<double>(
-          0,
-          (sum, item) => sum + _readWeight(item),
-        );
-
-        if (previousTotal == 0) {
-          final equalWeight = remaining / others.length;
-          for (final item in others) {
-            final t = _formatWeight(equalWeight);
-            item.weightController.value = TextEditingValue(
-              text: t,
-              selection: TextSelection.collapsed(offset: t.length),
-            );
-          }
-        } else {
-          for (final item in others) {
-            final t = _formatWeight(
-              remaining * _readWeight(item) / previousTotal,
-            );
-            item.weightController.value = TextEditingValue(
-              text: t,
-              selection: TextSelection.collapsed(offset: t.length),
-            );
-          }
+    setState(() {
+      _isRedistributing = true;
+      try {
+        _setWeightText(changed, _readWeight(changed));
+        if (!identical(changed, last)) {
+          _setWeightText(
+            last,
+            _residualForLast(parent.children, changed, last),
+          );
         }
       } finally {
         _isRedistributing = false;
@@ -959,12 +914,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         'normal-${DateTime.now().microsecondsSinceEpoch}',
       );
       _normalGrades.add(newItem);
-
-      final equalWeight = 100 / _normalGrades.length;
-      for (final item in _normalGrades) {
-        item.weightController.text = _formatWeight(equalWeight);
-      }
-
+      _applyResidualWeight(_normalGrades);
       _resetResult();
     });
   }
@@ -974,12 +924,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
 
     setState(() {
       _normalGrades.removeLast().dispose();
-
-      final equalWeight = 100 / _normalGrades.length;
-      for (final item in _normalGrades) {
-        item.weightController.text = _formatWeight(equalWeight);
-      }
-
+      _applyResidualWeight(_normalGrades);
       _resetResult();
     });
   }
@@ -1003,12 +948,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       parent.children.add(
         _newItem('${parent.id}-child-${DateTime.now().microsecondsSinceEpoch}'),
       );
-
-      final equalWeight = 100 / parent.children.length;
-      for (final child in parent.children) {
-        child.weightController.text = _formatWeight(equalWeight);
-      }
-
+      _applyResidualWeight(parent.children);
       _resetResult();
     });
   }
@@ -1026,10 +966,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         survivor.dispose();
         parent.children = [];
       } else {
-        final equalWeight = 100 / parent.children.length;
-        for (final child in parent.children) {
-          child.weightController.text = _formatWeight(equalWeight);
-        }
+        _applyResidualWeight(parent.children);
       }
 
       _resetResult();
@@ -1438,6 +1375,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
           onWeightChanged: _changeFinalWeight,
           onConfidenceChanged: (v) => _changeConfidence(finalItem, v),
           scoreColor: _scoreColor(finalItem.id),
+          weightFieldKey: const ValueKey('weight-final'),
         ),
         const SizedBox(height: 12),
         _ExamCard(
@@ -1446,6 +1384,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
           onWeightChanged: _changeExamWeight,
           onConfidenceChanged: (v) => _changeConfidence(examItem, v),
           scoreColor: _scoreColor(examItem.id),
+          weightFieldKey: const ValueKey('weight-exam'),
         ),
       ],
     );
@@ -1525,6 +1464,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
                   child: _NormalGradeCard(
                     key: ValueKey(item.id),
                     item: item,
+                    weightFieldKey: ValueKey('weight-${item.id}'),
                     label: gradeRowLabel(item.backendName, 'NOTA ${index + 1}'),
                     onScoreChanged: () => setState(_resetResult),
                     onWeightChanged: () => _changeNormalWeight(item),
@@ -1934,6 +1874,7 @@ class _FinalGradeCard extends StatelessWidget {
     required this.onWeightChanged,
     required this.onConfidenceChanged,
     required this.scoreColor,
+    this.weightFieldKey,
   });
 
   final _GradeItem item;
@@ -1941,6 +1882,7 @@ class _FinalGradeCard extends StatelessWidget {
   final VoidCallback onWeightChanged;
   final ValueChanged<int> onConfidenceChanged;
   final Color scoreColor;
+  final Key? weightFieldKey;
 
   @override
   Widget build(BuildContext context) {
@@ -1967,6 +1909,7 @@ class _FinalGradeCard extends StatelessWidget {
             confidence: item.confidence,
             onConfidenceChanged: onConfidenceChanged,
             scoreColor: scoreColor,
+            weightFieldKey: weightFieldKey,
           ),
         ],
       ),
@@ -1981,6 +1924,7 @@ class _ExamCard extends StatelessWidget {
     required this.onWeightChanged,
     required this.onConfidenceChanged,
     required this.scoreColor,
+    this.weightFieldKey,
   });
 
   final _GradeItem item;
@@ -1988,6 +1932,7 @@ class _ExamCard extends StatelessWidget {
   final VoidCallback onWeightChanged;
   final ValueChanged<int> onConfidenceChanged;
   final Color scoreColor;
+  final Key? weightFieldKey;
 
   @override
   Widget build(BuildContext context) {
@@ -2014,6 +1959,7 @@ class _ExamCard extends StatelessWidget {
             confidence: item.confidence,
             onConfidenceChanged: onConfidenceChanged,
             scoreColor: scoreColor,
+            weightFieldKey: weightFieldKey,
           ),
         ],
       ),
@@ -2037,6 +1983,7 @@ class _NormalGradeCard extends StatelessWidget {
     required this.scoreColor,
     required this.onChildConfidenceChanged,
     required this.childScoreColor,
+    this.weightFieldKey,
   });
 
   final _GradeItem item;
@@ -2052,6 +1999,7 @@ class _NormalGradeCard extends StatelessWidget {
   final Color scoreColor;
   final void Function(_GradeItem child, int value) onChildConfidenceChanged;
   final Color Function(_GradeItem child) childScoreColor;
+  final Key? weightFieldKey;
 
   @override
   Widget build(BuildContext context) {
@@ -2097,6 +2045,7 @@ class _NormalGradeCard extends StatelessWidget {
               confidence: item.confidence,
               onConfidenceChanged: onConfidenceChanged,
               scoreColor: scoreColor,
+              weightFieldKey: weightFieldKey,
             ),
             const SizedBox(height: 8),
             Align(
@@ -2120,6 +2069,7 @@ class _NormalGradeCard extends StatelessWidget {
                     hint: '%',
                     integer: true,
                     onChanged: onWeightChanged,
+                    fieldKey: weightFieldKey,
                   ),
                 ),
               ],
@@ -2152,6 +2102,7 @@ class _NormalGradeCard extends StatelessWidget {
                   'SUBNOTA ${index + 1}',
                 ),
                 item: item.children[index],
+                weightFieldKey: ValueKey('weight-${item.children[index].id}'),
                 onScoreChanged: onChildScoreChanged,
                 onWeightChanged: () {
                   onChildWeightChanged(item.children[index]);
@@ -2236,6 +2187,7 @@ class _ChildGradeRow extends StatelessWidget {
     required this.onWeightChanged,
     required this.onConfidenceChanged,
     required this.scoreColor,
+    this.weightFieldKey,
   });
 
   final String label;
@@ -2244,6 +2196,7 @@ class _ChildGradeRow extends StatelessWidget {
   final VoidCallback onWeightChanged;
   final ValueChanged<int> onConfidenceChanged;
   final Color scoreColor;
+  final Key? weightFieldKey;
 
   @override
   Widget build(BuildContext context) {
@@ -2300,6 +2253,7 @@ class _ChildGradeRow extends StatelessWidget {
                     hint: '%',
                     integer: true,
                     onChanged: onWeightChanged,
+                    fieldKey: weightFieldKey,
                   ),
                 ],
               ),
@@ -2321,6 +2275,7 @@ class _ScoreAndWeightRow extends StatelessWidget {
     required this.confidence,
     required this.onConfidenceChanged,
     required this.scoreColor,
+    this.weightFieldKey,
   });
 
   final TextEditingController scoreController;
@@ -2331,6 +2286,7 @@ class _ScoreAndWeightRow extends StatelessWidget {
   final int confidence;
   final ValueChanged<int> onConfidenceChanged;
   final Color scoreColor;
+  final Key? weightFieldKey;
 
   @override
   Widget build(BuildContext context) {
@@ -2375,6 +2331,7 @@ class _ScoreAndWeightRow extends StatelessWidget {
                     hint: '%',
                     integer: true,
                     onChanged: onWeightChanged,
+                    fieldKey: weightFieldKey,
                   ),
                 ],
               ),
@@ -2403,6 +2360,7 @@ class _NumericInput extends StatelessWidget {
     required this.onChanged,
     this.integer = false,
     this.textColor = AppColors.text,
+    this.fieldKey,
   });
 
   final TextEditingController controller;
@@ -2410,10 +2368,12 @@ class _NumericInput extends StatelessWidget {
   final VoidCallback onChanged;
   final bool integer;
   final Color textColor;
+  final Key? fieldKey;
 
   @override
   Widget build(BuildContext context) {
     return TextField(
+      key: fieldKey,
       controller: controller,
       keyboardType: integer
           ? TextInputType.number
