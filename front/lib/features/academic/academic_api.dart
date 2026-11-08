@@ -212,6 +212,32 @@ class AcademicApi {
     return AcademicCurriculum(id: id, name: name);
   }
 
+  // PATCH /curricula/:id {semester_count} -> malla actualizada.
+  Future<AcademicCurriculum> updateCurriculumSemesterCount(
+    String curriculumId,
+    int semesterCount,
+  ) async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .patch(
+            Uri.parse('$_baseUrl/curricula/$curriculumId'),
+            headers: _headers(json: true),
+            body: jsonEncode(<String, dynamic>{
+              'semester_count': semesterCount,
+            }),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) {
+      throw _toError(res, 'No se pudo actualizar la malla.');
+    }
+    final body = jsonDecode(utf8.decode(res.bodyBytes));
+    if (body is! Map) {
+      throw AcademicApiException('Respuesta inesperada del servidor.');
+    }
+    return AcademicCurriculum.fromJson(Map<String, dynamic>.from(body));
+  }
+
   // GET /curricula/:id/subjects -> materias de la malla.
   Future<List<AcademicSubject>> listSubjects(String curriculumId) async {
     final res = await AuthedHttp.run(

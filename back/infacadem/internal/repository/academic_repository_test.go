@@ -55,6 +55,7 @@ CREATE TABLE academic.curricula (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id uuid NOT NULL,
     name varchar(200) NOT NULL,
+    semester_count int NOT NULL DEFAULT 8 CHECK (semester_count BETWEEN 1 AND 20),
     created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE academic.subjects (
@@ -204,6 +205,16 @@ func TestRepository_Curricula(t *testing.T) {
 	}
 	if upd, _ := r.UpdateName(ctx, c.ID, repoUserB, "Hack"); upd != nil {
 		t.Fatal("update ajeno nil")
+	}
+	if c.SemesterCount != 8 {
+		t.Fatalf("semester_count default: %d", c.SemesterCount)
+	}
+	updCount, err := r.UpdateSemesterCount(ctx, c.ID, repoUserA, 12)
+	if err != nil || updCount == nil || updCount.SemesterCount != 12 {
+		t.Fatalf("update semester_count: %+v %v", updCount, err)
+	}
+	if upd, _ := r.UpdateSemesterCount(ctx, c.ID, repoUserB, 10); upd != nil {
+		t.Fatal("update semester_count ajeno nil")
 	}
 	deleted, err := r.Delete(ctx, c.ID, repoUserB)
 	if err != nil || deleted {

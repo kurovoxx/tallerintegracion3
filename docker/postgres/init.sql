@@ -96,6 +96,7 @@ CREATE TABLE academic.curricula (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id uuid NOT NULL,
     name varchar(200) NOT NULL,
+    semester_count int NOT NULL DEFAULT 8 CHECK (semester_count BETWEEN 1 AND 20),
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
