@@ -1468,11 +1468,9 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
   late final TextEditingController _codeCtrl;
   late final TextEditingController _creditsCtrl;
   late final TextEditingController _professorCtrl;
-  late final TextEditingController _scheduleCtrl;
-  late final TextEditingController _roomCtrl;
   String _status = kSubjectInProgress;
   // Bloques de horario añadidos, p.ej. 'Lun / Mié · 10:00–11:30', con su
-  // sala opcional (la sala del curso se usa como fallback al enviar).
+  // sala opcional.
   final List<_ScheduleEntry> _scheduleEntries = [];
 
   @override
@@ -1482,8 +1480,6 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
     _codeCtrl = TextEditingController();
     _creditsCtrl = TextEditingController(text: '5');
     _professorCtrl = TextEditingController();
-    _scheduleCtrl = TextEditingController();
-    _roomCtrl = TextEditingController();
   }
 
   @override
@@ -1492,8 +1488,6 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
     _codeCtrl.dispose();
     _creditsCtrl.dispose();
     _professorCtrl.dispose();
-    _scheduleCtrl.dispose();
-    _roomCtrl.dispose();
     super.dispose();
   }
 
@@ -1507,27 +1501,19 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
       'professor': _professorCtrl.text.trim().isEmpty
           ? 'Por asignar'
           : _professorCtrl.text.trim(),
-      'schedule': _scheduleCtrl.text.trim().isEmpty
+      'schedule': _scheduleEntries.isEmpty
           ? 'Por definir'
-          : _scheduleCtrl.text.trim(),
+          : _scheduleEntries.map((e) => e.label).join(' · '),
       'schedule_rooms': <String, String?>{
         for (final entry in _scheduleEntries) entry.label: entry.room,
       },
-      'room': _roomCtrl.text.trim().isEmpty
-          ? 'Por asignar'
-          : _roomCtrl.text.trim(),
+      'room': 'Por asignar',
     });
-  }
-
-  /// Sincroniza el campo HORARIO con los bloques añadidos.
-  void _syncScheduleText() {
-    _scheduleCtrl.text = _scheduleEntries.map((e) => e.label).join(' · ');
   }
 
   void _removeScheduleEntry(int index) {
     setState(() {
       _scheduleEntries.removeAt(index);
-      _syncScheduleText();
     });
   }
 
@@ -1545,7 +1531,6 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
       _scheduleEntries
         ..clear()
         ..addAll(result);
-      _syncScheduleText();
     });
   }
 
@@ -1663,9 +1648,9 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                   decoration: appInputDecoration('Prof. Apellido'),
                 ),
                 const SizedBox(height: 12),
-                // Selector compacto: un botón abre el popup de horario
-                // (días + bloque), agregando entradas tipo 'Lun / Mié · 10:00–11:30'
-                // que se sincronizan con el campo HORARIO (sigue siendo editable).
+                // Selector compacto: un botón abre el popup de horario/sala
+                // (días + bloque), agregando entradas tipo
+                // 'Lun / Mié · 10:00–11:30'.
                 Row(
                   children: [
                     const Text(
@@ -1683,7 +1668,6 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                         onTap: () {
                           setState(() {
                             _scheduleEntries.clear();
-                            _syncScheduleText();
                           });
                         },
                         child: const Text(
@@ -1699,7 +1683,7 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                 ),
                 const SizedBox(height: 6),
                 NeobrutalistButton(
-                  label: 'SELECCIONAR HORARIO',
+                  label: 'SELECCIONAR HORARIO/SALA',
                   icon: Icons.calendar_month_rounded,
                   variant: NeobrutalistButtonVariant.secondary,
                   expand: true,
@@ -1728,48 +1712,6 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                         ),
                     ],
                   ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const AppFieldLabel('HORARIO'),
-                          const SizedBox(height: 6),
-                          TextFormField(
-                            controller: _scheduleCtrl,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 13,
-                              color: AppColors.text,
-                            ),
-                            decoration: appInputDecoration('Lun / Mié · 10:00'),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const AppFieldLabel('SALA (POR DEFECTO)'),
-                          const SizedBox(height: 6),
-                          TextFormField(
-                            controller: _roomCtrl,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 13,
-                              color: AppColors.text,
-                            ),
-                            decoration: appInputDecoration('CJP11-204'),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
                 const SizedBox(height: 12),
                 const AppFieldLabel('ESTADO'),
                 const SizedBox(height: 6),
@@ -1964,7 +1906,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
           side: const BorderSide(color: AppColors.border, width: 3),
         ),
         title: const Text(
-          'SELECCIONAR HORARIO',
+          'SELECCIONAR HORARIO/SALA',
           style: TextStyle(
             fontWeight: FontWeight.w900,
             fontSize: 14,
