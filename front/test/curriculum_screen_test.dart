@@ -46,6 +46,29 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('agrega y elimina el último semestre', (tester) async {
+    await pumpCurriculum(tester, const Size(1600, 1000));
+
+    final add = find.text('AGREGAR SEMESTRE');
+    await tester.ensureVisible(add);
+    await tester.pumpAndSettle();
+    await tester.tap(add);
+    await tester.pumpAndSettle();
+
+    expect(find.text('SEMESTRE 9'), findsOneWidget);
+    expect(find.text('9 de 20'), findsOneWidget);
+
+    final remove = find.text('ELIMINAR ÚLTIMO SEMESTRE');
+    await tester.ensureVisible(remove);
+    await tester.pumpAndSettle();
+    await tester.tap(remove);
+    await tester.pumpAndSettle();
+
+    expect(find.text('SEMESTRE 9'), findsNothing);
+    expect(find.text('8 de 20'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('movil conserva scroll horizontal con BouncingScrollPhysics', (
     tester,
   ) async {

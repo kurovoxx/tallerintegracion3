@@ -27,6 +27,10 @@ const double _kMobileBreakpoint = 600;
 /// existen aún en la malla.
 const int _kCoursesInsertSemester = 6;
 
+/// Cantidad de semestres por defecto y máximo permitido por el backend.
+const int _kDefaultSemesters = 8;
+const int _kMaxSemesters = 20;
+
 class CurriculumScreen extends StatefulWidget {
   const CurriculumScreen({super.key});
 
@@ -42,8 +46,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
 
   // semestre -> ramos
   Map<int, List<Map<String, dynamic>>> _semesters = {};
-  // snapshot para limpiar
-  Map<int, List<Map<String, dynamic>>>? _snapshot;
+  int _semesterCount = _kDefaultSemesters;
 
   // Backend Academic: si hay sesión y backend, la malla se lista/crea por
   // API; si no, se usa el mock local (mismo comportamiento que antes).
@@ -83,8 +86,6 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       await Future.delayed(const Duration(milliseconds: 620));
       if (await _loadFromBackend()) {
         _syncWithCoursesService();
-        // snapshot deep copy
-        _snapshot = _deepCopy(_semesters);
         if (!mounted) return;
         setState(() => _isLoading = false);
         return;
@@ -215,9 +216,8 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           },
         ],
       };
+      _semesterCount = _kDefaultSemesters;
       _syncWithCoursesService();
-      // snapshot deep copy
-      _snapshot = _deepCopy(_semesters);
       if (!mounted) return;
       setState(() => _isLoading = false);
     } catch (_) {
@@ -236,12 +236,18 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       final malla = await _academicApi.ensureCurriculum();
       final subjects = await _academicApi.listSubjects(malla.id);
       if (!mounted) return true;
+      var count = malla.semesterCount;
+      if (count < 1) count = _kDefaultSemesters;
+      if (count > _kMaxSemesters) count = _kMaxSemesters;
+      final fallback = _kCoursesInsertSemester <= count
+          ? _kCoursesInsertSemester
+          : count;
       final map = <int, List<Map<String, dynamic>>>{};
       for (final s in subjects) {
         final sem = s.semester;
-        final key = (sem != null && sem >= 1 && sem <= 8)
+        final key = (sem != null && sem >= 1 && sem <= count)
             ? sem
-            : _kCoursesInsertSemester;
+            : fallback;
         (map[key] ??= []).add({
           'id': s.id,
           'code': s.code ?? '',
@@ -253,6 +259,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       }
       setState(() {
         _semesters = map;
+        _semesterCount = count;
         _curriculumId = malla.id;
         _backendMode = true;
         _backendSubjects = subjects;
@@ -268,16 +275,6 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       }
       return false;
     }
-  }
-
-  Map<int, List<Map<String, dynamic>>> _deepCopy(
-    Map<int, List<Map<String, dynamic>>> src,
-  ) {
-    final out = <int, List<Map<String, dynamic>>>{};
-    src.forEach((k, v) {
-      out[k] = v.map((e) => Map<String, dynamic>.from(e)).toList();
-    });
-    return out;
   }
 
   /// Refleja en la malla el estado de los cursos registrados en Mis Cursos:
@@ -327,11 +324,13 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       final match = RegExp(r'(\d+)').firstMatch(raw);
       final n = int.tryParse(match?.group(1) ?? '');
       if (n != null) {
-        if (n >= 1 && n <= 8) return n;
-        if (n > 8) return 8;
+        if (n >= 1 && n <= _semesterCount) return n;
+        if (n > _semesterCount) return _semesterCount;
       }
     }
-    return _kCoursesInsertSemester;
+    return _kCoursesInsertSemester <= _semesterCount
+        ? _kCoursesInsertSemester
+        : _semesterCount;
   }
 
   int _creditsForSemester(int sem) {
@@ -423,24 +422,62 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     }
   }
 
-  void _handleRestoreSnapshot() {
-    if (_snapshot == null) return;
-    setState(() => _semesters = _deepCopy(_snapshot!));
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Malla restaurada'),
-        backgroundColor: AppColors.border,
-      ),
-    );
+  Future<void> _changeSemesterCount(int next) async {
+    if (next < 1 || next > _kMaxSemesters || next == _semesterCount) return;
+    final adding = next > _semesterCount;
+    if (!adding && (_semesters[_semesterCount] ?? []).isNotEmpty) {
+      _showSnack('Vacía el último semestre antes de eliminarlo.');
+      return;
+    }
+    if (_backendMode && _curriculumId != null) {
+      try {
+        await _academicApi.updateCurriculumSemesterCount(
+          _curriculumId!,
+          next,
+        );
+      } on AcademicApiException catch (e) {
+        if (!mounted) return;
+        _showSnack('No se pudo actualizar la malla: ${e.message}');
+        return;
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      if (adding) {
+        for (var s = _semesterCount + 1; s <= next; s++) {
+          _semesters.putIfAbsent(s, () => []);
+        }
+      } else {
+        for (var s = next + 1; s <= _semesterCount; s++) {
+          _semesters.remove(s);
+        }
+      }
+      _semesterCount = next;
+    });
+    if (adding) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_horizontalScrollController.hasClients) return;
+        _horizontalScrollController.animateTo(
+          _horizontalScrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOut,
+        );
+      });
+    }
   }
 
-  void _handleSave() {
-    _snapshot = _deepCopy(_semesters);
+  void _handleAddSemester() {
+    _changeSemesterCount(_semesterCount + 1);
+  }
+
+  void _handleRemoveLastSemester() {
+    _changeSemesterCount(_semesterCount - 1);
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Malla guardada correctamente'),
-        backgroundColor: AppColors.border,
-      ),
+      SnackBar(content: Text(message), backgroundColor: AppColors.border),
     );
   }
 
@@ -827,23 +864,6 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           variant: NeobrutalistButtonVariant.secondary,
           onPressed: _handleClearAll,
         ),
-        NeobrutalistButton(
-          label: 'Guardar malla',
-          icon: Icons.save_rounded,
-          variant: NeobrutalistButtonVariant.primary,
-          onPressed: _handleSave,
-        ),
-        if (_snapshot != null)
-          NeobrutalistButton(
-            label: 'Restaurar',
-            icon: Icons.restore_rounded,
-            variant: NeobrutalistButtonVariant.secondary,
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppDimens.spaceMd,
-              vertical: 10,
-            ),
-            onPressed: _handleRestoreSnapshot,
-          ),
       ],
     );
 
@@ -915,10 +935,12 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
   }
 
   Widget _buildMallaContent(bool isDesktop, bool isMobile) {
-    // Ordena semestres numéricamente
-    final semesterKeys = _semesters.keys.toList()..sort();
-    // Asegura que al menos se muestren semestres 1..8 aunque algunos vacíos
-    for (int i = 1; i <= 8; i++) {
+    // Semestres visibles 1.._semesterCount, siempre con columnas vacías.
+    final semesterKeys = _semesters.keys
+        .where((s) => s >= 1 && s <= _semesterCount)
+        .toList()
+      ..sort();
+    for (int i = 1; i <= _semesterCount; i++) {
       _semesters.putIfAbsent(i, () => []);
       if (!semesterKeys.contains(i)) semesterKeys.add(i);
     }
@@ -937,6 +959,10 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
     final columns = <Widget>[
       for (final semester in semesterKeys)
         SizedBox(width: columnWidth, child: _buildSemesterColumn(semester)),
+      SizedBox(
+        width: isMobile ? 280 : 300,
+        child: _buildSemesterControls(isMobile),
+      ),
     ];
 
     return Column(
@@ -1092,6 +1118,85 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildSemesterControls(bool isMobile) {
+    final lastHasSubjects = (_semesters[_semesterCount] ?? []).isNotEmpty;
+    final canRemove = _semesterCount > 1 && !lastHasSubjects;
+    final canAdd = _semesterCount < _kMaxSemesters;
+
+    return Container(
+      padding: EdgeInsets.all(isMobile ? 10 : 14),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border: Border.all(color: AppColors.border, width: 2),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+        boxShadow: AppShadows.badge,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'SEMESTRES',
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+              fontSize: 12,
+              letterSpacing: 0.5,
+              color: AppColors.text,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '$_semesterCount de $_kMaxSemesters',
+            style: const TextStyle(
+              fontWeight: FontWeight.w800,
+              fontSize: 12,
+              color: AppColors.muted,
+            ),
+          ),
+          const SizedBox(height: 14),
+          NeobrutalistButton(
+            label: 'AGREGAR SEMESTRE',
+            icon: Icons.add_rounded,
+            variant: NeobrutalistButtonVariant.accent,
+            expand: true,
+            onPressed: canAdd ? _handleAddSemester : null,
+          ),
+          const SizedBox(height: 10),
+          NeobrutalistButton(
+            label: 'ELIMINAR ÚLTIMO SEMESTRE',
+            icon: Icons.remove_rounded,
+            variant: NeobrutalistButtonVariant.danger,
+            expand: true,
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+            onPressed: canRemove ? _handleRemoveLastSemester : null,
+          ),
+          if (_semesterCount > 1 && lastHasSubjects) ...[
+            const SizedBox(height: 8),
+            const Text(
+              'Vacía el último semestre antes de eliminarlo.',
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 10.5,
+                color: AppColors.muted,
+              ),
+            ),
+          ],
+          if (!canAdd) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Máximo $_kMaxSemesters semestres.',
+              style: const TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 10.5,
+                color: AppColors.muted,
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 

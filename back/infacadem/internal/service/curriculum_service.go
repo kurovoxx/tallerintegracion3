@@ -15,8 +15,15 @@ type CurriculumStore interface {
 	GetByID(ctx context.Context, id, userID string) (*model.Curriculum, error)
 	ListByUser(ctx context.Context, userID string) ([]model.Curriculum, error)
 	UpdateName(ctx context.Context, id, userID, name string) (*model.Curriculum, error)
+	UpdateSemesterCount(ctx context.Context, id, userID string, count int) (*model.Curriculum, error)
 	Delete(ctx context.Context, id, userID string) (bool, error)
 }
+
+const (
+	defaultSemesterCount = 8
+	minSemesterCount     = 1
+	maxSemesterCount     = 20
+)
 
 // CurriculumService contiene las reglas de curricula (100% personal).
 type CurriculumService struct {
@@ -43,7 +50,14 @@ func (s *CurriculumService) Create(ctx context.Context, userID, name string) (*m
 	if err != nil {
 		return nil, err
 	}
-	return s.repo.Create(ctx, strings.TrimSpace(userID), clean)
+	c, err := s.repo.Create(ctx, strings.TrimSpace(userID), clean)
+	if err != nil {
+		return nil, err
+	}
+	if c.SemesterCount < minSemesterCount || c.SemesterCount > maxSemesterCount {
+		c.SemesterCount = defaultSemesterCount
+	}
+	return c, nil
 }
 
 // Get retorna una malla propia; 404 si no existe o es ajena.
@@ -94,6 +108,29 @@ func (s *CurriculumService) Update(ctx context.Context, userID, id, name string)
 		return nil, err
 	}
 	c, err := s.repo.UpdateName(ctx, id, strings.TrimSpace(userID), clean)
+	if err != nil {
+		return nil, err
+	}
+	if c == nil {
+		return nil, NewServiceError(utils.ErrNotFound)
+	}
+	return c, nil
+}
+
+// UpdateSemesterCount fija la cantidad de semestres (1..20) de una malla
+// propia. 400 invalid_semester_count fuera de rango; 404 si no es propia.
+func (s *CurriculumService) UpdateSemesterCount(ctx context.Context, userID, id string, count int) (*model.Curriculum, error) {
+	if err := requireUser(userID); err != nil {
+		return nil, err
+	}
+	id, err := ValidateUUID(id)
+	if err != nil {
+		return nil, err
+	}
+	if count < minSemesterCount || count > maxSemesterCount {
+		return nil, NewServiceError(utils.ErrInvalidSemesterCount)
+	}
+	c, err := s.repo.UpdateSemesterCount(ctx, id, strings.TrimSpace(userID), count)
 	if err != nil {
 		return nil, err
 	}

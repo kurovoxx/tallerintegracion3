@@ -25,7 +25,7 @@ func newFakeCurricula() *fakeCurricula { return &fakeCurricula{items: map[string
 func (f *fakeCurricula) Create(_ context.Context, userID, name string) (*model.Curriculum, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	c := &model.Curriculum{ID: uuid.NewString(), UserID: userID, Name: name, CreatedAt: time.Now()}
+	c := &model.Curriculum{ID: uuid.NewString(), UserID: userID, Name: name, SemesterCount: 8, CreatedAt: time.Now()}
 	f.items[c.ID] = c
 	cp := *c
 	return &cp, nil
@@ -58,6 +58,17 @@ func (f *fakeCurricula) UpdateName(_ context.Context, id, userID, name string) (
 	defer f.mu.Unlock()
 	if c, ok := f.items[id]; ok && c.UserID == userID {
 		c.Name = name
+		cp := *c
+		return &cp, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeCurricula) UpdateSemesterCount(_ context.Context, id, userID string, count int) (*model.Curriculum, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if c, ok := f.items[id]; ok && c.UserID == userID {
+		c.SemesterCount = count
 		cp := *c
 		return &cp, nil
 	}
@@ -334,6 +345,26 @@ func TestCurriculum_CRUD(t *testing.T) {
 	}
 	if _, err := svc.Update(ctx, userB, c.ID, "Hack"); err == nil {
 		t.Fatal("update ajeno debe ser 404")
+	} else {
+		mustCode(t, err, "not_found")
+	}
+	if c.SemesterCount != defaultSemesterCount {
+		t.Fatalf("semester_count default: %d", c.SemesterCount)
+	}
+
+	updCount, err := svc.UpdateSemesterCount(ctx, userA, c.ID, 12)
+	if err != nil || updCount.SemesterCount != 12 {
+		t.Fatalf("update semester_count: %+v %v", updCount, err)
+	}
+	for _, bad := range []int{0, 21} {
+		if _, err := svc.UpdateSemesterCount(ctx, userA, c.ID, bad); err == nil {
+			t.Fatalf("semester_count %d debe ser 400", bad)
+		} else {
+			mustCode(t, err, "invalid_semester_count")
+		}
+	}
+	if _, err := svc.UpdateSemesterCount(ctx, userB, c.ID, 10); err == nil {
+		t.Fatal("update semester_count ajeno debe ser 404")
 	} else {
 		mustCode(t, err, "not_found")
 	}

@@ -4,15 +4,23 @@
 // - back/infacadem/internal/model/{curriculum,subject,schedule}.go (tags json)
 // - back/infacadem/internal/handler/http/present.go (horas "15:04:05")
 class AcademicCurriculum {
-  AcademicCurriculum({required this.id, required this.name});
+  AcademicCurriculum({
+    required this.id,
+    required this.name,
+    this.semesterCount = 8,
+  });
 
   final String id;
   final String name;
+  final int semesterCount;
 
   factory AcademicCurriculum.fromJson(Map<String, dynamic> j) {
+    final raw = j['semester_count'];
+    final parsed = raw is int ? raw : int.tryParse('$raw') ?? 8;
     return AcademicCurriculum(
       id: (j['id'] as String?) ?? '',
       name: (j['name'] as String?) ?? '',
+      semesterCount: parsed < 1 ? 8 : (parsed > 20 ? 20 : parsed),
     );
   }
 }

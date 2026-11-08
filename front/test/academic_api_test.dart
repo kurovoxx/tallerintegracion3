@@ -45,6 +45,33 @@ void main() {
     expect(all.single.id, 'm1');
   });
 
+  test(
+    'updateCurriculumSemesterCount hace PATCH y parsea semester_count',
+    () async {
+      final api = await apiWith(
+        MockClient((request) async {
+          expect(request.method, 'PATCH');
+          expect(request.url.servicePath, '/curricula/m1');
+          expect(request.headers['Authorization'], 'Bearer jwt-test');
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          expect(body['semester_count'], 12);
+          return http.Response(
+            jsonEncode({
+              'id': 'm1',
+              'user_id': 'u',
+              'name': 'Malla 2026',
+              'semester_count': 12,
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }),
+      );
+      final updated = await api.updateCurriculumSemesterCount('m1', 12);
+      expect(updated.semesterCount, 12);
+    },
+  );
+
   test('createSubject envía code/credits y devuelve id', () async {
     final api = await apiWith(
       MockClient((request) async {

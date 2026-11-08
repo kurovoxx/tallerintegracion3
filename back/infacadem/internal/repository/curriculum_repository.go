@@ -27,8 +27,8 @@ func (r *CurriculumRepository) Create(ctx context.Context, userID, name string) 
 	err := r.pool.QueryRow(ctx, `
 		INSERT INTO academic.curricula (user_id, name)
 		VALUES ($1, $2)
-		RETURNING id, user_id, name, created_at
-	`, userID, name).Scan(&c.ID, &c.UserID, &c.Name, &c.CreatedAt)
+		RETURNING id, user_id, name, semester_count, created_at
+	`, userID, name).Scan(&c.ID, &c.UserID, &c.Name, &c.SemesterCount, &c.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("create curriculum: %w", err)
 	}
@@ -39,10 +39,10 @@ func (r *CurriculumRepository) Create(ctx context.Context, userID, name string) 
 func (r *CurriculumRepository) GetByID(ctx context.Context, id, userID string) (*model.Curriculum, error) {
 	var c model.Curriculum
 	err := r.pool.QueryRow(ctx, `
-		SELECT id, user_id, name, created_at
+		SELECT id, user_id, name, semester_count, created_at
 		FROM academic.curricula
 		WHERE id = $1 AND user_id = $2
-	`, id, userID).Scan(&c.ID, &c.UserID, &c.Name, &c.CreatedAt)
+	`, id, userID).Scan(&c.ID, &c.UserID, &c.Name, &c.SemesterCount, &c.CreatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -55,7 +55,7 @@ func (r *CurriculumRepository) GetByID(ctx context.Context, id, userID string) (
 // ListByUser lista solo las mallas propias (nunca null).
 func (r *CurriculumRepository) ListByUser(ctx context.Context, userID string) ([]model.Curriculum, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, user_id, name, created_at
+		SELECT id, user_id, name, semester_count, created_at
 		FROM academic.curricula
 		WHERE user_id = $1
 		ORDER BY created_at DESC, id DESC
@@ -67,7 +67,7 @@ func (r *CurriculumRepository) ListByUser(ctx context.Context, userID string) ([
 	out := make([]model.Curriculum, 0)
 	for rows.Next() {
 		var c model.Curriculum
-		if err := rows.Scan(&c.ID, &c.UserID, &c.Name, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.UserID, &c.Name, &c.SemesterCount, &c.CreatedAt); err != nil {
 			return nil, fmt.Errorf("list curricula: %w", err)
 		}
 		out = append(out, c)
@@ -85,13 +85,32 @@ func (r *CurriculumRepository) UpdateName(ctx context.Context, id, userID, name 
 		UPDATE academic.curricula
 		SET name = $3
 		WHERE id = $1 AND user_id = $2
-		RETURNING id, user_id, name, created_at
-	`, id, userID, name).Scan(&c.ID, &c.UserID, &c.Name, &c.CreatedAt)
+		RETURNING id, user_id, name, semester_count, created_at
+	`, id, userID, name).Scan(&c.ID, &c.UserID, &c.Name, &c.SemesterCount, &c.CreatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("update curriculum: %w", err)
+	}
+	return &c, nil
+}
+
+// UpdateSemesterCount fija la cantidad de semestres de una malla propia.
+// nil si no existe o es ajena.
+func (r *CurriculumRepository) UpdateSemesterCount(ctx context.Context, id, userID string, count int) (*model.Curriculum, error) {
+	var c model.Curriculum
+	err := r.pool.QueryRow(ctx, `
+		UPDATE academic.curricula
+		SET semester_count = $3
+		WHERE id = $1 AND user_id = $2
+		RETURNING id, user_id, name, semester_count, created_at
+	`, id, userID, count).Scan(&c.ID, &c.UserID, &c.Name, &c.SemesterCount, &c.CreatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("update curriculum semester count: %w", err)
 	}
 	return &c, nil
 }

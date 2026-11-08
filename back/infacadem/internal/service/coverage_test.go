@@ -19,11 +19,12 @@ var errBoom = errors.New("boom")
 
 type errCurricula struct {
 	*fakeCurricula
-	listErr   error
-	getErr    error
-	updateErr error
-	deleteErr error
-	createErr error
+	listErr                error
+	getErr                 error
+	updateErr              error
+	updateSemesterCountErr error
+	deleteErr              error
+	createErr              error
 }
 
 func (f *errCurricula) ListByUser(ctx context.Context, userID string) ([]model.Curriculum, error) {
@@ -45,6 +46,13 @@ func (f *errCurricula) UpdateName(ctx context.Context, id, userID, name string) 
 		return nil, f.updateErr
 	}
 	return f.fakeCurricula.UpdateName(ctx, id, userID, name)
+}
+
+func (f *errCurricula) UpdateSemesterCount(ctx context.Context, id, userID string, count int) (*model.Curriculum, error) {
+	if f.updateSemesterCountErr != nil {
+		return nil, f.updateSemesterCountErr
+	}
+	return f.fakeCurricula.UpdateSemesterCount(ctx, id, userID, count)
 }
 
 func (f *errCurricula) Delete(ctx context.Context, id, userID string) (bool, error) {

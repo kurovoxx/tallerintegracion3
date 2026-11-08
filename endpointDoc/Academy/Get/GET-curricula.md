@@ -5,7 +5,7 @@
 - Headers: `Authorization: Bearer <access_token>`. Sin body.
 
 ## Res
-- `200`: `{"items":[{"id":"...","user_id":"...","name":"...","created_at":"..."}]}` (solo propias, `[]` nunca `null`).
+- `200`: `{"items":[{"id":"...","user_id":"...","name":"...","semester_count":8,"created_at":"..."}]}` (solo propias, `[]` nunca `null`).
 - `401`: `{"error":{"code":"unauthorized|invalid_token|token_expired","message":"..."}}`.
 
 ## Invocación (Front / Otros Servicios)
