@@ -71,6 +71,7 @@ func (NoopMeetingCreatedNotifier) OnMeetingCreated(ctx context.Context, meeting 
 type MeetingRepo interface {
 	GetGroupByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialGroup, error)
 	IsMember(ctx context.Context, groupID, userID pgtype.UUID) (bool, error)
+	GetMemberRole(ctx context.Context, groupID, userID pgtype.UUID) (string, error)
 	CreateMeetingWithNotifications(ctx context.Context, arg sqlc.CreateMeetingParams, attendeeEmails []string) (sqlc.SocialMeeting, error)
 	ListMeetingsByGroup(ctx context.Context, groupID pgtype.UUID) ([]sqlc.SocialMeeting, error)
 }
@@ -193,8 +194,16 @@ func (s *MeetingService) CreateMeeting(ctx context.Context, groupID, userID, tit
 	if err := s.requireMeetingGroup(ctx, gid); err != nil {
 		return sqlc.SocialMeeting{}, err
 	}
-	if err := s.requireMembership(ctx, gid, uid); err != nil {
+	// Política: solo admins agendan reuniones.
+	role, err := s.repo.GetMemberRole(ctx, gid, uid)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return sqlc.SocialMeeting{}, ErrForbidden
+		}
 		return sqlc.SocialMeeting{}, err
+	}
+	if role != "admin" {
+		return sqlc.SocialMeeting{}, ErrForbidden
 	}
 
 	meeting, err := s.repo.CreateMeetingWithNotifications(ctx, sqlc.CreateMeetingParams{

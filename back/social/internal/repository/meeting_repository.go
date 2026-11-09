@@ -34,6 +34,13 @@ func (r *MeetingRepository) IsMember(ctx context.Context, groupID, userID pgtype
 	})
 }
 
+func (r *MeetingRepository) GetMemberRole(ctx context.Context, groupID, userID pgtype.UUID) (string, error) {
+	return r.queries.GetGroupMemberRole(ctx, sqlc.GetGroupMemberRoleParams{
+		GroupID: groupID,
+		UserID:  userID,
+	})
+}
+
 // CreateMeetingWithNotifications crea la reunión y, en la misma transacción,
 // una fila en meeting_notifications por cada miembro del grupo excepto el creador,
 // más una fila en meeting_attendees por cada email invitado (ya validados y
