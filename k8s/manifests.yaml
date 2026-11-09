@@ -232,13 +232,14 @@ spec:
           image: ghcr.io/kurovoxx/tallerintegracion3-ai:latest
           ports: [{containerPort: 8084}]
           resources:
-            requests: {cpu: 25m, memory: 64Mi}
-            limits: {cpu: 100m, memory: 128Mi}
+            requests: {cpu: 25m, memory: 96Mi}
+            limits: {cpu: 250m, memory: 256Mi}
+          # Sin GEMINI_API_KEY el servicio arranca en modo mock (optional: true).
           envFrom: [{secretRef: {name: ti3-secrets}}]
           env:
             - {name: PORT, value: "8084"}
             - {name: AI_PORT, value: "8084"}
-            - {name: GEMINI_API_KEY, valueFrom: {secretKeyRef: {name: ti3-secrets, key: GEMINI_API_KEY}}}
+            - {name: GEMINI_API_KEY, valueFrom: {secretKeyRef: {name: ti3-secrets, key: GEMINI_API_KEY, optional: true}}}
             - {name: INTERNAL_API_KEY, valueFrom: {secretKeyRef: {name: ti3-secrets, key: INTERNAL_API_KEY}}}
           readinessProbe:
             httpGet:
