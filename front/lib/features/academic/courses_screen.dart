@@ -37,10 +37,37 @@ String? _realRoom(String? raw) {
   return value;
 }
 
+/// Primera sala definida en el resultado del formulario de curso.
+String? _firstScheduleRoom(Map<String, dynamic> result) {
+  final raw = result['schedule_rooms'];
+  if (raw is Map) {
+    for (final value in raw.values) {
+      final room = _realRoom(value as String?);
+      if (room != null) return room;
+    }
+  }
+  return _realRoom(result['room'] as String?);
+}
+
 class _ScheduleEntry {
   const _ScheduleEntry({required this.label, this.room});
 
   final String label;
+  final String? room;
+}
+
+/// Horario individual que se desea persistir al editar una materia.
+class _ScheduleDraftRoom {
+  const _ScheduleDraftRoom({
+    required this.day,
+    required this.start,
+    required this.end,
+    this.room,
+  });
+
+  final int day;
+  final String start;
+  final String end;
   final String? room;
 }
 
@@ -224,8 +251,11 @@ class _CoursesScreenState extends State<CoursesScreen> {
   void _openDetail(Map<String, dynamic> course) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            CourseDetailScreen(course: course, onRefresh: _refreshCourse),
+        builder: (_) => CourseDetailScreen(
+          course: course,
+          onRefresh: _refreshCourse,
+          onEdit: _showEditCourseDialog,
+        ),
       ),
     );
   }
@@ -242,7 +272,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
   Future<void> _showCreateCourseDialog() async {
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (_) => const _CreateCourseDialog(),
+      builder: (_) => const _CourseDialog(),
     );
 
     if (result == null || !mounted) return;
@@ -363,6 +393,238 @@ class _CoursesScreenState extends State<CoursesScreen> {
         backgroundColor: AppColors.border,
       ),
     );
+  }
+
+  /// Mismo formulario que el alta, precargado con los datos del curso.
+  Future<void> _showEditCourseDialog(Map<String, dynamic> course) async {
+    final entries = await _initialScheduleEntries(course);
+    if (!mounted) return;
+
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (_) =>
+          _CourseDialog(initialCourse: course, initialScheduleEntries: entries),
+    );
+    if (result == null || !mounted) return;
+
+    final id = course['id'] as String?;
+    if (id == null || id.isEmpty) return;
+
+    if (_backendMode) {
+      await _updateCourseBackend(id, result);
+      return;
+    }
+
+    final firstRoom = _firstScheduleRoom(result);
+    CoursesService.instance.updateCourse(id, {
+      'name': result['name'],
+      'code': result['code'],
+      'credits': result['credits'],
+      'status': result['status'],
+      'professor': result['professor'],
+      'schedule': result['schedule'],
+      'room': firstRoom ?? 'Por asignar',
+      'progress': _progressForStatus(result['status'] as String),
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Curso actualizado correctamente'),
+        backgroundColor: AppColors.border,
+      ),
+    );
+  }
+
+  int _progressForStatus(String status) {
+    if (status == kSubjectApproved) return 100;
+    if (status == kSubjectPending) return 0;
+    return 15;
+  }
+
+  /// Precarga el horario: desde la API si hay sesión (conserva salas por
+  /// bloque) o desde el texto del curso en modo local.
+  Future<List<_ScheduleEntry>> _initialScheduleEntries(
+    Map<String, dynamic> course,
+  ) async {
+    final subjectId = course['id'] as String?;
+    if (_backendMode && subjectId != null && subjectId.isNotEmpty) {
+      try {
+        final slots = await _academicApi.listSchedules(subjectId);
+        return _scheduleEntriesFromSlots(
+          slots,
+          _realRoom(course['room'] as String?),
+        );
+      } on AcademicApiException {
+        // Si falla, se usa el texto que ya muestra el detalle.
+      }
+    }
+    return _scheduleEntriesFromCourse(course);
+  }
+
+  List<_ScheduleEntry> _scheduleEntriesFromCourse(Map<String, dynamic> course) {
+    final text = (course['schedule'] as String?)?.trim() ?? '';
+    if (text.isEmpty || text == 'Por definir') return const [];
+    final room = _realRoom(course['room'] as String?);
+    return _splitScheduleEntries(text)
+        .map((label) => _ScheduleEntry(label: label, room: room))
+        .toList();
+  }
+
+  List<_ScheduleEntry> _scheduleEntriesFromSlots(
+    List<AcademicScheduleSlot> slots,
+    String? fallbackRoom,
+  ) {
+    final daysByKey = <String, Set<int>>{};
+    final blockByKey = <String, String>{};
+    final roomByKey = <String, String?>{};
+    for (final slot in slots) {
+      final start = hhMmToMinutes(slot.startTime);
+      final end = hhMmToMinutes(slot.endTime);
+      if (start == null || end == null || end <= start) continue;
+      final room = _realRoom(slot.room) ?? fallbackRoom;
+      final block = '${minutesToHhMm(start)}–${minutesToHhMm(end)}';
+      final key = '$block|${room?.toLowerCase() ?? ''}';
+      daysByKey.putIfAbsent(key, () => <int>{}).add(slot.dayOfWeek);
+      blockByKey[key] = block;
+      roomByKey[key] = room;
+    }
+    final keys = daysByKey.keys.toList()
+      ..sort((a, b) => blockByKey[a]!.compareTo(blockByKey[b]!));
+    return keys.map((key) {
+      final days = daysByKey[key]!.toList()
+        ..sort((a, b) => (a == 0 ? 7 : a).compareTo(b == 0 ? 7 : b));
+      return _ScheduleEntry(
+        label: '${days.map(dayNumberToLabel).join(' / ')} · ${blockByKey[key]}',
+        room: roomByKey[key],
+      );
+    }).toList();
+  }
+
+  /// Actualiza la materia y sincroniza sus horarios (la API no tiene
+  /// PATCH de schedule: se borran los que sobran y se crean los nuevos).
+  Future<void> _updateCourseBackend(
+    String subjectId,
+    Map<String, dynamic> result,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final firstRoom = _firstScheduleRoom(result);
+    try {
+      await _academicApi.patchSubject(subjectId, {
+        'name': result['name'],
+        'code': result['code'],
+        'professor': result['professor'] == 'Por asignar'
+            ? ''
+            : result['professor'],
+        'room': firstRoom ?? '',
+        'credits': result['credits'],
+        'status': result['status'],
+      });
+    } on AcademicApiException catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('No se pudo actualizar el curso: ${e.message}'),
+          backgroundColor: AppColors.border,
+        ),
+      );
+      return;
+    }
+
+    final failed = await _syncSchedules(subjectId, result);
+    if (!mounted) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          failed.isEmpty
+              ? 'Curso actualizado correctamente'
+              : 'Curso actualizado, pero fallaron horarios: ${failed.join(', ')}. Verifica y reintenta.',
+        ),
+        backgroundColor: AppColors.border,
+      ),
+    );
+  }
+
+  Future<List<String>> _syncSchedules(
+    String subjectId,
+    Map<String, dynamic> result,
+  ) async {
+    final failed = <String>[];
+    List<AcademicScheduleSlot> current;
+    try {
+      current = await _academicApi.listSchedules(subjectId);
+    } on AcademicApiException catch (e) {
+      return ['no se pudieron leer los horarios (${e.message})'];
+    }
+
+    final scheduleText = (result['schedule'] as String?) ?? '';
+    final rawRooms = result['schedule_rooms'];
+    final scheduleRooms = rawRooms is Map
+        ? Map<String, String?>.from(rawRooms)
+        : const <String, String?>{};
+
+    final desired = <String, _ScheduleDraftRoom>{};
+    if (scheduleText.trim().isNotEmpty && scheduleText != 'Por definir') {
+      for (final entry in _splitScheduleEntries(scheduleText)) {
+        List<ScheduleDraft> drafts;
+        try {
+          drafts = expandScheduleEntry(entry);
+        } on FormatException {
+          failed.add(entry);
+          continue;
+        }
+        final room = _realRoom(scheduleRooms[entry.trim()]);
+        for (final draft in drafts) {
+          final start = _normTime(draft.startTime);
+          final end = _normTime(draft.endTime);
+          final key =
+              '${draft.dayOfWeek}|$start|$end|${room?.toLowerCase() ?? ''}';
+          desired[key] = _ScheduleDraftRoom(
+            day: draft.dayOfWeek,
+            start: start,
+            end: end,
+            room: room,
+          );
+        }
+      }
+    }
+
+    final currentKeys = <String>{};
+    for (final slot in current) {
+      final key =
+          '${slot.dayOfWeek}|${_normTime(slot.startTime)}|${_normTime(slot.endTime)}|${slot.room?.trim().toLowerCase() ?? ''}';
+      currentKeys.add(key);
+      if (desired.containsKey(key)) continue;
+      try {
+        await _academicApi.deleteSchedule(slot.id);
+      } on AcademicApiException catch (e) {
+        failed.add(
+          'eliminar ${dayNumberToLabel(slot.dayOfWeek)} (${e.message})',
+        );
+      }
+    }
+
+    for (final entry in desired.entries) {
+      if (currentKeys.contains(entry.key)) continue;
+      final draft = entry.value;
+      try {
+        await _academicApi.createSchedule(
+          subjectId: subjectId,
+          dayOfWeek: draft.day,
+          startTime: draft.start,
+          endTime: draft.end,
+          room: draft.room,
+        );
+      } on AcademicApiException catch (e) {
+        failed.add('${dayNumberToLabel(draft.day)} (${e.message})');
+      }
+    }
+
+    return failed;
+  }
+
+  String _normTime(String raw) {
+    final minutes = hhMmToMinutes(raw);
+    return minutes == null ? raw.trim() : minutesToHhMm(minutes);
   }
 
   @override
@@ -887,10 +1149,12 @@ class CourseDetailScreen extends StatefulWidget {
     super.key,
     required this.course,
     required this.onRefresh,
+    this.onEdit,
   });
 
   final Map<String, dynamic> course;
   final Future<Map<String, dynamic>?> Function(String id) onRefresh;
+  final Future<void> Function(Map<String, dynamic> course)? onEdit;
 
   @override
   State<CourseDetailScreen> createState() => _CourseDetailScreenState();
@@ -909,6 +1173,14 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
       if (updated != null) _course = updated;
       _refreshing = false;
     });
+  }
+
+  Future<void> _edit() async {
+    final onEdit = widget.onEdit;
+    if (onEdit == null) return;
+    await onEdit(_course);
+    if (!mounted) return;
+    await _refresh();
   }
 
   @override
@@ -1033,6 +1305,18 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                         ),
                         const SizedBox(height: AppDimens.spaceLg),
                         _CourseProgress(progress: progress),
+                        if (widget.onEdit != null) ...[
+                          const SizedBox(height: AppDimens.spaceLg),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: NeobrutalistButton(
+                              label: 'Editar curso',
+                              icon: Icons.edit_rounded,
+                              variant: NeobrutalistButtonVariant.secondary,
+                              onPressed: _refreshing ? null : _edit,
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -1450,36 +1734,52 @@ class _DetailMeta extends StatelessWidget {
   }
 }
 
-/// Diálogo "CREAR NUEVO CURSO" como StatefulWidget dedicado. Los
+/// Formulario de curso como StatefulWidget dedicado. Se reutiliza para
+/// crear y editar: con [initialCourse] precarga los datos existentes. Los
 /// TextEditingController viven en su State (initState) y se liberan en
 /// dispose(), momento en que la ruta del diálogo ya desmontó sus widgets.
 /// Esto evita el assert de ChangeNotifier '_dependents.isEmpty' que ocurría
 /// al disponer los controladores justo después del pop del showDialog.
-class _CreateCourseDialog extends StatefulWidget {
-  const _CreateCourseDialog();
+class _CourseDialog extends StatefulWidget {
+  const _CourseDialog({
+    this.initialCourse,
+    this.initialScheduleEntries = const [],
+  });
+
+  final Map<String, dynamic>? initialCourse;
+  final List<_ScheduleEntry> initialScheduleEntries;
 
   @override
-  State<_CreateCourseDialog> createState() => _CreateCourseDialogState();
+  State<_CourseDialog> createState() => _CourseDialogState();
 }
 
-class _CreateCourseDialogState extends State<_CreateCourseDialog> {
+class _CourseDialogState extends State<_CourseDialog> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _nameCtrl;
   late final TextEditingController _codeCtrl;
   late final TextEditingController _creditsCtrl;
   late final TextEditingController _professorCtrl;
-  String _status = kSubjectInProgress;
+  late String _status;
   // Bloques de horario añadidos, p.ej. 'Lun / Mié · 10:00–11:30', con su
   // sala opcional.
-  final List<_ScheduleEntry> _scheduleEntries = [];
+  late final List<_ScheduleEntry> _scheduleEntries;
+
+  bool get _isEditing => widget.initialCourse != null;
 
   @override
   void initState() {
     super.initState();
-    _nameCtrl = TextEditingController();
-    _codeCtrl = TextEditingController();
-    _creditsCtrl = TextEditingController(text: '5');
-    _professorCtrl = TextEditingController();
+    final course = widget.initialCourse;
+    final credits = course?['credits'];
+    final professor = course?['professor'] as String?;
+    _nameCtrl = TextEditingController(text: (course?['name'] as String?) ?? '');
+    _codeCtrl = TextEditingController(text: (course?['code'] as String?) ?? '');
+    _creditsCtrl = TextEditingController(text: '${credits ?? 5}');
+    _professorCtrl = TextEditingController(
+      text: professor == null || professor == 'Por asignar' ? '' : professor,
+    );
+    _status = (course?['status'] as String?) ?? kSubjectInProgress;
+    _scheduleEntries = List<_ScheduleEntry>.of(widget.initialScheduleEntries);
   }
 
   @override
@@ -1544,9 +1844,9 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
           borderRadius: BorderRadius.circular(AppDimens.radius),
           side: const BorderSide(color: AppColors.border, width: 3),
         ),
-        title: const Text(
-          'CREAR NUEVO CURSO',
-          style: TextStyle(
+        title: Text(
+          _isEditing ? 'EDITAR CURSO' : 'CREAR NUEVO CURSO',
+          style: const TextStyle(
             fontWeight: FontWeight.w900,
             fontSize: 16,
             color: AppColors.text,
@@ -1780,9 +2080,9 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                 borderRadius: BorderRadius.circular(AppDimens.radius),
               ),
             ),
-            child: const Text(
-              'CREAR RAMO',
-              style: TextStyle(fontWeight: FontWeight.w900),
+            child: Text(
+              _isEditing ? 'GUARDAR CAMBIOS' : 'CREAR RAMO',
+              style: const TextStyle(fontWeight: FontWeight.w900),
             ),
           ),
         ],

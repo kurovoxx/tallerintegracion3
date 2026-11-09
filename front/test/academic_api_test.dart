@@ -122,6 +122,18 @@ void main() {
     expect(posts.map((p) => p['room']), ['Lab-3', 'Lab-3']);
   });
 
+  test('deleteSchedule hace DELETE y acepta 204', () async {
+    final api = await apiWith(
+      MockClient((request) async {
+        expect(request.method, 'DELETE');
+        expect(request.url.servicePath, '/schedules/h1');
+        expect(request.headers['Authorization'], 'Bearer jwt-test');
+        return http.Response('', 204);
+      }),
+    );
+    await api.deleteSchedule('h1');
+  });
+
   test(
     'fan-out parcial: falla el 2º -> error visible + reintento sin duplicar',
     () async {
