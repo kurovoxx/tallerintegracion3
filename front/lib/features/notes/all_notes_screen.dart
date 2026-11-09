@@ -4998,6 +4998,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                 maxLines: null,
                 textAlignVertical: TextAlignVertical.top,
                 keyboardType: TextInputType.multiline,
+                style: const TextStyle(fontSize: 16, height: 1.45),
                 decoration: appInputDecoration('Contenido Markdown'),
               ),
               previewBuilder: (text) => _NeobrutalistMarkdownBody(
@@ -5363,6 +5364,7 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
         maxLines: null,
         textAlignVertical: TextAlignVertical.top,
         keyboardType: TextInputType.multiline,
+        style: const TextStyle(fontSize: 16, height: 1.45),
         decoration: appInputDecoration('Contenido Markdown'),
       ),
       previewBuilder: (text) => _NeobrutalistMarkdownBody(
@@ -7524,7 +7526,7 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
   }
 
   static const TextStyle _paragraphStyle = TextStyle(
-    fontSize: 14,
+    fontSize: 16,
     height: 1.5,
     color: AppColors.text,
   );
