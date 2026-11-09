@@ -207,8 +207,8 @@ func TestSuiteShareSameNoteTwiceToGroupIsConflict(t *testing.T) {
 	api := newNotesAPI(t)
 	owner := newUser()
 	group, other := uuid.NewString(), uuid.NewString()
-	api.social.AddMember(owner, group)
-	api.social.AddMember(owner, other)
+	api.social.AddAdmin(owner, group)
+	api.social.AddAdmin(owner, other)
 	id := api.createNote(owner, "Para el grupo", "private", "x")
 	share := func(groupID, mode string, want int) map[string]any {
 		t.Helper()
@@ -243,7 +243,7 @@ func TestSuiteSearchByID(t *testing.T) {
 	api := newNotesAPI(t)
 	alice, bob := newUser(), newUser()
 	group := uuid.NewString()
-	api.social.AddMember(alice, group)
+	api.social.AddAdmin(alice, group)
 
 	public := api.createNote(alice, "Física I", "public", "# Cinemática")
 	private := api.createNote(alice, "Privada", "private", "secreto")

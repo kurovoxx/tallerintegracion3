@@ -775,7 +775,7 @@ func TestListGroupNotesOrdering(t *testing.T) {
 	member := uuid.NewString()
 	groupID := uuid.NewString()
 	social.AddAdmin(authorAdmin, groupID)
-	social.AddMember(authorMember, groupID)
+	social.AddAdmin(authorMember, groupID) // compartir exige admin; IsAdminNote se fuerza abajo
 	social.AddMember(member, groupID)
 	atAdmin := genToken(authorAdmin, "student")
 	atMember := genToken(authorMember, "student")

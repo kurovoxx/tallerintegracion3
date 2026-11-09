@@ -2011,7 +2011,14 @@ func (s *NoteService) shareLocked(ctx context.Context, ownerID string, noteID st
 	if !isMember {
 		return nil, newServiceError(utils.ErrForbidden)
 	}
-	isAdmin, _ := s.social.IsAdmin(ctx, ownerID, groupID)
+	// Política: solo los admins del grupo pueden compartir apuntes en él.
+	isAdmin, err := s.social.IsAdmin(ctx, ownerID, groupID)
+	if err != nil {
+		return nil, ErrInternalDatabase
+	}
+	if !isAdmin {
+		return nil, newServiceErrorMsg(utils.ErrForbidden, "solo los administradores del grupo pueden compartir apuntes")
+	}
 	followers, _ := s.social.GetFollowersCount(ctx, ownerID)
 
 	previous, err := s.shared.ListByNote(ctx, noteID)

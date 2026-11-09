@@ -50,7 +50,7 @@ func TestUnshareAllRevokesLeaverOnOtherAuthorsNote(t *testing.T) {
 	ctx := context.Background()
 	owner, member, group := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	social.AddAdmin(owner, group)
-	social.AddMember(member, group)
+	social.AddAdmin(member, group) // compartir exige admin
 
 	fake := &fakeDriveEmails{byGroup: map[string][]string{
 		group: {"owner@gmail.com", "member@gmail.com"},

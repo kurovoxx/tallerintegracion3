@@ -158,8 +158,8 @@ func TestShareSameGroupTwiceIsConflict(t *testing.T) {
 	svc, _, _, _, _, _, shares, social := newTestService()
 	ctx := context.Background()
 	owner, group, other := uuid.NewString(), uuid.NewString(), uuid.NewString()
-	social.AddMember(owner, group)
-	social.AddMember(owner, other)
+	social.AddAdmin(owner, group)
+	social.AddAdmin(owner, other)
 	note, err := svc.Create(ctx, owner, "Para el grupo", nil, "private", stringPtr("x"), "")
 	if err != nil {
 		t.Fatal(err)
