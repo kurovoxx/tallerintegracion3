@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository/sqlc"
 )
 
 // Política: solo los admins del grupo agendan reuniones y modifican el
@@ -15,7 +16,10 @@ func TestMeetingCreate_SoloAdmins(t *testing.T) {
 	gid, admin, member, stranger := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
 	store := NewMemoryMeetingStore()
 	store.AddGroup(gid, admin, member)
-	svc := NewMeetingService(store, nil)
+	// El notifier corre en una goroutine best-effort que lee bestEffortTimeout:
+	// se espera su fin para no pisar tests que modifican esa variable global (-race).
+	done := make(chan struct{})
+	svc := NewMeetingService(store, notifierFunc(func() { close(done) }))
 	ctx := context.Background()
 	when := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
 
@@ -27,6 +31,11 @@ func TestMeetingCreate_SoloAdmins(t *testing.T) {
 	}
 	if _, err := svc.CreateMeeting(ctx, gid, admin, "Daily", nil, when, nil, nil); err != nil {
 		t.Fatalf("admin sí puede agendar: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("el notifier best-effort no terminó")
 	}
 	// Los miembros siguen viendo las reuniones próximas.
 	got, err := svc.ListUpcomingMeetings(ctx, gid, member, time.Now())
@@ -126,3 +135,8 @@ func TestSprintTimeRemaining(t *testing.T) {
 		t.Fatalf("extraño: got %v", err)
 	}
 }
+
+// notifierFunc adapta una función a MeetingCreatedNotifier.
+type notifierFunc func()
+
+func (f notifierFunc) OnMeetingCreated(_ context.Context, _ sqlc.SocialMeeting) { f() }
