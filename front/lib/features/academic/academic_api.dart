@@ -343,6 +343,21 @@ class AcademicApi {
     return _createdId(res, 'No se pudo crear el horario.');
   }
 
+  // DELETE /schedules/:id -> 204.
+  Future<void> deleteSchedule(String scheduleId) async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .delete(
+            Uri.parse('$_baseUrl/schedules/$scheduleId'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 204) {
+      throw _toError(res, 'No se pudo eliminar el horario.');
+    }
+  }
+
   /// Normaliza "HH:MM[:SS]" a "HH:MM" para comparar horarios.
   String _normTime(String raw) {
     final m = hhMmToMinutes(raw);
