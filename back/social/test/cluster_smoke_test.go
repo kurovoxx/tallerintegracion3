@@ -141,8 +141,14 @@ func TestClusterSmoke(t *testing.T) {
 			s.join(t, member, other, otherInvite, 201)
 			note := f.note(t, member)
 			kept := f.note(t, owner)
+			// Compartir exige admin: se promueve al miembro solo para compartir.
+			s.share(t, member, note, group, 403)
+			s.setRole(t, owner, group, member, "admin")
+			s.setRole(t, owner, other, member, "admin")
 			s.share(t, member, note, group, 201)
 			s.share(t, member, note, other, 201)
+			s.setRole(t, owner, group, member, "member")
+			s.setRole(t, owner, other, member, "member")
 			s.share(t, owner, kept, group, 201)
 			s.assertGroupNotes(t, owner, group, note, kept)
 			s.request(t, "GET", s.notes+"/groups/"+group+"/notes", outsider.token, nil, 403, nil)
@@ -683,4 +689,9 @@ func clusterContains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func (s *clusterSmoke) setRole(t *testing.T, admin *clusterSmokeUser, group string, user *clusterSmokeUser, role string) {
+	t.Helper()
+	s.request(t, "PATCH", s.social+"/groups/"+group+"/members/"+user.id+"/role", admin.token, map[string]string{"role": role}, 200, nil)
 }

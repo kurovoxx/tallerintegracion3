@@ -165,8 +165,15 @@ func TestCrossServiceMembershipLifecycle(t *testing.T) {
 
 			note := s.note(t, writer)
 			kept := s.note(t, owner)
+			// Compartir exige ser admin del grupo: se promueve al autor solo para
+			// compartir y se lo devuelve a miembro antes de probar kick/ban/leave.
+			s.request(t, "POST", s.notes+"/notes/"+note+"/share", writer.token, map[string]string{"group_id": group, "access_mode": "restricted"}, 403, nil)
+			s.setRole(t, owner, group, writer, "admin")
+			s.setRole(t, owner, other, writer, "admin")
 			s.share(t, writer, note, group, 201)
 			s.share(t, writer, note, other, 201)
+			s.setRole(t, owner, group, writer, "member")
+			s.setRole(t, owner, other, writer, "member")
 			s.share(t, owner, kept, group, 201)
 			s.request(t, "GET", s.notes+"/groups/"+group+"/notes", outsider.token, nil, 403, nil)
 			s.share(t, outsider, note, group, 403)
@@ -260,7 +267,9 @@ func TestCrossServiceAccountDeletionRetriesPartialDriveCleanup(t *testing.T) {
 	s.join(t, author, sharedGroup, sharedInvite, http.StatusCreated)
 
 	foreignNote := s.note(t, author)
+	s.setRole(t, target, sharedGroup, author, "admin") // compartir exige admin
 	s.share(t, author, foreignNote, sharedGroup, http.StatusCreated)
+	s.setRole(t, target, sharedGroup, author, "member")
 	lastMemberNote := s.note(t, target)
 	s.share(t, target, lastMemberNote, lastGroup, http.StatusCreated)
 
@@ -388,7 +397,9 @@ func TestCrossServiceAccountDeletionCompletesNormallyAndCanRepeat(t *testing.T) 
 	groupID, invite := s.group(t, target)
 	s.join(t, survivor, groupID, invite, http.StatusCreated)
 	foreignNote := s.note(t, survivor)
+	s.setRole(t, target, groupID, survivor, "admin") // compartir exige admin
 	s.share(t, survivor, foreignNote, groupID, http.StatusCreated)
+	s.setRole(t, target, groupID, survivor, "member")
 
 	var result struct {
 		Status string `json:"status"`
@@ -843,4 +854,58 @@ func TestCrossService_AcademicHealth(t *testing.T) {
 	if db.Status != "UP" || !strings.HasPrefix(db.Database, "social_cross_e2e_") {
 		t.Fatalf("academic /health/db: %+v", db)
 	}
+}
+
+// setRole cambia el rol de un miembro (lo ejecuta un admin del grupo).
+func (s *stack) setRole(t *testing.T, admin testUser, group string, user testUser, role string) {
+	t.Helper()
+	s.request(t, "PATCH", s.social+"/groups/"+group+"/members/"+user.id+"/role", admin.token, map[string]string{"role": role}, 200, nil)
+}
+
+// Política de permisos con Notes real: solo admins comparten apuntes en el
+// grupo, y un miembro común solo lee lo compartido.
+func TestCrossService_GroupAdminPolicyWithNotes(t *testing.T) {
+	s := startStack(t)
+	admin := s.register(t, "Admin de políticas")
+	member := s.register(t, "Miembro de políticas")
+	outsider := s.register(t, "Externo de políticas")
+	group, invite := s.group(t, admin)
+	s.join(t, member, group, invite, http.StatusCreated)
+
+	adminNote := s.note(t, admin)
+	memberNote := s.note(t, member)
+
+	// Miembro común y externo: 403 al compartir.
+	s.share(t, member, memberNote, group, http.StatusForbidden)
+	s.share(t, outsider, adminNote, group, http.StatusForbidden)
+	// Admin comparte; el miembro la ve en el grupo.
+	s.share(t, admin, adminNote, group, http.StatusCreated)
+	var shared struct {
+		Notes []struct {
+			ID string `json:"id"`
+		} `json:"notes"`
+	}
+	s.request(t, "GET", s.notes+"/groups/"+group+"/notes", member.token, nil, 200, &shared)
+	if len(shared.Notes) != 1 || shared.Notes[0].ID != adminNote {
+		t.Fatalf("el miembro debe ver solo la nota del admin: %+v", shared.Notes)
+	}
+	s.request(t, "GET", s.notes+"/groups/"+group+"/notes", outsider.token, nil, 403, nil)
+
+	// Promovido a admin, el miembro ya puede compartir.
+	s.setRole(t, admin, group, member, "admin")
+	s.share(t, member, memberNote, group, http.StatusCreated)
+	// Degradado de nuevo, vuelve a recibir 403 con otra nota.
+	s.setRole(t, admin, group, member, "member")
+	another := s.note(t, member)
+	s.share(t, member, another, group, http.StatusForbidden)
+
+	// Reuniones y sprint: solo admins (Social real).
+	base := s.social + "/groups/" + group
+	meeting := map[string]any{"title": "Reunión de políticas", "scheduled_at": time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339), "notify_discord": false}
+	s.request(t, "POST", base+"/meetings", member.token, meeting, 403, nil)
+	s.request(t, "POST", base+"/meetings", admin.token, meeting, 201, nil)
+	sheet := map[string]string{"name": "Sprint políticas", "period_start": "2026-10-19", "period_end": "2026-10-25"}
+	s.request(t, "POST", base+"/sprint-sheets", member.token, sheet, 403, nil)
+	s.request(t, "POST", base+"/sprint-sheets", admin.token, sheet, 201, nil)
+	s.request(t, "GET", base+"/sprint-sheets/remaining", member.token, nil, 200, nil)
 }
