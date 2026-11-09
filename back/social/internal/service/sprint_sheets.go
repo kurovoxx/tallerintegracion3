@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strconv"
 	"context"
 	"errors"
 	"github.com/jackc/pgx/v5"
@@ -155,4 +156,69 @@ func applySheetPatch(value *sqlc.SocialSprintSheet, patch SheetPatch) error {
 		return ErrInvalidSheet
 	}
 	return nil
+}
+
+// SprintNoticeThresholdDays: desde cuántos días restantes se avisa al grupo.
+const SprintNoticeThresholdDays = 3
+
+// SprintRemaining describe el tiempo que le queda a un sprint.
+type SprintRemaining struct {
+	Sheet         sqlc.SocialSprintSheet
+	State         string // not_started | active | ended
+	DaysRemaining int    // días hasta period_end (0 = termina hoy); negativo si terminó
+	Notify        bool   // true si está activo y quedan <= SprintNoticeThresholdDays
+	Message       string
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+// SprintTimeRemaining calcula el tiempo restante de cada sprint con rango de
+// fechas del grupo, respecto de now (inyectado para poder testear). Cualquier
+// miembro puede consultarlo. Hojas históricas sin rango se omiten.
+func (s *SprintService) SprintTimeRemaining(ctx context.Context, groupID, userID string, now time.Time) ([]SprintRemaining, error) {
+	gid, err := s.sheetAccess(ctx, groupID, userID)
+	if err != nil {
+		return nil, err
+	}
+	sheets, err := s.repo.ListSheetsByGroup(ctx, gid)
+	if err != nil {
+		return nil, err
+	}
+	n := now.UTC()
+	today := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, time.UTC)
+	out := make([]SprintRemaining, 0, len(sheets))
+	for _, sh := range sheets {
+		if !sh.PeriodStart.Valid || !sh.PeriodEnd.Valid {
+			continue
+		}
+		start := sh.PeriodStart.Time.UTC()
+		end := sh.PeriodEnd.Time.UTC()
+		end = time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, time.UTC)
+		start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC)
+		days := int(end.Sub(today).Hours() / 24)
+		r := SprintRemaining{Sheet: sh, DaysRemaining: days}
+		switch {
+		case today.Before(start):
+			r.State = "not_started"
+			r.Message = "El sprint \"" + sh.Name + "\" aún no comienza."
+		case days < 0:
+			r.State = "ended"
+			r.Message = "El sprint \"" + sh.Name + "\" ya terminó."
+		case days == 0:
+			r.State = "active"
+			r.Notify = true
+			r.Message = "El sprint \"" + sh.Name + "\" termina hoy."
+		default:
+			r.State = "active"
+			r.Notify = days <= SprintNoticeThresholdDays
+			r.Message = "Al sprint \"" + sh.Name + "\" le " + plural(days, "queda ", "quedan ") + strconv.Itoa(days) + plural(days, " día.", " días.")
+		}
+		out = append(out, r)
+	}
+	return out, nil
 }
