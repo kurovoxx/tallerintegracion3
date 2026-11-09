@@ -19,6 +19,11 @@ type SheetPatch struct {
 }
 
 func (s *SprintService) sheetAccess(ctx context.Context, groupID, userID string) (pgtype.UUID, error) {
+	return s.sheetAccessAs(ctx, groupID, userID, false)
+}
+
+// sheetAccessAs valida grupo y membresía; con adminOnly exige además rol admin.
+func (s *SprintService) sheetAccessAs(ctx context.Context, groupID, userID string, adminOnly bool) (pgtype.UUID, error) {
 	gid, err := parseGroupUUID(groupID)
 	if err != nil {
 		return gid, err
@@ -29,6 +34,9 @@ func (s *SprintService) sheetAccess(ctx context.Context, groupID, userID string)
 	}
 	if err := s.requireGroup(ctx, gid); err != nil {
 		return gid, err
+	}
+	if adminOnly {
+		return gid, s.requireAdmin(ctx, gid, uid)
 	}
 	return gid, s.requireMembership(ctx, gid, uid)
 }
@@ -50,7 +58,7 @@ func (s *SprintService) ListSprintSheets(ctx context.Context, groupID, userID st
 }
 
 func (s *SprintService) CreateSprintSheet(ctx context.Context, groupID, userID string, patch SheetPatch) (sqlc.SocialSprintSheet, error) {
-	gid, err := s.sheetAccess(ctx, groupID, userID)
+	gid, err := s.sheetAccessAs(ctx, groupID, userID, true)
 	if err != nil {
 		return sqlc.SocialSprintSheet{}, err
 	}
@@ -65,7 +73,7 @@ func (s *SprintService) CreateSprintSheet(ctx context.Context, groupID, userID s
 }
 
 func (s *SprintService) UpdateSprintSheet(ctx context.Context, groupID, userID, sheetID string, patch SheetPatch) (sqlc.SocialSprintSheet, error) {
-	gid, err := s.sheetAccess(ctx, groupID, userID)
+	gid, err := s.sheetAccessAs(ctx, groupID, userID, true)
 	if err != nil {
 		return sqlc.SocialSprintSheet{}, err
 	}
@@ -90,11 +98,11 @@ func (s *SprintService) UpdateSprintSheet(ctx context.Context, groupID, userID, 
 }
 
 // DeleteSprintSheet borra la hoja con la MISMA autorización que crear y
-// editar (solo membresía, vía sheetAccess). PostgreSQL resuelve la cascada
+// editar (solo admins, vía sheetAccessAs). PostgreSQL resuelve la cascada
 // (tareas y daily hours) por ON DELETE CASCADE; no hay deletes manuales.
 // Nunca deja al grupo sin hojas: con una sola responde ErrLastSheet.
 func (s *SprintService) DeleteSprintSheet(ctx context.Context, groupID, userID, sheetID string) (sqlc.SocialSprintSheet, error) {
-	gid, err := s.sheetAccess(ctx, groupID, userID)
+	gid, err := s.sheetAccessAs(ctx, groupID, userID, true)
 	if err != nil {
 		return sqlc.SocialSprintSheet{}, err
 	}

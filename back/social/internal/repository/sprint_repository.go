@@ -31,6 +31,13 @@ func (r *SprintRepository) IsMember(ctx context.Context, groupID, userID pgtype.
 	})
 }
 
+func (r *SprintRepository) GetMemberRole(ctx context.Context, groupID, userID pgtype.UUID) (string, error) {
+	return r.queries.GetGroupMemberRole(ctx, sqlc.GetGroupMemberRoleParams{
+		GroupID: groupID,
+		UserID:  userID,
+	})
+}
+
 func (r *SprintRepository) GetSheetByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialSprintSheet, error) {
 	return r.queries.GetSheetByID(ctx, id)
 }

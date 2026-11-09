@@ -51,6 +51,7 @@ type SprintRepo interface {
 	UpdateSheet(ctx context.Context, arg sqlc.UpdateSheetParams) (sqlc.SocialSprintSheet, error)
 	GetGroupByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialGroup, error)
 	IsMember(ctx context.Context, groupID, userID pgtype.UUID) (bool, error)
+	GetMemberRole(ctx context.Context, groupID, userID pgtype.UUID) (string, error)
 	GetSheetByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialSprintSheet, error)
 	ListSheetsByGroup(ctx context.Context, groupID pgtype.UUID) ([]sqlc.SocialSprintSheet, error)
 	CreateSheet(ctx context.Context, arg sqlc.CreateSheetParams) (sqlc.SocialSprintSheet, error)
@@ -89,6 +90,22 @@ func (s *SprintService) requireMembership(ctx context.Context, gid, uid pgtype.U
 		return err
 	}
 	if !isMember {
+		return ErrForbidden
+	}
+	return nil
+}
+
+// requireAdmin exige que el usuario sea admin del grupo (403 si es miembro
+// común o no pertenece). Política: solo admins modifican el sprint/kanban.
+func (s *SprintService) requireAdmin(ctx context.Context, gid, uid pgtype.UUID) error {
+	role, err := s.repo.GetMemberRole(ctx, gid, uid)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrForbidden
+		}
+		return err
+	}
+	if role != "admin" {
 		return ErrForbidden
 	}
 	return nil
@@ -245,7 +262,7 @@ func (s *SprintService) CreateSprintTask(ctx context.Context, groupID, userID, s
 	if err := s.requireGroup(ctx, gid); err != nil {
 		return SprintTaskView{}, err
 	}
-	if err := s.requireMembership(ctx, gid, uid); err != nil {
+	if err := s.requireAdmin(ctx, gid, uid); err != nil {
 		return SprintTaskView{}, err
 	}
 	if err := s.requireAssigneeMember(ctx, gid, assignee); err != nil {
@@ -375,7 +392,7 @@ func (s *SprintService) UpdateSprintTask(ctx context.Context, groupID, userID, t
 	if err := s.requireGroup(ctx, gid); err != nil {
 		return SprintTaskView{}, err
 	}
-	if err := s.requireMembership(ctx, gid, uid); err != nil {
+	if err := s.requireAdmin(ctx, gid, uid); err != nil {
 		return SprintTaskView{}, err
 	}
 
@@ -480,7 +497,7 @@ func (s *SprintService) DeleteSprintTask(ctx context.Context, groupID, userID, t
 	if err := s.requireGroup(ctx, gid); err != nil {
 		return SprintTaskView{}, err
 	}
-	if err := s.requireMembership(ctx, gid, uid); err != nil {
+	if err := s.requireAdmin(ctx, gid, uid); err != nil {
 		return SprintTaskView{}, err
 	}
 
