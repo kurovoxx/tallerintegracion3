@@ -1,0 +1,8 @@
+# Contexto mínimo para `docker compose build front` (solo build web).
+build/
+.dart_tool/
+windows/
+linux/
+android/
+ios/
+macos/

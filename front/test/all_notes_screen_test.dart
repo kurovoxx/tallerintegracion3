@@ -162,9 +162,10 @@ void main() {
 
     final sheet = find.byType(DraggableScrollableSheet);
     expect(sheet, findsOneWidget);
-    // El editor se acota a un ancho máximo legible en ultra-wide (920 dp) en
-    // lugar de estirarse al 100 % de la ventana junto al sidebar.
-    expect(tester.getSize(sheet).width, 920);
+    // El sheet ocupa casi todo el ancho (margen de 24 dp por lado) para que
+    // el modo edición tenga editor + vista previa amplios; la lectura se
+    // centra dentro a 920 dp.
+    expect(tester.getSize(sheet).width, 1440 - 48);
     expect(find.text('AMPLIAR'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });

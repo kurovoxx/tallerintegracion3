@@ -108,6 +108,23 @@ Future<T> _withNotesClient<T>(
 /// de forma desproporcionada (skill 3.3, contenedor máximo de contenido).
 const double _noteEditorMaxWidth = 920;
 
+/// Por debajo de este ancho el editor de notas se trata como móvil y ocupa
+/// el 100 % de la pantalla.
+const double _noteEditorMobileBreakpoint = 600;
+
+/// Margen exterior del editor de notas (crear/editar): casi pantalla completa
+/// en escritorio (~95 %) y sin margen en móvil.
+EdgeInsets _noteEditorInset(BuildContext context) {
+  final width = MediaQuery.sizeOf(context).width;
+  return width < _noteEditorMobileBreakpoint
+      ? EdgeInsets.zero
+      : const EdgeInsets.all(AppDimens.spaceXl);
+}
+
+/// Alto mínimo útil para que el editor se estire con `Expanded`; con menos
+/// (teclado abierto, ventana muy baja) todo el formulario pasa a hacer scroll.
+const double _noteEditorExpandMinHeight = 520;
+
 class AllNotesScreen extends StatefulWidget {
   const AllNotesScreen({
     super.key,
@@ -2495,10 +2512,14 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
-      // En desktop/web el modal por defecto se limita a 640px; lo acotamos a
-      // `_noteEditorMaxWidth` y Flutter lo centra horizontalmente para no
-      // estirar el editor al 100 % del ancho junto al sidebar.
-      constraints: const BoxConstraints(maxWidth: _noteEditorMaxWidth),
+      // En desktop/web el modal por defecto se limita a 640px. Lo abrimos a
+      // casi todo el ancho para que el modo edición (editor + vista previa)
+      // tenga espacio; la lectura se centra a `_noteEditorMaxWidth` dentro.
+      constraints: BoxConstraints(
+        maxWidth: _noteEditorInset(
+          context,
+        ).deflateSize(MediaQuery.sizeOf(context)).width,
+      ),
       builder: (_) => DraggableScrollableSheet(
         initialChildSize: 0.95,
         minChildSize: 0.5,
@@ -2671,6 +2692,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   void _showCreateDialog({String? initialTitle, String? subjectId}) {
     showNeobrutalistDialog<void>(
       context: context,
+      insetPadding: _noteEditorInset(context),
       dialog: _CreateNoteDialog(
         initialTitle: initialTitle ?? '',
         onCreate: (title, content, visibility, attachments) async {
@@ -4828,375 +4850,393 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
             ),
           ),
           Expanded(
-            child: ListView(
-              controller: widget.scrollController,
-              padding: const EdgeInsets.all(20),
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: widget.note.visibility == 'public'
-                            ? const Color(0xFF0055FF)
-                            : const Color(0xFFFFCC00),
-                        border: Border.all(color: Colors.black, width: 1.5),
-                      ),
-                      child: Text(
-                        widget.note.visibility.toUpperCase(),
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w900,
-                          color: widget.note.visibility == 'public'
-                              ? Colors.white
-                              : Colors.black,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF5F0E8),
-                            border: Border.all(color: Colors.black, width: 1.5),
-                          ),
-                          child: Text(
-                            widget.tag,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w800,
-                              color: Colors.black,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      _fmtDate(widget.note.updatedAt),
-                      style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF1A1A1A),
-                      ),
-                    ),
-                  ],
+            child: LayoutBuilder(builder: (context, box) => _buildBody(box)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBody(BoxConstraints box) {
+    // Lectura: columna centrada de ancho cómodo. Edición: todo el ancho.
+    final readingInset = _editing
+        ? 0.0
+        : ((box.maxWidth - _noteEditorMaxWidth) / 2).clamp(
+            0.0,
+            double.infinity,
+          );
+    // Editor alto (~60 % del sheet): deja visibles título, barra de adjuntos
+    // y botones GUARDAR/CANCELAR en una ventana de escritorio normal.
+    final editorHeight = (box.maxHeight * 0.6).clamp(320.0, double.infinity);
+    final padding = EdgeInsets.symmetric(
+      horizontal: 20 + readingInset,
+      vertical: 20,
+    );
+    final children = <Widget>[
+      Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: widget.note.visibility == 'public'
+                  ? const Color(0xFF0055FF)
+                  : const Color(0xFFFFCC00),
+              border: Border.all(color: Colors.black, width: 1.5),
+            ),
+            child: Text(
+              widget.note.visibility.toUpperCase(),
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w900,
+                color: widget.note.visibility == 'public'
+                    ? Colors.white
+                    : Colors.black,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF5F0E8),
+                  border: Border.all(color: Colors.black, width: 1.5),
                 ),
-                if (_loadingRemote) ...[
-                  const SizedBox(height: 12),
-                  const LinearProgressIndicator(
+                child: Text(
+                  widget.tag,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
                     color: Colors.black,
-                    backgroundColor: Color(0xFFF5F0E8),
                   ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'Sincronizando con Drive…',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF555555),
-                    ),
-                  ),
-                ],
-                if (_driveWarning != null) ...[
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFF3C4),
-                      border: Border.all(color: Colors.black, width: 1.5),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(
-                          Icons.warning_amber_rounded,
-                          color: Colors.black,
-                          size: 18,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            _driveWarning!,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w800,
-                              color: Colors.black,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 16),
-                if (_editing) ...[
-                  const AppFieldLabel('TÍTULO'),
-                  const SizedBox(height: 4),
-                  TextField(
-                    controller: _titleCtrl,
-                    decoration: appInputDecoration('Título'),
-                  ),
-                  const SizedBox(height: 12),
-                  const AppFieldLabel('CONTENIDO MARKDOWN / LATEX'),
-                  const SizedBox(height: 4),
-                  if (_contentCtrl != null)
-                    MarkdownLiveEditor(
-                      controller: _contentCtrl!,
-                      editor: TextField(
-                        controller: _contentCtrl,
-                        minLines: 6,
-                        maxLines: 14,
-                        decoration: appInputDecoration('Contenido Markdown'),
-                      ),
-                      previewBuilder: (text) => _NeobrutalistMarkdownBody(
-                        content: text,
-                        resources: _mergedResources,
-                        onOpenResource: _showResourceDialog,
-                      ),
-                    ),
-                  const SizedBox(height: 8),
-                  if (_contentCtrl != null) ...[
-                    _AttachmentToolbar(
-                      controller: _contentCtrl!,
-                      onChanged: () => setState(() {}),
-                      onUploaded: _onAttachmentUploadedInEdit,
-                      onWarning: (message) {
-                        if (!mounted) return;
-                        setState(() {
-                          _attachNotice = message;
-                          _attachNoticeOk = false;
-                        });
-                      },
-                    ),
-                    if (_attachNotice != null) ...[
-                      const SizedBox(height: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: _attachNoticeOk
-                              ? AppColors.subjectMint
-                              : AppColors.accentYellow,
-                          border: Border.all(
-                            color: AppColors.border,
-                            width: 1.5,
-                          ),
-                          borderRadius: BorderRadius.circular(
-                            AppDimens.radiusChip,
-                          ),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              _attachNoticeOk
-                                  ? Icons.cloud_done_rounded
-                                  : Icons.info_outline_rounded,
-                              size: 14,
-                              color: AppColors.text,
-                            ),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: Text(
-                                _attachNotice!,
-                                style: const TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w800,
-                                  color: AppColors.text,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                    _DetectedAttachmentsPreview(
-                      content: _contentCtrl!.text,
-                      // Borrar solo el snippet NO elimina el attachment (queda
-                      // en ARCHIVOS ADJUNTOS hasta pulsar su X): semántica
-                      // validada E2E, distinto del borrado con X.
-                      onRemoveSnippet: (url) {
-                        final matches = _attachments.where(
-                          (a) => urlMatchesAttachment(a, url),
-                        );
-                        if (matches.isNotEmpty) {
-                          _togglePendingRemove(matches.first);
-                        } else {
-                          _removeAttachmentUrl(_contentCtrl!, url);
-                          setState(() {});
-                        }
-                      },
-                      onPreviewResource: _showResourceDialog,
-                    ),
-                    _buildEditAttachments(),
-                  ],
-                  if (_editError != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      _editError!,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFFE63B2E),
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextButton(
-                          onPressed: _saving ? null : _cancelEdit,
-                          child: const Text(
-                            'CANCELAR',
-                            style: TextStyle(
-                              color: Colors.black,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.black,
-                            foregroundColor: Colors.white,
-                            shape: const RoundedRectangleBorder(
-                              borderRadius: BorderRadius.zero,
-                            ),
-                          ),
-                          onPressed:
-                              _saving ||
-                                  _linkingAttachment ||
-                                  _removingAttachment
-                              ? null
-                              : _confirmEdit,
-                          child: Text(
-                            _saving ? 'GUARDANDO…' : 'GUARDAR',
-                            style: const TextStyle(fontWeight: FontWeight.w900),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ] else ...[
-                  Text(
-                    _title,
-                    style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w900,
-                      color: Colors.black,
-                      height: 1.2,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Container(height: 2, color: Colors.black),
-                  const SizedBox(height: 16),
-                  _NeobrutalistMarkdownBody(
-                    content: _content,
-                    resources: _mergedResources,
-                    onOpenResource: _showResourceDialog,
-                  ),
-                ],
-                if (_mergedResources.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  Container(height: 2, color: Colors.black),
-                  const SizedBox(height: 14),
-                  const Row(
-                    children: [
-                      Icon(
-                        Icons.folder_open_rounded,
-                        size: 16,
-                        color: Colors.black,
-                      ),
-                      SizedBox(width: 6),
-                      Text(
-                        'RECURSOS ADJUNTOS',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w900,
-                          fontSize: 13,
-                          letterSpacing: 0.5,
-                          color: Colors.black,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  ..._buildResourceItems(),
-                ],
-                const SizedBox(height: 24),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    _ActionButton(
-                      icon: Icons.favorite_rounded,
-                      label: '$_likes',
-                      isActive: _liked,
-                      activeColor: AppColors.errorDeep,
-                      activeForeground: AppColors.surface,
-                      onTap: () {
-                        setState(() {
-                          _liked = !_liked;
-                          _likes += _liked ? 1 : -1;
-                        });
-                        widget.onToggleLike();
-                      },
-                    ),
-                    _ActionButton(
-                      icon: Icons.bookmark_rounded,
-                      label: 'Guardar',
-                      isActive: _saved,
-                      activeColor: AppColors.accentYellow,
-                      onTap: () {
-                        setState(() => _saved = !_saved);
-                        widget.onToggleSave();
-                      },
-                    ),
-                    _ActionButton(
-                      icon: Icons.share_rounded,
-                      label: 'Compartir',
-                      onTap: widget.onShare,
-                    ),
-                    if (!widget.isMine) ...[
-                      _ActionButton(
-                        icon: Icons.copy_rounded,
-                        label: _cloning ? '…' : 'Copiar a mis apuntes',
-                        onTap: _cloning ? () {} : _confirmClone,
-                      ),
-                    ],
-                    if (widget.isMine && !_editing) ...[
-                      _ActionButton(
-                        icon: Icons.edit_rounded,
-                        label: 'Editar',
-                        onTap: _onEditTap,
-                      ),
-                      _ActionButton(
-                        icon: Icons.delete_rounded,
-                        label: _deleting ? '…' : 'Eliminar',
-                        onTap: _deleting ? () {} : _confirmDelete,
-                      ),
-                    ],
-                  ],
                 ),
-              ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            _fmtDate(widget.note.updatedAt),
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF1A1A1A),
             ),
           ),
         ],
       ),
+      if (_loadingRemote) ...[
+        const SizedBox(height: 12),
+        const LinearProgressIndicator(
+          color: Colors.black,
+          backgroundColor: Color(0xFFF5F0E8),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Sincronizando con Drive…',
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            color: Color(0xFF555555),
+          ),
+        ),
+      ],
+      if (_driveWarning != null) ...[
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF3C4),
+            border: Border.all(color: Colors.black, width: 1.5),
+          ),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.warning_amber_rounded,
+                color: Colors.black,
+                size: 18,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _driveWarning!,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.black,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+      const SizedBox(height: 16),
+      if (_editing) ...[
+        const AppFieldLabel('TÍTULO'),
+        const SizedBox(height: 4),
+        TextField(
+          controller: _titleCtrl,
+          decoration: appInputDecoration('Título'),
+        ),
+        const SizedBox(height: 12),
+        const AppFieldLabel('CONTENIDO MARKDOWN / LATEX'),
+        const SizedBox(height: 4),
+        if (_contentCtrl != null)
+          SizedBox(
+            height: editorHeight,
+            child: MarkdownLiveEditor(
+              controller: _contentCtrl!,
+              expand: true,
+              editor: TextField(
+                controller: _contentCtrl,
+                expands: true,
+                minLines: null,
+                maxLines: null,
+                textAlignVertical: TextAlignVertical.top,
+                keyboardType: TextInputType.multiline,
+                style: const TextStyle(fontSize: 16, height: 1.45),
+                decoration: appInputDecoration('Contenido Markdown'),
+              ),
+              previewBuilder: (text) => _NeobrutalistMarkdownBody(
+                content: text,
+                resources: _mergedResources,
+                onOpenResource: _showResourceDialog,
+              ),
+            ),
+          ),
+        const SizedBox(height: 8),
+        if (_contentCtrl != null) ...[
+          _AttachmentToolbar(
+            controller: _contentCtrl!,
+            onChanged: () => setState(() {}),
+            onUploaded: _onAttachmentUploadedInEdit,
+            onWarning: (message) {
+              if (!mounted) return;
+              setState(() {
+                _attachNotice = message;
+                _attachNoticeOk = false;
+              });
+            },
+          ),
+          if (_attachNotice != null) ...[
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              decoration: BoxDecoration(
+                color: _attachNoticeOk
+                    ? AppColors.subjectMint
+                    : AppColors.accentYellow,
+                border: Border.all(color: AppColors.border, width: 1.5),
+                borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _attachNoticeOk
+                        ? Icons.cloud_done_rounded
+                        : Icons.info_outline_rounded,
+                    size: 14,
+                    color: AppColors.text,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      _attachNotice!,
+                      style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.text,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          _DetectedAttachmentsPreview(
+            content: _contentCtrl!.text,
+            // Borrar solo el snippet NO elimina el attachment (queda
+            // en ARCHIVOS ADJUNTOS hasta pulsar su X): semántica
+            // validada E2E, distinto del borrado con X.
+            onRemoveSnippet: (url) {
+              final matches = _attachments.where(
+                (a) => urlMatchesAttachment(a, url),
+              );
+              if (matches.isNotEmpty) {
+                _togglePendingRemove(matches.first);
+              } else {
+                _removeAttachmentUrl(_contentCtrl!, url);
+                setState(() {});
+              }
+            },
+            onPreviewResource: _showResourceDialog,
+          ),
+          _buildEditAttachments(),
+        ],
+        if (_editError != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            _editError!,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: Color(0xFFE63B2E),
+            ),
+          ),
+        ],
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: TextButton(
+                onPressed: _saving ? null : _cancelEdit,
+                child: const Text(
+                  'CANCELAR',
+                  style: TextStyle(
+                    color: Colors.black,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.black,
+                  foregroundColor: Colors.white,
+                  shape: const RoundedRectangleBorder(
+                    borderRadius: BorderRadius.zero,
+                  ),
+                ),
+                onPressed: _saving || _linkingAttachment || _removingAttachment
+                    ? null
+                    : _confirmEdit,
+                child: Text(
+                  _saving ? 'GUARDANDO…' : 'GUARDAR',
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ] else ...[
+        Text(
+          _title,
+          style: const TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.w900,
+            color: Colors.black,
+            height: 1.2,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Container(height: 2, color: Colors.black),
+        const SizedBox(height: 16),
+        _NeobrutalistMarkdownBody(
+          content: _content,
+          resources: _mergedResources,
+          onOpenResource: _showResourceDialog,
+        ),
+      ],
+      if (_mergedResources.isNotEmpty) ...[
+        const SizedBox(height: 16),
+        Container(height: 2, color: Colors.black),
+        const SizedBox(height: 14),
+        const Row(
+          children: [
+            Icon(Icons.folder_open_rounded, size: 16, color: Colors.black),
+            SizedBox(width: 6),
+            Text(
+              'RECURSOS ADJUNTOS',
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                fontSize: 13,
+                letterSpacing: 0.5,
+                color: Colors.black,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        ..._buildResourceItems(),
+      ],
+      const SizedBox(height: 24),
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          _ActionButton(
+            icon: Icons.favorite_rounded,
+            label: '$_likes',
+            isActive: _liked,
+            activeColor: AppColors.errorDeep,
+            activeForeground: AppColors.surface,
+            onTap: () {
+              setState(() {
+                _liked = !_liked;
+                _likes += _liked ? 1 : -1;
+              });
+              widget.onToggleLike();
+            },
+          ),
+          _ActionButton(
+            icon: Icons.bookmark_rounded,
+            label: 'Guardar',
+            isActive: _saved,
+            activeColor: AppColors.accentYellow,
+            onTap: () {
+              setState(() => _saved = !_saved);
+              widget.onToggleSave();
+            },
+          ),
+          _ActionButton(
+            icon: Icons.share_rounded,
+            label: 'Compartir',
+            onTap: widget.onShare,
+          ),
+          if (!widget.isMine) ...[
+            _ActionButton(
+              icon: Icons.copy_rounded,
+              label: _cloning ? '…' : 'Copiar a mis apuntes',
+              onTap: _cloning ? () {} : _confirmClone,
+            ),
+          ],
+          if (widget.isMine && !_editing) ...[
+            _ActionButton(
+              icon: Icons.edit_rounded,
+              label: 'Editar',
+              onTap: _onEditTap,
+            ),
+            _ActionButton(
+              icon: Icons.delete_rounded,
+              label: _deleting ? '…' : 'Eliminar',
+              onTap: _deleting ? () {} : _confirmDelete,
+            ),
+          ],
+        ],
+      ),
+    ];
+    if (_editing) {
+      // Edición: scroll no perezoso para que adjuntos y botones bajo el editor
+      // alto estén siempre construidos (y accesibles a lectores/tests).
+      return SingleChildScrollView(
+        controller: widget.scrollController,
+        padding: padding,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: children,
+        ),
+      );
+    }
+    return ListView(
+      controller: widget.scrollController,
+      padding: padding,
+      children: children,
     );
   }
 }
@@ -5314,126 +5354,171 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return NeobrutalistDialog(
-      title: 'NUEVA NOTA',
-      // Ancho del editor de notas: en escritorio permite el split-view
-      // editor + vista previa; en móvil la pantalla lo limita igual.
-      maxWidth: _noteEditorMaxWidth,
-      cancelLabel: 'CANCELAR',
-      confirmLabel: _submitting ? 'GUARDANDO…' : 'GUARDAR',
-      closeOnConfirm: false,
-      onConfirm: _submitting ? null : _submit,
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const AppFieldLabel('TÍTULO'),
-          const SizedBox(height: 4),
-          TextField(
-            controller: _titleCtrl,
-            focusNode: _titleFocus,
-            decoration: appInputDecoration('Título').copyWith(
-              errorText: _titleError,
-              errorStyle: const TextStyle(
-                color: AppColors.error,
-                fontWeight: FontWeight.w800,
-                fontSize: 12,
-              ),
-            ),
+    final editor = MarkdownLiveEditor(
+      controller: _contentCtrl,
+      expand: true,
+      editor: TextField(
+        controller: _contentCtrl,
+        expands: true,
+        minLines: null,
+        maxLines: null,
+        textAlignVertical: TextAlignVertical.top,
+        keyboardType: TextInputType.multiline,
+        style: const TextStyle(fontSize: 16, height: 1.45),
+        decoration: appInputDecoration('Contenido Markdown'),
+      ),
+      previewBuilder: (text) => _NeobrutalistMarkdownBody(
+        content: text,
+        onOpenResource: _showResource,
+      ),
+    );
+    final header = <Widget>[
+      const AppFieldLabel('TÍTULO'),
+      const SizedBox(height: 4),
+      TextField(
+        controller: _titleCtrl,
+        focusNode: _titleFocus,
+        decoration: appInputDecoration('Título').copyWith(
+          errorText: _titleError,
+          errorStyle: const TextStyle(
+            color: AppColors.error,
+            fontWeight: FontWeight.w800,
+            fontSize: 12,
           ),
-          const SizedBox(height: 12),
-          const AppFieldLabel('CONTENIDO MARKDOWN / LATEX'),
-          const SizedBox(height: 4),
-          MarkdownLiveEditor(
-            controller: _contentCtrl,
-            previewMaxHeight: 280,
-            editor: TextField(
-              controller: _contentCtrl,
-              minLines: 4,
-              maxLines: 10,
-              decoration: appInputDecoration('Contenido Markdown'),
+        ),
+      ),
+      const SizedBox(height: 12),
+      const AppFieldLabel('CONTENIDO MARKDOWN / LATEX'),
+      const SizedBox(height: 4),
+    ];
+    final footer = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _AttachmentToolbar(
+          queueUntilCreated: true,
+          controller: _contentCtrl,
+          onChanged: () => setState(() {}),
+          onUploaded: _onAttachmentUploaded,
+          onWarning: _onAttachmentWarning,
+        ),
+        if (_attachNotice != null) ...[
+          const SizedBox(height: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            decoration: BoxDecoration(
+              color: _attachNoticeOk
+                  ? AppColors.subjectMint
+                  : AppColors.accentYellow,
+              border: Border.all(color: AppColors.border, width: 1.5),
+              borderRadius: BorderRadius.circular(AppDimens.radiusChip),
             ),
-            previewBuilder: (text) => _NeobrutalistMarkdownBody(
-              content: text,
-              onOpenResource: _showResource,
-            ),
-          ),
-          const SizedBox(height: 8),
-          _AttachmentToolbar(
-            queueUntilCreated: true,
-            controller: _contentCtrl,
-            onChanged: () => setState(() {}),
-            onUploaded: _onAttachmentUploaded,
-            onWarning: _onAttachmentWarning,
-          ),
-          if (_attachNotice != null) ...[
-            const SizedBox(height: 6),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              decoration: BoxDecoration(
-                color: _attachNoticeOk
-                    ? AppColors.subjectMint
-                    : AppColors.accentYellow,
-                border: Border.all(color: AppColors.border, width: 1.5),
-                borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    _attachNoticeOk
-                        ? Icons.cloud_done_rounded
-                        : Icons.info_outline_rounded,
-                    size: 14,
-                    color: AppColors.text,
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      _attachNotice!,
-                      style: const TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.text,
-                      ),
+            child: Row(
+              children: [
+                Icon(
+                  _attachNoticeOk
+                      ? Icons.cloud_done_rounded
+                      : Icons.info_outline_rounded,
+                  size: 14,
+                  color: AppColors.text,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    _attachNotice!,
+                    style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.text,
                     ),
                   ),
-                ],
+                ),
+              ],
+            ),
+          ),
+        ],
+        _DetectedAttachmentsPreview(
+          content: _contentCtrl.text,
+          onRemoveSnippet: (url) {
+            _removeAttachmentUrl(_contentCtrl, url);
+            _pendingAttachments.removeWhere((a) => a.fileUrl == url);
+            _pendingAttachmentFiles.remove(url);
+            setState(() {});
+          },
+          onPreviewResource: _showResource,
+        ),
+        const SizedBox(height: 12),
+        const AppFieldLabel('VISIBILIDAD'),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Expanded(
+              child: _VisibilityOption(
+                label: 'PÚBLICO',
+                active: _visibility == 'public',
+                onTap: () => setState(() => _visibility = 'public'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _VisibilityOption(
+                label: 'PRIVADO',
+                active: _visibility == 'private',
+                onTap: () => setState(() => _visibility = 'private'),
               ),
             ),
           ],
-          _DetectedAttachmentsPreview(
-            content: _contentCtrl.text,
-            onRemoveSnippet: (url) {
-              _removeAttachmentUrl(_contentCtrl, url);
-              _pendingAttachments.removeWhere((a) => a.fileUrl == url);
-              _pendingAttachmentFiles.remove(url);
-              setState(() {});
-            },
-            onPreviewResource: _showResource,
-          ),
-          const SizedBox(height: 12),
-          const AppFieldLabel('VISIBILIDAD'),
-          const SizedBox(height: 4),
-          Row(
-            children: [
-              Expanded(
-                child: _VisibilityOption(
-                  label: 'PÚBLICO',
-                  active: _visibility == 'public',
-                  onTap: () => setState(() => _visibility = 'public'),
+        ),
+      ],
+    );
+    // SafeArea: en móvil el diálogo no tiene margen y no debe quedar bajo la
+    // barra de estado o el notch.
+    return SafeArea(
+      child: NeobrutalistDialog(
+        title: 'NUEVA NOTA',
+        // Casi pantalla completa: el ancho lo acota solo el insetPadding.
+        maxWidth: double.infinity,
+        expandContent: true,
+        cancelLabel: 'CANCELAR',
+        confirmLabel: _submitting ? 'GUARDANDO…' : 'GUARDAR',
+        closeOnConfirm: false,
+        onConfirm: _submitting ? null : _submit,
+        content: LayoutBuilder(
+          builder: (context, constraints) {
+            if (constraints.maxHeight < _noteEditorExpandMinHeight) {
+              // Poco alto (teclado abierto, ventana baja): todo hace scroll y
+              // el editor conserva un alto cómodo fijo.
+              return SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ...header,
+                    SizedBox(height: 320, child: editor),
+                    const SizedBox(height: 8),
+                    footer,
+                  ],
                 ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _VisibilityOption(
-                  label: 'PRIVADO',
-                  active: _visibility == 'private',
-                  onTap: () => setState(() => _visibility = 'private'),
+              );
+            }
+            // El editor (Expanded) se queda con todo el alto sobrante; el pie
+            // (adjuntos, visibilidad) se acota y hace scroll si crece mucho.
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                ...header,
+                Expanded(child: editor),
+                const SizedBox(height: 8),
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: constraints.maxHeight * 0.4,
+                  ),
+                  child: SingleChildScrollView(child: footer),
                 ),
-              ),
-            ],
-          ),
-        ],
+              ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -7441,7 +7526,7 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
   }
 
   static const TextStyle _paragraphStyle = TextStyle(
-    fontSize: 14,
+    fontSize: 16,
     height: 1.5,
     color: AppColors.text,
   );
