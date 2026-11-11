@@ -67,7 +67,7 @@ func Load() *Config {
 		cfg.Port = "8084"
 	}
 	if cfg.GeminiModel == "" {
-		cfg.GeminiModel = "gemini-1.5-flash"
+		cfg.GeminiModel = "gemini-3.5-flash"
 	}
 	if cfg.InternalAPIKey == "" {
 		cfg.InternalAPIKey = "dev-internal-key-change-me"

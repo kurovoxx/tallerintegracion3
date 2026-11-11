@@ -16,6 +16,12 @@ const _socialBase = String.fromEnvironment(
   defaultValue: '$_pillanOrigin/api-social',
 );
 
+// Microservicio IA (desplegado en cluster externo, no en Pillán).
+const _aiBase = String.fromEnvironment(
+  'AI_BASE_URL',
+  defaultValue: 'https://ia-hlepio.dev.censei.cl',
+);
+
 String resolveApiBaseUrl(String v, {bool isWeb = kIsWeb, String? webOrigin}) {
   if (!v.startsWith('/')) return v;
   if (isWeb) return '${webOrigin ?? Uri.base.origin}$v';
@@ -26,3 +32,4 @@ String resolveApiBaseUrl(String v, {bool isWeb = kIsWeb, String? webOrigin}) {
 String get authApiBaseUrl => resolveApiBaseUrl(_authBase);
 String get notesApiBaseUrl => resolveApiBaseUrl(_notesBase);
 String get socialApiBaseUrl => resolveApiBaseUrl(_socialBase);
+String get aiApiBaseUrl => resolveApiBaseUrl(_aiBase);

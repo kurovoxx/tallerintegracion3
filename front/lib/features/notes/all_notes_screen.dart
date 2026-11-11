@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io' show File, Platform, Process;
 
 import 'package:drift/drift.dart' show Value;
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
@@ -14,6 +15,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/database/app_database.dart';
 import '../../core/database/app_database_manager.dart';
 import '../../core/database/local_notes_repository.dart';
+import '../../core/services/ai_service.dart';
 import '../../core/services/api_config.dart';
 import '../../core/services/authed_client.dart';
 import '../../core/services/session_manager.dart';
@@ -189,6 +191,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   int _hiddenDemoCount = 0;
   String _currentQuery = '';
 
+  // --- Conversión PDF → Markdown (microservicio IA externo) ---
+  late final AiService _aiService;
+  AiConversionResult? _markdownResult;
+  bool _convertingPdf = false;
+
   /// Filtro de materia desde academic (UX-05): prefijo "[CODE] " en título.
   String? _subjectFilter;
 
@@ -318,6 +325,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     super.initState();
     _sessionOwnerId = SessionManager.currentUserId;
     _sessionRevision = SessionManager.revision.value;
+    _aiService = AiService();
     _subjectFilter = widget.initialSubjectCode?.trim().isNotEmpty == true
         ? widget.initialSubjectCode!.trim()
         : null;
@@ -2178,6 +2186,44 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     await _notesFuture;
   }
 
+  /// Abre un file picker para seleccionar un PDF y lo convierte a Markdown
+  /// usando el microservicio IA externo.
+  Future<void> _pickAndConvertPdf() async {
+    final XFile? file = await openFile(
+      acceptedTypeGroups: <XTypeGroup>[
+        XTypeGroup(
+          label: 'PDF',
+          extensions: <String>['pdf'],
+        ),
+      ],
+    );
+    if (file == null || !mounted) return;
+    setState(() {
+      _convertingPdf = true;
+      _markdownResult = null;
+    });
+    try {
+      final bytes = await file.readAsBytes();
+      final result = await _aiService.convertPdfToMarkdown(bytes, file.name);
+      if (!mounted) return;
+      setState(() {
+        _markdownResult = result;
+        _convertingPdf = false;
+      });
+      _notifySnack('PDF convertido a Markdown.');
+    } on AiApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _convertingPdf = false);
+      debugPrint('[IA] ApiException status=${e.statusCode} code=${e.code}: ${e.message}');
+      _notifySnack('Error IA (${e.statusCode ?? '?'})${e.code != null ? ' [${e.code}]' : ''}: ${e.message}', ok: false);
+    } catch (e, st) {
+      if (!mounted) return;
+      setState(() => _convertingPdf = false);
+      debugPrint('[IA] Error inesperado: $e\n$st');
+      _notifySnack('Error al convertir PDF: $e', ok: false);
+    }
+  }
+
   /// Id remoto (UUID) de una nota, o null si solo existe en este equipo.
   String? _remoteIdOf(LocalNote note) {
     final id = _remoteIds[note.id] ?? note.id;
@@ -2556,6 +2602,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   void dispose() {
     _debounce?.cancel();
     _searchController.dispose();
+    _aiService.dispose();
     // La base es compartida y la posee AppDatabaseManager. Cerrarla aquí
     // mataba el isolate mientras una sincronización seguía en vuelo.
     if (_ownsDatabase) {
@@ -2654,6 +2701,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                     const SizedBox(height: 8),
                     _buildIdSearchHint(),
                   ],
+                  const SizedBox(height: 12),
+                  if (_markdownResult != null) _markdownResultPanel(),
                   const SizedBox(height: 12),
                   _buildCommunityActions(),
                   const SizedBox(height: 12),
@@ -3155,6 +3204,17 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           ),
           onPressed: _openPublicNotes,
         ),
+        NeobrutalistButton(
+          key: const Key('notes-pdf-to-markdown'),
+          label: 'PDF → Markdown',
+          icon: Icons.picture_as_pdf_rounded,
+          variant: NeobrutalistButtonVariant.accent,
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppDimens.spaceMd,
+            vertical: AppDimens.spaceSm,
+          ),
+          onPressed: _convertingPdf ? null : _pickAndConvertPdf,
+        ),
       ],
     );
   }
@@ -3270,6 +3330,131 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             ),
           );
         }).toList(),
+      ),
+    );
+  }
+
+  /// Panel con el resultado de la conversión PDF→Markdown.
+  Widget _markdownResultPanel() {
+    final r = _markdownResult!;
+    return Container(
+      margin: const EdgeInsets.all(AppDimens.spaceMd),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+        boxShadow: AppShadows.badge,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(AppDimens.spaceMd),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.picture_as_pdf_rounded,
+                  size: 18,
+                  color: AppColors.text,
+                ),
+                const SizedBox(width: AppDimens.spaceSm),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'PDF → Markdown',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w900,
+                          fontSize: 12,
+                          color: AppColors.text,
+                        ),
+                      ),
+                      Text(
+                        r.filename,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: AppColors.mutedStrong,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                NeobrutalistButton(
+                  label: 'Cerrar',
+                  icon: Icons.close_rounded,
+                  variant: NeobrutalistButtonVariant.secondary,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppDimens.spaceMd,
+                    vertical: AppDimens.spaceSm,
+                  ),
+                  onPressed: () => setState(() => _markdownResult = null),
+                ),
+              ],
+            ),
+          ),
+          const Divider(
+            color: AppColors.border,
+            thickness: AppDimens.borderWidth,
+            height: 1,
+          ),
+          Padding(
+            padding: const EdgeInsets.all(AppDimens.spaceMd),
+            child: SelectableText(
+              r.markdown.isEmpty ? '(sin contenido)' : r.markdown,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppColors.text,
+                height: 1.5,
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(AppDimens.spaceMd),
+            child: Row(
+              children: [
+                const Text(
+                  'Proveedor: ',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.mutedStrong,
+                  ),
+                ),
+                Text(
+                  r.provider,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: AppColors.mutedStrong,
+                  ),
+                ),
+                const SizedBox(width: AppDimens.spaceMd),
+                const Text(
+                  'Tamaño: ',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.mutedStrong,
+                  ),
+                ),
+                Text(
+                  '${r.sizeBytes} bytes',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: AppColors.mutedStrong,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
