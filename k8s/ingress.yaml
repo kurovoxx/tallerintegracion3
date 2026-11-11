@@ -7,6 +7,9 @@ metadata:
   name: front
   annotations:
     external-dns.alpha.kubernetes.io/target: proxy.inf.uct.cl
+    # nginx-ingress limita el body a 1m por defecto: los adjuntos/PDF de hasta 10MB
+    # (+ overhead multipart) daban 413 antes de llegar a Notes.
+    nginx.ingress.kubernetes.io/proxy-body-size: "15m"
 spec:
   ingressClassName: nginx
   rules:

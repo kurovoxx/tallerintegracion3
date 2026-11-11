@@ -48,6 +48,16 @@ void main() {
         ),
         isTrue,
       );
+      // El microservicio IA usa el mismo Ingress (Fake Certificate) en otro host.
+      expect(
+        isTrustedPillanCertificate(
+          TestCertificate(bytes),
+          'ia-hlepio.dev.censei.cl',
+          443,
+          fingerprints: fixturePin,
+        ),
+        isTrue,
+      );
       expect(
         isTrustedPillanCertificate(
           TestCertificate(bytes),

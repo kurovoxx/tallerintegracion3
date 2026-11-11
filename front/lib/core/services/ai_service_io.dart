@@ -3,10 +3,13 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 
-/// Crea un HttpClient que acepta certificados autofirmados
-/// (solo para móvil/desktop; en web no podemos saltarnos la verificación SSL).
+import 'insecure_http_io.dart';
+
+/// Cliente para móvil/desktop. El Ingress sirve el "Fake Certificate":
+/// solo se acepta si coincide con las huellas fijadas en
+/// [isTrustedPillanCertificate] (host + puerto + SHA-256), nunca cualquiera.
 http.Client createIoClient() {
   final ioClient = HttpClient()
-    ..badCertificateCallback = (cert, host, port) => true;
+    ..badCertificateCallback = isTrustedPillanCertificate;
   return IOClient(ioClient);
 }

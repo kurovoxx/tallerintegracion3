@@ -57,6 +57,8 @@ metadata:
   namespace: student-hlepio
   annotations:
     external-dns.alpha.kubernetes.io/target: "proxy.inf.uct.cl"
+    # PDFs de hasta 10MB + overhead multipart (el default de nginx-ingress es 1m).
+    nginx.ingress.kubernetes.io/proxy-body-size: "15m"
     # CORS resuelto en el ingress mientras el servicio Go no tenga middleware propio.
     nginx.ingress.kubernetes.io/enable-cors: "true"
     nginx.ingress.kubernetes.io/cors-allow-origin: "*"
