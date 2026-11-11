@@ -193,8 +193,24 @@ class AllNotesScreenState extends State<AllNotesScreen> {
 
   // --- Conversión PDF → Markdown (microservicio IA externo) ---
   late final AiService _aiService;
-  AiConversionResult? _markdownResult;
+  String? _convertedMarkdown;
+  String? _convertedFilename;
+  int? _convertedSizeBytes;
   bool _convertingPdf = false;
+
+  /// Historial de conversiones exitosas (últimas 24 h) para el rate limit
+  /// local de 5 conversiones por hora.
+  final List<DateTime> _conversionTimes = [];
+
+  /// Máximo de conversiones por hora (rate limit del servicio IA).
+  static const int _kMaxConversionsPerHour = 5;
+
+  /// Conversiones restantes en la hora actual.
+  int get _conversionsRemaining {
+    final cutoff = DateTime.now().subtract(const Duration(hours: 1));
+    final recent = _conversionTimes.where((t) => t.isAfter(cutoff)).length;
+    return (_kMaxConversionsPerHour - recent).clamp(0, _kMaxConversionsPerHour);
+  }
 
   /// Filtro de materia desde academic (UX-05): prefijo "[CODE] " en título.
   String? _subjectFilter;
@@ -2200,17 +2216,20 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     if (file == null || !mounted) return;
     setState(() {
       _convertingPdf = true;
-      _markdownResult = null;
     });
     try {
       final bytes = await file.readAsBytes();
       final result = await _aiService.convertPdfToMarkdown(bytes, file.name);
       if (!mounted) return;
       setState(() {
-        _markdownResult = result;
+        _convertedMarkdown = result.markdown;
+        _convertedFilename = result.filename;
+        _convertedSizeBytes = result.sizeBytes;
         _convertingPdf = false;
+        // Registrar conversión para el rate limit local
+        _conversionTimes.add(DateTime.now());
       });
-      _notifySnack('PDF convertido a Markdown.');
+      _showMarkdownDialog();
     } on AiApiException catch (e) {
       if (!mounted) return;
       setState(() => _convertingPdf = false);
@@ -2221,6 +2240,162 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       setState(() => _convertingPdf = false);
       debugPrint('[IA] Error inesperado: $e\n$st');
       _notifySnack('Error al convertir PDF: $e', ok: false);
+    }
+  }
+
+  /// Abre un diálogo con el Markdown convertido y un botón para guardarlo
+  /// como una nota nueva. El diálogo tiene scroll propio para no desbordar
+  /// la pantalla cuando el texto es largo.
+  Future<void> _showMarkdownDialog() async {
+    if (_convertedMarkdown == null || !mounted) return;
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => NeobrutalistDialog(
+        title: 'PDF → Markdown',
+        cancelLabel: 'Descartar',
+        confirmLabel: 'Guardar como nota',
+        closeOnConfirm: false,
+        maxWidth: 760,
+        onConfirm: () async {
+          if (_convertedMarkdown == null || !mounted) return;
+          Navigator.of(context).pop(true);
+          await _saveConvertedNote();
+        },
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(AppDimens.spaceMd),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.picture_as_pdf_rounded,
+                    size: 18,
+                    color: AppColors.text,
+                  ),
+                  const SizedBox(width: AppDimens.spaceSm),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _convertedFilename ?? 'documento.pdf',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w900,
+                            fontSize: 12,
+                            color: AppColors.text,
+                          ),
+                        ),
+                        Text(
+                          '${_convertedSizeBytes ?? 0} bytes',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: AppColors.mutedStrong,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(
+              color: AppColors.border,
+              thickness: AppDimens.borderWidth,
+              height: 1,
+            ),
+            // Scroll propio para el texto largo
+            ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: 500),
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.all(AppDimens.spaceMd),
+                  child: SelectableText(
+                    _convertedMarkdown!,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.text,
+                      height: 1.5,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved == true && mounted) {
+      // El guardado ya se hizo dentro del onConfirm.
+    }
+  }
+
+  /// Crea una nota nueva con el Markdown convertido.
+  Future<void> _saveConvertedNote() async {
+    if (_convertedMarkdown == null || !mounted) return;
+    setState(() => _convertingPdf = true);
+    try {
+      final tempId = _newTempNoteId();
+      final note = LocalNote(
+        needsSync: false,
+        id: tempId,
+        title: _convertedFilename ?? 'Nota desde PDF',
+        content: _convertedMarkdown!,
+        visibility: 'private',
+        updatedAt: DateTime.now(),
+        ownerUserId: _ownerId(),
+      );
+      _noteTags[tempId] = 'Desde PDF';
+      if (_useMemoryFallback) {
+        setState(() {
+          _memoryFallback.insert(0, note);
+          _likesCount[tempId] = 0;
+          _isLiked[tempId] = false;
+          _isSaved[tempId] = false;
+        });
+        _applySearch(_currentQuery);
+      } else {
+        try {
+          await _db!.transaction(() async {
+            await _repo!.upsertNote(note);
+          });
+          _likesCount[tempId] = 0;
+          _isLiked[tempId] = false;
+          _isSaved[tempId] = false;
+          await _applySearch(_currentQuery);
+        } catch (e) {
+          setState(() {
+            _useMemoryFallback = true;
+            _memoryFallback = [note, ..._memoryFallback];
+            _likesCount[tempId] = 0;
+          });
+          _applySearch(_currentQuery);
+        }
+      }
+      _noteSyncState[tempId] = _NoteSyncState.syncing;
+      final syncFuture = AppDatabaseManager.instance.guard(
+        () => _completeRemoteCreation(
+          tempId: tempId,
+          note: note,
+          attachments: const [],
+          revision: SessionManager.revision.value,
+          subjectId: null,
+          attachmentsPersisted: false,
+        ),
+      );
+      _pendingNoteSyncs[tempId] = syncFuture;
+      unawaited(syncFuture);
+      _notifySnack('Nota creada desde PDF.');
+    } catch (_) {
+      if (!mounted) return;
+      _notifySnack('No se pudo guardar la nota.', ok: false);
+    } finally {
+      if (mounted) setState(() => _convertingPdf = false);
     }
   }
 
@@ -2701,8 +2876,6 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                     const SizedBox(height: 8),
                     _buildIdSearchHint(),
                   ],
-                  const SizedBox(height: 12),
-                  if (_markdownResult != null) _markdownResultPanel(),
                   const SizedBox(height: 12),
                   _buildCommunityActions(),
                   const SizedBox(height: 12),
@@ -3204,17 +3377,40 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           ),
           onPressed: _openPublicNotes,
         ),
+        // Loading en el botón mientras se convierte el PDF.
         NeobrutalistButton(
           key: const Key('notes-pdf-to-markdown'),
-          label: 'PDF → Markdown',
-          icon: Icons.picture_as_pdf_rounded,
+          label: _convertingPdf
+              ? 'Convirtiendo…'
+              : 'PDF → Markdown',
+          icon: _convertingPdf
+              ? Icons.hourglass_empty_rounded
+              : Icons.picture_as_pdf_rounded,
           variant: NeobrutalistButtonVariant.accent,
           padding: const EdgeInsets.symmetric(
             horizontal: AppDimens.spaceMd,
             vertical: AppDimens.spaceSm,
           ),
-          onPressed: _convertingPdf ? null : _pickAndConvertPdf,
+          onPressed: _convertingPdf || _conversionsRemaining == 0
+              ? null
+              : _pickAndConvertPdf,
         ),
+        // Contador de conversiones restantes (rate limit: 5 por hora).
+        if (_conversionsRemaining < _kMaxConversionsPerHour)
+          Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppDimens.spaceMd,
+              vertical: AppDimens.spaceSm,
+            ),
+            child: Text(
+              'Conversiones restantes: $_conversionsRemaining/$_kMaxConversionsPerHour',
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                color: AppColors.mutedStrong,
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -3330,131 +3526,6 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             ),
           );
         }).toList(),
-      ),
-    );
-  }
-
-  /// Panel con el resultado de la conversión PDF→Markdown.
-  Widget _markdownResultPanel() {
-    final r = _markdownResult!;
-    return Container(
-      margin: const EdgeInsets.all(AppDimens.spaceMd),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        border: Border.all(
-          color: AppColors.border,
-          width: AppDimens.borderWidth,
-        ),
-        borderRadius: BorderRadius.circular(AppDimens.radius),
-        boxShadow: AppShadows.badge,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(AppDimens.spaceMd),
-            child: Row(
-              children: [
-                const Icon(
-                  Icons.picture_as_pdf_rounded,
-                  size: 18,
-                  color: AppColors.text,
-                ),
-                const SizedBox(width: AppDimens.spaceSm),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        'PDF → Markdown',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w900,
-                          fontSize: 12,
-                          color: AppColors.text,
-                        ),
-                      ),
-                      Text(
-                        r.filename,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: AppColors.mutedStrong,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                NeobrutalistButton(
-                  label: 'Cerrar',
-                  icon: Icons.close_rounded,
-                  variant: NeobrutalistButtonVariant.secondary,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: AppDimens.spaceMd,
-                    vertical: AppDimens.spaceSm,
-                  ),
-                  onPressed: () => setState(() => _markdownResult = null),
-                ),
-              ],
-            ),
-          ),
-          const Divider(
-            color: AppColors.border,
-            thickness: AppDimens.borderWidth,
-            height: 1,
-          ),
-          Padding(
-            padding: const EdgeInsets.all(AppDimens.spaceMd),
-            child: SelectableText(
-              r.markdown.isEmpty ? '(sin contenido)' : r.markdown,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: AppColors.text,
-                height: 1.5,
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(AppDimens.spaceMd),
-            child: Row(
-              children: [
-                const Text(
-                  'Proveedor: ',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.mutedStrong,
-                  ),
-                ),
-                Text(
-                  r.provider,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: AppColors.mutedStrong,
-                  ),
-                ),
-                const SizedBox(width: AppDimens.spaceMd),
-                const Text(
-                  'Tamaño: ',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.mutedStrong,
-                  ),
-                ),
-                Text(
-                  '${r.sizeBytes} bytes',
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: AppColors.mutedStrong,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }
