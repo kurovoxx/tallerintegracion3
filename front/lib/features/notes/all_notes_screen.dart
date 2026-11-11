@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show File, Platform, Process;
+import 'dart:math';
 
 import 'package:drift/drift.dart' show Value;
 import 'package:file_selector/file_selector.dart';
@@ -197,6 +198,23 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   String? _convertedFilename;
   int? _convertedSizeBytes;
   bool _convertingPdf = false;
+  String? _convertingWord;
+
+  /// Palabras mostradas en el botón mientras se convierte el PDF.
+  static const List<String> _kConvertingWords = <String>[
+    'Pensando',
+    'Convirtiendo',
+    'Ponderando',
+    'Cavilando',
+    'Meditando',
+    'Recapacitando',
+    'Rumiando',
+    'Discurriendo',
+    'Juzgando',
+    'Considerando',
+    'Reflexionando',
+    'ME PROYECTO',
+  ];
 
   /// Historial de conversiones exitosas (últimas 24 h) para el rate limit
   /// local de 5 conversiones por hora.
@@ -2216,6 +2234,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     if (file == null || !mounted) return;
     setState(() {
       _convertingPdf = true;
+      _convertingWord = _kConvertingWords[Random().nextInt(_kConvertingWords.length)];
     });
     try {
       final bytes = await file.readAsBytes();
@@ -2226,18 +2245,25 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         _convertedFilename = result.filename;
         _convertedSizeBytes = result.sizeBytes;
         _convertingPdf = false;
+        _convertingWord = null;
         // Registrar conversión para el rate limit local
         _conversionTimes.add(DateTime.now());
       });
       _showMarkdownDialog();
     } on AiApiException catch (e) {
       if (!mounted) return;
-      setState(() => _convertingPdf = false);
+      setState(() {
+        _convertingPdf = false;
+        _convertingWord = null;
+      });
       debugPrint('[IA] ApiException status=${e.statusCode} code=${e.code}: ${e.message}');
       _notifySnack('Error IA (${e.statusCode ?? '?'})${e.code != null ? ' [${e.code}]' : ''}: ${e.message}', ok: false);
     } catch (e, st) {
       if (!mounted) return;
-      setState(() => _convertingPdf = false);
+      setState(() {
+        _convertingPdf = false;
+        _convertingWord = null;
+      });
       debugPrint('[IA] Error inesperado: $e\n$st');
       _notifySnack('Error al convertir PDF: $e', ok: false);
     }
@@ -3381,7 +3407,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         NeobrutalistButton(
           key: const Key('notes-pdf-to-markdown'),
           label: _convertingPdf
-              ? 'Convirtiendo…'
+              ? (_convertingWord ?? 'Convirtiendo…')
               : 'PDF → Markdown',
           icon: _convertingPdf
               ? Icons.hourglass_empty_rounded
