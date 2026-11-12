@@ -517,6 +517,7 @@ CREATE TABLE social.meetings (
     group_id uuid NOT NULL REFERENCES social.groups(id) ON DELETE CASCADE,
     title varchar(300) NOT NULL,
     description text,
+    link varchar(1000),
     scheduled_at timestamptz NOT NULL,
     created_by_user_id uuid NOT NULL,
     notify_discord boolean NOT NULL DEFAULT true,

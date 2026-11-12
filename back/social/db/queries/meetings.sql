@@ -1,8 +1,8 @@
 -- name: CreateMeeting :one
 INSERT INTO social.meetings (
-  group_id, title, description, scheduled_at, created_by_user_id, notify_discord
+  group_id, title, description, link, scheduled_at, created_by_user_id, notify_discord
 ) VALUES (
-  $1, $2, $3, $4, $5, $6
+  $1, $2, $3, $4, $5, $6, $7
 ) RETURNING *;
 
 -- name: GetMeetingByID :one
