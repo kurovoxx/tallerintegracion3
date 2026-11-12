@@ -35,10 +35,10 @@ fi
 echo ">> Build front local (http://localhost:8085)..."
 $COMPOSE build --no-cache front
 
-echo ">> Rebuild backends (incluye las correcciones de Notes)..."
-$COMPOSE build notes auth social infacadem
+echo ">> Rebuild backends (incluye las correcciones de Notes y AI)..."
+$COMPOSE build notes auth social infacadem ai
 
-echo ">> Levanta postgres + auth + notes + social + infacadem + front..."
+echo ">> Levanta postgres + auth + notes + social + infacadem + ai + front..."
 $COMPOSE up -d
 
 echo ""
@@ -51,9 +51,11 @@ echo "Notes: http://localhost:8082/health"
 echo "Social:http://localhost:8083/health"
 echo "Academic directo: http://localhost:8087/health  (host 8087->8081, 8081 reservado)"
 echo "Academic vía nginx: http://localhost:8086/api-academic/health  (-> academic:8081)"
+echo "AI directo: http://localhost:8084/health"
 echo ""
 echo "Test:"
 echo "  curl -v http://localhost:8085/health"
 echo "  curl -v http://localhost:8086/api-auth/health"
 echo "  curl -v http://localhost:8087/health"
 echo "  curl -v http://localhost:8086/api-academic/health"
+echo "  curl -v http://localhost:8084/health"
