@@ -30,20 +30,51 @@ class AiService {
       http.MultipartFile.fromBytes('file', pdfBytes, filename: filename),
     );
 
-    final streamedResponse = await _client.send(request).timeout(
-      const Duration(seconds: 60),
-    );
-    final res = await http.Response.fromStream(streamedResponse);
+    try {
+      final streamedResponse = await _client.send(request).timeout(
+        const Duration(seconds: 60),
+      );
+      final res = await http.Response.fromStream(streamedResponse);
 
-    if (res.statusCode != 200) throw _toError(res);
+      if (res.statusCode != 200) throw _toError(res);
 
-    final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-    return AiConversionResult(
-      markdown: body['markdown'] as String? ?? '',
-      filename: body['filename'] as String? ?? filename,
-      sizeBytes: body['size_bytes'] as int? ?? pdfBytes.length,
-      provider: body['provider'] as String? ?? 'gemini',
-    );
+      final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      return AiConversionResult(
+        markdown: body['markdown'] as String? ?? '',
+        filename: body['filename'] as String? ?? filename,
+        sizeBytes: body['size_bytes'] as int? ?? pdfBytes.length,
+        provider: body['provider'] as String? ?? 'gemini',
+      );
+    } on AiApiException {
+      rethrow;
+    } catch (e, st) {
+      print('[IA] Error de red/SSL: $e\n$st');
+      final msg = e.toString();
+      if (msg.contains('CERTIFICATE_VERIFY_FAILED') ||
+          msg.contains('HandshakeException') ||
+          msg.contains('failed to fetch') ||
+          msg.contains('SSL')) {
+        throw AiApiException(
+          'No se pudo conectar con el servicio de IA. El certificado SSL del servidor no es válido para el navegador. Contacta al administrador para configurar un certificado SSL válido en ia-hlepio.dev.censei.cl.',
+          statusCode: 0,
+          code: 'ssl_certificate_invalid',
+        );
+      }
+      if (msg.contains('Connection closed before full header') ||
+          msg.contains('Connection closed') ||
+          msg.contains('ClientException')) {
+        throw AiApiException(
+          'La conexión con el servidor de IA se cerró antes de recibir la respuesta. Esto suele deberse a que el archivo excede el tamaño permitido en el servidor (intenta con un PDF más pequeño) o a que el servidor tardó demasiado en responder. Contacta al administrador de ia-hlepio.dev.censei.cl.',
+          statusCode: 0,
+          code: 'connection_closed',
+        );
+      }
+      throw AiApiException(
+        'Error de red al conectar con el servicio de IA: $e',
+        statusCode: 0,
+        code: 'network_error',
+      );
+    }
   }
 
   AiApiException _toError(http.Response res) {
