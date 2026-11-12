@@ -157,6 +157,7 @@ services:
       PORT: 8084
       AI_PORT: 8084
       GEMINI_API_KEY: ${GEMINI_API_KEY}
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-me}
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
       DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable}
     depends_on:

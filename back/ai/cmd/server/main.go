@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/kurovoxx/tallerintegracion3/back/ai/internal/config"
 	httpHandler "github.com/kurovoxx/tallerintegracion3/back/ai/internal/handler/http"
+	"github.com/kurovoxx/tallerintegracion3/back/ai/internal/middleware"
 	"github.com/kurovoxx/tallerintegracion3/back/ai/internal/service"
 )
 
@@ -30,9 +31,15 @@ func main() {
 		log.Print("IA: modo mock activado (GEMINI_API_KEY no configurada)")
 	}
 
+	// Middleware de auth JWT para endpoints de IA.
+	authMw := middleware.NewAuthMiddleware(middleware.NewConfigValidator(cfg))
+
+	// Rate limiter: 5 conversiones por hora por usuario.
+	rateLimiter := service.NewRateLimiter(cfg.GeminiRateLimit)
+
 	r := gin.Default()
 
-	// Health checks.
+	// Health checks (público, sin auth).
 	r.GET("/health", httpHandler.NewHealthHandler().Health)
 	r.GET("/health/db", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -42,11 +49,12 @@ func main() {
 		})
 	})
 
-	// Rutas de IA (público por ahora; se añadirá auth interno en el futuro).
+	// Rutas de IA (requieren JWT de usuario + rate limit).
 	ai := r.Group("/ai")
+	ai.Use(authMw.RequireAuth())
 	{
 		ai.POST("/generate", httpHandler.NewAIHandler(aiSvc).Generate)
-		ai.POST("/pdf-to-markdown", httpHandler.NewPDFHandler(aiSvc).ConvertPDFToMarkdown)
+		ai.POST("/pdf-to-markdown", httpHandler.NewPDFHandler(aiSvc, authMw, rateLimiter).ConvertPDFToMarkdown)
 	}
 
 	addr := ":" + cfg.Port
