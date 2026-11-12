@@ -6,9 +6,10 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import 'api_config.dart';
+import 'session_manager.dart';
 
 // Cliente para el microservicio IA (desplegado en cluster externo).
-// No requiere autenticación (CORS activado en el Ingress).
+// Requiere autenticación JWT (Authorization: Bearer <token>).
 // Contrato:
 //   POST /ai/pdf-to-markdown (multipart/form-data, campo "file")
 //   -> 200 {markdown, filename, size_bytes, provider}
@@ -22,6 +23,7 @@ class AiService {
   /// Sube un PDF y devuelve el Markdown convertido por Gemini.
   /// Lanza [AiApiException] si el backend responde con error.
   Future<AiConversionResult> convertPdfToMarkdown(Uint8List pdfBytes, String filename) async {
+    final token = SessionManager.token;
     final request = http.MultipartRequest(
       'POST',
       Uri.parse('$baseUrl/ai/pdf-to-markdown'),
@@ -29,6 +31,10 @@ class AiService {
     request.files.add(
       http.MultipartFile.fromBytes('file', pdfBytes, filename: filename),
     );
+    // Agregar header de autenticación JWT si hay sesión.
+    if (token != null && token.isNotEmpty) {
+      request.headers['Authorization'] = 'Bearer $token';
+    }
 
     try {
       final streamedResponse = await _client.send(request).timeout(
