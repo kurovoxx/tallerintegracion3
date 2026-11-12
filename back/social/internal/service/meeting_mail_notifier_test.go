@@ -31,7 +31,7 @@ func mailSeam(t *testing.T, attendees []string) (sqlc.SocialMeeting, *MeetingMai
 	store := NewMemoryMeetingStore()
 	store.AddGroup(gid, admin, member)
 	svc := NewMeetingService(store, NoopMeetingCreatedNotifier{})
-	m, err := svc.CreateMeeting(context.Background(), gid, admin, "Daily mail", nil, "2026-11-20T15:00:00Z", nil, attendees)
+	m, err := svc.CreateMeeting(context.Background(), gid, admin, "Daily mail", nil, nil, "2026-11-20T15:00:00Z", nil, attendees)
 	if err != nil {
 		t.Fatalf("crear: %v", err)
 	}

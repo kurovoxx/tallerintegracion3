@@ -434,12 +434,14 @@ class MeetingItem {
     required this.id,
     required this.title,
     this.description,
+    this.link,
     required this.scheduledAt,
   });
 
   final String id;
   final String title;
   final String? description;
+  final String? link;
   final DateTime scheduledAt;
 
   factory MeetingItem.fromJson(Map<String, dynamic> j) {
@@ -450,6 +452,7 @@ class MeetingItem {
       id: _str(j, 'id'),
       title: _str(j, 'title', 'Reunión'),
       description: j['description'] as String?,
+      link: j['link'] as String?,
       scheduledAt: when,
     );
   }

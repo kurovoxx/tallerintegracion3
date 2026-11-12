@@ -6,6 +6,7 @@
 // canónicos de core/theme/app_theme.dart y core/widgets/neobrutalism.dart.
 
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/common_widgets.dart';
 import '../../core/models/social_models.dart';
@@ -285,6 +286,16 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
     return '$date · $time';
   }
 
+  Future<void> _openMeetingLink(String link) async {
+    final uri = Uri.tryParse(link);
+    if (uri == null) return;
+    final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (opened || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('No se pudo abrir el enlace de la reunión.')),
+    );
+  }
+
   Future<void> _pickDate() async {
     final d = await showDatePicker(
       context: context,
@@ -339,10 +350,12 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
         _selectedTime.minute,
       ).toUtc();
       final desc = _descCtrl.text.trim();
+      final link = _linkCtrl.text.trim();
       final id = await _social.createMeeting(
         groupId: widget.groupId!.trim(),
         title: _titleCtrl.text.trim(),
         description: desc.isEmpty ? null : desc,
+        link: link.isEmpty ? null : link,
         scheduledAtUtc: when,
         attendees: _guests.keys.toList(),
       );
@@ -806,6 +819,21 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                                     fontWeight: FontWeight.w600,
                                     color: AppColors.text,
                                     height: 1.35,
+                                  ),
+                                ),
+                              ],
+                              if (m.link != null &&
+                                  m.link!.trim().isNotEmpty) ...[
+                                const SizedBox(height: 6),
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: TextButton.icon(
+                                    onPressed: () => _openMeetingLink(m.link!),
+                                    icon: const Icon(
+                                      Icons.link_rounded,
+                                      size: 16,
+                                    ),
+                                    label: const Text('Abrir enlace'),
                                   ),
                                 ),
                               ],

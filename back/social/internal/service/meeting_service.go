@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -21,6 +22,8 @@ var (
 	ErrInvalidAttendeeEmail = errors.New("invalid attendee email")
 	// ErrTooManyAttendees acota la lista (Google acepta cientos; 50 es margen sano).
 	ErrTooManyAttendees = errors.New("too many attendees: max 50")
+	// ErrInvalidMeetingLink exige http/https válido en el enlace/sala (opcional).
+	ErrInvalidMeetingLink = errors.New("invalid link: must be an http(s) URL (max 1000 characters)")
 )
 
 // maxAttendees acota los invitados por reunión.
@@ -140,6 +143,30 @@ func parseMeetingDescription(description *string) pgtype.Text {
 	return d
 }
 
+// parseMeetingLink valida y normaliza el enlace/sala de la reunión (opcional).
+// Solo se aceptan URLs http/https; vacío se guarda como NULL.
+func parseMeetingLink(link *string) (pgtype.Text, error) {
+	var l pgtype.Text
+	if link == nil {
+		return l, nil
+	}
+	trimmed := strings.TrimSpace(*link)
+	if trimmed == "" {
+		return l, nil
+	}
+	if len(trimmed) > 1000 {
+		return l, ErrInvalidMeetingLink
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return l, ErrInvalidMeetingLink
+	}
+	if err := l.Scan(trimmed); err != nil {
+		return l, ErrInvalidMeetingLink
+	}
+	return l, nil
+}
+
 func (s *MeetingService) requireMeetingGroup(ctx context.Context, gid pgtype.UUID) error {
 	if _, err := s.repo.GetGroupByID(ctx, gid); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -164,7 +191,7 @@ func (s *MeetingService) requireMembership(ctx context.Context, gid, uid pgtype.
 // CreateMeeting agenda una reunión: creación local síncrona + notificaciones
 // in-app a los miembros (excepto el creador). Las integraciones externas se
 // disparan en background y son best-effort.
-func (s *MeetingService) CreateMeeting(ctx context.Context, groupID, userID, title string, description *string, scheduledAt string, notifyDiscord *bool, attendees []string) (sqlc.SocialMeeting, error) {
+func (s *MeetingService) CreateMeeting(ctx context.Context, groupID, userID, title string, description *string, link *string, scheduledAt string, notifyDiscord *bool, attendees []string) (sqlc.SocialMeeting, error) {
 	title, err := validateTitle(title)
 	if err != nil {
 		return sqlc.SocialMeeting{}, err
@@ -174,6 +201,10 @@ func (s *MeetingService) CreateMeeting(ctx context.Context, groupID, userID, tit
 		return sqlc.SocialMeeting{}, err
 	}
 	emails, err := parseAttendees(attendees)
+	if err != nil {
+		return sqlc.SocialMeeting{}, err
+	}
+	meetingLink, err := parseMeetingLink(link)
 	if err != nil {
 		return sqlc.SocialMeeting{}, err
 	}
@@ -210,6 +241,7 @@ func (s *MeetingService) CreateMeeting(ctx context.Context, groupID, userID, tit
 		GroupID:         gid,
 		Title:           title,
 		Description:     parseMeetingDescription(description),
+		Link:            meetingLink,
 		ScheduledAt:     scheduled,
 		CreatedByUserID: uid,
 		NotifyDiscord:   notify,

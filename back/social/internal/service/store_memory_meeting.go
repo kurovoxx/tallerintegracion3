@@ -150,6 +150,7 @@ func (m *MemoryMeetingStore) CreateMeetingWithNotifications(_ context.Context, a
 		GroupID:         arg.GroupID,
 		Title:           arg.Title,
 		Description:     arg.Description,
+		Link:            arg.Link,
 		ScheduledAt:     arg.ScheduledAt,
 		CreatedByUserID: arg.CreatedByUserID,
 		NotifyDiscord:   arg.NotifyDiscord,

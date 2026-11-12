@@ -132,9 +132,11 @@ func (r *MeetingRepository) SetCalendarEventID(ctx context.Context, meetingID pg
 func (r *MeetingRepository) ListNotificationsByUser(ctx context.Context, userID string) ([]model.MeetingNotificationItem, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT n.id::text, n.meeting_id::text, m.group_id::text, m.title,
+		       m.description, m.link, g.name,
 		       m.scheduled_at, n.read_at, n.created_at
 		FROM social.meeting_notifications n
 		JOIN social.meetings m ON m.id = n.meeting_id
+		JOIN social.groups g ON g.id = m.group_id
 		WHERE n.user_id = $1
 		ORDER BY (n.read_at IS NOT NULL), n.created_at DESC`, userID)
 	if err != nil {
@@ -144,9 +146,17 @@ func (r *MeetingRepository) ListNotificationsByUser(ctx context.Context, userID 
 	out := []model.MeetingNotificationItem{}
 	for rows.Next() {
 		var it model.MeetingNotificationItem
+		var description, link pgtype.Text
 		if err := rows.Scan(&it.ID, &it.MeetingID, &it.GroupID, &it.Title,
+			&description, &link, &it.GroupName,
 			&it.ScheduledAt, &it.ReadAt, &it.CreatedAt); err != nil {
 			return nil, err
+		}
+		if description.Valid {
+			it.Description = &description.String
+		}
+		if link.Valid {
+			it.Link = &link.String
 		}
 		out = append(out, it)
 	}

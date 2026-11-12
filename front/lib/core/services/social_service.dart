@@ -748,12 +748,13 @@ class SocialService {
   }
 
   // POST /groups/:id/meetings
-  // {title required, description?, scheduled_at RFC3339 required, notify_discord?}
+  // {title required, description?, link?, scheduled_at RFC3339 required, notify_discord?}
   // -> 201 {meeting_id}. Ver back/social/internal/handler/http/meeting_handler.go.
   Future<String> createMeeting({
     required String groupId,
     required String title,
     String? description,
+    String? link,
     required DateTime scheduledAtUtc,
     List<String> attendees = const [],
   }) async {
@@ -761,6 +762,7 @@ class SocialService {
       'title': title.trim(),
       if (description != null && description.trim().isNotEmpty)
         'description': description.trim(),
+      if (link != null && link.trim().isNotEmpty) 'link': link.trim(),
       if (attendees.isNotEmpty)
         'attendees': normalizeMeetingAttendees(attendees),
       'scheduled_at': scheduledAtUtc.toUtc().toIso8601String(),
@@ -861,7 +863,16 @@ class SocialService {
           )
           .timeout(const Duration(seconds: 10)),
     );
-    if (res.statusCode != 204 && res.statusCode != 200) throw _toError(res);
+    if (res.statusCode != 204 && res.statusCode != 200) {
+      if (res.statusCode == 404) {
+        throw SocialApiException(
+          'La notificación ya no existe o no es tuya.',
+          statusCode: 404,
+          code: 'not_found',
+        );
+      }
+      throw _toError(res);
+    }
   }
 
   // POST /groups/:id/leave -> 204. Solo miembros.

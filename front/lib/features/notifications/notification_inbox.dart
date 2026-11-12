@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/models/social_models.dart';
 import '../../core/services/social_service.dart';
@@ -124,6 +125,16 @@ class _NotificationInboxState extends State<NotificationInbox> {
     } catch (_) {
       // Best-effort: la recarga muestra el estado real.
     }
+  }
+
+  Future<void> _openLink(String link) async {
+    final uri = Uri.tryParse(link);
+    if (uri == null) return;
+    final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (opened || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('No se pudo abrir el enlace de la reunión.')),
+    );
   }
 
   static String _formatWhen(DateTime when) {
@@ -300,10 +311,7 @@ class _NotificationInboxState extends State<NotificationInbox> {
                         if (n.link?.isNotEmpty ?? false)
                           InkWell(
                             borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-                            onTap: () {
-                              // Abrir enlace externo
-                              // TODO: usar url_launcher si está disponible
-                            },
+                            onTap: () => _openLink(n.link!),
                             child: const Icon(
                               Icons.open_in_new_rounded,
                               size: 16,
@@ -314,11 +322,11 @@ class _NotificationInboxState extends State<NotificationInbox> {
                     ),
                     const SizedBox(height: AppDimens.spaceXs),
                     Text(
-                      _formatWhen(n.createdAt),
+                      'Reunión: ${_formatWhen(n.scheduledAt)}',
                       style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.mutedStrong,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.text,
                       ),
                     ),
                     if (n.groupName?.isNotEmpty ?? false) ...[
@@ -349,17 +357,14 @@ class _NotificationInboxState extends State<NotificationInbox> {
                     if (n.link?.isNotEmpty ?? false) ...[
                       const SizedBox(height: AppDimens.spaceSm),
                       NeobrutalistButton(
-                        label: 'Ver reunión',
-                        icon: Icons.calendar_today_rounded,
+                        label: 'Abrir enlace',
+                        icon: Icons.link_rounded,
                         variant: NeobrutalistButtonVariant.secondary,
                         padding: const EdgeInsets.symmetric(
                           horizontal: AppDimens.spaceMd,
                           vertical: AppDimens.spaceSm,
                         ),
-                        onPressed: () {
-                          // Abrir enlace de la reunión
-                          // TODO: usar url_launcher si está disponible
-                        },
+                        onPressed: () => _openLink(n.link!),
                       ),
                     ],
                   ],

@@ -115,6 +115,10 @@ func buildWorkspace(d *service.WorkspaceData) model.Workspace {
 			desc := m.Description.String
 			item.Description = &desc
 		}
+		if m.Link.Valid {
+			l := m.Link.String
+			item.Link = &l
+		}
 		ws.Meetings.Upcoming = append(ws.Meetings.Upcoming, item)
 	}
 	return ws
