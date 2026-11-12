@@ -456,7 +456,8 @@ class MeetingItem {
 }
 
 /// Notificación in-app de reunión (tarea 3_5_14).
-/// Backend: GET /notifications/me, POST /notifications/:id/read.
+/// Backend: GET /notifications/me, POST /notifications/:id/read,
+/// DELETE /notifications/:id.
 class MeetingNotification {
   MeetingNotification({
     required this.id,
@@ -467,6 +468,9 @@ class MeetingNotification {
     required this.read,
     this.readAt,
     required this.createdAt,
+    this.description,
+    this.link,
+    this.groupName,
   });
 
   final String id;
@@ -477,6 +481,9 @@ class MeetingNotification {
   final bool read;
   final DateTime? readAt;
   final DateTime createdAt;
+  final String? description;
+  final String? link;
+  final String? groupName;
 
   factory MeetingNotification.fromJson(Map<String, dynamic> j) {
     DateTime when = DateTime.now();
@@ -498,6 +505,9 @@ class MeetingNotification {
       read: read,
       readAt: readAt,
       createdAt: created,
+      description: j['description'] as String?,
+      link: j['link'] as String?,
+      groupName: j['group_name'] as String?,
     );
   }
 }

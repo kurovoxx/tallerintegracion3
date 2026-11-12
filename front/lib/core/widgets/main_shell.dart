@@ -7,6 +7,7 @@ import '../../features/academic/grade_calculator_screen.dart';
 import '../../features/academic/profile_screen.dart';
 import '../../features/academic/schedule_screen.dart';
 import '../../features/groups/groups_screen.dart';
+import '../../features/notifications/notification_inbox.dart';
 import '../../features/notes/all_notes_screen.dart';
 import '../models/social_models.dart';
 import '../services/profile_service.dart';
@@ -79,6 +80,13 @@ class _MainShellState extends State<MainShell> {
 
   void _onGroupsChanged() {
     _loadSidebar();
+  }
+
+  void _openInbox() async {
+    await showDialog(
+      context: context,
+      builder: (_) => NotificationInbox(service: _social),
+    );
   }
 
   @override
@@ -186,6 +194,11 @@ class _MainShellState extends State<MainShell> {
       label: 'Perfil de Usuario',
       section: 'ESPACIO DE TRABAJO GENERAL',
     ),
+    _NavItem(
+      icon: Icons.notifications_rounded,
+      label: 'Notificaciones',
+      section: 'ESPACIO DE TRABAJO GENERAL',
+    ),
   ];
 
   /// Selecciona una sección y cierra el drawer si está abierto.
@@ -193,6 +206,11 @@ class _MainShellState extends State<MainShell> {
     final scaffold = _scaffoldKey.currentState;
     if (scaffold != null && scaffold.isDrawerOpen) {
       Navigator.of(context).pop();
+    }
+    // Notificaciones es el último ítem: abre el diálogo en lugar de cambiar de página.
+    if (index == _navItems.length - 1) {
+      _openInbox();
+      return;
     }
     setState(() => _selectedIndex = index);
   }

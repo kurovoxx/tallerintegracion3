@@ -85,3 +85,26 @@ func (h *NotificationHandler) MarkRead(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "notification marked as read"})
 }
+
+// Delete maneja DELETE /notifications/:id.
+// 204 sin contenido | 404 ajena/inexistente (sin filtrar).
+func (h *NotificationHandler) Delete(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		fail(c, "DeleteNotification", http.StatusUnauthorized, "unauthorized", "unauthorized")
+		return
+	}
+	if err := h.svc.Delete(c.Request.Context(), userID, c.Param("id")); err != nil {
+		if errors.Is(err, service.ErrMeetingNotFound) {
+			fail(c, "DeleteNotification", http.StatusNotFound, "notification_not_found", "notification not found")
+			return
+		}
+		if errors.Is(err, service.ErrInvalidUserID) {
+			fail(c, "DeleteNotification", http.StatusBadRequest, "invalid_user_id", err.Error())
+			return
+		}
+		fail(c, "DeleteNotification", http.StatusInternalServerError, "internal", "could not delete notification")
+		return
+	}
+	c.Status(http.StatusNoContent)
+}

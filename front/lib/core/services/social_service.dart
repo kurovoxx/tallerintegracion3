@@ -847,6 +847,23 @@ class SocialService {
     if (res.statusCode != 200) throw _toError(res);
   }
 
+  // DELETE /notifications/:id -> 204. Elimina la notificación propia (3_5_14).
+  Future<void> deleteNotification(String id) async {
+    final nid = id.trim();
+    if (nid.isEmpty) {
+      throw SocialApiException('notification id vacío.', code: 'invalid_id');
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .delete(
+            Uri.parse('$baseUrl/notifications/$nid'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 204 && res.statusCode != 200) throw _toError(res);
+  }
+
   // POST /groups/:id/leave -> 204. Solo miembros.
   // Si eres el único admin, el backend promueve al miembro más antiguo
   // (RN-GRUPO-10). Si eres el último miembro, el grupo se elimina.

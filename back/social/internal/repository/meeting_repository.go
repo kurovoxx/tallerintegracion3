@@ -164,3 +164,15 @@ func (r *MeetingRepository) MarkNotificationRead(ctx context.Context, id, userID
 	}
 	return tag.RowsAffected() > 0, nil
 }
+
+// DeleteNotification borra una notificación del usuario.
+// Devuelve false si no existe o no es suya (el handler responde 404).
+func (r *MeetingRepository) DeleteNotification(ctx context.Context, id, userID string) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `
+		DELETE FROM social.meeting_notifications
+		WHERE id = $1 AND user_id = $2`, id, userID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
