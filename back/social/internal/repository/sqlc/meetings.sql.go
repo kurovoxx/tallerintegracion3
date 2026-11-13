@@ -93,6 +93,7 @@ func (q *Queries) ListMeetingsByGroup(ctx context.Context, groupID pgtype.UUID) 
 			&i.GroupID,
 			&i.Title,
 			&i.Description,
+			&i.Link,
 			&i.ScheduledAt,
 			&i.CreatedByUserID,
 			&i.NotifyDiscord,
