@@ -28,4 +28,3 @@ func (rl *RateLimiter) Remaining(userID string) int {
 func (rl *RateLimiter) Limit() int {
 	return rl.limit
 }
-

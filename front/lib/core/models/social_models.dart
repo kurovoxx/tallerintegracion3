@@ -416,17 +416,21 @@ class SprintHoursList {
 // GET /groups/:id/discord-config -> 200 {server_name, invite_url,
 // webhook_url?}. 404 discord_not_configured si nunca se configuró.
 class DiscordConfig {
-  DiscordConfig({required this.serverName, required this.inviteUrl, this.webhookUrl});
+  DiscordConfig({
+    required this.serverName,
+    required this.inviteUrl,
+    this.webhookUrl,
+  });
 
   final String serverName;
   final String inviteUrl;
   final String? webhookUrl;
 
   factory DiscordConfig.fromJson(Map<String, dynamic> j) => DiscordConfig(
-        serverName: _str(j, 'server_name'),
-        inviteUrl: _str(j, 'invite_url'),
-        webhookUrl: j['webhook_url'] as String?,
-      );
+    serverName: _str(j, 'server_name'),
+    inviteUrl: _str(j, 'invite_url'),
+    webhookUrl: j['webhook_url'] as String?,
+  );
 }
 
 class MeetingItem {
@@ -497,7 +501,8 @@ class MeetingNotification {
     if (rawRead is String) readAt = DateTime.tryParse(rawRead);
     DateTime created = DateTime.now();
     final rawCreated = j['created_at'];
-    if (rawCreated is String) created = DateTime.tryParse(rawCreated) ?? created;
+    if (rawCreated is String)
+      created = DateTime.tryParse(rawCreated) ?? created;
     final read = j['read'] is bool ? j['read'] as bool : readAt != null;
     return MeetingNotification(
       id: _str(j, 'id'),

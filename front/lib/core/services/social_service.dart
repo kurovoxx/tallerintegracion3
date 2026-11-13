@@ -301,10 +301,7 @@ class SocialService {
     final uid = userId.trim();
     final r = role.trim();
     if (gid.isEmpty || uid.isEmpty || (r != 'admin' && r != 'member')) {
-      throw SocialApiException(
-        'Datos de rol inválidos.',
-        code: 'invalid_args',
-      );
+      throw SocialApiException('Datos de rol inválidos.', code: 'invalid_args');
     }
     final res = await AuthedHttp.run(
       () => _client
@@ -799,10 +796,7 @@ class SocialService {
     }
     final res = await AuthedHttp.run(
       () => _client
-          .get(
-            Uri.parse('$baseUrl/groups/$id/meetings'),
-            headers: _headers(),
-          )
+          .get(Uri.parse('$baseUrl/groups/$id/meetings'), headers: _headers())
           .timeout(const Duration(seconds: 10)),
     );
     if (res.statusCode != 200) throw _toError(res);

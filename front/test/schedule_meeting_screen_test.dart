@@ -1,6 +1,6 @@
-import 'dart:async';
-import 'support/service_uri.dart';
 import 'dart:convert';
+
+import 'support/service_uri.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -10,209 +10,123 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taller_integracion_front/core/services/session_manager.dart';
 import 'package:taller_integracion_front/core/services/social_service.dart';
 import 'package:taller_integracion_front/core/widgets/neobrutalism.dart';
-import 'package:taller_integracion_front/features/auth/google_calendar_service.dart';
 import 'package:taller_integracion_front/features/workspace/schedule_meeting_screen.dart';
 
 void main() {
-  testWidgets(
-    'ignora respuesta tardía de Calendar de A y libera la vista para B',
-    (tester) async {
-      SharedPreferences.setMockInitialValues({});
-      await SessionManager.saveSession('jwt-A', {'id': 'A'});
-      addTearDown(SessionManager.resetInMemory);
-
-      var requestAStarted = false;
-      final responseA = Completer<http.Response>();
-      var requestBStarted = false;
-      final client = MockClient((request) {
-        expect(
-          request.url.path.endsWith('/auth/google-calendar/status'),
-          isTrue,
-        );
-        final authorization = request.headers['authorization'];
-        if (authorization == 'Bearer jwt-A') {
-          requestAStarted = true;
-          return responseA.future;
+  testWidgets('agenda real envía enlace y refresca reuniones', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    SessionManager.saveSession('jwt-test', {'id': 'u'});
+    addTearDown(SessionManager.resetInMemory);
+    const groupId = '11111111-1111-1111-1111-111111111111';
+    Map<String, dynamic>? payload;
+    var loads = 0;
+    final service = SocialService(
+      client: MockClient((request) async {
+        if (request.method == 'GET' &&
+            request.url.servicePath.endsWith('/workspace')) {
+          loads++;
+          return http.Response(
+            jsonEncode({
+              'group': {'id': groupId, 'name': 'Grupo', 'role': 'admin'},
+              'kanban': {'todo': [], 'in_progress': [], 'done': []},
+              'sprint_sheet': {'sheets': [], 'tasks': []},
+              'meetings': {
+                'upcoming': [
+                  {
+                    'id': 'existing',
+                    'title': 'Reunión existente',
+                    'scheduled_at': '2027-01-01T12:00:00Z',
+                  },
+                  if (payload != null) {'id': 'created', ...payload!},
+                ],
+              },
+              'chat': {'provider': 'stream', 'token_endpoint': ''},
+            }),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
         }
-        if (authorization == 'Bearer jwt-B') {
-          requestBStarted = true;
-          return Future.value(http.Response('{"connected":false}', 200));
+        if (request.method == 'POST' &&
+            request.url.servicePath.endsWith('/meetings')) {
+          payload = jsonDecode(request.body) as Map<String, dynamic>;
+          return http.Response('{"meeting_id":"created"}', 201);
         }
-        return Future.value(http.Response('', 401));
-      });
-      addTearDown(client.close);
-
-      await tester.pumpWidget(
-        MaterialApp(
-          home: ScheduleMeetingScreen(
-            calendarService: GoogleCalendarService(client: client),
-          ),
-        ),
-      );
-      await tester.pump();
-      expect(requestAStarted, isTrue, reason: 'la sesión A consulta Calendar');
-      expect(find.byType(LinearProgressIndicator), findsOneWidget);
-
-      await SessionManager.saveSession('jwt-B', {'id': 'B'});
-      await tester.pump();
-      await tester.pump();
-      expect(requestBStarted, isTrue, reason: 'la sesión B consulta Calendar');
-      await tester.pump(const Duration(milliseconds: 20));
-
-      expect(find.byType(LinearProgressIndicator), findsNothing);
-      expect(find.text('VINCULAR CON GOOGLE CALENDAR'), findsOneWidget);
-
-      responseA.complete(
-        http.Response(
-          '{"connected":true,"external_email":"calendar-a@example.test"}',
-          200,
-        ),
-      );
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 20));
-
-      expect(find.text('calendar-a@example.test'), findsNothing);
-      expect(find.text('✓ Google Calendar vinculado'), findsNothing);
-      expect(find.text('VINCULAR CON GOOGLE CALENDAR'), findsOneWidget);
-      expect(find.byType(LinearProgressIndicator), findsNothing);
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox.shrink());
-    },
-  );
-
-  testWidgets(
-    'agenda real conserva campos UI sin enviarlos y refresca reuniones',
-    (tester) async {
-      SharedPreferences.setMockInitialValues({});
-      SessionManager.saveSession('jwt-test', {'id': 'u'});
-      addTearDown(SessionManager.resetInMemory);
-      const groupId = '11111111-1111-1111-1111-111111111111';
-      Map<String, dynamic>? payload;
-      var loads = 0;
-      final service = SocialService(
-        client: MockClient((request) async {
-          if (request.method == 'GET' &&
-              request.url.servicePath.endsWith('/workspace')) {
-            loads++;
-            return http.Response(
-              jsonEncode({
-                'group': {'id': groupId, 'name': 'Grupo', 'role': 'admin'},
-                'kanban': {'todo': [], 'in_progress': [], 'done': []},
-                'sprint_sheet': {'sheets': [], 'tasks': []},
-                'meetings': {
-                  'upcoming': [
-                    {
-                      'id': 'existing',
-                      'title': 'Reunión existente',
-                      'scheduled_at': '2027-01-01T12:00:00Z',
-                    },
-                    if (payload != null) {'id': 'created', ...payload!},
-                  ],
-                },
-                'chat': {'provider': 'stream', 'token_endpoint': ''},
-              }),
-              200,
-              headers: {'content-type': 'application/json; charset=utf-8'},
-            );
-          }
-          if (request.method == 'POST' &&
-              request.url.servicePath.endsWith('/meetings')) {
-            payload = jsonDecode(request.body) as Map<String, dynamic>;
-            return http.Response('{"meeting_id":"created"}', 201);
-          }
-          if (request.url.servicePath.endsWith('/members')) {
-            return http.Response(
-              jsonEncode([
-                {
-                  'id': 'membership',
-                  'group_id': groupId,
-                  'user_id': 'real-user',
-                  'display_name': 'Camila Pérez',
-                  'email': 'camila@example.com',
-                  'role': 'member',
-                },
-                {
-                  'id': 'membership2',
-                  'group_id': groupId,
-                  'user_id': 'hidden-uuid',
-                  'role': 'member',
-                },
-              ]),
-              200,
-              headers: {'content-type': 'application/json; charset=utf-8'},
-            );
-          }
-          return http.Response('{}', 404);
-        }),
-      );
-      addTearDown(service.dispose);
-      final calendarClient = MockClient(
-        (_) async => http.Response('{"connected":false}', 200),
-      );
-      addTearDown(calendarClient.close);
-      tester.view.physicalSize = const Size(1280, 1200);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-      await tester.pumpWidget(
-        MaterialApp(
-          home: ScheduleMeetingScreen(
-            groupId: groupId,
-            service: service,
-            calendarService: FakeCalendarService(client: calendarClient),
-            calendarConfigLoader: (_) async {},
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('Reunión existente'), findsOneWidget);
-      await tester.enterText(find.byType(TextFormField).at(0), '  Repaso  ');
-      await tester.enterText(
-        find.byType(TextFormField).at(1),
-        '  Unidad dos  ',
-      );
-      // Los selectores abren desde la tarjeta, debajo de su etiqueta.
-      await tester.tap(find.byIcon(Icons.calendar_month_rounded).first);
-      await tester.pumpAndSettle();
-      expect(find.byType(DatePickerDialog), findsOneWidget);
-      await tester.tap(find.text('OK'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byIcon(Icons.access_time_rounded));
-      await tester.pumpAndSettle();
-      expect(find.byType(TimePickerDialog), findsOneWidget);
-      await tester.tap(find.text('OK'));
-      await tester.pumpAndSettle();
-      await tester.enterText(find.byType(TextFormField).at(2), 'Sala 12');
-      expect(find.text('CAMILA PÉREZ'), findsOneWidget);
-      expect(find.textContaining('hidden-uuid'), findsNothing);
-      await tester.ensureVisible(find.text('CAMILA PÉREZ'));
-      await tester.tap(find.text('CAMILA PÉREZ'));
-      // Calendar usa flujo real: sin config muestra error humano, nunca
-      // "próximamente", y no bloquea el agendado.
-      await tester.tap(find.byType(NeobrutalistButton).first);
-      await tester.pumpAndSettle();
-      expect(find.textContaining('próximamente'), findsNothing);
-      expect(find.textContaining('GOOGLE_CLIENT_ID'), findsOneWidget);
-      FocusManager.instance.primaryFocus?.unfocus();
-      await tester.ensureVisible(find.byType(NeobrutalistButton).last);
-      await tester.tap(find.byType(NeobrutalistButton).last);
-      await tester.pumpAndSettle();
-      expect(payload!['title'], 'Repaso');
-      expect(payload!['description'], 'Unidad dos');
-      expect(DateTime.parse(payload!['scheduled_at'] as String).isUtc, isTrue);
-      expect(payload!.keys.toSet(), {
-        'title',
-        'description',
-        'scheduled_at',
-        'attendees',
-      });
-      expect(payload!['attendees'], ['camila@example.com']);
-      expect(loads, 2);
-      expect(find.text('Repaso'), findsWidgets);
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox.shrink());
-    },
-  );
+        if (request.url.servicePath.endsWith('/members')) {
+          return http.Response(
+            jsonEncode([
+              {
+                'id': 'membership',
+                'group_id': groupId,
+                'user_id': 'real-user',
+                'display_name': 'Camila Pérez',
+                'email': 'camila@example.com',
+                'role': 'member',
+              },
+              {
+                'id': 'membership2',
+                'group_id': groupId,
+                'user_id': 'hidden-uuid',
+                'role': 'member',
+              },
+            ]),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        return http.Response('{}', 404);
+      }),
+    );
+    addTearDown(service.dispose);
+    tester.view.physicalSize = const Size(1280, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ScheduleMeetingScreen(groupId: groupId, service: service),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Reunión existente'), findsOneWidget);
+    await tester.enterText(find.byType(TextFormField).at(0), '  Repaso  ');
+    await tester.enterText(find.byType(TextFormField).at(1), '  Unidad dos  ');
+    // Los selectores abren desde la tarjeta, debajo de su etiqueta.
+    await tester.tap(find.byIcon(Icons.calendar_month_rounded).first);
+    await tester.pumpAndSettle();
+    expect(find.byType(DatePickerDialog), findsOneWidget);
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.access_time_rounded));
+    await tester.pumpAndSettle();
+    expect(find.byType(TimePickerDialog), findsOneWidget);
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextFormField).at(2), 'Sala 12');
+    expect(find.text('CAMILA PÉREZ'), findsOneWidget);
+    expect(find.textContaining('hidden-uuid'), findsNothing);
+    await tester.ensureVisible(find.text('CAMILA PÉREZ'));
+    await tester.tap(find.text('CAMILA PÉREZ'));
+    FocusManager.instance.primaryFocus?.unfocus();
+    await tester.ensureVisible(find.byType(NeobrutalistButton).last);
+    await tester.tap(find.byType(NeobrutalistButton).last);
+    await tester.pumpAndSettle();
+    expect(payload!['title'], 'Repaso');
+    expect(payload!['description'], 'Unidad dos');
+    expect(payload!['link'], 'Sala 12');
+    expect(DateTime.parse(payload!['scheduled_at'] as String).isUtc, isTrue);
+    expect(payload!.keys.toSet(), {
+      'title',
+      'description',
+      'link',
+      'scheduled_at',
+      'attendees',
+    });
+    expect(payload!['attendees'], ['camila@example.com']);
+    expect(loads, 2);
+    expect(find.text('Repaso'), findsWidgets);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   Future<void> pumpMeeting(WidgetTester tester, Size size) async {
     tester.view.physicalSize = size;
@@ -230,7 +144,7 @@ void main() {
     final form = find.byType(Form);
     expect(
       find.descendant(of: form, matching: find.byType(NeobrutalistButton)),
-      findsNWidgets(2),
+      findsOneWidget,
     );
     expect(
       find.descendant(of: form, matching: find.text('PRÓXIMAS REUNIONES')),
@@ -251,7 +165,8 @@ void main() {
     expect(find.textContaining('Sofía'), findsNothing);
     expect(find.textContaining('POST real'), findsNothing);
     expect(find.textContaining('LOCAL, NO SE ENV'), findsNothing);
-    expect(find.text('VINCULAR CON GOOGLE CALENDAR'), findsOneWidget);
+    // Calendar ya no es parte del formulario: el enlace viaja en el correo.
+    expect(find.textContaining('GOOGLE CALENDAR'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -267,15 +182,4 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   });
-}
-
-class FakeCalendarService extends GoogleCalendarService {
-  FakeCalendarService({super.client});
-
-  @override
-  Future<({String code, String redirectUri})?> getCalendarAuthCode({
-    String? loginHint,
-  }) async {
-    throw StateError('GOOGLE_CLIENT_ID no configurado.');
-  }
 }

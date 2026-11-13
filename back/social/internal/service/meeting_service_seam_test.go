@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,12 +23,16 @@ func TestMeetingServiceSeam_CreateListNotifications(t *testing.T) {
 	svc := NewMeetingService(store, NoopMeetingCreatedNotifier{})
 
 	desc := "llevar apuntes"
-	m, err := svc.CreateMeeting(context.Background(), gid, admin, "Reunión costura", &desc, nil, "2026-09-25T15:00:00Z", nil, nil)
+	link := "https://meet.google.com/abc-defg-hij"
+	m, err := svc.CreateMeeting(context.Background(), gid, admin, "Reunión costura", &desc, &link, "2026-09-25T15:00:00Z", nil, nil)
 	if err != nil {
 		t.Fatalf("crear no debe fallar: %v", err)
 	}
 	if m.Title != "Reunión costura" || !m.NotifyDiscord {
 		t.Fatalf("reunión inesperada: %+v", m)
+	}
+	if !m.Link.Valid || m.Link.String != link {
+		t.Fatalf("enlace no persistido: %+v", m.Link)
 	}
 	mid, _ := uuid.FromBytes(m.ID.Bytes[:])
 	if got := store.NotificationsFor(mid.String()); got != 1 {
@@ -88,5 +93,9 @@ func TestMeetingServiceSeam_Errores(t *testing.T) {
 	}
 	if _, err := svc.CreateMeeting(context.Background(), gid, admin, "  ", nil, nil, "2026-09-25T15:00:00Z", nil, nil); err != ErrInvalidTitle {
 		t.Fatalf("título vacío debe dar ErrInvalidTitle, got %v", err)
+	}
+	longLink := "https://meet.google.com/" + strings.Repeat("a", 1000)
+	if _, err := svc.CreateMeeting(context.Background(), gid, admin, "X", nil, &longLink, "2026-09-25T15:00:00Z", nil, nil); err != ErrInvalidMeetingLink {
+		t.Fatalf("enlace largo debe dar ErrInvalidMeetingLink, got %v", err)
 	}
 }

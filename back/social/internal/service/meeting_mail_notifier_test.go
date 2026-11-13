@@ -13,14 +13,16 @@ import (
 type fakeMailSender struct {
 	to    []string
 	title string
+	link  string
 	calls int
 	err   error
 }
 
-func (f *fakeMailSender) SendMeetingInvite(_ context.Context, to []string, _, title string, _ time.Time, _ bool, _ string) error {
+func (f *fakeMailSender) SendMeetingInvite(_ context.Context, to []string, _, title string, _ time.Time, _ bool, _, link string) error {
 	f.calls++
 	f.to = append([]string{}, to...)
 	f.title = title
+	f.link = link
 	return f.err
 }
 
@@ -31,7 +33,8 @@ func mailSeam(t *testing.T, attendees []string) (sqlc.SocialMeeting, *MeetingMai
 	store := NewMemoryMeetingStore()
 	store.AddGroup(gid, admin, member)
 	svc := NewMeetingService(store, NoopMeetingCreatedNotifier{})
-	m, err := svc.CreateMeeting(context.Background(), gid, admin, "Daily mail", nil, nil, "2026-11-20T15:00:00Z", nil, attendees)
+	link := "https://meet.google.com/demo"
+	m, err := svc.CreateMeeting(context.Background(), gid, admin, "Daily mail", nil, &link, "2026-11-20T15:00:00Z", nil, attendees)
 	if err != nil {
 		t.Fatalf("crear: %v", err)
 	}
@@ -47,6 +50,9 @@ func TestMailNotifier_SendsToAttendees(t *testing.T) {
 	}
 	if len(mail.to) != 2 || mail.title != "Daily mail" {
 		t.Fatalf("destinatarios/título: %v %q", mail.to, mail.title)
+	}
+	if mail.link != "https://meet.google.com/demo" {
+		t.Fatalf("enlace: %q", mail.link)
 	}
 }
 

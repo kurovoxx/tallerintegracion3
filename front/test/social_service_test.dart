@@ -1,4 +1,5 @@
 import 'support/service_uri.dart';
+
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -106,6 +107,7 @@ void main() {
         expect(request.url.servicePath, '/groups/$gid/meetings');
         final body = jsonDecode(request.body) as Map<String, dynamic>;
         expect(body['title'], 'Daily');
+        expect(body['link'], 'https://meet.google.com/abc');
         expect(body['scheduled_at'], contains('T'));
         expect(body.containsKey('members'), isFalse);
         checked = true;
@@ -121,6 +123,7 @@ void main() {
     final id = await service.createMeeting(
       groupId: gid,
       title: 'Daily',
+      link: 'https://meet.google.com/abc',
       scheduledAtUtc: DateTime.utc(2026, 9, 30, 15),
     );
     expect(id, 'm1');
