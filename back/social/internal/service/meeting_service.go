@@ -17,6 +17,8 @@ var (
 	ErrMeetingNotFound     = errors.New("meeting not found")
 	ErrScheduledAtRequired = errors.New("scheduled_at is required")
 	ErrInvalidScheduledAt  = errors.New("invalid scheduled_at: must be RFC3339 (e.g. 2026-09-20T15:00:00Z)")
+	// ErrMeetingLinkTooLong acota el enlace/sala al tamaño de la columna.
+	ErrMeetingLinkTooLong = errors.New("meeting link is too long: max 500")
 	// ErrInvalidAttendeeEmail exige emails válidos en attendees (regla: invitados por email).
 	ErrInvalidAttendeeEmail = errors.New("invalid attendee email")
 	// ErrTooManyAttendees acota la lista (Google acepta cientos; 50 es margen sano).
@@ -140,6 +142,24 @@ func parseMeetingDescription(description *string) pgtype.Text {
 	return d
 }
 
+func parseMeetingLink(link *string) (pgtype.Text, error) {
+	var l pgtype.Text
+	if link == nil {
+		return l, nil
+	}
+	trimmed := strings.TrimSpace(*link)
+	if trimmed == "" {
+		return l, nil
+	}
+	if len(trimmed) > 500 {
+		return l, ErrMeetingLinkTooLong
+	}
+	if err := l.Scan(trimmed); err != nil {
+		return pgtype.Text{}, ErrMeetingLinkTooLong
+	}
+	return l, nil
+}
+
 func (s *MeetingService) requireMeetingGroup(ctx context.Context, gid pgtype.UUID) error {
 	if _, err := s.repo.GetGroupByID(ctx, gid); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -164,12 +184,16 @@ func (s *MeetingService) requireMembership(ctx context.Context, gid, uid pgtype.
 // CreateMeeting agenda una reunión: creación local síncrona + notificaciones
 // in-app a los miembros (excepto el creador). Las integraciones externas se
 // disparan en background y son best-effort.
-func (s *MeetingService) CreateMeeting(ctx context.Context, groupID, userID, title string, description *string, scheduledAt string, notifyDiscord *bool, attendees []string) (sqlc.SocialMeeting, error) {
+func (s *MeetingService) CreateMeeting(ctx context.Context, groupID, userID, title string, description *string, link *string, scheduledAt string, notifyDiscord *bool, attendees []string) (sqlc.SocialMeeting, error) {
 	title, err := validateTitle(title)
 	if err != nil {
 		return sqlc.SocialMeeting{}, err
 	}
 	scheduled, err := parseScheduledAt(scheduledAt)
+	if err != nil {
+		return sqlc.SocialMeeting{}, err
+	}
+	meetingLink, err := parseMeetingLink(link)
 	if err != nil {
 		return sqlc.SocialMeeting{}, err
 	}
@@ -210,6 +234,7 @@ func (s *MeetingService) CreateMeeting(ctx context.Context, groupID, userID, tit
 		GroupID:         gid,
 		Title:           title,
 		Description:     parseMeetingDescription(description),
+		Link:            meetingLink,
 		ScheduledAt:     scheduled,
 		CreatedByUserID: uid,
 		NotifyDiscord:   notify,

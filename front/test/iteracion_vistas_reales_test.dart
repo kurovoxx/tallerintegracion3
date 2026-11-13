@@ -1,4 +1,5 @@
 import 'support/service_uri.dart';
+
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -589,8 +590,9 @@ void main() {
       );
       expect(find.text('AGENDAR REUNIÓN'), findsWidgets);
       expect(find.text('Reunión Real'), findsOneWidget);
-      // Secciones completas; Calendar no simula una conexión.
-      expect(find.text('VINCULAR CON GOOGLE CALENDAR'), findsOneWidget);
+      // Secciones completas; Calendar ya no forma parte del formulario.
+      expect(find.textContaining('ENLACE / SALA'), findsOneWidget);
+      expect(find.textContaining('GOOGLE CALENDAR'), findsNothing);
       expect(find.textContaining('INVITAR MIEMBROS'), findsOneWidget);
       expect(find.textContaining('INVITAR POR CORREO'), findsOneWidget);
       expect(tester.takeException(), isNull);
@@ -904,13 +906,12 @@ void main() {
   group('PRE-CHECKPOINT — Chat/Header/Sprint', () {
     StreamChatConnector connectorFor(Future<ChatSession> Function() open) {
       return StreamChatConnector(
-        factory:
-            ({
-              required String apiKey,
-              required String userToken,
-              required String userId,
-              required String channelId,
-            }) => open(),
+        factory: ({
+          required String apiKey,
+          required String userToken,
+          required String userId,
+          required String channelId,
+        }) => open(),
       );
     }
 

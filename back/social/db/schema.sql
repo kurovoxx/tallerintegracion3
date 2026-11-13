@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS social.meetings (
   group_id uuid not null,
   title character varying(300) not null,
   description text null,
+  link character varying(500) null,
   scheduled_at timestamp with time zone not null,
   created_by_user_id uuid not null,
   notify_discord boolean not null default true,

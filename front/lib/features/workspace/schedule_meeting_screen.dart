@@ -9,31 +9,16 @@ import 'package:flutter/material.dart';
 
 import '../../core/common_widgets.dart';
 import '../../core/models/social_models.dart';
-import '../../core/services/api_config.dart';
-import '../../core/services/session_manager.dart';
 import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
-import '../auth/google_calendar_service.dart';
-import '../auth/google_drive_service.dart' show LocalPortBusyException;
-
-typedef CalendarConfigLoader = Future<void> Function(String backendBaseUrl);
 
 class ScheduleMeetingScreen extends StatefulWidget {
-  const ScheduleMeetingScreen({
-    super.key,
-    this.groupId,
-    SocialService? service,
-    GoogleCalendarService? calendarService,
-    CalendarConfigLoader? calendarConfigLoader,
-  }) : _serviceOverride = service,
-       _calendarOverride = calendarService,
-       _calendarConfigLoader = calendarConfigLoader;
+  const ScheduleMeetingScreen({super.key, this.groupId, SocialService? service})
+    : _serviceOverride = service;
 
   final String? groupId;
   final SocialService? _serviceOverride;
-  final GoogleCalendarService? _calendarOverride;
-  final CalendarConfigLoader? _calendarConfigLoader;
 
   @override
   State<ScheduleMeetingScreen> createState() => _ScheduleMeetingScreenState();
@@ -54,33 +39,24 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
   TimeOfDay _selectedTime = const TimeOfDay(hour: 10, minute: 0);
 
   late final SocialService _social;
-  late final GoogleCalendarService _calendar;
   bool _isSubmitting = false;
   String? _createdMeetingId;
   String? _submitError;
   List<MeetingItem> _upcoming = const [];
   bool _loadingUpcoming = false;
-  CalendarStatus? _calStatus;
-  bool _calLoading = false;
-  bool _calConnecting = false;
-  String? _calError;
 
   @override
   void initState() {
     super.initState();
     _social = widget._serviceOverride ?? SocialService();
-    _calendar = widget._calendarOverride ?? GoogleCalendarService();
-    SessionManager.revision.addListener(_sessionChanged);
     if (_isRealGroup) {
       _loadUpcoming();
       _loadMembers();
     }
-    _loadCalendarStatus();
   }
 
   @override
   void dispose() {
-    SessionManager.revision.removeListener(_sessionChanged);
     _titleCtrl.dispose();
     _descCtrl.dispose();
     _linkCtrl.dispose();
@@ -95,25 +71,6 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
       r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
     );
     return id.isNotEmpty && uuid.hasMatch(id);
-  }
-
-  void _sessionChanged() {
-    if (!mounted) return;
-    setState(() {
-      _calStatus = null;
-      _calError = null;
-      _calLoading = false;
-      _calConnecting = false;
-    });
-    _loadCalendarStatus();
-  }
-
-  Future<void> _ensureCalendarConfigured() {
-    final loader = widget._calendarConfigLoader;
-    if (loader != null) return loader(authApiBaseUrl);
-    return GoogleCalendarService.ensureConfigured(
-      backendBaseUrl: authApiBaseUrl,
-    );
   }
 
   /// Próximas reuniones desde GET /groups/:id/workspace.meetings.upcoming.
@@ -171,111 +128,6 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
     }
   }
 
-  /// Estado real de Calendar para la cuenta activa (aislado por JWT,
-  /// igual que Drive). null = sin red/sesión: se conserva el estado previo.
-  Future<void> _loadCalendarStatus() async {
-    if (!mounted) return;
-    final revision = SessionManager.revision.value;
-    setState(() {
-      _calLoading = true;
-      _calError = null;
-    });
-    try {
-      final status = await _calendar.fetchStatus(
-        backendBaseUrl: authApiBaseUrl,
-      );
-      if (!mounted || revision != SessionManager.revision.value) return;
-      setState(() {
-        if (status != null) _calStatus = status;
-        _calError = status == null
-            ? 'No se pudo verificar la conexión con Google Calendar.'
-            : null;
-        _calLoading = false;
-      });
-    } catch (_) {
-      if (mounted && revision == SessionManager.revision.value) {
-        setState(() => _calLoading = false);
-      }
-    }
-  }
-
-  /// Flujo OAuth real: navegador → code → POST connect → status.
-  /// Nunca guarda tokens de Google en el frontend.
-  Future<void> _linkGoogleCalendar() async {
-    if (_calConnecting) return;
-    final revision = SessionManager.revision.value;
-    setState(() {
-      _calConnecting = true;
-      _calError = null;
-    });
-    try {
-      await _ensureCalendarConfigured();
-      if (!mounted || revision != SessionManager.revision.value) return;
-      final auth = await _calendar.getCalendarAuthCode();
-      if (!mounted || revision != SessionManager.revision.value) return;
-      if (auth == null) {
-        setState(() {
-          _calConnecting = false;
-          _calError =
-              'Autorización cancelada. Vuelve a intentarlo si quieres vincular Calendar.';
-        });
-        return;
-      }
-      final result = await _calendar.connectCalendar(
-        backendBaseUrl: authApiBaseUrl,
-        oauthCode: auth.code,
-        redirectUri: auth.redirectUri.isEmpty ? null : auth.redirectUri,
-        expectedSessionRevision: revision,
-      );
-      if (!mounted || revision != SessionManager.revision.value) return;
-      if (!result.ok) {
-        setState(() {
-          _calConnecting = false;
-          _calError = result.message;
-        });
-        return;
-      }
-      final status = await _calendar.fetchStatus(
-        backendBaseUrl: authApiBaseUrl,
-      );
-      if (!mounted || revision != SessionManager.revision.value) return;
-      setState(() {
-        _calConnecting = false;
-        _calStatus = status ?? const CalendarStatus(connected: true);
-        _calError = status == null
-            ? 'Conexión confirmada; no se pudo actualizar el estado remoto.'
-            : null;
-      });
-      if (mounted && (status?.connected ?? false)) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Google Calendar vinculado.')),
-        );
-      }
-    } on LocalPortBusyException catch (e) {
-      if (mounted && revision == SessionManager.revision.value) {
-        setState(() {
-          _calConnecting = false;
-          _calError = e.toString();
-        });
-      }
-    } on StateError catch (e) {
-      if (mounted && revision == SessionManager.revision.value) {
-        setState(() {
-          _calConnecting = false;
-          _calError = e.message;
-        });
-      }
-    } catch (_) {
-      if (mounted && revision == SessionManager.revision.value) {
-        setState(() {
-          _calConnecting = false;
-          _calError =
-              'No se pudo conectar con Google Calendar. Inténtalo nuevamente más tarde.';
-        });
-      }
-    }
-  }
-
   static String _formatWhen(DateTime when) {
     final local = when.toLocal();
     final date =
@@ -315,8 +167,8 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
     if (t != null) setState(() => _selectedTime = t);
   }
 
-  // POST /groups/:id/meetings {title, description?, scheduled_at}.
-  // Invitados por email; enlace/sala continúa como dato local del formulario.
+  // POST /groups/:id/meetings {title, description?, link?, scheduled_at}.
+  // El enlace viaja en el correo de invitación de los asistentes.
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     if (!_isRealGroup) {
@@ -339,10 +191,12 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
         _selectedTime.minute,
       ).toUtc();
       final desc = _descCtrl.text.trim();
+      final link = _linkCtrl.text.trim();
       final id = await _social.createMeeting(
         groupId: widget.groupId!.trim(),
         title: _titleCtrl.text.trim(),
         description: desc.isEmpty ? null : desc,
+        link: link.isEmpty ? null : link,
         scheduledAtUtc: when,
         attendees: _guests.keys.toList(),
       );
@@ -364,6 +218,8 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
             ? 'Ingresa un correo válido.'
             : e.message.contains('too many attendees')
             ? 'Puedes invitar hasta 50 personas.'
+            : e.message.contains('meeting link is too long')
+            ? 'El enlace es demasiado largo (máximo 500 caracteres).'
             : 'No se pudo agendar la reunión.',
       );
     } catch (_) {
@@ -487,97 +343,6 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                             ),
                           ),
                           const SizedBox(height: AppDimens.spaceMd),
-                          const AppFieldLabel('GOOGLE CALENDAR'),
-                          const SizedBox(height: AppDimens.spaceSm),
-                          if (_calLoading)
-                            const LinearProgressIndicator()
-                          else if (_calStatus?.connected == true) ...[
-                            Container(
-                              padding: const EdgeInsets.all(AppDimens.spaceMd),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFE7F6E7),
-                                border: Border.all(
-                                  color: AppColors.border,
-                                  width: AppDimens.borderWidth,
-                                ),
-                                borderRadius: BorderRadius.circular(
-                                  AppDimens.radius,
-                                ),
-                              ),
-                              child: Row(
-                                children: [
-                                  const Icon(
-                                    Icons.check_circle_rounded,
-                                    color: AppColors.text,
-                                    size: 18,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        const Text(
-                                          '✓ Google Calendar vinculado',
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w900,
-                                            color: AppColors.text,
-                                          ),
-                                        ),
-                                        if (_calStatus?.externalEmail != null)
-                                          Text(
-                                            _calStatus!.externalEmail!,
-                                            style: const TextStyle(
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w600,
-                                              color: AppColors.muted,
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: AppDimens.spaceSm),
-                            NeobrutalistButton(
-                              label: _calConnecting
-                                  ? 'CONECTANDO...'
-                                  : 'RECONECTAR',
-                              icon: Icons.refresh_rounded,
-                              variant: NeobrutalistButtonVariant.secondary,
-                              expand: true,
-                              onPressed: _calConnecting
-                                  ? null
-                                  : _linkGoogleCalendar,
-                            ),
-                          ] else ...[
-                            NeobrutalistButton(
-                              label: _calConnecting
-                                  ? 'CONECTANDO...'
-                                  : 'VINCULAR CON GOOGLE CALENDAR',
-                              icon: Icons.calendar_today_rounded,
-                              variant: NeobrutalistButtonVariant.info,
-                              expand: true,
-                              borderWidth: AppDimens.borderWidthAction,
-                              onPressed: _calConnecting
-                                  ? null
-                                  : _linkGoogleCalendar,
-                            ),
-                          ],
-                          if (_calError != null) ...[
-                            const SizedBox(height: AppDimens.spaceSm),
-                            Text(
-                              _calError!,
-                              style: const TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.error,
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: AppDimens.spaceMd),
                           const AppFieldLabel('INVITAR MIEMBROS DEL GRUPO'),
                           const Text(
                             'Toca un integrante para agregarlo con su correo real. El chip muestra el nombre; internamente se guarda el email.',
@@ -612,8 +377,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                                       setState(() => _guests.remove(email));
                                     } else if (email.isEmpty) {
                                       setState(
-                                        () => _guestError =
-                                            'Este integrante no tiene correo disponible. Escríbelo abajo para invitarlo.',
+                                        () => _guestError = 'Este integrante no tiene correo disponible. Escríbelo abajo para invitarlo.',
                                       );
                                     } else {
                                       _addGuest(email, _memberLabel(member));
@@ -806,6 +570,20 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                                     fontWeight: FontWeight.w600,
                                     color: AppColors.text,
                                     height: 1.35,
+                                  ),
+                                ),
+                              ],
+                              if (m.link != null &&
+                                  m.link!.trim().isNotEmpty) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  m.link!.trim(),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                    color: AppColors.accentBlue,
                                   ),
                                 ),
                               ],

@@ -1,4 +1,5 @@
 import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -59,8 +60,8 @@ void main() {
   ) async {
     await t.pumpWidget(const MaterialApp(home: ScheduleMeetingScreen()));
     await t.pumpAndSettle();
-    // Calendar real: botón vincular visible, sin texto "próximamente".
-    expect(find.text('VINCULAR CON GOOGLE CALENDAR'), findsOneWidget);
+    // El formulario ya no vincula Calendar: el enlace se envía por correo.
+    expect(find.textContaining('GOOGLE CALENDAR'), findsNothing);
     expect(find.textContaining('próximamente'), findsNothing);
     expect(find.textContaining('INVITAR MIEMBROS'), findsOneWidget);
     expect(find.textContaining('INVITAR POR CORREO'), findsOneWidget);

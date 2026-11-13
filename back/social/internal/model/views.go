@@ -76,6 +76,7 @@ type MeetingItem struct {
 	ID          string    `json:"id"`
 	Title       string    `json:"title"`
 	Description *string   `json:"description,omitempty"`
+	Link        *string   `json:"link,omitempty"`
 	ScheduledAt time.Time `json:"scheduled_at"`
 }
 

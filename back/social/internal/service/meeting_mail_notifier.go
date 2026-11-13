@@ -20,7 +20,7 @@ type MeetingMailStore interface {
 // MailSender envía el aviso. *mail.MeetingMailer es la implementación real;
 // en tests se usa un falso que captura.
 type MailSender interface {
-	SendMeetingInvite(ctx context.Context, to []string, groupName, title string, scheduled time.Time, hasSchedule bool, description string) error
+	SendMeetingInvite(ctx context.Context, to []string, groupName, title string, scheduled time.Time, hasSchedule bool, description, link string) error
 }
 
 // MeetingMailNotifier implementa MeetingCreatedNotifier avisando por mail
@@ -63,13 +63,17 @@ func (n *MeetingMailNotifier) OnMeetingCreated(ctx context.Context, meeting sqlc
 	if meeting.Description.Valid {
 		description = meeting.Description.String
 	}
+	link := ""
+	if meeting.Link.Valid {
+		link = meeting.Link.String
+	}
 	var scheduled time.Time
 	hasSchedule := false
 	if meeting.ScheduledAt.Valid {
 		scheduled = meeting.ScheduledAt.Time
 		hasSchedule = true
 	}
-	if err := n.mail.SendMeetingInvite(ctx, to, groupName, meeting.Title, scheduled, hasSchedule, description); err != nil {
+	if err := n.mail.SendMeetingInvite(ctx, to, groupName, meeting.Title, scheduled, hasSchedule, description, link); err != nil {
 		log.Printf("mail notify: no se pudo enviar aviso: %v", err)
 		return
 	}

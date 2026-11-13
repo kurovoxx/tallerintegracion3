@@ -301,10 +301,7 @@ class SocialService {
     final uid = userId.trim();
     final r = role.trim();
     if (gid.isEmpty || uid.isEmpty || (r != 'admin' && r != 'member')) {
-      throw SocialApiException(
-        'Datos de rol inválidos.',
-        code: 'invalid_args',
-      );
+      throw SocialApiException('Datos de rol inválidos.', code: 'invalid_args');
     }
     final res = await AuthedHttp.run(
       () => _client
@@ -748,12 +745,13 @@ class SocialService {
   }
 
   // POST /groups/:id/meetings
-  // {title required, description?, scheduled_at RFC3339 required, notify_discord?}
+  // {title required, description?, link?, scheduled_at RFC3339 required, notify_discord?}
   // -> 201 {meeting_id}. Ver back/social/internal/handler/http/meeting_handler.go.
   Future<String> createMeeting({
     required String groupId,
     required String title,
     String? description,
+    String? link,
     required DateTime scheduledAtUtc,
     List<String> attendees = const [],
   }) async {
@@ -761,6 +759,7 @@ class SocialService {
       'title': title.trim(),
       if (description != null && description.trim().isNotEmpty)
         'description': description.trim(),
+      if (link != null && link.trim().isNotEmpty) 'link': link.trim(),
       if (attendees.isNotEmpty)
         'attendees': normalizeMeetingAttendees(attendees),
       'scheduled_at': scheduledAtUtc.toUtc().toIso8601String(),
@@ -797,10 +796,7 @@ class SocialService {
     }
     final res = await AuthedHttp.run(
       () => _client
-          .get(
-            Uri.parse('$baseUrl/groups/$id/meetings'),
-            headers: _headers(),
-          )
+          .get(Uri.parse('$baseUrl/groups/$id/meetings'), headers: _headers())
           .timeout(const Duration(seconds: 10)),
     );
     if (res.statusCode != 200) throw _toError(res);
