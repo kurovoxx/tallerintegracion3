@@ -7,6 +7,7 @@ import '../../features/academic/grade_calculator_screen.dart';
 import '../../features/academic/profile_screen.dart';
 import '../../features/academic/schedule_screen.dart';
 import '../../features/groups/groups_screen.dart';
+import '../../features/notifications/notification_inbox.dart';
 import '../../features/notes/all_notes_screen.dart';
 import '../models/social_models.dart';
 import '../services/profile_service.dart';
@@ -79,6 +80,13 @@ class _MainShellState extends State<MainShell> {
 
   void _onGroupsChanged() {
     _loadSidebar();
+  }
+
+  void _openInbox() async {
+    await showDialog(
+      context: context,
+      builder: (_) => NotificationInbox(service: _social),
+    );
   }
 
   @override
@@ -186,6 +194,11 @@ class _MainShellState extends State<MainShell> {
       label: 'Perfil de Usuario',
       section: 'ESPACIO DE TRABAJO GENERAL',
     ),
+    _NavItem(
+      icon: Icons.notifications_rounded,
+      label: 'Notificaciones',
+      section: 'ESPACIO DE TRABAJO GENERAL',
+    ),
   ];
 
   /// Selecciona una sección y cierra el drawer si está abierto.
@@ -193,6 +206,11 @@ class _MainShellState extends State<MainShell> {
     final scaffold = _scaffoldKey.currentState;
     if (scaffold != null && scaffold.isDrawerOpen) {
       Navigator.of(context).pop();
+    }
+    // Notificaciones es el último ítem: abre el diálogo en lugar de cambiar de página.
+    if (index == _navItems.length - 1) {
+      _openInbox();
+      return;
     }
     setState(() => _selectedIndex = index);
   }
@@ -397,7 +415,6 @@ class _MainShellState extends State<MainShell> {
             },
           ),
         ),
-        _buildGroupsFooter(isCollapsed: isCollapsed),
         const Divider(
           color: AppColors.border,
           thickness: AppDimens.borderWidth,
@@ -405,173 +422,6 @@ class _MainShellState extends State<MainShell> {
         ),
         _buildProfileFooter(isCollapsed: isCollapsed),
       ],
-    );
-  }
-
-  // Barra lateral global: grupos del overview.
-  // Ver back/social/internal/handler/http/view_handler.go:29 y model/views.go.
-  Widget _buildGroupsFooter({required bool isCollapsed}) {
-    if (isCollapsed) {
-      final count = _overview?.groupsCount;
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: Center(
-          child: _loadingSidebar
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : InkWell(
-                  onTap: () => _onSelectPage(_groupsIndex),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppColors.accentYellow,
-                      border: Border.all(
-                        color: AppColors.border,
-                        width: AppDimens.borderWidth,
-                      ),
-                      borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-                    ),
-                    child: Text(
-                      '${count ?? '·'}',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w900,
-                        fontSize: 11,
-                      ),
-                    ),
-                  ),
-                ),
-        ),
-      );
-    }
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: AppColors.bg,
-        border: Border.all(
-          color: AppColors.border,
-          width: AppDimens.borderWidth,
-        ),
-        borderRadius: BorderRadius.circular(AppDimens.radius),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'MIS GRUPOS',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0.6,
-                    color: AppColors.muted,
-                  ),
-                ),
-              ),
-              InkWell(
-                onTap: _loadingSidebar ? null : _loadSidebar,
-                child: const Icon(
-                  Icons.refresh_rounded,
-                  size: 14,
-                  color: AppColors.text,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          if (_loadingSidebar)
-            const Center(
-              child: SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            )
-          else if (_sidebarError != null)
-            Text(
-              _sidebarError!,
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: AppColors.mutedStrong,
-              ),
-            )
-          else if (_overview == null || _overview!.sidebarGroups.isEmpty)
-            const Text(
-              'Sin grupos. Crea uno en Grupos.',
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: AppColors.mutedStrong,
-              ),
-            )
-          else ...[
-            Builder(
-              builder: (context) {
-                final o = _overview!;
-                return Text(
-                  '${o.groupsCount} ${o.groupsCount == 1 ? 'grupo' : 'grupos'} · '
-                  '${o.adminGroupsCount} como admin',
-                  style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.text,
-                  ),
-                );
-              },
-            ),
-            const SizedBox(height: 6),
-            for (final g in _overview!.sidebarGroups.take(5))
-              InkWell(
-                onTap: () => _onSelectPage(_groupsIndex),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.groups_rounded,
-                        size: 13,
-                        color: AppColors.text,
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          g.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.text,
-                          ),
-                        ),
-                      ),
-                      Text(
-                        g.role,
-                        style: const TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.mutedStrong,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-          ],
-        ],
-      ),
     );
   }
 

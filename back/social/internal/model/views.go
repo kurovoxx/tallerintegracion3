@@ -91,6 +91,9 @@ type MeetingNotificationItem struct {
 	MeetingID   string
 	GroupID     string
 	Title       string
+	Description *string
+	Link        *string
+	GroupName   string
 	ScheduledAt time.Time
 	ReadAt      *time.Time
 	CreatedAt   time.Time

@@ -6,6 +6,7 @@
 // canónicos de core/theme/app_theme.dart y core/widgets/neobrutalism.dart.
 
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/common_widgets.dart';
 import '../../core/models/social_models.dart';
@@ -135,6 +136,16 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
     final time =
         '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
     return '$date · $time';
+  }
+
+  Future<void> _openMeetingLink(String link) async {
+    final uri = Uri.tryParse(link);
+    if (uri == null) return;
+    final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (opened || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('No se pudo abrir el enlace de la reunión.')),
+    );
   }
 
   Future<void> _pickDate() async {
@@ -575,15 +586,16 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                               ],
                               if (m.link != null &&
                                   m.link!.trim().isNotEmpty) ...[
-                                const SizedBox(height: 4),
-                                Text(
-                                  m.link!.trim(),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w800,
-                                    color: AppColors.accentBlue,
+                                const SizedBox(height: 6),
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: TextButton.icon(
+                                    onPressed: () => _openMeetingLink(m.link!),
+                                    icon: const Icon(
+                                      Icons.link_rounded,
+                                      size: 16,
+                                    ),
+                                    label: const Text('Abrir enlace'),
                                   ),
                                 ),
                               ],

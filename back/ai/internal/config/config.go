@@ -23,6 +23,8 @@ type Config struct {
 	GeminiMaxFileSizeMB int
 	// Límite de conversiones por usuario por hora.
 	GeminiRateLimit int
+	// Clave secreta HS256 para validar JWT de usuario en endpoints de IA.
+	JWTSecret string
 	// Clave secreta compartida para endpoints internos servicio-a-servicio.
 	InternalAPIKey string
 	// DATABASE_URL opcional: si se provee, el servicio puede persistir
@@ -57,6 +59,7 @@ func Load() *Config {
 		GeminiModel:        os.Getenv("GEMINI_MODEL"),
 		GeminiMaxFileSizeMB: 10,
 		GeminiRateLimit:    5,
+		JWTSecret:          os.Getenv("JWT_SECRET"),
 		InternalAPIKey:     os.Getenv("INTERNAL_API_KEY"),
 		DatabaseURL:        os.Getenv("DATABASE_URL"),
 	}
@@ -72,6 +75,10 @@ func Load() *Config {
 	if cfg.InternalAPIKey == "" {
 		cfg.InternalAPIKey = "dev-internal-key-change-me"
 		log.Print("config: INTERNAL_API_KEY no seteado, usando fallback (no usar en prod)")
+	}
+	if cfg.JWTSecret == "" {
+		cfg.JWTSecret = "dev-jwt-secret-change-me"
+		log.Print("config: JWT_SECRET no seteado, usando fallback (no usar en prod)")
 	}
 	return cfg
 }

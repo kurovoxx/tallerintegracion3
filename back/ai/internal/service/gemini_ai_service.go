@@ -103,6 +103,28 @@ func (rt *rateTracker) Allow(key string, limit int) bool {
 	return true
 }
 
+// Remaining devuelve cuántas conversiones le quedan al identificador en la hora actual.
+func (rt *rateTracker) Remaining(key string, limit int) int {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-1 * time.Hour)
+
+	var count int
+	for _, t := range rt.store[key] {
+		if t.After(cutoff) {
+			count++
+		}
+	}
+
+	remaining := limit - count
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
 // GeminiAIService implementa AIService usando la API REST de Gemini.
 type GeminiAIService struct {
 	cfg        *config.Config

@@ -59,6 +59,12 @@ func (n *CalendarMeetingNotifier) OnMeetingCreated(ctx context.Context, meeting 
 	if meeting.Description.Valid {
 		description = meeting.Description.String
 	}
+	if meeting.Link.Valid && meeting.Link.String != "" {
+		if description != "" {
+			description += "\n\n"
+		}
+		description += meeting.Link.String
+	}
 	start := time.Now().Add(5 * time.Minute)
 	if meeting.ScheduledAt.Valid {
 		start = meeting.ScheduledAt.Time

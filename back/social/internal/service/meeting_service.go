@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -17,12 +18,12 @@ var (
 	ErrMeetingNotFound     = errors.New("meeting not found")
 	ErrScheduledAtRequired = errors.New("scheduled_at is required")
 	ErrInvalidScheduledAt  = errors.New("invalid scheduled_at: must be RFC3339 (e.g. 2026-09-20T15:00:00Z)")
-	// ErrMeetingLinkTooLong acota el enlace/sala al tamaño de la columna.
-	ErrMeetingLinkTooLong = errors.New("meeting link is too long: max 500")
 	// ErrInvalidAttendeeEmail exige emails válidos en attendees (regla: invitados por email).
 	ErrInvalidAttendeeEmail = errors.New("invalid attendee email")
 	// ErrTooManyAttendees acota la lista (Google acepta cientos; 50 es margen sano).
 	ErrTooManyAttendees = errors.New("too many attendees: max 50")
+	// ErrInvalidMeetingLink exige http/https válido en el enlace/sala (opcional).
+	ErrInvalidMeetingLink = errors.New("invalid link: must be an http(s) URL (max 1000 characters)")
 )
 
 // maxAttendees acota los invitados por reunión.
@@ -142,6 +143,8 @@ func parseMeetingDescription(description *string) pgtype.Text {
 	return d
 }
 
+// parseMeetingLink valida y normaliza el enlace/sala de la reunión (opcional).
+// Solo se aceptan URLs http/https; vacío se guarda como NULL.
 func parseMeetingLink(link *string) (pgtype.Text, error) {
 	var l pgtype.Text
 	if link == nil {
@@ -151,11 +154,15 @@ func parseMeetingLink(link *string) (pgtype.Text, error) {
 	if trimmed == "" {
 		return l, nil
 	}
-	if len(trimmed) > 500 {
-		return l, ErrMeetingLinkTooLong
+	if len(trimmed) > 1000 {
+		return l, ErrInvalidMeetingLink
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return l, ErrInvalidMeetingLink
 	}
 	if err := l.Scan(trimmed); err != nil {
-		return pgtype.Text{}, ErrMeetingLinkTooLong
+		return l, ErrInvalidMeetingLink
 	}
 	return l, nil
 }
@@ -193,11 +200,11 @@ func (s *MeetingService) CreateMeeting(ctx context.Context, groupID, userID, tit
 	if err != nil {
 		return sqlc.SocialMeeting{}, err
 	}
-	meetingLink, err := parseMeetingLink(link)
+	emails, err := parseAttendees(attendees)
 	if err != nil {
 		return sqlc.SocialMeeting{}, err
 	}
-	emails, err := parseAttendees(attendees)
+	meetingLink, err := parseMeetingLink(link)
 	if err != nil {
 		return sqlc.SocialMeeting{}, err
 	}

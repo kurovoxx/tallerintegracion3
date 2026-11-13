@@ -177,35 +177,40 @@ Levantar `back/ai` como un microservicio Go independiente, con su propio puerto,
 
 ### Objetivo
 
-Integrar el microservicio IA con la API de Google Gemini para convertir archivos PDF a Markdown. El usuario sube un PDF, el servicio lo envía a Gemini (`gemini-1.5-flash`), recibe el Markdown y se lo devuelve al cliente. No guarda la nota en Notes/Drive todavía (eso se pospone para una tarea posterior).
+Integrar el microservicio IA con la API de Google Gemini para convertir archivos PDF a Markdown. El usuario sube un PDF, el servicio lo envía a Gemini (`gemini-3.5-flash`), recibe el Markdown y el front lo muestra en un diálogo con la opción de guardarlo como nota en Notes (contenido en Drive vía el flujo normal de Notes).
 
 ### Alcance acordado
 
 | Aspecto | Valor |
 |---------|-------|
 | Endpoint | `POST /ai/pdf-to-markdown` (multipart/form-data, campo `file`) |
-| Modelo Gemini | `gemini-1.5-flash` (nivel gratuito en Google AI Studio) |
+| Auth | JWT del usuario (`Authorization: Bearer <token>`); el `user_id` sale del token |
+| Modelo Gemini | `gemini-3.5-flash` (nivel gratuito de Google AI Studio) |
 | Tamaño máximo PDF | 10 MB |
-| Rate limit | 5 conversiones por hora por identificador (archivo/IP) |
+| Rate limit | 5 conversiones por hora **por usuario autenticado** (mapa en memoria `user_id → timestamps`) |
 | Timeout de llamada | 60 segundos |
 | Reintentos | 2 (backoff: 2s, 4s ante 429/503) |
-| Guardar en Notes | Pospuesto (solo convierte y devuelve el texto) |
+| Guardar en Notes | Sí: el front guarda el Markdown resultante como nota nueva desde el diálogo |
 
 ### Archivos creados
 
 | Archivo | Contenido |
 |---------|-----------|
-| `back/ai/internal/service/gemini_ai_service.go` | Implementación real de `AIService` que llama a la API REST de Gemini. Incluye validación de tamaño (10 MB), rate limit en memoria, reintentos (2) y timeout (60s). |
-| `back/ai/internal/handler/http/pdf_handler.go` | Handler `POST /ai/pdf-to-markdown`. Recibe `multipart/form-data`, valida que sea PDF, llama al servicio y devuelve `{markdown, filename, size_bytes, provider}`. |
+| `back/ai/internal/service/gemini_ai_service.go` | Implementación real de `AIService` que llama a la API REST de Gemini. Incluye validación de tamaño (10 MB), rate limit por usuario, reintentos (2), timeout (60s) y saneamiento de errores para no filtrar la API key. |
+| `back/ai/internal/service/rate_limiter.go` | Rate limiter en memoria por `user_id` (5/hora) con conteo de restantes. |
+| `back/ai/internal/middleware/auth_middleware.go` | Validación JWT HS256 del mismo secreto que Auth; inyecta `user_id` en el contexto. |
+| `back/ai/internal/handler/http/pdf_handler.go` | Handler `POST /ai/pdf-to-markdown`. Exige JWT, aplica rate limit, recibe `multipart/form-data`, valida que sea PDF, llama al servicio y devuelve `{markdown, filename, size_bytes, provider, remaining}`. |
+| `front/lib/core/services/ai_service.dart` | Cliente del servicio IA; envía `Authorization: Bearer <token>` y clasifica errores (SSL, 413, 429). |
+| `front/lib/core/services/ai_service_io.dart` / `ai_service_web.dart` | Clientes HTTP condicionales (certificados solo en IO). |
 
 ### Archivos modificados
 
 | Archivo | Cambio |
 |---------|--------|
-| `back/ai/internal/config/config.go` | Agregado `GeminiModel`, `GeminiMaxFileSizeMB` (default 10), `GeminiRateLimit` (default 5). |
+| `back/ai/internal/config/config.go` | Agregado `GeminiModel` (default `gemini-3.5-flash`), `GeminiMaxFileSizeMB` (default 10), `GeminiRateLimit` (default 5) y `JWTSecret` (fallback `JWT`). |
 | `back/ai/internal/service/ai_service.go` | Agregado `ConvertPDFToMarkdown(pdfData []byte, filename string) (string, error)` a la interfaz `AIService`. Implementado en `MockAIService` (respuesta simulada) y `GeminiAIService` (llamada real a Gemini). |
-| `back/ai/cmd/server/main.go` | Wire: si `GEMINI_API_KEY` está configurada, usa `GeminiAIService`; si no, `MockAIService`. Registrada ruta `POST /ai/pdf-to-markdown`. |
-| `.env.example` | Agregado `GEMINI_MODEL=gemini-1.5-flash`, `GEMINI_MAX_FILE_SIZE_MB=10`, `GEMINI_RATE_LIMIT=5`. |
+| `back/ai/cmd/server/main.go` | Wire: si `GEMINI_API_KEY` está configurada, usa `GeminiAIService`; si no, `MockAIService`. Registra auth + rate limiter en `POST /ai/pdf-to-markdown`. |
+| `.env.example` | Agregado `GEMINI_MODEL=gemini-3.5-flash`, `GEMINI_MAX_FILE_SIZE_MB=10`, `GEMINI_RATE_LIMIT=5`, `JWT_SECRET`. |
 | `docker-compose.yml` | Ya tenía `GEMINI_API_KEY` en el servicio `ai`; no requiere cambios adicionales. |
 | `k8s/manifests.yaml` | Ya tenía `GEMINI_API_KEY` desde el secret `ti3-secrets`; no requiere cambios adicionales. |
 
@@ -213,27 +218,26 @@ Integrar el microservicio IA con la API de Google Gemini para convertir archivos
 
 | Método | Ruta | Responde |
 |--------|------|----------|
-| `POST` | `/ai/pdf-to-markdown` | Recibe archivo PDF (multipart). Devuelve `{markdown, filename, size_bytes, provider}`. Rechaza si no es PDF, si excede 10 MB, o si se supera el rate limit. |
+| `POST` | `/ai/pdf-to-markdown` | Requiere JWT. Recibe archivo PDF (multipart). Devuelve `{markdown, filename, size_bytes, provider, remaining}`. Rechaza con 401 sin token, 400 si no es PDF, 413 si excede el límite del gateway, 429 si se agotan las 5 conversiones/hora. |
 
 ### Cómo interactúa con el resto del proyecto
 
 - Con **4_5_5**: `back/ai` ya existe; esta tarea agrega la integración real con Gemini sobre el scaffold existente.
-- Con **front**: el front puede llamar a `POST /ai/pdf-to-markdown` vía el gateway de nginx (prefijo `/api-ai` por definir).
-- Con **Notes/Drive**: por ahora no hay integración. El Markdown se devuelve al cliente; el guardado como nota en Notes/Drive se pospone.
+- Con **front**: botón "PDF → Markdown" en "Todas las Notas" (`all_notes_screen.dart`), con estado de carga (palabra aleatoria) y contador de conversiones restantes. `AiService` envía el JWT del usuario.
+- Con **Notes/Drive**: al confirmar "Guardar como nota", el front crea la nota con el Markdown; Notes persiste el contenido como Markdown en el Drive del autor.
 
 ### Verificación
 
 - `go build ./...` + `go vet ./...` en `back/ai`: OK.
 - Servidor arranca en `:8084` y responde `/health`, `/health/db`, `/ai/generate`, `/ai/pdf-to-markdown`.
 - Validación de archivo: rechaza archivos no-PDF con 400, requiere campo `file`.
+- Auth: sin `Authorization` responde 401; el rate limit se cuenta por `user_id` del JWT.
 - Modo mock: si no hay `GEMINI_API_KEY`, usa `MockAIService` (respuesta simulada sin llamar a Gemini).
 - Modo Gemini: si hay `GEMINI_API_KEY`, llama a la API REST de Gemini con reintentos y timeout.
 
 ### No entra
 
-- Guardar el Markdown como nota en Notes (pospuesto).
-- Subir el Markdown a Google Drive (pospuesto).
-- Auth/JWT en el endpoint (por ahora público; se añadirá cuando sea necesario).
+- Subir el Markdown a Google Drive directamente desde el servicio IA (lo hace Notes al crear la nota).
 - SDK oficial de Google: se usa la API REST directamente con `net/http`.
 
 ## 4_5_X — Editar grupo: nombre y descripción (backend + front)
@@ -291,3 +295,61 @@ Ninguno nuevo (todo es modificación de existentes).
 - Editar otros campos del grupo (owner, notes_restricted_to_staff, invite_token).
 - Historial de cambios de nombre/descripción.
 - Notificar a miembros cuando el grupo es editado.
+
+## 4_5_Y — Notificación de reunión con datos completos y enlace
+
+### Objetivo
+
+Cuando un administrador agenda una reunión, cada miembro del grupo (excepto el creador) recibe una notificación in-app con todo lo necesario para entenderla sin abrir el grupo: **nombre del grupo, título, descripción, fecha y hora de la reunión, y enlace/sala si se indicó**.
+
+Antes solo se veía el título y la hora de creación de la notificación; el enlace del formulario se descartaba porque no se enviaba al backend ni existía columna donde guardarlo.
+
+### Alcance
+
+| Aspecto | Valor |
+|---------|-------|
+| Endpoint para agendar | `POST /groups/:id/meetings` ahora acepta `link?` (URL http/https, máximo 1000 caracteres) |
+| Persistencia | Nueva columna `social.meetings.link` (`varchar(1000)`, nullable) + migración `004_meeting_link.sql` |
+| Fan-out | Sin cambios: una notificación por miembro del grupo excepto el creador (regla 4.8) |
+| Respuesta `GET /notifications/me` | Incluye `group_name`, `title`, `description`, `link`, `scheduled_at`, `read`, `read_at`, `created_at` |
+| Front | La bandeja muestra grupo, título, "Reunión: fecha · hora", descripción y botón "Abrir enlace" cuando existe |
+
+### Flujo de los datos
+
+1. El admin llena el formulario "Agendar reunión"; el campo **ENLACE / SALA** viaja en el body del POST.
+2. `meeting_service.CreateMeeting` valida la URL (`parseMeetingLink`: solo `http`/`https`, máx. 1000) y la guarda junto con título, descripción y `scheduled_at`.
+3. `CreateMeetingWithNotifications` crea la reunión y, en la misma transacción, una fila en `social.meeting_notifications` por cada miembro distinto del creador.
+4. `ListNotificationsByUser` hace `JOIN` con `social.meetings` y `social.groups`, por lo que la notificación siempre refleja los datos actuales de la reunión (incluidas notificaciones ya existentes).
+5. El front (`NotificationInbox`) pinta los campos y abre el enlace con `url_launcher`; el mismo enlace aparece en las próximas reuniones del grupo.
+
+### Archivos modificados
+
+| Archivo | Cambio |
+|---------|--------|
+| `back/social/db/schema.sql` | Columna `link` en `social.meetings`. |
+| `back/social/db/migrations/004_meeting_link.sql` | `ALTER TABLE ... ADD COLUMN IF NOT EXISTS link`. |
+| `docker/postgres/init.sql` | Columna `link` para instalaciones locales nuevas. |
+| `back/social/db/queries/meetings.sql` + `internal/repository/sqlc/meetings.sql.go` / `models.go` | `CreateMeeting` inserta y devuelve `link`; `SocialMeeting.Link`. |
+| `back/social/internal/service/meeting_service.go` | `parseMeetingLink`, error `ErrInvalidMeetingLink` y nuevo parámetro en `CreateMeeting`. |
+| `back/social/internal/service/meeting_calendar_notifier.go` | El enlace se agrega al final de la descripción del evento de Google Calendar. |
+| `back/social/internal/handler/http/meeting_handler.go` | Campo `link` en `CreateMeetingRequest` y mapeo de error a 400. |
+| `back/social/internal/model/views.go` | `MeetingNotificationItem` con `Description`, `Link`, `GroupName`; `MeetingItem.Link`. |
+| `back/social/internal/repository/meeting_repository.go` | `ListNotificationsByUser` con `JOIN social.groups` y campos nuevos. |
+| `back/social/internal/handler/http/notification_handler.go` | `notificationToJSON` emite `group_name`, `description` y `link`. |
+| `front/lib/core/services/social_service.dart` | `createMeeting` acepta y envía `link`. |
+| `front/lib/features/workspace/schedule_meeting_screen.dart` | Envía el campo ENLACE / SALA y muestra "Abrir enlace" en las próximas reuniones. |
+| `front/lib/features/notifications/notification_inbox.dart` | Muestra grupo, hora de la reunión y descripción; botón/ícono para abrir el enlace. |
+| `front/lib/core/models/social_models.dart` | `MeetingItem.link`. |
+
+### Verificación
+
+- `go build ./...` + `go vet ./...` en `back/social`: OK.
+- `go test ./internal/service ./internal/handler/http -count=1`: OK.
+- `flutter analyze` en los archivos tocados: sin errores nuevos.
+- Migración en despliegue: aplicar `back/social/db/migrations/004_meeting_link.sql` antes de desplegar la imagen.
+
+### No entra
+
+- Recordatorios antes de la reunión (solo se notifica al agendar).
+- Editar el enlace de una reunión ya creada.
+- Reenviar notificaciones si cambia la reunión.

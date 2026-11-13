@@ -45,6 +45,37 @@ func TestMeetingServiceSeam_CreateListNotifications(t *testing.T) {
 	}
 }
 
+func TestMeetingServiceSeam_LinkValidaciones(t *testing.T) {
+	gid, admin, _, _ := meetingSeamSetup()
+	store := NewMemoryMeetingStore()
+	store.AddGroup(gid, admin)
+	svc := NewMeetingService(store, NoopMeetingCreatedNotifier{})
+	ctx := context.Background()
+
+	link := "https://meet.google.com/abc-defg-hij"
+	m, err := svc.CreateMeeting(ctx, gid, admin, "Con enlace", nil, &link, "2026-09-25T15:00:00Z", nil, nil)
+	if err != nil {
+		t.Fatalf("un enlace válido no debe fallar: %v", err)
+	}
+	if !m.Link.Valid || m.Link.String != link {
+		t.Fatalf("se esperaba link %q, got %+v", link, m.Link)
+	}
+
+	bad := "javascript:alert(1)"
+	if _, err := svc.CreateMeeting(ctx, gid, admin, "Malo", nil, &bad, "2026-09-25T15:00:00Z", nil, nil); err != ErrInvalidMeetingLink {
+		t.Fatalf("se esperaba ErrInvalidMeetingLink, got %v", err)
+	}
+
+	empty := "   "
+	m, err = svc.CreateMeeting(ctx, gid, admin, "Sin enlace", nil, &empty, "2026-09-25T15:00:00Z", nil, nil)
+	if err != nil {
+		t.Fatalf("un enlace vacío es opcional: %v", err)
+	}
+	if m.Link.Valid {
+		t.Fatalf("un enlace vacío debe quedar NULL, got %+v", m.Link)
+	}
+}
+
 func TestMeetingServiceSeam_Errores(t *testing.T) {
 	gid, admin, _, stranger := meetingSeamSetup()
 	store := NewMemoryMeetingStore()
@@ -63,8 +94,8 @@ func TestMeetingServiceSeam_Errores(t *testing.T) {
 	if _, err := svc.CreateMeeting(context.Background(), gid, admin, "  ", nil, nil, "2026-09-25T15:00:00Z", nil, nil); err != ErrInvalidTitle {
 		t.Fatalf("título vacío debe dar ErrInvalidTitle, got %v", err)
 	}
-	longLink := "https://meet.google.com/" + strings.Repeat("a", 500)
-	if _, err := svc.CreateMeeting(context.Background(), gid, admin, "X", nil, &longLink, "2026-09-25T15:00:00Z", nil, nil); err != ErrMeetingLinkTooLong {
-		t.Fatalf("enlace largo debe dar ErrMeetingLinkTooLong, got %v", err)
+	longLink := "https://meet.google.com/" + strings.Repeat("a", 1000)
+	if _, err := svc.CreateMeeting(context.Background(), gid, admin, "X", nil, &longLink, "2026-09-25T15:00:00Z", nil, nil); err != ErrInvalidMeetingLink {
+		t.Fatalf("enlace largo debe dar ErrInvalidMeetingLink, got %v", err)
 	}
 }

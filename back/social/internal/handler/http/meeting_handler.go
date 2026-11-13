@@ -26,7 +26,7 @@ func NewMeetingHandler(svc *service.MeetingService) *MeetingHandler {
 type CreateMeetingRequest struct {
 	Title         string   `json:"title" binding:"required,max=300"`
 	Description   *string  `json:"description"`
-	Link          *string  `json:"link"`
+	Link          *string  `json:"link" binding:"omitempty,max=1000"`
 	ScheduledAt   string   `json:"scheduled_at" binding:"required"`
 	NotifyDiscord *bool    `json:"notify_discord"`
 	Attendees     []string `json:"attendees"`
@@ -80,9 +80,9 @@ func (h *MeetingHandler) CreateMeeting(c *gin.Context) {
 			errors.Is(err, service.ErrTitleTooLong),
 			errors.Is(err, service.ErrScheduledAtRequired),
 			errors.Is(err, service.ErrInvalidScheduledAt),
-			errors.Is(err, service.ErrMeetingLinkTooLong),
 			errors.Is(err, service.ErrInvalidAttendeeEmail),
-			errors.Is(err, service.ErrTooManyAttendees):
+			errors.Is(err, service.ErrTooManyAttendees),
+			errors.Is(err, service.ErrInvalidMeetingLink):
 			fail(c, "CreateMeeting", http.StatusBadRequest, "invalid_body", err.Error())
 		default:
 			log.Printf("CreateMeeting internal error: %v", err)
