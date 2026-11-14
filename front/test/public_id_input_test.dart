@@ -62,4 +62,26 @@ void main() {
       });
     });
   });
+
+  group('publicProfileLink', () {
+    test('construye sigma-academy://perfil/<public_id> normalizado', () {
+      expect(publicProfileLink(id), 'sigma-academy://perfil/$id');
+      expect(
+        publicProfileLink('  ${id.toUpperCase()} '),
+        'sigma-academy://perfil/$id',
+      );
+    });
+
+    test('nunca usa un UUID interno ni un valor inválido', () {
+      expect(publicProfileLink('550e8400-e29b-41d4-a716-446655440000'), isNull);
+      expect(publicProfileLink(''), isNull);
+      expect(publicProfileLink('a8kp92mqwx7l'), isNull);
+    });
+
+    test('el enlace generado vuelve al mismo ID en el buscador', () {
+      final link = publicProfileLink(id)!;
+      expect(parsePublicIdInput(link).publicId, id);
+      expect(parsePublicIdInput('Mira mi perfil: $link').publicId, id);
+    });
+  });
 }

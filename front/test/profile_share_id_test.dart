@@ -126,49 +126,114 @@ void main() {
     await SessionManager.clear();
   });
 
-  testWidgets(
-    '«Mi ID de perfil» copia solo el public_id y no hay botón compartir',
-    (tester) async {
-      await SessionManager.saveSession(_tokenWithUserId('user-abc-123'), {
-        'id': 'user-abc-123',
-      });
-      final clipboardWrites = <String>[];
+  const sessionUuid = '550e8400-e29b-41d4-a716-446655440000';
+
+  List<String> captureClipboard(WidgetTester tester) {
+    final writes = <String>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          final args = call.arguments as Map<dynamic, dynamic>;
+          writes.add(args['text'] as String);
+        }
+        if (call.method == 'Clipboard.getData') {
+          return <String, dynamic>{'text': writes.isEmpty ? null : writes.last};
+        }
+        return null;
+      },
+    );
+    addTearDown(() {
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
         SystemChannels.platform,
-        (call) async {
-          if (call.method == 'Clipboard.setData') {
-            final args = call.arguments as Map<dynamic, dynamic>;
-            clipboardWrites.add(args['text'] as String);
-          }
-          return null;
-        },
+        null,
       );
-      addTearDown(() {
-        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-          SystemChannels.platform,
-          null,
-        );
+    });
+    return writes;
+  }
+
+  testWidgets(
+    '«Compartir perfil» copia el enlace con el public_id, nunca el UUID',
+    (tester) async {
+      await SessionManager.saveSession(_tokenWithUserId(sessionUuid), {
+        'id': sessionUuid,
       });
+      final clipboardWrites = captureClipboard(tester);
       final service = _profileService();
       addTearDown(service.dispose);
 
       await _pumpProfile(tester, service);
-      expect(find.byKey(const ValueKey('profile-share-id')), findsNothing);
-      expect(find.byTooltip('Compartir perfil'), findsNothing);
-      expect(find.text('MI ID DE PERFIL'), findsOneWidget);
-      expect(find.text('a8kp92mqwx7r'), findsOneWidget);
+      // La tarjeta «Mi ID de perfil» ya no existe: se comparte con el botón.
+      expect(find.text('MI ID DE PERFIL'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('profile-copy-public-id')),
+        findsNothing,
+      );
+      expect(find.byTooltip('Compartir perfil'), findsOneWidget);
 
-      await tester.tap(find.byKey(const ValueKey('profile-copy-public-id')));
+      await tester.tap(find.byKey(const ValueKey('profile-share-link')));
       await tester.pumpAndSettle();
 
-      expect(clipboardWrites, ['a8kp92mqwx7r']);
+      expect(clipboardWrites, ['sigma-academy://perfil/a8kp92mqwx7r']);
+      expect(clipboardWrites.single, isNot(contains(sessionUuid)));
       expect(
-        find.text('ID de perfil copiado al portapapeles.'),
+        find.text('Enlace del perfil copiado al portapapeles.'),
         findsOneWidget,
       );
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('sin public_id no se copia nada y se informa el error', (
+    tester,
+  ) async {
+    await SessionManager.saveSession(_tokenWithUserId(sessionUuid), {
+      'id': sessionUuid,
+    });
+    final clipboardWrites = captureClipboard(tester);
+    final service = _profileService(publicId: null);
+    addTearDown(service.dispose);
+
+    await _pumpProfile(tester, service);
+    await tester.tap(find.byKey(const ValueKey('profile-share-link')));
+    await tester.pumpAndSettle();
+
+    expect(clipboardWrites, isEmpty);
+    expect(
+      find.text(
+        'No se pudo obtener el enlace de tu perfil. Vuelve a iniciar sesión.',
+      ),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('el enlace copiado se pega en «Buscar perfil» y abre el perfil', (
+    tester,
+  ) async {
+    await SessionManager.saveSession(_tokenWithUserId(sessionUuid), {
+      'id': sessionUuid,
+    });
+    final clipboardWrites = captureClipboard(tester);
+    final service = _profileService();
+    addTearDown(service.dispose);
+
+    await _pumpProfile(tester, service);
+    await tester.tap(find.byKey(const ValueKey('profile-share-link')));
+    await tester.pumpAndSettle();
+    expect(find.text('Pega aquí el enlace del perfil'), findsOneWidget);
+    expect(
+      find.text(
+        'Encuentra el perfil de otra persona utilizando el enlace que te compartió.',
+      ),
+      findsOneWidget,
+    );
+
+    await _search(tester, clipboardWrites.single);
+
+    expect(find.byType(PublicProfileScreen), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('buscar con el enlace interno abre el perfil encontrado', (
     tester,
