@@ -29,8 +29,8 @@ typedef NoteMarkdownImageBuilder =
 /// chips de PDF.
 ///
 /// Es el mismo renderizador que usa el visor de TODAS LAS NOTAS, extraído para
-/// que la búsqueda por ID («VER APUNTE») muestre Markdown real en lugar del
-/// texto crudo. No interpreta HTML: todo lo que no es una construcción Markdown
+/// que la vista previa de apuntes de otros perfiles («Ver apunte») muestre
+/// Markdown real en lugar del texto crudo. No interpreta HTML: todo lo que no es una construcción Markdown
 /// soportada se pinta como texto plano, así que `<script>` nunca se ejecuta.
 class NoteMarkdownBody extends StatelessWidget {
   const NoteMarkdownBody({

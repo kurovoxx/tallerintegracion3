@@ -7499,6 +7499,17 @@ Widget _resourceInfoRow(String label, String value, {bool mono = false}) {
   );
 }
 
+/// Abre el visor de recursos (imagen ampliada o documento/PDF servido por el
+/// endpoint autenticado de adjuntos) fuera de [AllNotesScreen], por ejemplo
+/// desde la vista previa de un apunte de otro perfil.
+Future<void> showNoteResourceViewer(
+  BuildContext context,
+  Map<String, dynamic> resource,
+) => showNeobrutalistDialog<void>(
+  context: context,
+  dialog: _ResourceViewerDialog(resource: resource),
+);
+
 /// Visor de recurso: imagen grande (con fallback neobrutalista) o ficha técnica
 /// del documento con apertura real en el visor del sistema y copia a descargas.
 class _ResourceViewerDialog extends StatefulWidget {
