@@ -85,6 +85,7 @@ services:
       STORAGE_MODE: mock
       SOCIAL_SERVICE_URL: http://social:8083
       SOCIAL_GRPC_ADDR: social:9083
+      IDENTITY_GRPC_ADDR: auth:9080
       INTERNAL_API_KEY: ti3-e2e-internal-key
       GOOGLE_CLIENT_ID: ""
       GOOGLE_CLIENT_SECRET: ""
