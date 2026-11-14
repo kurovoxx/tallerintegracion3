@@ -19,10 +19,63 @@ CREATE SCHEMA IF NOT EXISTS ai;
 -- IDENTITY SERVICE
 -- =====================================================
 
+-- H-05: public_id de 12 caracteres Crockford Base32 (60 bits). El DEFAULT usa
+-- el generador con reintento; la UNIQUE y el CHECK son la garantía final.
+CREATE OR REPLACE FUNCTION identity.generate_public_id()
+RETURNS text
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+DECLARE
+    alphabet CONSTANT text := '0123456789abcdefghjkmnpqrstvwxyz';
+    raw bytea := gen_random_bytes(8);
+    value bigint := 0;
+    result text := '';
+BEGIN
+    FOR i IN 0..6 LOOP
+        value := (value << 8) | get_byte(raw, i);
+    END LOOP;
+    value := (value << 4) | (get_byte(raw, 7) >> 4);
+
+    FOR i IN 0..11 LOOP
+        result := result || substr(
+            alphabet,
+            (((value >> (55 - i * 5)) & 31) + 1)::int,
+            1
+        );
+    END LOOP;
+    RETURN result;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION identity.generate_unique_public_id()
+RETURNS text
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+DECLARE
+    candidate text;
+BEGIN
+    FOR attempt IN 1..10 LOOP
+        candidate := identity.generate_public_id();
+        IF NOT EXISTS (
+            SELECT 1 FROM identity.users WHERE public_id = candidate
+        ) THEN
+            RETURN candidate;
+        END IF;
+    END LOOP;
+    RAISE EXCEPTION 'no se pudo generar un public_id único tras 10 intentos';
+END;
+$$;
+
 CREATE TABLE identity.users (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     email varchar(255) NOT NULL UNIQUE,
     password_hash varchar(255) NOT NULL,
+    public_id text NOT NULL DEFAULT identity.generate_unique_public_id()
+        CONSTRAINT users_public_id_key UNIQUE
+        CONSTRAINT users_public_id_format
+            CHECK (public_id ~ '^[0-9a-hj-km-np-tv-z]{12}$'),
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
