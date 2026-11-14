@@ -18,6 +18,7 @@ import '../../core/widgets/neobrutalism.dart';
 import '../auth/account_deletion_dialog.dart';
 import '../auth/google_drive_service.dart';
 import 'profile_photo_crop.dart';
+import 'public_profile_screen.dart';
 
 const String kSubjectApproved = 'approved';
 const String kSubjectInProgress = 'in_progress';
@@ -98,6 +99,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // Viaja como login_hint en OAuth y como expected_email al backend,
   // que lo compara con el email real de userinfo (anti cuenta equivocada).
   final _googleEmailController = TextEditingController();
+  final _publicProfileSearchController = TextEditingController();
+  String? _publicProfileSearchError;
   String _draftVisibility = 'public';
   _DriveStatus _driveStatus = _DriveStatus.idle;
 
@@ -126,6 +129,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _phoneController.clear();
       _institutionController.clear();
       _descriptionController.clear();
+      _publicProfileSearchController.clear();
+      _publicProfileSearchError = null;
     });
     if (SessionManager.isLoggedIn) {
       _restoreDriveStatus();
@@ -158,6 +163,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _institutionController.dispose();
     _descriptionController.dispose();
     _googleEmailController.dispose();
+    _publicProfileSearchController.dispose();
     if (widget._serviceOverride == null) _service.dispose();
     _ownedDeletionService?.dispose();
     super.dispose();
@@ -566,10 +572,58 @@ class _ProfileScreenState extends State<ProfileScreen> {
     await _restoreDriveStatus();
   }
 
-  void _handleShare() {
+  /// Copia el identificador público del perfil (12 caracteres). Nunca copia
+  /// el UUID interno ni otro dato personal.
+  Future<void> _handleShare() async {
+    final publicId = normalizePublicId(_profile?.publicId ?? '');
+    if (publicId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No se pudo obtener tu ID de perfil. Vuelve a iniciar sesión.',
+          ),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
+    try {
+      await Clipboard.setData(ClipboardData(text: publicId));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo copiar tu ID. Inténtalo nuevamente.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Enlace de perfil copiado al portapapeles')),
+      const SnackBar(
+        content: Text('ID de perfil copiado al portapapeles.'),
+        backgroundColor: AppColors.border,
+      ),
     );
+  }
+
+  /// Abre el perfil público del ID escrito o pegado en «Mi Perfil».
+  /// El parser es estricto: no busca por nombre, correo, teléfono ni UUID.
+  Future<void> _handleOpenPublicProfile() async {
+    final publicId = normalizePublicId(_publicProfileSearchController.text);
+    if (publicId == null) {
+      setState(() {
+        _publicProfileSearchError =
+            'Ingresa un ID de perfil válido de 12 caracteres.';
+      });
+      return;
+    }
+    setState(() => _publicProfileSearchError = null);
+    FocusScope.of(context).unfocus();
+    await openPublicProfile(context, publicId);
   }
 
   Future<void> _handleLogout() async {
@@ -717,8 +771,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
 
     final shareButton = NeobrutalistIconButton(
+      key: const ValueKey('profile-share-id'),
       icon: Icons.share_rounded,
-      tooltip: 'Compartir perfil',
+      tooltip: 'Copiar ID de perfil',
       onPressed: _handleShare,
     );
 
@@ -748,6 +803,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (_profile == null) return const [SizedBox.shrink()];
     return [
       _buildIdentityCard(isDesktop),
+      const SizedBox(height: AppDimens.spaceLg),
+      _buildPublicProfileCard(isDesktop),
       const SizedBox(height: AppDimens.spaceLg),
       _buildPersonalDataCard(isDesktop),
       const SizedBox(height: AppDimens.spaceLg),
@@ -878,6 +935,109 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 identityText,
               ],
             ),
+    );
+  }
+
+  Widget _buildPublicProfileCard(bool isDesktop) {
+    final ownId = normalizePublicId(_profile?.publicId ?? '');
+    final openButton = NeobrutalistButton(
+      key: const ValueKey('public-profile-open'),
+      label: 'ABRIR PERFIL',
+      icon: Icons.person_search_rounded,
+      variant: NeobrutalistButtonVariant.info,
+      expand: !isDesktop,
+      onPressed: _handleOpenPublicProfile,
+    );
+
+    return _ProfileCard(
+      title: 'Perfil público',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Comparte tu ID con otras personas o escribe el suyo para ver '
+            'su perfil y sus apuntes públicos.',
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+              color: AppColors.mutedStrong,
+              height: 1.4,
+            ),
+          ),
+          if (ownId != null) ...[
+            const SizedBox(height: AppDimens.spaceSm),
+            Row(
+              children: [
+                const Text(
+                  'TU ID',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.muted,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                const SizedBox(width: AppDimens.spaceSm),
+                Expanded(
+                  child: SelectableText(
+                    ownId,
+                    key: const ValueKey('profile-own-public-id'),
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w900,
+                      color: AppColors.text,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                ),
+                NeobrutalistIconButton(
+                  key: const ValueKey('profile-copy-public-id'),
+                  icon: Icons.copy_rounded,
+                  tooltip: 'Copiar ID de perfil',
+                  onPressed: _handleShare,
+                ),
+              ],
+            ),
+          ],
+          const SizedBox(height: AppDimens.spaceMd),
+          TextField(
+            key: const ValueKey('public-profile-search'),
+            controller: _publicProfileSearchController,
+            onSubmitted: (_) => _handleOpenPublicProfile(),
+            onChanged: (_) {
+              // El error deja de ser válido en cuanto el usuario corrige el
+              // texto; se limpia al editar para no bloquear el campo.
+              if (_publicProfileSearchError != null) {
+                setState(() => _publicProfileSearchError = null);
+              }
+            },
+            style: const TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 14,
+              color: AppColors.text,
+            ),
+            decoration:
+                appInputDecoration(
+                  'ID de perfil, p. ej. a8kp92mqwx7r',
+                ).copyWith(
+                  prefixIcon: const Icon(
+                    Icons.person_search_rounded,
+                    size: 18,
+                    color: AppColors.text,
+                  ),
+                  errorText: _publicProfileSearchError,
+                  errorMaxLines: 3,
+                ),
+          ),
+          const SizedBox(height: AppDimens.spaceMd),
+          isDesktop
+              ? Align(
+                  alignment: Alignment.centerRight,
+                  child: SizedBox(width: 240, child: openButton),
+                )
+              : openButton,
+        ],
+      ),
     );
   }
 
