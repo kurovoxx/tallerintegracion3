@@ -30,6 +30,7 @@ func validProfilePhotoURL(v string) bool {
 // Permite mockear en tests sin tocar la BD.
 type ProfileRepository interface {
 	GetByUserID(ctx context.Context, userID string) (*model.Profile, error)
+	GetPublicByPublicID(ctx context.Context, publicID string) (*model.PublicProfile, error)
 	Update(ctx context.Context, userID string, req repository.ProfileUpdateRequest) (*model.Profile, error)
 }
 
@@ -82,6 +83,36 @@ func (s *ProfileService) GetProfile(ctx context.Context, userID string) (*model.
 		return nil, &ServiceError{Code: "profile_not_found", Message: "Perfil no encontrado"}
 	}
 	s.fillEmail(ctx, profile)
+	return profile, nil
+}
+
+// GetPublicProfileByPublicID resuelve GET /profile/public/:public_id.
+// El public_id se normaliza a minúsculas y se valida estrictamente; un UUID,
+// un nombre o cualquier otro dato personal no son aceptados. Reglas:
+//   - requesterID vacío → 401 (defensa en profundidad; lo exige el middleware).
+//   - public_id inválido o inexistente → 404 profile_not_found.
+//   - Perfil privado consultado por un tercero → 404 (no revela su existencia).
+//   - Perfil privado consultado por su dueño → 200.
+//   - Cualquier visibilidad distinta de "public" se trata como privada.
+func (s *ProfileService) GetPublicProfileByPublicID(ctx context.Context, requesterID, rawPublicID string) (*model.PublicProfile, error) {
+	requesterID = strings.TrimSpace(requesterID)
+	if requesterID == "" {
+		return nil, NewServiceError(utils.ErrUnauthorized)
+	}
+	publicID := utils.NormalizePublicID(rawPublicID)
+	if !utils.ValidatePublicID(publicID) {
+		return nil, &ServiceError{Code: "profile_not_found", Message: "Perfil no encontrado"}
+	}
+	profile, err := s.repo.GetPublicByPublicID(ctx, publicID)
+	if err != nil {
+		return nil, err
+	}
+	if profile == nil {
+		return nil, &ServiceError{Code: "profile_not_found", Message: "Perfil no encontrado"}
+	}
+	if profile.Visibility != model.VisibilityPublic && requesterID != profile.UserID {
+		return nil, &ServiceError{Code: "profile_not_found", Message: "Perfil no encontrado"}
+	}
 	return profile, nil
 }
 

@@ -11,6 +11,22 @@ import (
 
 var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
 
+// publicIDRegex es Crockford Base32 en minúsculas, 12 caracteres (60 bits).
+// Excluye deliberadamente l, i, o y u para evitar confusiones visuales.
+var publicIDRegex = regexp.MustCompile(`^[0-9a-hj-km-np-tv-z]{12}$`)
+
+// NormalizePublicID recorta espacios y pasa a minúsculas. No corrige
+// caracteres ambiguos (l/o no se convierten en 1/0).
+func NormalizePublicID(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+// ValidatePublicID valida estrictamente el formato ya normalizado (o el que
+// entregue el cliente, sin normalizar dentro de esta función).
+func ValidatePublicID(s string) bool {
+	return publicIDRegex.MatchString(strings.TrimSpace(s))
+}
+
 // ValidateEmail checks formato RFC básico + regex adicional.
 // Retorna false si formato inválido.
 func ValidateEmail(email string) bool {

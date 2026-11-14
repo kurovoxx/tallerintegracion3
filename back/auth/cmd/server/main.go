@@ -128,7 +128,7 @@ func main() {
 	// saludable sin señal (ver serveGRPC).
 	grpcStatus := &grpcHealth{}
 	// gRPC Identity en goroutine; HTTP bloquea abajo (igual que social).
-	startGRPC(usersSvc, jwtSvc, driveSvc, calendarSvc, oauthRepo, cfg, grpcStatus)
+	startGRPC(usersSvc, jwtSvc, driveSvc, calendarSvc, oauthRepo, userRepo, cfg, grpcStatus)
 
 	r := gin.Default()
 
@@ -157,6 +157,12 @@ func main() {
 		internal.GET("/users/:id", internalUsersH.GetByID)
 		internal.POST("/auth/verify", internalAuthH.Verify)
 	}
+
+	// Perfil público por public_id (sin UUID ni datos personales). El
+	// solicitante siempre sale del JWT. PrivateNoStore se ejecuta antes de
+	// RequireAuth para que también los 401/423/503 emitidos por el middleware
+	// lleven Cache-Control: private, no-store. No se aplica al resto de rutas.
+	r.GET("/profile/public/:public_id", middleware.PrivateNoStore(), authMw.RequireAuth(), profileH.GetPublicProfileByPublicID)
 
 	// Protegido: middleware valida firma+expiración, inyecta solo user_id (sin role global)
 	// 401 token inválido/expirado
@@ -256,7 +262,7 @@ func (h *grpcHealth) snapshot() (bool, string) {
 
 // startGRPC sirve IdentityService (usuarios, verify y OAuth) para Social y
 // Notes. Logging va afuera para auditar también los rechazos de clave.
-func startGRPC(usersSvc *service.UsersService, jwtSvc *service.JWTService, driveSvc *service.DriveOAuthService, calendarSvc *service.CalendarOAuthService, oauthRepo *repository.OAuthRepository, cfg *config.Config, health *grpcHealth) {
+func startGRPC(usersSvc *service.UsersService, jwtSvc *service.JWTService, driveSvc *service.DriveOAuthService, calendarSvc *service.CalendarOAuthService, oauthRepo *repository.OAuthRepository, userRepo *repository.UserRepository, cfg *config.Config, health *grpcHealth) {
 	if cfg.InternalAPIKey == "" {
 		log.Printf("gRPC identity: INTERNAL_API_KEY vacía, todas las llamadas fallarán (fail-closed)")
 	}
@@ -268,7 +274,7 @@ func startGRPC(usersSvc *service.UsersService, jwtSvc *service.JWTService, drive
 		interceptor.NewLogging(log.Default()),
 		interceptor.NewInternalAuth(cfg.InternalAPIKey),
 	))
-	identityv1.RegisterIdentityServiceServer(s, grpchandler.NewIdentityServer(usersSvc, jwtSvc, driveSvc, calendarSvc, oauthRepo))
+	identityv1.RegisterIdentityServiceServer(s, grpchandler.NewIdentityServerWithPublicProfiles(usersSvc, jwtSvc, driveSvc, calendarSvc, oauthRepo, userRepo))
 	go func() {
 		log.Printf("Servidor gRPC de Identity en :%s", cfg.GRPCPort)
 		serveGRPC(s, lis, cfg.GRPCPort, health)

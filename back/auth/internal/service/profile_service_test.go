@@ -32,6 +32,28 @@ func (m *mockProfileRepo) GetByUserID(ctx context.Context, userID string) (*mode
 	return nil, nil
 }
 
+func (m *mockProfileRepo) GetPublicByPublicID(ctx context.Context, publicID string) (*model.PublicProfile, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	if publicID == "" {
+		return nil, nil
+	}
+	for _, p := range m.store {
+		if p.PublicID != publicID {
+			continue
+		}
+		return &model.PublicProfile{
+			UserID:      p.UserID,
+			PublicID:    p.PublicID,
+			DisplayName: p.DisplayName,
+			Institution: p.Institution,
+			Visibility:  p.Visibility,
+		}, nil
+	}
+	return nil, nil
+}
+
 func (m *mockProfileRepo) Update(ctx context.Context, userID string, req repository.ProfileUpdateRequest) (*model.Profile, error) {
 	if m.err != nil {
 		return nil, m.err

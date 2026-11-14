@@ -37,17 +37,30 @@ type oauthConnectionStore interface {
 	GetByUserIDAndProvider(ctx context.Context, userID, provider string) (*model.OAuthConnection, error)
 }
 
+// publicProfileResolver resuelve public_id → UUID interno. Lo implementa
+// repository.UserRepository; el handler gRPC solo ve esta interfaz.
+type publicProfileResolver interface {
+	GetIDByPublicID(ctx context.Context, publicID string) (string, error)
+}
+
 type IdentityServer struct {
 	identityv1.UnimplementedIdentityServiceServer
-	users    *service.UsersService
-	jwt      *service.JWTService
-	drive    oauthTokenService
-	calendar calendarService
-	oauth    oauthConnectionStore
+	users          *service.UsersService
+	jwt            *service.JWTService
+	drive          oauthTokenService
+	calendar       calendarService
+	oauth          oauthConnectionStore
+	publicProfiles publicProfileResolver
 }
 
 func NewIdentityServer(users *service.UsersService, jwtSvc *service.JWTService, drive oauthTokenService, calendar calendarService, oauth oauthConnectionStore) *IdentityServer {
-	return &IdentityServer{users: users, jwt: jwtSvc, drive: drive, calendar: calendar, oauth: oauth}
+	return NewIdentityServerWithPublicProfiles(users, jwtSvc, drive, calendar, oauth, nil)
+}
+
+// NewIdentityServerWithPublicProfiles añade ResolvePublicProfile sin cambiar
+// el constructor existente (los tests previos siguen compilando).
+func NewIdentityServerWithPublicProfiles(users *service.UsersService, jwtSvc *service.JWTService, drive oauthTokenService, calendar calendarService, oauth oauthConnectionStore, publicProfiles publicProfileResolver) *IdentityServer {
+	return &IdentityServer{users: users, jwt: jwtSvc, drive: drive, calendar: calendar, oauth: oauth, publicProfiles: publicProfiles}
 }
 
 func (s *IdentityServer) GetUser(ctx context.Context, req *identityv1.GetUserRequest) (*identityv1.GetUserResponse, error) {
@@ -159,6 +172,26 @@ func (s *IdentityServer) ReportCalendarRevoked(ctx context.Context, req *identit
 	// ignora a propósito y siempre es OK.
 	_ = s.calendar.ReportCalendarPermissionDenied(ctx, userID)
 	return &identityv1.ReportCalendarRevokedResponse{}, nil
+}
+
+// ResolvePublicProfile resuelve el identificador público al UUID interno.
+// La normalización a minúsculas ocurre antes de validar; l/o no se corrigen.
+func (s *IdentityServer) ResolvePublicProfile(ctx context.Context, req *identityv1.ResolvePublicProfileRequest) (*identityv1.ResolvePublicProfileResponse, error) {
+	publicID := utils.NormalizePublicID(req.GetPublicId())
+	if !utils.ValidatePublicID(publicID) {
+		return nil, status.Error(codes.InvalidArgument, "public_id inválido")
+	}
+	if s.publicProfiles == nil {
+		return nil, status.Error(codes.Internal, "internal")
+	}
+	userID, err := s.publicProfiles.GetIDByPublicID(ctx, publicID)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "internal")
+	}
+	if strings.TrimSpace(userID) == "" {
+		return nil, status.Error(codes.NotFound, "profile_not_found")
+	}
+	return &identityv1.ResolvePublicProfileResponse{UserId: userID}, nil
 }
 
 // toStatusOAuth traduce los códigos de dominio OAuth (los mismos del HTTP)
