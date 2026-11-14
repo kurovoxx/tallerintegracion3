@@ -9,6 +9,23 @@ import (
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/utils"
 )
 
+const (
+	maxPhotoURLLength         = 500
+	maxProfilePhotoDataURLLen = 2_000_000
+	profilePhotoDataURLPrefix = "data:image/"
+	profilePhotoDataURLBase64 = ";base64,"
+)
+
+// validProfilePhotoURL acepta URLs http(s) cortas o data URLs de imagen
+// recortadas por el cliente. El límite evita cuerpos PATCH desmedidos.
+func validProfilePhotoURL(v string) bool {
+	if strings.HasPrefix(v, profilePhotoDataURLPrefix) {
+		return strings.Contains(v, profilePhotoDataURLBase64) &&
+			len(v) <= maxProfilePhotoDataURLLen
+	}
+	return len(v) <= maxPhotoURLLength
+}
+
 // ProfileRepository define el contrato que el Service espera del Repository.
 // Permite mockear en tests sin tocar la BD.
 type ProfileRepository interface {
@@ -71,18 +88,19 @@ func (s *ProfileService) GetProfile(ctx context.Context, userID string) (*model.
 // UpdateProfile aplica PATCH parcial solo al perfil del user_id autenticado.
 // Valida visibility, display_name y normaliza opcionales.
 // Comportamientos documentados:
-// - Campos omitidos (nil) no se modifican.
-// - Campos enviados como "" o "   " se persisten como NULL (borrar), salvo display_name que debe ser 1..100 y no puede ser vacío/NULL.
-// - display_name si se envía debe ser 1..100 caracteres tras trim, sino 400 invalid_display_name.
-// - photo_url si se envía debe ser 0..500 (vacío→NULL), sino 400 invalid_photo_url.
-// - phone si se envía debe ser 0..30 (vacío→NULL), sino 400 invalid_phone.
-// - institution si se envía debe ser 0..200 (vacío→NULL), sino 400 invalid_institution.
-// - description es text sin límite (agentSql.md:46) → no se valida longitud, vacío→NULL.
-// - visibility si se envía debe ser public/private, sino 400 invalid_visibility.
-// - Body vacío (ningún campo) → 400 bad_request.
-// - Si perfil no existe → 404 profile_not_found (no se crea automáticamente; Register es quien lo crea).
-// - Un PATCH inválido no modifica ningún campo (validación antes de UPDATE).
-// - updated_at solo se actualiza cuando el UPDATE es válido.
+//   - Campos omitidos (nil) no se modifican.
+//   - Campos enviados como "" o "   " se persisten como NULL (borrar), salvo display_name que debe ser 1..100 y no puede ser vacío/NULL.
+//   - display_name si se envía debe ser 1..100 caracteres tras trim, sino 400 invalid_display_name.
+//   - photo_url si se envía debe ser 0..500 para URLs remotas, o una data URL
+//     de imagen de hasta 2.000.000 caracteres (vacío→NULL), sino 400 invalid_photo_url.
+//   - phone si se envía debe ser 0..30 (vacío→NULL), sino 400 invalid_phone.
+//   - institution si se envía debe ser 0..200 (vacío→NULL), sino 400 invalid_institution.
+//   - description es text sin límite (agentSql.md:46) → no se valida longitud, vacío→NULL.
+//   - visibility si se envía debe ser public/private, sino 400 invalid_visibility.
+//   - Body vacío (ningún campo) → 400 bad_request.
+//   - Si perfil no existe → 404 profile_not_found (no se crea automáticamente; Register es quien lo crea).
+//   - Un PATCH inválido no modifica ningún campo (validación antes de UPDATE).
+//   - updated_at solo se actualiza cuando el UPDATE es válido.
 func (s *ProfileService) UpdateProfile(ctx context.Context, userID string, req repository.ProfileUpdateRequest) (*model.Profile, error) {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
@@ -115,8 +133,8 @@ func (s *ProfileService) UpdateProfile(ctx context.Context, userID string, req r
 	// Validar longitudes máximas SIN truncar (400 si excede)
 	if req.PhotoURL != nil {
 		v := strings.TrimSpace(*req.PhotoURL)
-		if len(v) > 500 {
-			return nil, &ServiceError{Code: "invalid_photo_url", Message: "photo_url excede 500 caracteres"}
+		if !validProfilePhotoURL(v) {
+			return nil, &ServiceError{Code: "invalid_photo_url", Message: "photo_url inválida o excede el tamaño permitido"}
 		}
 		req.PhotoURL = &v
 	}

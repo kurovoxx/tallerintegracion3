@@ -10,16 +10,17 @@ Actualiza parcialmente los campos del perfil personal del usuario autenticado.
   ```json
   {
     "display_name": "Juan P.",
+    "photo_url": "data:image/png;base64,iVBORw0KGgo...",
     "phone": "+56987654321",
     "description": "Nueva descripción de perfil",
     "visibility": "public"
   }
   ```
-- **Validaciones:** `display_name` 1-100 caracteres si está presente; `visibility` debe ser `public` o `private`.
+- **Validaciones:** `display_name` 1-100 caracteres si está presente; `visibility` debe ser `public` o `private`; `photo_url` acepta una URL remota de hasta 500 caracteres o una data URL `data:image/...;base64,...` de hasta 2.000.000 caracteres; `""` borra la foto (`NULL`).
 
 ## 2. Res (Respuestas y Códigos HTTP)
 - **`200 OK`:** Perfil completo actualizado.
-- **`400 Bad Request`:** `invalid_body` o visibilidad no permitida.
+- **`400 Bad Request`:** `invalid_body`, visibilidad no permitida o `invalid_photo_url`.
 - **`401 Unauthorized`:** Token ausente o expirado.
 
 ## 3. Invocación (Front / Otros Servicios)
