@@ -17,8 +17,12 @@ import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 import '../auth/account_deletion_dialog.dart';
 import '../auth/google_drive_service.dart';
+import '../notes/notes_api.dart';
 import 'profile_photo_crop.dart';
 import 'public_profile_screen.dart';
+
+/// Resultado de comprobar un perfil antes de abrirlo desde «Buscar perfil».
+enum _ProfileLookup { found, notFound, unavailable }
 
 const String kSubjectApproved = 'approved';
 const String kSubjectInProgress = 'in_progress';
@@ -66,11 +70,17 @@ class ProfileScreen extends StatefulWidget {
     this.userData,
     ProfileService? service,
     AccountDeletionService? accountDeletionService,
+    NotesApi? notesApi,
   }) : _serviceOverride = service,
-       _accountDeletionOverride = accountDeletionService;
+       _accountDeletionOverride = accountDeletionService,
+       _notesApiOverride = notesApi;
 
   final ProfileService? _serviceOverride;
   final AccountDeletionService? _accountDeletionOverride;
+
+  /// Cliente de Notes inyectable (pruebas) para comprobar si un perfil
+  /// privado existe antes de abrirlo desde «Buscar perfil».
+  final NotesApi? _notesApiOverride;
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -101,6 +111,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   final _googleEmailController = TextEditingController();
   final _publicProfileSearchController = TextEditingController();
   String? _publicProfileSearchError;
+  bool _searchingProfile = false;
   String _draftVisibility = 'public';
   _DriveStatus _driveStatus = _DriveStatus.idle;
 
@@ -574,7 +585,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   /// Copia el identificador público del perfil (12 caracteres). Nunca copia
   /// el UUID interno ni otro dato personal.
-  Future<void> _handleShare() async {
+  Future<void> _handleCopyPublicId() async {
     final publicId = normalizePublicId(_profile?.publicId ?? '');
     if (publicId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -610,20 +621,67 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  /// Abre el perfil público del ID escrito o pegado en «Mi Perfil».
-  /// El parser es estricto: no busca por nombre, correo, teléfono ni UUID.
-  Future<void> _handleOpenPublicProfile() async {
-    final publicId = normalizePublicId(_publicProfileSearchController.text);
-    if (publicId == null) {
+  /// «Buscar perfil»: interpreta el ID o enlace pegado, comprueba que el
+  /// perfil existe y lo abre en pantalla completa. No busca por nombre,
+  /// correo, teléfono ni UUID, y no abre enlaces externos.
+  Future<void> _handleSearchProfile() async {
+    if (_searchingProfile) return;
+    final parsed = parsePublicIdInput(_publicProfileSearchController.text);
+    if (!parsed.isValid) {
       setState(() {
-        _publicProfileSearchError =
-            'Ingresa un ID de perfil válido de 12 caracteres.';
+        _publicProfileSearchError = publicIdInputMessage(parsed.error!);
       });
       return;
     }
-    setState(() => _publicProfileSearchError = null);
+    final publicId = parsed.publicId!;
     FocusScope.of(context).unfocus();
-    await openPublicProfile(context, publicId);
+    setState(() {
+      _publicProfileSearchError = null;
+      _searchingProfile = true;
+    });
+    final lookup = await _lookupPublicProfile(publicId);
+    if (!mounted) return;
+    setState(() {
+      _searchingProfile = false;
+      switch (lookup) {
+        case _ProfileLookup.found:
+          break;
+        case _ProfileLookup.notFound:
+          _publicProfileSearchError = 'No encontramos un perfil con ese ID.';
+        case _ProfileLookup.unavailable:
+          _publicProfileSearchError =
+              'No pudimos buscar el perfil en este momento. Inténtalo más tarde.';
+      }
+    });
+    if (lookup == _ProfileLookup.found) {
+      await openPublicProfile(context, publicId);
+    }
+  }
+
+  /// Un perfil privado responde 404 en Auth pero conserva sus apuntes
+  /// públicos en Notes; solo es «inexistente» si Notes también responde 404.
+  Future<_ProfileLookup> _lookupPublicProfile(String publicId) async {
+    try {
+      await _service.getPublicProfile(publicId);
+      return _ProfileLookup.found;
+    } on ProfileApiException catch (e) {
+      if (e.statusCode != 404) return _ProfileLookup.unavailable;
+    } catch (_) {
+      return _ProfileLookup.unavailable;
+    }
+    final notes = widget._notesApiOverride ?? NotesApi();
+    try {
+      await notes.listPublicByPublicId(publicId, limit: 1);
+      return _ProfileLookup.found;
+    } on NotesApiException catch (e) {
+      return e.statusCode == 404
+          ? _ProfileLookup.notFound
+          : _ProfileLookup.unavailable;
+    } catch (_) {
+      return _ProfileLookup.unavailable;
+    } finally {
+      if (widget._notesApiOverride == null) notes.dispose();
+    }
   }
 
   Future<void> _handleLogout() async {
@@ -770,13 +828,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
       );
     }
 
-    final shareButton = NeobrutalistIconButton(
-      key: const ValueKey('profile-share-id'),
-      icon: Icons.share_rounded,
-      tooltip: 'Copiar ID de perfil',
-      onPressed: _handleShare,
-    );
-
     // Salida rápida para tests: un tap, sin diálogos ni scroll.
     final quickLogoutButton = NeobrutalistIconButton(
       icon: Icons.logout_rounded,
@@ -788,8 +839,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Expanded(child: titleBlock),
-        const SizedBox(width: AppDimens.spaceSm),
-        shareButton,
         const SizedBox(width: AppDimens.spaceSm),
         quickLogoutButton,
       ],
@@ -804,7 +853,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return [
       _buildIdentityCard(isDesktop),
       const SizedBox(height: AppDimens.spaceLg),
-      _buildPublicProfileCard(isDesktop),
+      _buildMyPublicIdCard(isDesktop),
+      const SizedBox(height: AppDimens.spaceLg),
+      _buildProfileSearchCard(isDesktop),
       const SizedBox(height: AppDimens.spaceLg),
       _buildPersonalDataCard(isDesktop),
       const SizedBox(height: AppDimens.spaceLg),
@@ -938,25 +989,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildPublicProfileCard(bool isDesktop) {
+  Widget _buildMyPublicIdCard(bool isDesktop) {
     final ownId = normalizePublicId(_profile?.publicId ?? '');
-    final openButton = NeobrutalistButton(
-      key: const ValueKey('public-profile-open'),
-      label: 'ABRIR PERFIL',
-      icon: Icons.person_search_rounded,
-      variant: NeobrutalistButtonVariant.info,
-      expand: !isDesktop,
-      onPressed: _handleOpenPublicProfile,
-    );
-
     return _ProfileCard(
-      title: 'Perfil público',
+      title: 'Mi ID de perfil',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Text(
-            'Comparte tu ID con otras personas o escribe el suyo para ver '
-            'su perfil y sus apuntes públicos.',
+            'Comparte este identificador para que otras personas encuentren tu '
+            'perfil en «Buscar perfil». No es tu ID interno de usuario.',
             style: TextStyle(
               fontSize: 12.5,
               fontWeight: FontWeight.w600,
@@ -964,46 +1006,78 @@ class _ProfileScreenState extends State<ProfileScreen> {
               height: 1.4,
             ),
           ),
-          if (ownId != null) ...[
-            const SizedBox(height: AppDimens.spaceSm),
+          const SizedBox(height: AppDimens.spaceMd),
+          if (ownId == null)
+            const Text(
+              'No disponible. Vuelve a iniciar sesión.',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: AppColors.muted,
+              ),
+            )
+          else
             Row(
               children: [
-                const Text(
-                  'TU ID',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.muted,
-                    letterSpacing: 0.5,
-                  ),
-                ),
-                const SizedBox(width: AppDimens.spaceSm),
                 Expanded(
                   child: SelectableText(
                     ownId,
                     key: const ValueKey('profile-own-public-id'),
                     style: const TextStyle(
-                      fontSize: 14,
+                      fontSize: 16,
                       fontWeight: FontWeight.w900,
                       color: AppColors.text,
-                      letterSpacing: 1,
+                      letterSpacing: 1.2,
                     ),
                   ),
                 ),
-                NeobrutalistIconButton(
+                const SizedBox(width: AppDimens.spaceMd),
+                NeobrutalistButton(
                   key: const ValueKey('profile-copy-public-id'),
+                  label: 'COPIAR',
                   icon: Icons.copy_rounded,
-                  tooltip: 'Copiar ID de perfil',
-                  onPressed: _handleShare,
+                  variant: NeobrutalistButtonVariant.secondary,
+                  onPressed: _handleCopyPublicId,
                 ),
               ],
             ),
-          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProfileSearchCard(bool isDesktop) {
+    final searchButton = NeobrutalistButton(
+      key: const ValueKey('public-profile-open'),
+      label: _searchingProfile ? 'BUSCANDO…' : 'BUSCAR',
+      icon: Icons.person_search_rounded,
+      variant: NeobrutalistButtonVariant.info,
+      expand: !isDesktop,
+      onPressed: _searchingProfile ? null : _handleSearchProfile,
+    );
+
+    return _ProfileCard(
+      title: 'Buscar perfil',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Pega el identificador público de otra persona o su enlace '
+            'sigma-academy://perfil/... para ver su perfil y sus apuntes '
+            'públicos. La búsqueda es exacta: no se busca por nombre.',
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+              color: AppColors.mutedStrong,
+              height: 1.4,
+            ),
+          ),
           const SizedBox(height: AppDimens.spaceMd),
           TextField(
             key: const ValueKey('public-profile-search'),
             controller: _publicProfileSearchController,
-            onSubmitted: (_) => _handleOpenPublicProfile(),
+            enabled: !_searchingProfile,
+            onSubmitted: (_) => _handleSearchProfile(),
             onChanged: (_) {
               // El error deja de ser válido en cuanto el usuario corrige el
               // texto; se limpia al editar para no bloquear el campo.
@@ -1018,7 +1092,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
             decoration:
                 appInputDecoration(
-                  'ID de perfil, p. ej. a8kp92mqwx7r',
+                  'Pega sigma-academy://perfil/... o el identificador público',
                 ).copyWith(
                   prefixIcon: const Icon(
                     Icons.person_search_rounded,
@@ -1029,13 +1103,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   errorMaxLines: 3,
                 ),
           ),
+          if (_searchingProfile) ...[
+            const SizedBox(height: AppDimens.spaceSm),
+            const LinearProgressIndicator(
+              key: ValueKey('public-profile-searching'),
+              color: AppColors.border,
+              backgroundColor: AppColors.surface,
+            ),
+          ],
           const SizedBox(height: AppDimens.spaceMd),
           isDesktop
               ? Align(
                   alignment: Alignment.centerRight,
-                  child: SizedBox(width: 240, child: openButton),
+                  child: SizedBox(width: 240, child: searchButton),
                 )
-              : openButton,
+              : searchButton,
         ],
       ),
     );

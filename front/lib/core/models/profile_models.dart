@@ -16,6 +16,127 @@ String? normalizePublicId(String input) {
   return isValidPublicId(candidate) ? candidate : null;
 }
 
+/// Motivo por el que el texto del buscador no contiene un ID de perfil.
+enum PublicIdInputError {
+  empty,
+  internalUuid,
+  webLink,
+  unsupportedLink,
+  ambiguous,
+  invalid,
+}
+
+/// Resultado de interpretar el texto pegado en «Buscar perfil».
+class PublicIdInput {
+  const PublicIdInput.found(String this.publicId) : error = null;
+  const PublicIdInput.rejected(PublicIdInputError this.error) : publicId = null;
+
+  final String? publicId;
+  final PublicIdInputError? error;
+
+  bool get isValid => publicId != null;
+}
+
+const String publicProfileLinkScheme = 'sigma-academy';
+const String publicProfileLinkHost = 'perfil';
+
+final RegExp _internalUuidPattern = RegExp(
+  r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+);
+
+// Un enlace interno solo cuenta si empieza el texto o va tras un espacio o
+// un signo de apertura: así no se acepta un enlace sigma-academy escondido
+// dentro de otra URL (por ejemplo en la query de un enlace https).
+final RegExp _sigmaLinkPattern = RegExp(
+  r'''(?<![^\s(\[<"'«“‘])sigma-academy://\S+''',
+  caseSensitive: false,
+);
+final RegExp _anyLinkPattern = RegExp(r'[a-zA-Z][a-zA-Z0-9+.\-]*://');
+const String _trailingPunctuation = '.,;:!?)]}>"\'»”’';
+
+/// Interpreta el texto escrito o pegado en el buscador de perfiles.
+///
+/// Acepta el identificador público (sin distinguir mayúsculas) o el enlace
+/// interno `sigma-academy://perfil/<public_id>`, también dentro de otro texto.
+/// Rechaza UUID internos, enlaces http/https, otros esquemas o dominios,
+/// enlaces con segmentos, query o fragmento adicionales y textos con enlaces
+/// a perfiles distintos. No busca por nombre ni abre enlaces: el usuario pega
+/// el ID en la app.
+PublicIdInput parsePublicIdInput(String input) {
+  final text = input.trim();
+  if (text.isEmpty) {
+    return const PublicIdInput.rejected(PublicIdInputError.empty);
+  }
+  final ids = <String>{};
+  for (final match in _sigmaLinkPattern.allMatches(text)) {
+    final id = _publicIdFromLink(_stripTrailingPunctuation(match.group(0)!));
+    if (id == null) {
+      return const PublicIdInput.rejected(PublicIdInputError.unsupportedLink);
+    }
+    ids.add(id);
+  }
+  if (ids.length > 1) {
+    return const PublicIdInput.rejected(PublicIdInputError.ambiguous);
+  }
+  if (ids.length == 1) return PublicIdInput.found(ids.single);
+
+  if (_anyLinkPattern.hasMatch(text)) {
+    final lower = text.toLowerCase();
+    final web = lower.contains('http://') || lower.contains('https://');
+    return PublicIdInput.rejected(
+      web ? PublicIdInputError.webLink : PublicIdInputError.unsupportedLink,
+    );
+  }
+  if (_internalUuidPattern.hasMatch(text)) {
+    return const PublicIdInput.rejected(PublicIdInputError.internalUuid);
+  }
+  final id = normalizePublicId(text);
+  return id == null
+      ? const PublicIdInput.rejected(PublicIdInputError.invalid)
+      : PublicIdInput.found(id);
+}
+
+/// Mensaje para mostrar bajo el campo de búsqueda.
+String publicIdInputMessage(PublicIdInputError error) {
+  switch (error) {
+    case PublicIdInputError.empty:
+      return 'Escribe o pega un ID de perfil.';
+    case PublicIdInputError.internalUuid:
+      return 'Eso es un identificador interno. Usa el ID público de 12 '
+          'caracteres que aparece en «Mi ID de perfil».';
+    case PublicIdInputError.webLink:
+      return 'Los enlaces web no son válidos. Pega sigma-academy://perfil/... '
+          'o el identificador público.';
+    case PublicIdInputError.unsupportedLink:
+      return 'El enlace no es válido. Solo se acepta '
+          'sigma-academy://perfil/<id>.';
+    case PublicIdInputError.ambiguous:
+      return 'El texto contiene enlaces a perfiles distintos. Pega solo uno.';
+    case PublicIdInputError.invalid:
+      return 'No es un ID válido: debe tener 12 caracteres (letras y números, '
+          'sin i, l, o ni u).';
+  }
+}
+
+String _stripTrailingPunctuation(String link) {
+  var end = link.length;
+  while (end > 0 && _trailingPunctuation.contains(link[end - 1])) {
+    end--;
+  }
+  return link.substring(0, end);
+}
+
+String? _publicIdFromLink(String link) {
+  final uri = Uri.tryParse(link);
+  if (uri == null) return null;
+  if (uri.scheme.toLowerCase() != publicProfileLinkScheme) return null;
+  if (uri.host.toLowerCase() != publicProfileLinkHost) return null;
+  if (uri.userInfo.isNotEmpty || uri.hasPort) return null;
+  if (uri.hasQuery || uri.hasFragment) return null;
+  if (uri.pathSegments.length != 1) return null;
+  return normalizePublicId(uri.pathSegments.single);
+}
+
 // Modelo para GET/PATCH /profile/me (Auth).
 // El backend entrega display_name, photo_url, phone, institution,
 // description, visibility, public_id y email (backward-compatible).
