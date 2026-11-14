@@ -624,6 +624,96 @@ func (*ReportCalendarRevokedResponse) Descriptor() ([]byte, []int) {
 	return file_v1_identity_proto_rawDescGZIP(), []int{10}
 }
 
+type ResolvePublicProfileRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 12 caracteres Crockford Base32 en minúsculas; se normaliza a minúsculas.
+	PublicId      string `protobuf:"bytes,1,opt,name=public_id,json=publicId,proto3" json:"public_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolvePublicProfileRequest) Reset() {
+	*x = ResolvePublicProfileRequest{}
+	mi := &file_v1_identity_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolvePublicProfileRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolvePublicProfileRequest) ProtoMessage() {}
+
+func (x *ResolvePublicProfileRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_identity_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolvePublicProfileRequest.ProtoReflect.Descriptor instead.
+func (*ResolvePublicProfileRequest) Descriptor() ([]byte, []int) {
+	return file_v1_identity_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ResolvePublicProfileRequest) GetPublicId() string {
+	if x != nil {
+		return x.PublicId
+	}
+	return ""
+}
+
+type ResolvePublicProfileResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// UUID interno de identity.users. Uso exclusivo servicio-a-servicio.
+	UserId        string `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolvePublicProfileResponse) Reset() {
+	*x = ResolvePublicProfileResponse{}
+	mi := &file_v1_identity_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolvePublicProfileResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolvePublicProfileResponse) ProtoMessage() {}
+
+func (x *ResolvePublicProfileResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_identity_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolvePublicProfileResponse.ProtoReflect.Descriptor instead.
+func (*ResolvePublicProfileResponse) Descriptor() ([]byte, []int) {
+	return file_v1_identity_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ResolvePublicProfileResponse) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
 var File_v1_identity_proto protoreflect.FileDescriptor
 
 const file_v1_identity_proto_rawDesc = "" +
@@ -662,17 +752,22 @@ const file_v1_identity_proto_rawDesc = "" +
 	"\x0f_external_email\"7\n" +
 	"\x1cReportCalendarRevokedRequest\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\"\x1f\n" +
-	"\x1dReportCalendarRevokedResponse*]\n" +
+	"\x1dReportCalendarRevokedResponse\":\n" +
+	"\x1bResolvePublicProfileRequest\x12\x1b\n" +
+	"\tpublic_id\x18\x01 \x01(\tR\bpublicId\"7\n" +
+	"\x1cResolvePublicProfileResponse\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId*]\n" +
 	"\bProvider\x12\x18\n" +
 	"\x14PROVIDER_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15PROVIDER_GOOGLE_DRIVE\x10\x01\x12\x1c\n" +
-	"\x18PROVIDER_GOOGLE_CALENDAR\x10\x022\xc3\x03\n" +
+	"\x18PROVIDER_GOOGLE_CALENDAR\x10\x022\xb0\x04\n" +
 	"\x0fIdentityService\x12D\n" +
 	"\aGetUser\x12\x1b.identity.v1.GetUserRequest\x1a\x1c.identity.v1.GetUserResponse\x12P\n" +
 	"\vLookupUsers\x12\x1f.identity.v1.LookupUsersRequest\x1a .identity.v1.LookupUsersResponse\x12P\n" +
 	"\vVerifyToken\x12\x1f.identity.v1.VerifyTokenRequest\x1a .identity.v1.VerifyTokenResponse\x12V\n" +
 	"\rGetOAuthToken\x12!.identity.v1.GetOAuthTokenRequest\x1a\".identity.v1.GetOAuthTokenResponse\x12n\n" +
-	"\x15ReportCalendarRevoked\x12).identity.v1.ReportCalendarRevokedRequest\x1a*.identity.v1.ReportCalendarRevokedResponseBUZSgithub.com/kurovoxx/tallerintegracion3/back/auth/internal/gen/identityv1;identityv1b\x06proto3"
+	"\x15ReportCalendarRevoked\x12).identity.v1.ReportCalendarRevokedRequest\x1a*.identity.v1.ReportCalendarRevokedResponse\x12k\n" +
+	"\x14ResolvePublicProfile\x12(.identity.v1.ResolvePublicProfileRequest\x1a).identity.v1.ResolvePublicProfileResponseBUZSgithub.com/kurovoxx/tallerintegracion3/back/auth/internal/gen/identityv1;identityv1b\x06proto3"
 
 var (
 	file_v1_identity_proto_rawDescOnce sync.Once
@@ -687,7 +782,7 @@ func file_v1_identity_proto_rawDescGZIP() []byte {
 }
 
 var file_v1_identity_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_v1_identity_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_v1_identity_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_v1_identity_proto_goTypes = []any{
 	(Provider)(0),                         // 0: identity.v1.Provider
 	(*GetUserRequest)(nil),                // 1: identity.v1.GetUserRequest
@@ -701,24 +796,28 @@ var file_v1_identity_proto_goTypes = []any{
 	(*GetOAuthTokenResponse)(nil),         // 9: identity.v1.GetOAuthTokenResponse
 	(*ReportCalendarRevokedRequest)(nil),  // 10: identity.v1.ReportCalendarRevokedRequest
 	(*ReportCalendarRevokedResponse)(nil), // 11: identity.v1.ReportCalendarRevokedResponse
-	(*timestamppb.Timestamp)(nil),         // 12: google.protobuf.Timestamp
+	(*ResolvePublicProfileRequest)(nil),   // 12: identity.v1.ResolvePublicProfileRequest
+	(*ResolvePublicProfileResponse)(nil),  // 13: identity.v1.ResolvePublicProfileResponse
+	(*timestamppb.Timestamp)(nil),         // 14: google.protobuf.Timestamp
 }
 var file_v1_identity_proto_depIdxs = []int32{
 	3,  // 0: identity.v1.LookupUsersResponse.users:type_name -> identity.v1.User
 	0,  // 1: identity.v1.GetOAuthTokenRequest.provider:type_name -> identity.v1.Provider
-	12, // 2: identity.v1.GetOAuthTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
+	14, // 2: identity.v1.GetOAuthTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
 	1,  // 3: identity.v1.IdentityService.GetUser:input_type -> identity.v1.GetUserRequest
 	4,  // 4: identity.v1.IdentityService.LookupUsers:input_type -> identity.v1.LookupUsersRequest
 	6,  // 5: identity.v1.IdentityService.VerifyToken:input_type -> identity.v1.VerifyTokenRequest
 	8,  // 6: identity.v1.IdentityService.GetOAuthToken:input_type -> identity.v1.GetOAuthTokenRequest
 	10, // 7: identity.v1.IdentityService.ReportCalendarRevoked:input_type -> identity.v1.ReportCalendarRevokedRequest
-	2,  // 8: identity.v1.IdentityService.GetUser:output_type -> identity.v1.GetUserResponse
-	5,  // 9: identity.v1.IdentityService.LookupUsers:output_type -> identity.v1.LookupUsersResponse
-	7,  // 10: identity.v1.IdentityService.VerifyToken:output_type -> identity.v1.VerifyTokenResponse
-	9,  // 11: identity.v1.IdentityService.GetOAuthToken:output_type -> identity.v1.GetOAuthTokenResponse
-	11, // 12: identity.v1.IdentityService.ReportCalendarRevoked:output_type -> identity.v1.ReportCalendarRevokedResponse
-	8,  // [8:13] is the sub-list for method output_type
-	3,  // [3:8] is the sub-list for method input_type
+	12, // 8: identity.v1.IdentityService.ResolvePublicProfile:input_type -> identity.v1.ResolvePublicProfileRequest
+	2,  // 9: identity.v1.IdentityService.GetUser:output_type -> identity.v1.GetUserResponse
+	5,  // 10: identity.v1.IdentityService.LookupUsers:output_type -> identity.v1.LookupUsersResponse
+	7,  // 11: identity.v1.IdentityService.VerifyToken:output_type -> identity.v1.VerifyTokenResponse
+	9,  // 12: identity.v1.IdentityService.GetOAuthToken:output_type -> identity.v1.GetOAuthTokenResponse
+	11, // 13: identity.v1.IdentityService.ReportCalendarRevoked:output_type -> identity.v1.ReportCalendarRevokedResponse
+	13, // 14: identity.v1.IdentityService.ResolvePublicProfile:output_type -> identity.v1.ResolvePublicProfileResponse
+	9,  // [9:15] is the sub-list for method output_type
+	3,  // [3:9] is the sub-list for method input_type
 	3,  // [3:3] is the sub-list for extension type_name
 	3,  // [3:3] is the sub-list for extension extendee
 	0,  // [0:3] is the sub-list for field type_name
@@ -738,7 +837,7 @@ func file_v1_identity_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_v1_identity_proto_rawDesc), len(file_v1_identity_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   11,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
