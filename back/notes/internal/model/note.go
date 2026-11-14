@@ -52,15 +52,19 @@ type PublicNote struct {
 }
 
 type Attachment struct {
-	ID             string    `json:"id"`
-	NoteID         string    `json:"note_id"`
-	ExternalFileID string    `json:"external_file_id"`
-	FileURL        string    `json:"file_url"`
-	FileType       string    `json:"file_type"`
-	FileName       *string   `json:"file_name,omitempty"`
-	FileSizeBytes  *int      `json:"file_size_bytes,omitempty"`
-	IsInline       bool      `json:"is_inline"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID             string  `json:"id"`
+	NoteID         string  `json:"note_id"`
+	ExternalFileID string  `json:"external_file_id"`
+	FileURL        string  `json:"file_url"`
+	FileType       string  `json:"file_type"`
+	FileName       *string `json:"file_name,omitempty"`
+	FileSizeBytes  *int    `json:"file_size_bytes,omitempty"`
+	IsInline       bool    `json:"is_inline"`
+	// CopiedFromAttachmentID es la procedencia lógica cuando esta fila nació
+	// al copiar un apunte. No se expone en la API: solo se usa para
+	// idempotencia/trazabilidad interna del copiado.
+	CopiedFromAttachmentID *string   `json:"-"`
+	CreatedAt              time.Time `json:"created_at"`
 }
 
 type SavedNote struct {

@@ -122,6 +122,13 @@ func (m *MemoryNoteStore) Create(ctx context.Context, noteID string, userID stri
 	if _, exists := m.notes[noteID]; exists {
 		return nil, fmt.Errorf("create note: duplicate_note_id: %s", noteID)
 	}
+	if forkedFrom != nil && strings.TrimSpace(*forkedFrom) != "" {
+		for _, existing := range m.notes {
+			if existing.UserID == userID && existing.ForkedFromNoteID != nil && *existing.ForkedFromNoteID == *forkedFrom {
+				return nil, repository.ErrAlreadyCopied
+			}
+		}
+	}
 	n := &model.Note{
 		ID: noteID, UserID: userID, SubjectID: subjectID, Title: title,
 		ExternalFileID: externalFileID, Visibility: visibility, LikesCount: 0,
@@ -141,6 +148,20 @@ func (m *MemoryNoteStore) GetByID(ctx context.Context, id string) (*model.Note, 
 	}
 	cop := *n
 	return &cop, nil
+}
+
+// GetByUserAndForkedFrom replica el índice único parcial
+// uq_notes_user_forked_from: como máximo un clon vivo por usuario y origen.
+func (m *MemoryNoteStore) GetByUserAndForkedFrom(ctx context.Context, userID, forkedFromNoteID string) (*model.Note, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, n := range m.notes {
+		if n.UserID == userID && n.ForkedFromNoteID != nil && *n.ForkedFromNoteID == forkedFromNoteID {
+			cop := *n
+			return &cop, nil
+		}
+	}
+	return nil, nil
 }
 func (m *MemoryNoteStore) ListByUser(ctx context.Context, userID, cursor string, limit int) ([]*model.Note, string, error) {
 	m.mu.RLock()
@@ -480,6 +501,42 @@ func (m *MemoryAttachmentStore) GetByID(ctx context.Context, id string) (*model.
 	}
 	cop := *a
 	return &cop, nil
+}
+
+// CreateCopy replica la idempotencia de uq_note_attachments_copy_source: un
+// reintento con el mismo par (noteID, sourceAttachmentID) devuelve la fila ya
+// creada en lugar de duplicarla.
+func (m *MemoryAttachmentStore) CreateCopy(ctx context.Context, noteID, externalFileID, fileURL, fileType string, fileName *string, fileSize *int, isInline bool, copiedFromAttachmentID string) (*model.Attachment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, existing := range m.atts {
+		if existing.NoteID == noteID && existing.CopiedFromAttachmentID != nil && *existing.CopiedFromAttachmentID == copiedFromAttachmentID {
+			cop := *existing
+			return &cop, nil
+		}
+	}
+	id := uuid.NewString()
+	source := copiedFromAttachmentID
+	a := &model.Attachment{
+		ID: id, NoteID: noteID, ExternalFileID: externalFileID, FileURL: fileURL, FileType: fileType,
+		FileName: fileName, FileSizeBytes: fileSize, IsInline: isInline,
+		CopiedFromAttachmentID: &source, CreatedAt: time.Now().UTC(),
+	}
+	m.atts[id] = a
+	cop := *a
+	return &cop, nil
+}
+
+func (m *MemoryAttachmentStore) GetByNoteAndSource(ctx context.Context, noteID, sourceAttachmentID string) (*model.Attachment, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, a := range m.atts {
+		if a.NoteID == noteID && a.CopiedFromAttachmentID != nil && *a.CopiedFromAttachmentID == sourceAttachmentID {
+			cop := *a
+			return &cop, nil
+		}
+	}
+	return nil, nil
 }
 func (m *MemoryAttachmentStore) ListByNote(ctx context.Context, noteID string) ([]*model.Attachment, error) {
 	m.mu.RLock()

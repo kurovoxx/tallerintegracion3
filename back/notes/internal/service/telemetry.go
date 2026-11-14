@@ -97,6 +97,13 @@ func (s *NoteService) observedDriveCopyFile(ctx context.Context, srcUserID strin
 	return result0, err
 }
 
+func (s *NoteService) observedDriveCopyAttachment(ctx context.Context, srcUserID string, srcFileID string, dstUserID string, newNoteID string, fileName string, fileType string, isInline bool) (string, string, error) {
+	started := time.Now()
+	result0, result1, err := s.drive.CopyAttachment(ctx, srcUserID, srcFileID, dstUserID, newNoteID, fileName, fileType, isInline)
+	logNotesResult(ctx, started, "DRIVE UPLOAD", result0, err, "source_user_id", srcUserID, "source_drive_file_id", srcFileID, "user_id", dstUserID, "note_id", newNoteID, "file_type", fileType, "is_inline", isInline)
+	return result0, result1, err
+}
+
 func (s *NoteService) observedDriveFindFileByNoteID(ctx context.Context, ownerUserID string, noteID string) (string, error) {
 	started := time.Now()
 	result0, err := s.drive.FindFileByNoteID(ctx, ownerUserID, noteID)
@@ -182,6 +189,17 @@ func (s *NoteService) observedNotesGetByID(ctx context.Context, id string) (*mod
 	return result0, err
 }
 
+func (s *NoteService) observedNotesGetByUserAndForkedFrom(ctx context.Context, userID, forkedFromNoteID string) (*model.Note, error) {
+	started := time.Now()
+	result0, err := s.notes.GetByUserAndForkedFrom(ctx, userID, forkedFromNoteID)
+	attrs := []any{"user_id", userID, "forked_from_note_id", forkedFromNoteID}
+	if result0 != nil {
+		attrs = append(attrs, "note_id", result0.ID, "sync_status", result0.SyncStatus)
+	}
+	logNotesResult(ctx, started, "DB notes.GetByUserAndForkedFrom", "", err, attrs...)
+	return result0, err
+}
+
 func (s *NoteService) observedNotesListByUser(ctx context.Context, userID, cursor string, limit int) ([]*model.Note, string, error) {
 	started := time.Now()
 	result0, result1, err := s.notes.ListByUser(ctx, userID, cursor, limit)
@@ -264,6 +282,28 @@ func (s *NoteService) observedAttachmentsCreate(ctx context.Context, noteID, ext
 		attrs = append(attrs, "attachment_id", result0.ID)
 	}
 	logNotesResult(ctx, started, "DB attachments.Create", externalFileID, err, attrs...)
+	return result0, err
+}
+
+func (s *NoteService) observedAttachmentsCreateCopy(ctx context.Context, noteID, externalFileID, fileURL, fileType string, fileName *string, fileSize *int, isInline bool, copiedFromAttachmentID string) (*model.Attachment, error) {
+	started := time.Now()
+	result0, err := s.attachments.CreateCopy(ctx, noteID, externalFileID, fileURL, fileType, fileName, fileSize, isInline, copiedFromAttachmentID)
+	attrs := []any{"note_id", noteID, "drive_file_id", externalFileID, "file_type", fileType, "is_inline", isInline, "copied_from_attachment_id", copiedFromAttachmentID}
+	if result0 != nil {
+		attrs = append(attrs, "attachment_id", result0.ID)
+	}
+	logNotesResult(ctx, started, "DB attachments.CreateCopy", externalFileID, err, attrs...)
+	return result0, err
+}
+
+func (s *NoteService) observedAttachmentsGetByNoteAndSource(ctx context.Context, noteID, sourceAttachmentID string) (*model.Attachment, error) {
+	started := time.Now()
+	result0, err := s.attachments.GetByNoteAndSource(ctx, noteID, sourceAttachmentID)
+	attrs := []any{"note_id", noteID, "copied_from_attachment_id", sourceAttachmentID}
+	if result0 != nil {
+		attrs = append(attrs, "attachment_id", result0.ID)
+	}
+	logNotesResult(ctx, started, "DB attachments.GetByNoteAndSource", "", err, attrs...)
 	return result0, err
 }
 

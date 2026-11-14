@@ -334,6 +334,31 @@ func (r *RealDriveClient) CopyFile(ctx context.Context, srcUserID string, srcFil
 	return f.Id, nil
 }
 
+// CopyAttachment clona un binario adjunto al Drive del usuario que copia el
+// apunte. Descarga con el token del destino (archivo público/compartido) y cae
+// al token del autor (archivo aún no compartido); sube una copia nueva con el
+// MIME y nombre originales al Drive del destino. Nunca comparte el archivo del
+// autor ni reutiliza URLs públicas: el clon es un archivo independiente.
+func (r *RealDriveClient) CopyAttachment(ctx context.Context, srcUserID string, srcFileID string, dstUserID string, newNoteID string, fileName string, fileType string, isInline bool) (string, string, error) {
+	dstSrv, err := r.serviceFor(ctx, dstUserID)
+	if err != nil {
+		return "", "", err
+	}
+	data, err := downloadWith(dstSrv, srcFileID)
+	if err != nil {
+		srcSrv, errSrc := r.serviceFor(ctx, srcUserID)
+		if errSrc != nil {
+			return "", "", err
+		}
+		dataFallback, errFallback := downloadWith(srcSrv, srcFileID)
+		if errFallback != nil {
+			return "", "", errFallback
+		}
+		data = dataFallback
+	}
+	return r.UploadAttachment(ctx, dstUserID, newNoteID, fileName, fileType, data, isInline)
+}
+
 // downloadWith descarga el contenido crudo de un archivo con errores mapeados.
 func downloadWith(srv *drive.Service, fileID string) ([]byte, error) {
 	resp, err := srv.Files.Get(fileID).Download()

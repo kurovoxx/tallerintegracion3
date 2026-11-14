@@ -64,7 +64,38 @@ func (r *NoteRepository) Create(ctx context.Context, db DBTX, noteID string, use
 		&n.ID, &n.UserID, &n.SubjectID, &n.Title, &n.ExternalFileID, &n.Visibility, &n.LikesCount, &n.ForkedFromNoteID, &n.SyncStatus, &n.Version, &n.CreatedAt, &n.UpdatedAt,
 	)
 	if err != nil {
+		// uq_notes_user_forked_from (migración 006): dos copias concurrentes
+		// del mismo apunte origen para el mismo usuario. El llamador traduce
+		// esto a 409 already_copied en lugar de 500.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "uq_notes_user_forked_from" {
+			return nil, ErrAlreadyCopied
+		}
 		return nil, fmt.Errorf("create note: %w", err)
+	}
+	return &n, nil
+}
+
+// GetByUserAndForkedFrom devuelve el clon vivo que el usuario ya tiene de un
+// apunte origen. nil, nil si aún no existe. Se usa para rechazar la segunda
+// copia con 409 already_copied y para reutilizar un clon failed_sync.
+func (r *NoteRepository) GetByUserAndForkedFrom(ctx context.Context, db DBTX, userID, forkedFromNoteID string) (*model.Note, error) {
+	if db == nil {
+		db = r.pool
+	}
+	var n model.Note
+	err := db.QueryRow(ctx, `
+		SELECT id, user_id, subject_id, title, external_file_id, visibility, likes_count, forked_from_note_id, sync_status, version, created_at, updated_at
+		FROM notes.notes
+		WHERE user_id = $1 AND forked_from_note_id = $2::uuid
+		LIMIT 1`, userID, forkedFromNoteID).Scan(
+		&n.ID, &n.UserID, &n.SubjectID, &n.Title, &n.ExternalFileID, &n.Visibility, &n.LikesCount, &n.ForkedFromNoteID, &n.SyncStatus, &n.Version, &n.CreatedAt, &n.UpdatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get note by user and forked_from: %w", err)
 	}
 	return &n, nil
 }
@@ -540,6 +571,10 @@ var ErrConflict = errors.New("conflict")
 // ErrAlreadyShared: la nota ya tiene un vínculo con ese grupo
 // (UNIQUE (note_id, group_id) de notes.shared_notes, migración 005).
 var ErrAlreadyShared = errors.New("already_shared")
+
+// ErrAlreadyCopied: el usuario ya tiene un clon vivo de ese apunte origen
+// (uq_notes_user_forked_from, migración 006). Se traduce a 409 already_copied.
+var ErrAlreadyCopied = errors.New("already_copied")
 
 // EnqueueDriveOperation accepts a transaction so the outbox and local mutation
 // commit together. Empty logical references are stored as NULL.

@@ -25,6 +25,9 @@ func (p *PGNoteStore) Create(ctx context.Context, noteID string, userID string, 
 func (p *PGNoteStore) GetByID(ctx context.Context, id string) (*model.Note, error) {
 	return p.repo.GetByID(ctx, nil, id)
 }
+func (p *PGNoteStore) GetByUserAndForkedFrom(ctx context.Context, userID, forkedFromNoteID string) (*model.Note, error) {
+	return p.repo.GetByUserAndForkedFrom(ctx, nil, userID, forkedFromNoteID)
+}
 func (p *PGNoteStore) ListByUser(ctx context.Context, userID, cursor string, limit int) ([]*model.Note, string, error) {
 	return p.repo.ListByUser(ctx, nil, userID, cursor, limit)
 }
@@ -69,6 +72,12 @@ func (p *PGAttachmentStore) Create(ctx context.Context, noteID, externalFileID, 
 }
 func (p *PGAttachmentStore) GetByID(ctx context.Context, id string) (*model.Attachment, error) {
 	return p.repo.GetByID(ctx, nil, id)
+}
+func (p *PGAttachmentStore) CreateCopy(ctx context.Context, noteID, externalFileID, fileURL, fileType string, fileName *string, fileSize *int, isInline bool, copiedFromAttachmentID string) (*model.Attachment, error) {
+	return p.repo.CreateCopy(ctx, nil, noteID, externalFileID, fileURL, fileType, fileName, fileSize, isInline, copiedFromAttachmentID)
+}
+func (p *PGAttachmentStore) GetByNoteAndSource(ctx context.Context, noteID, sourceAttachmentID string) (*model.Attachment, error) {
+	return p.repo.GetByNoteAndSource(ctx, nil, noteID, sourceAttachmentID)
 }
 func (p *PGAttachmentStore) ListByNote(ctx context.Context, noteID string) ([]*model.Attachment, error) {
 	return p.repo.ListByNote(ctx, nil, noteID)

@@ -426,6 +426,10 @@ type NoteStore interface {
 	// misma fila en lugar de duplicarla.
 	Create(ctx context.Context, noteID string, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string, syncStatus string) (*model.Note, error)
 	GetByID(ctx context.Context, id string) (*model.Note, error)
+	// GetByUserAndForkedFrom devuelve el clon vivo del usuario para ese apunte
+	// origen, o nil si no existe. Sirve para rechazar la segunda copia (409
+	// already_copied) y para reintentar un clon failed_sync.
+	GetByUserAndForkedFrom(ctx context.Context, userID, forkedFromNoteID string) (*model.Note, error)
 	ListByUser(ctx context.Context, userID, cursor string, limit int) ([]*model.Note, string, error)
 	// ListPublicByUser lista solo apuntes públicos del autor indicado con el
 	// cursor keyset (created_at DESC, id DESC). El store debe rechazar
@@ -460,6 +464,13 @@ type NoteStore interface {
 
 type AttachmentStore interface {
 	Create(ctx context.Context, noteID, externalFileID, fileURL, fileType string, fileName *string, fileSize *int, isInline bool) (*model.Attachment, error)
+	// CreateCopy registra el adjunto clonado con su procedencia. Debe ser
+	// idempotente: si (noteID, copiedFromAttachmentID) ya existe, devuelve la
+	// fila existente en lugar de duplicarla.
+	CreateCopy(ctx context.Context, noteID, externalFileID, fileURL, fileType string, fileName *string, fileSize *int, isInline bool, copiedFromAttachmentID string) (*model.Attachment, error)
+	// GetByNoteAndSource recupera el adjunto clonado de un adjunto origen, o
+	// nil si aún no se copió.
+	GetByNoteAndSource(ctx context.Context, noteID, sourceAttachmentID string) (*model.Attachment, error)
 	GetByID(ctx context.Context, id string) (*model.Attachment, error)
 	ListByNote(ctx context.Context, noteID string) ([]*model.Attachment, error)
 	Delete(ctx context.Context, id string) error
@@ -1889,6 +1900,27 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 		}()
 	}
 
+	// 0.1 Un usuario solo puede tener un clon vivo por apunte origen
+	// (uq_notes_user_forked_from, migración 006). El replay de la MISMA clave
+	// ya retornó arriba; aquí distinguimos el reintento reutilizable
+	// (failed_sync) de una copia ya completada o en curso (409 already_copied).
+	existing, err := s.observedNotesGetByUserAndForkedFrom(ctx, userID, noteID)
+	if err != nil {
+		return nil, ErrInternalDatabase
+	}
+	if existing != nil && existing.ID != newNoteID {
+		if existing.SyncStatus == "failed_sync" {
+			// El intento anterior dejó la fila (y quizá el .md huérfano):
+			// reutilizarla permite retomar la copia sin duplicar el apunte.
+			newNoteID = existing.ID
+			recoveredFromCrash = true
+			pgInserted = true
+		} else {
+			log.Printf("notes: copy nota %s: usuario %s ya tiene el clon %s (%s)", noteID, userID, existing.ID, existing.SyncStatus)
+			return nil, newServiceError(utils.ErrAlreadyCopied)
+		}
+	}
+
 	// 1. Insertar metadata en PG con sync_status='pending_drive' ANTES de copiar en Drive.
 	// Reset SubjectID for the clone to prevent unauthorized access (auditoría:
 	// el subjectID del original nunca se hereda al clon). Si el intento anterior
@@ -1907,6 +1939,11 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 	if newNote == nil {
 		newNote, err = s.observedNotesCreate(ctx, newNoteID, userID, nilSubject, orig.Title, nil, "private", &orig.ID, "pending_drive")
 		if err != nil {
+			// Carrera entre dos copias concurrentes del mismo apunte: el índice
+			// único uq_notes_user_forked_from rechaza la segunda inserción.
+			if errors.Is(err, repository.ErrAlreadyCopied) {
+				return nil, newServiceError(utils.ErrAlreadyCopied)
+			}
 			return nil, ErrInternalDatabase
 		}
 		pgInserted = true
@@ -1933,6 +1970,9 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 		if findErr != nil {
 			_ = s.observedNotesUpdateSyncStatus(ctx, newNote.ID, "failed_sync")
 			log.Printf("notes: copy retry clon %s: no se pudo verificar el huérfano en Drive: %v", newNote.ID, findErr)
+			if drive.IsOAuthError(findErr) {
+				return nil, newServiceErrorMsg(utils.ErrForbidden, "Conecte o renueve su Google Drive")
+			}
 			return nil, ErrDriveUnavailable
 		}
 		newFileID = found
@@ -1978,6 +2018,20 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 			_ = s.observedNotesEnqueueDriveOperation(ctx, "delete_file", newNote.ID, "", newFileID, userID, map[string]any{"reason": "copy_orphan_failed"})
 			log.Printf("[CRITICAL_UNRECONCILED] notes: copy fileID duplicado, compensación falló (file %s): %v", newFileID, compErr)
 		}
+		return nil, ErrDriveUnavailable
+	}
+
+	// 2.1 Copiar físicamente los adjuntos al Drive del copiador y reescribir
+	// las referencias `attachment:<uuid>` del Markdown clonado. Se ejecuta antes
+	// de marcar 'synced': si falla, la nota queda failed_sync y el retry
+	// reutiliza la fila y los adjuntos ya copiados (idempotente).
+	if err := s.copyAttachmentsAndRewrite(ctx, userID, orig.UserID, orig.ID, newNote.ID, newFileID); err != nil {
+		_ = s.observedNotesUpdateSyncStatus(ctx, newNote.ID, "failed_sync")
+		if drive.IsOAuthError(err) {
+			log.Printf("notes: copy nota %s: adjuntos sin OAuth vigente del clonador: %v", noteID, err)
+			return nil, newServiceErrorMsg(utils.ErrForbidden, "Conecte o renueve su Google Drive")
+		}
+		log.Printf("notes: copy nota %s: fallo al copiar adjuntos del clon %s: %v", noteID, newNote.ID, err)
 		return nil, ErrDriveUnavailable
 	}
 

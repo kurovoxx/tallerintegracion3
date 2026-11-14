@@ -277,6 +277,12 @@ CREATE TABLE notes.notes (
 CREATE INDEX idx_notes_user_id ON notes.notes(user_id);
 CREATE INDEX idx_notes_subject_id ON notes.notes(subject_id);
 CREATE INDEX idx_notes_visibility ON notes.notes(visibility);
+-- Un usuario solo puede tener un clon vivo por apunte origen (ver migración
+-- 006). El índice parcial excluye las notas creadas desde cero y los clones
+-- cuyo original fue borrado (forked_from_note_id pasa a NULL).
+CREATE UNIQUE INDEX uq_notes_user_forked_from
+    ON notes.notes(user_id, forked_from_note_id)
+    WHERE forked_from_note_id IS NOT NULL;
 
 -- Archivos adjuntos (imágenes, PDF, etc), también alojados en el Drive del
 -- autor. is_inline distingue si ya está referenciado dentro del Markdown del
@@ -290,10 +296,18 @@ CREATE TABLE notes.note_attachments (
     file_name varchar(300),
     file_size_bytes int,
     is_inline boolean NOT NULL DEFAULT false,
+    -- Adjunto del apunte original del que se copió este archivo (NULL en
+    -- adjuntos subidos directamente por el autor). Ver migración 006.
+    copied_from_attachment_id uuid,
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_note_attachments_note_id ON notes.note_attachments(note_id);
+-- Idempotencia del copiado de adjuntos: un reintento reutiliza la fila ya
+-- creada para el mismo adjunto origen en el mismo clon.
+CREATE UNIQUE INDEX uq_note_attachments_copy_source
+    ON notes.note_attachments(note_id, copied_from_attachment_id)
+    WHERE copied_from_attachment_id IS NOT NULL;
 
 -- Referencia (no copia): "guardar" un apunte de otro usuario para verlo después.
 -- note_id es una referencia LÓGICA (sin FK): si el autor borra el original, el
