@@ -53,6 +53,19 @@ func (f *fakeUserRepo) GetPublicByIDs(_ context.Context, ids []string) ([]model.
 	return out, nil
 }
 
+// fakePublicProfiles resuelve public_id → UUID para ResolvePublicProfile.
+type fakePublicProfiles struct {
+	ids map[string]string
+	err error
+}
+
+func (f *fakePublicProfiles) GetIDByPublicID(_ context.Context, publicID string) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.ids[publicID], nil
+}
+
 // fakeTokenSvc programa tokens o errores de dominio por usuario.
 type fakeTokenSvc struct {
 	tokens map[string]string
@@ -107,7 +120,10 @@ func newTestIdentity(t *testing.T) identityv1.IdentityServiceClient {
 		errs:   map[string]string{testNocon: "not_connected", testRev: "calendar_connection_invalid", testDown: "google_unavailable"},
 	}
 
-	srv := NewIdentityServer(service.NewUsersService(repo), jwtSvc, drive, calendar, store)
+	srv := NewIdentityServerWithPublicProfiles(
+		service.NewUsersService(repo), jwtSvc, drive, calendar, store,
+		&fakePublicProfiles{ids: map[string]string{"a8kp92mqwx7r": testAda}},
+	)
 	lis := bufconn.Listen(1 << 20)
 	s := grpc.NewServer(grpc.ChainUnaryInterceptor(
 		interceptor.NewLogging(nil),
@@ -186,6 +202,59 @@ func TestIdentityServer_LookupUsers(t *testing.T) {
 	}
 	_, err = c.LookupUsers(ctx, &identityv1.LookupUsersRequest{UserIds: []string{testAda, testMal}})
 	wantCode(t, err, codes.InvalidArgument)
+}
+
+// TestIdentityServer_ResolvePublicProfile cubre resolución, normalización,
+// formato inválido, inexistente y fallo interno.
+func TestIdentityServer_ResolvePublicProfile(t *testing.T) {
+	c := newTestIdentity(t)
+	ctx := authedCtx()
+	r, err := c.ResolvePublicProfile(ctx, &identityv1.ResolvePublicProfileRequest{PublicId: "A8KP92MQWX7R"})
+	if err != nil || r.GetUserId() != testAda {
+		t.Fatalf("ResolvePublicProfile = %v, %v", r, err)
+	}
+	_, err = c.ResolvePublicProfile(ctx, &identityv1.ResolvePublicProfileRequest{PublicId: "a8kp92mqwx7l"})
+	wantCode(t, err, codes.InvalidArgument)
+	_, err = c.ResolvePublicProfile(ctx, &identityv1.ResolvePublicProfileRequest{PublicId: "zzzzzzzzzzzz"})
+	wantCode(t, err, codes.NotFound)
+	_, err = c.ResolvePublicProfile(context.Background(), &identityv1.ResolvePublicProfileRequest{PublicId: "a8kp92mqwx7r"})
+	wantCode(t, err, codes.Unauthenticated)
+}
+
+// TestIdentityServer_ResolvePublicProfile_Internal verifica que un fallo del
+// repositorio no se traduzca en NotFound (el llamador debe poder devolver 503).
+func TestIdentityServer_ResolvePublicProfile_Internal(t *testing.T) {
+	jwtSvc, err := service.NuevoJWTService(service.ConfiguracionJWT{
+		ClaveSecreta: []byte("secreto-de-prueba"),
+		Issuer:       "apuntes-auth",
+		Audience:     "apuntes-client",
+		Duracion:     time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := NewIdentityServerWithPublicProfiles(
+		service.NewUsersService(&fakeUserRepo{}), jwtSvc, &fakeTokenSvc{}, &fakeTokenSvc{}, &fakeStore{},
+		&fakePublicProfiles{err: context.DeadlineExceeded},
+	)
+	lis := bufconn.Listen(1 << 20)
+	s := grpc.NewServer(grpc.ChainUnaryInterceptor(
+		interceptor.NewLogging(nil),
+		interceptor.NewInternalAuth(testKey),
+	))
+	identityv1.RegisterIdentityServiceServer(s, srv)
+	go func() { _ = s.Serve(lis) }()
+	t.Cleanup(s.Stop)
+	conn, err := grpc.NewClient("passthrough:///bufnet",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return lis.DialContext(ctx) }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client := identityv1.NewIdentityServiceClient(conn)
+	_, err = client.ResolvePublicProfile(authedCtx(), &identityv1.ResolvePublicProfileRequest{PublicId: "a8kp92mqwx7r"})
+	wantCode(t, err, codes.Internal)
 }
 
 // TestIdentityServer_VerifyToken cubre válido, inválido, expirado y vacío.
