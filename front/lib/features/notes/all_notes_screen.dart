@@ -24,6 +24,8 @@ import '../../core/theme/app_theme.dart';
 import '../../core/common_widgets.dart';
 import '../../core/widgets/neobrutalism.dart';
 import '../academic/academic_mappers.dart';
+import 'attachment_bytes_opener.dart';
+import 'attachment_content.dart';
 import 'attachment_resources.dart';
 import 'note_file_picker.dart';
 import 'note_id_search_screen.dart';
@@ -7495,13 +7497,130 @@ Widget _resourceInfoRow(String label, String value, {bool mono = false}) {
 
 /// Visor de recurso: imagen grande (con fallback neobrutalista) o ficha técnica
 /// del documento con apertura real en el visor del sistema y copia a descargas.
-class _ResourceViewerDialog extends StatelessWidget {
+class _ResourceViewerDialog extends StatefulWidget {
   final Map<String, dynamic> resource;
-  const _ResourceViewerDialog({required this.resource});
 
+  /// Inyectables para pruebas: evitan abrir visores reales y permiten capturar
+  /// los bytes servidos por el endpoint autenticado.
+  final http.Client? client;
+  final Future<bool> Function(Uint8List, String, String)? openAttachment;
+  final Future<String?> Function(Uint8List, String, String)? saveAttachment;
+
+  const _ResourceViewerDialog({
+    required this.resource,
+    this.client,
+    this.openAttachment,
+    this.saveAttachment,
+  });
+
+  @override
+  State<_ResourceViewerDialog> createState() => _ResourceViewerDialogState();
+}
+
+class _ResourceViewerDialogState extends State<_ResourceViewerDialog> {
+  bool _busy = false;
+  AttachmentContent? _content;
+
+  Map<String, dynamic> get resource => widget.resource;
   bool get _isWindows => !kIsWeb && Platform.isWindows;
-
   String get _url => (resource['url'] ?? '') as String;
+
+  String? get _noteId {
+    final value = resource['note_id'];
+    return value is String && value.trim().isNotEmpty ? value.trim() : null;
+  }
+
+  String? get _attachmentId {
+    final value = resource['attachment_id'];
+    return value is String && value.trim().isNotEmpty ? value.trim() : null;
+  }
+
+  /// Un adjunto real siempre se sirve por el endpoint autenticado, aunque su
+  /// `file_url` sea un enlace de Drive (mock o real). Así el visor no depende
+  /// de que el archivo del autor siga compartido ni de que Drive exista.
+  bool get _hasAttachment => _noteId != null && _attachmentId != null;
+
+  Future<AttachmentContent> _loadContent() async {
+    final cached = _content;
+    if (cached != null) return cached;
+    final content = await fetchAttachmentContent(
+      baseUrl: notesBaseUrl,
+      noteId: _noteId!,
+      attachmentId: _attachmentId!,
+      fileName: (resource['name'] as String?) ?? 'adjunto',
+      client: widget.client,
+    );
+    if (mounted) setState(() => _content = content);
+    return content;
+  }
+
+  void _snack(BuildContext context, String message) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: Colors.black,
+        content: Text(
+          message,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openAttachment(BuildContext context) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final content = await _loadContent();
+      final opener = widget.openAttachment ?? openAttachmentBytes;
+      final ok = await opener(
+        content.bytes,
+        content.fileName,
+        content.mimeType,
+      );
+      if (!context.mounted) return;
+      _snack(
+        context,
+        ok
+            ? 'Abriendo ${content.fileName}…'
+            : 'No se pudo abrir el documento. Usa DESCARGAR.',
+      );
+    } on AttachmentContentException catch (e) {
+      if (!context.mounted) return;
+      _snack(context, e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _saveAttachment(BuildContext context) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final content = await _loadContent();
+      final saver = widget.saveAttachment ?? saveAttachmentBytes;
+      final dest = await saver(
+        content.bytes,
+        content.fileName,
+        content.mimeType,
+      );
+      if (!context.mounted) return;
+      _snack(
+        context,
+        dest != null
+            ? 'Documento guardado en: $dest'
+            : 'No se pudo guardar el documento.',
+      );
+    } on AttachmentContentException catch (e) {
+      if (!context.mounted) return;
+      _snack(context, e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   Future<void> _openInSystemViewer(BuildContext context, String url) async {
     final ok = await _openResourceExternally(url);
@@ -7523,6 +7642,10 @@ class _ResourceViewerDialog extends StatelessWidget {
   }
 
   Future<void> _download(BuildContext context, _ResourceFileInfo info) async {
+    if (_hasAttachment) {
+      await _saveAttachment(context);
+      return;
+    }
     String message;
     if (info.localFile != null) {
       final dest = await _copyLocalResourceToDownloads(info.localFile!);
@@ -7553,6 +7676,13 @@ class _ResourceViewerDialog extends StatelessWidget {
   }
 
   String get _primaryLabel {
+    if (_hasAttachment) {
+      if (resource['type'] == 'image') {
+        return _busy ? 'GUARDANDO…' : 'DESCARGAR';
+      }
+      if (_busy) return 'ABRIENDO…';
+      return resource['type'] == 'pdf' ? 'ABRIR PDF' : 'ABRIR DOCUMENTO';
+    }
     final info = _ResourceFileInfo.resolve(_url);
     return info.isRemote
         ? (isDriveViewerUrl(_url) ? 'ABRIR EN DRIVE' : 'ABRIR')
@@ -7564,6 +7694,14 @@ class _ResourceViewerDialog extends StatelessWidget {
   }
 
   void _onPrimary(BuildContext context) {
+    if (_hasAttachment) {
+      if (resource['type'] == 'image') {
+        _download(context, _ResourceFileInfo.resolve(_url));
+      } else {
+        _openAttachment(context);
+      }
+      return;
+    }
     final info = _ResourceFileInfo.resolve(_url);
     final isImage = resource['type'] == 'image';
     if (isImage && info.localFile != null) {
@@ -7586,7 +7724,7 @@ class _ResourceViewerDialog extends StatelessWidget {
           ? NeobrutalistButtonVariant.accent
           : NeobrutalistButtonVariant.info,
       closeOnConfirm: false,
-      onConfirm: () => _onPrimary(context),
+      onConfirm: _busy ? null : () => _onPrimary(context),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -7651,12 +7789,12 @@ class _ResourceViewerDialog extends StatelessWidget {
             )
           else
             _buildDocInfo(info),
-          if (!isImage && info.localFile != null) ...[
+          if (!isImage && (_hasAttachment || info.localFile != null)) ...[
             const SizedBox(height: 12),
             NeobrutalistButton(
-              label: 'DESCARGAR',
+              label: _busy ? 'GUARDANDO…' : 'DESCARGAR',
               variant: NeobrutalistButtonVariant.secondary,
-              onPressed: () => _download(context, info),
+              onPressed: _busy ? null : () => _download(context, info),
             ),
           ],
         ],
@@ -7668,22 +7806,29 @@ class _ResourceViewerDialog extends StatelessWidget {
   /// de disponibilidad, más el tipo de acceso (local verificado o remoto).
   Widget _buildDocInfo(_ResourceFileInfo info) {
     final isPdf = resource['type'] == 'pdf';
-    final sizeLabel = info.sizeBytes != null
+    final downloaded = _content;
+    final sizeLabel = downloaded != null
+        ? _formatFileSize(downloaded.bytes.length)
+        : info.sizeBytes != null
         ? _formatFileSize(info.sizeBytes!)
-        : info.isRemote
+        : (_hasAttachment || info.isRemote)
         ? 'Remoto'
         : '${resource['size'] ?? '—'}';
     final pathLabel =
         info.absolutePath ??
-        (info.isRemote ? _url : 'No se encontró el archivo en disco');
-    final badgeLabel = info.exists
+        (_hasAttachment
+            ? 'notes/$_noteId/attachments/$_attachmentId/content'
+            : (info.isRemote ? _url : 'No se encontró el archivo en disco'));
+    final badgeLabel = info.exists || downloaded != null
         ? 'DOCUMENTO LISTO'
+        : _hasAttachment
+        ? 'DOCUMENTO ADJUNTO'
         : info.isRemote
         ? 'DOCUMENTO REMOTO'
         : 'ARCHIVO NO ENCONTRADO';
-    final badgeColor = info.exists
+    final badgeColor = info.exists || downloaded != null
         ? AppColors.subjectMint
-        : info.isRemote
+        : (_hasAttachment || info.isRemote)
         ? AppColors.accentYellow
         : const Color(0xFFFFD6D2);
 
@@ -7739,6 +7884,8 @@ class _ResourceViewerDialog extends StatelessWidget {
             'ORIGEN',
             info.exists
                 ? 'Archivo local verificado en disco'
+                : _hasAttachment
+                ? 'Adjunto de la nota vía endpoint autenticado'
                 : info.isRemote
                 ? 'URL remota (visor/descarga externa)'
                 : 'Sin archivo asociado en disco',
@@ -8638,3 +8785,18 @@ class _NeobrutalistMarkdownBody extends StatelessWidget {
     );
   }
 }
+
+/// Visor de recursos para pruebas: permite inyectar el cliente HTTP del
+/// endpoint autenticado y capturar los bytes entregados al abridor/descarga.
+@visibleForTesting
+Widget debugBuildResourceViewer(
+  Map<String, dynamic> resource, {
+  http.Client? client,
+  Future<bool> Function(Uint8List, String, String)? openAttachment,
+  Future<String?> Function(Uint8List, String, String)? saveAttachment,
+}) => _ResourceViewerDialog(
+  resource: resource,
+  client: client,
+  openAttachment: openAttachment,
+  saveAttachment: saveAttachment,
+);
