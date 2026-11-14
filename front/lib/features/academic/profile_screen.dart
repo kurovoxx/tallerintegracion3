@@ -583,15 +583,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
     await _restoreDriveStatus();
   }
 
-  /// Copia el identificador público del perfil (12 caracteres). Nunca copia
-  /// el UUID interno ni otro dato personal.
-  Future<void> _handleCopyPublicId() async {
-    final publicId = normalizePublicId(_profile?.publicId ?? '');
-    if (publicId == null) {
+  /// «Compartir perfil»: copia el enlace `sigma-academy://perfil/<public_id>`
+  /// construido con el identificador público (nunca con el UUID interno ni
+  /// otro dato personal). Solo copia: no registra ni abre deep links.
+  Future<void> _handleShareProfile() async {
+    final link = publicProfileLink(_profile?.publicId ?? '');
+    if (link == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'No se pudo obtener tu ID de perfil. Vuelve a iniciar sesión.',
+            'No se pudo obtener el enlace de tu perfil. Vuelve a iniciar sesión.',
           ),
           backgroundColor: AppColors.error,
         ),
@@ -600,12 +601,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
 
     try {
-      await Clipboard.setData(ClipboardData(text: publicId));
+      await Clipboard.setData(ClipboardData(text: link));
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('No se pudo copiar tu ID. Inténtalo nuevamente.'),
+          content: Text('No se pudo copiar el enlace. Inténtalo nuevamente.'),
           backgroundColor: AppColors.error,
         ),
       );
@@ -615,7 +616,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('ID de perfil copiado al portapapeles.'),
+        content: Text('Enlace del perfil copiado al portapapeles.'),
         backgroundColor: AppColors.border,
       ),
     );
@@ -828,6 +829,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
       );
     }
 
+    final shareButton = NeobrutalistIconButton(
+      key: const ValueKey('profile-share-link'),
+      icon: Icons.share_rounded,
+      tooltip: 'Compartir perfil',
+      onPressed: _handleShareProfile,
+    );
+
     // Salida rápida para tests: un tap, sin diálogos ni scroll.
     final quickLogoutButton = NeobrutalistIconButton(
       icon: Icons.logout_rounded,
@@ -839,6 +847,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Expanded(child: titleBlock),
+        const SizedBox(width: AppDimens.spaceSm),
+        shareButton,
         const SizedBox(width: AppDimens.spaceSm),
         quickLogoutButton,
       ],
@@ -852,8 +862,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (_profile == null) return const [SizedBox.shrink()];
     return [
       _buildIdentityCard(isDesktop),
-      const SizedBox(height: AppDimens.spaceLg),
-      _buildMyPublicIdCard(isDesktop),
       const SizedBox(height: AppDimens.spaceLg),
       _buildProfileSearchCard(isDesktop),
       const SizedBox(height: AppDimens.spaceLg),
@@ -989,63 +997,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildMyPublicIdCard(bool isDesktop) {
-    final ownId = normalizePublicId(_profile?.publicId ?? '');
-    return _ProfileCard(
-      title: 'Mi ID de perfil',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text(
-            'Comparte este identificador para que otras personas encuentren tu '
-            'perfil en «Buscar perfil». No es tu ID interno de usuario.',
-            style: TextStyle(
-              fontSize: 12.5,
-              fontWeight: FontWeight.w600,
-              color: AppColors.mutedStrong,
-              height: 1.4,
-            ),
-          ),
-          const SizedBox(height: AppDimens.spaceMd),
-          if (ownId == null)
-            const Text(
-              'No disponible. Vuelve a iniciar sesión.',
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: AppColors.muted,
-              ),
-            )
-          else
-            Row(
-              children: [
-                Expanded(
-                  child: SelectableText(
-                    ownId,
-                    key: const ValueKey('profile-own-public-id'),
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w900,
-                      color: AppColors.text,
-                      letterSpacing: 1.2,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: AppDimens.spaceMd),
-                NeobrutalistButton(
-                  key: const ValueKey('profile-copy-public-id'),
-                  label: 'COPIAR',
-                  icon: Icons.copy_rounded,
-                  variant: NeobrutalistButtonVariant.secondary,
-                  onPressed: _handleCopyPublicId,
-                ),
-              ],
-            ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildProfileSearchCard(bool isDesktop) {
     final searchButton = NeobrutalistButton(
       key: const ValueKey('public-profile-open'),
@@ -1062,9 +1013,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Text(
-            'Pega el identificador público de otra persona o su enlace '
-            'sigma-academy://perfil/... para ver su perfil y sus apuntes '
-            'públicos. La búsqueda es exacta: no se busca por nombre.',
+            'Encuentra el perfil de otra persona utilizando el enlace que te '
+            'compartió.',
             style: TextStyle(
               fontSize: 12.5,
               fontWeight: FontWeight.w600,
@@ -1091,9 +1041,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               color: AppColors.text,
             ),
             decoration:
-                appInputDecoration(
-                  'Pega sigma-academy://perfil/... o el identificador público',
-                ).copyWith(
+                appInputDecoration('Pega aquí el enlace del perfil').copyWith(
                   prefixIcon: const Icon(
                     Icons.person_search_rounded,
                     size: 18,

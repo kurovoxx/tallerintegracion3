@@ -40,6 +40,16 @@ class PublicIdInput {
 const String publicProfileLinkScheme = 'sigma-academy';
 const String publicProfileLinkHost = 'perfil';
 
+/// Enlace que se comparte desde «Compartir perfil»:
+/// `sigma-academy://perfil/<public_id>`. Devuelve null si [publicId] no es un
+/// identificador público válido (nunca se construye con el UUID interno). No
+/// es un deep link: solo se copia para pegarlo en «Buscar perfil».
+String? publicProfileLink(String publicId) {
+  final id = normalizePublicId(publicId);
+  if (id == null) return null;
+  return '$publicProfileLinkScheme://$publicProfileLinkHost/$id';
+}
+
 final RegExp _internalUuidPattern = RegExp(
   r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
 );
