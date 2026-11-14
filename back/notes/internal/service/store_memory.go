@@ -183,6 +183,62 @@ func (m *MemoryNoteStore) ListByUser(ctx context.Context, userID, cursor string,
 	return list, next, nil
 }
 
+// ListPublicByUser replica la semántica de la consulta PG: solo notas
+// visibility='public' del autor, con external_file_id no nulo, orden
+// created_at DESC, id DESC y cursor keyset que debe pertenecer a una nota
+// pública con archivo del mismo autor. Un cursor inexistente, privado, sin
+// archivo o de otro autor devuelve lista vacía (fail-closed) en lugar de
+// reiniciar la paginación desde el principio.
+func (m *MemoryNoteStore) ListPublicByUser(ctx context.Context, userID, cursor string, limit int) ([]*model.PublicNote, string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	list := make([]*model.PublicNote, 0)
+	for _, n := range m.notes {
+		if n.UserID != userID || n.Visibility != "public" || n.ExternalFileID == nil {
+			continue
+		}
+		list = append(list, &model.PublicNote{
+			ID:         n.ID,
+			UserID:     n.UserID,
+			SubjectID:  n.SubjectID,
+			Title:      n.Title,
+			Visibility: n.Visibility,
+			LikesCount: n.LikesCount,
+			Version:    n.Version,
+			CreatedAt:  n.CreatedAt,
+			UpdatedAt:  n.UpdatedAt,
+		})
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].CreatedAt.Equal(list[j].CreatedAt) {
+			return list[i].ID > list[j].ID
+		}
+		return list[i].CreatedAt.After(list[j].CreatedAt)
+	})
+	if cursor != "" {
+		idx := -1
+		for i, n := range list {
+			if n.ID == cursor {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return []*model.PublicNote{}, "", nil
+		}
+		list = list[idx+1:]
+	}
+	var next string
+	if len(list) > limit {
+		next = list[limit-1].ID
+		list = list[:limit]
+	}
+	return list, next, nil
+}
+
 // Update replica el versionado optimista de PG: si la versión esperada no
 // coincide con la actual devuelve repository.ErrConflict (la nota existe y otro
 // writer ganó); si la nota no existe devuelve (nil, nil). En caso de éxito
@@ -523,6 +579,34 @@ func (m *MemorySavedStore) CountByNote(ctx context.Context, noteID string) (int,
 	return n, nil
 }
 
+// CountByNotes replica la consulta batch de PG en memoria.
+func (m *MemorySavedStore) CountByNotes(ctx context.Context, noteIDs []string) (map[string]int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	wanted := make(map[string]bool, len(noteIDs))
+	for _, id := range noteIDs {
+		wanted[id] = true
+	}
+	out := make(map[string]int, len(noteIDs))
+	for _, s := range m.saved {
+		if wanted[s.NoteID] {
+			out[s.NoteID]++
+		}
+	}
+	return out, nil
+}
+
+// ExistsByNotes replica la consulta batch de PG en memoria.
+func (m *MemorySavedStore) ExistsByNotes(ctx context.Context, userID string, noteIDs []string) (map[string]bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make(map[string]bool, len(noteIDs))
+	for _, id := range noteIDs {
+		_, out[id] = m.saved[keySaved(userID, id)]
+	}
+	return out, nil
+}
+
 // Like memory
 type MemoryLikeStore struct {
 	mu    sync.Mutex
@@ -574,6 +658,17 @@ func (m *MemoryLikeStore) Exists(ctx context.Context, noteID, userID string) (bo
 	defer m.mu.Unlock()
 	_, ok := m.likes[keyLike(noteID, userID)]
 	return ok, nil
+}
+
+// ExistsByNotes replica la consulta batch de PG en memoria.
+func (m *MemoryLikeStore) ExistsByNotes(ctx context.Context, userID string, noteIDs []string) (map[string]bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]bool, len(noteIDs))
+	for _, id := range noteIDs {
+		_, out[id] = m.likes[keyLike(id, userID)]
+	}
+	return out, nil
 }
 
 // LikeAtomic inserta like y incrementa likes_count de forma atómica en memoria (mutex exclusivo).

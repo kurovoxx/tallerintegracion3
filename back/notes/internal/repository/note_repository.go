@@ -201,6 +201,71 @@ func (r *NoteRepository) ListByUser(ctx context.Context, db DBTX, userID string,
 	return notes, nextCursor, nil
 }
 
+// ListPublicByUser lista únicamente apuntes visibility='public' del autor
+// indicado que además tengan archivo Drive asociado (external_file_id no nulo),
+// con paginación keyset estable por (created_at DESC, id DESC). Devuelve solo
+// las columnas del DTO público. El cursor debe pertenecer al mismo autor, ser
+// público y tener archivo: la subconsulta exige user_id, visibility y
+// external_file_id dentro de sí misma, de modo que un cursor inexistente,
+// privado, sin archivo o de otro autor produce NULL y la comparación de tuplas
+// no devuelve filas (fail-closed, sin filtrar notas privadas ni saltarse los
+// filtros).
+func (r *NoteRepository) ListPublicByUser(ctx context.Context, db DBTX, userID string, cursor string, limit int) ([]*model.PublicNote, string, error) {
+	if db == nil {
+		db = r.pool
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	const publicColumns = `id, user_id, subject_id, title, visibility, likes_count, version, created_at, updated_at`
+	var rows pgx.Rows
+	var err error
+	if cursor == "" {
+		rows, err = db.Query(ctx, `
+			SELECT `+publicColumns+`
+			FROM notes.notes
+			WHERE user_id = $1 AND visibility = 'public' AND external_file_id IS NOT NULL
+			ORDER BY created_at DESC, id DESC LIMIT $2`, userID, limit+1)
+	} else {
+		// La subconsulta DEBE devolver las dos columnas (created_at, id): una
+		// tupla de dos columnas no puede compararse con una subconsulta de una.
+		rows, err = db.Query(ctx, `
+			SELECT `+publicColumns+`
+			FROM notes.notes
+			WHERE user_id = $1 AND visibility = 'public' AND external_file_id IS NOT NULL
+			  AND (created_at, id) < (
+			      SELECT created_at, id
+			      FROM notes.notes
+			      WHERE id = $2
+			        AND user_id = $1
+			        AND visibility = 'public'
+			        AND external_file_id IS NOT NULL
+			  )
+			ORDER BY created_at DESC, id DESC LIMIT $3`, userID, cursor, limit+1)
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("list public notes: %w", err)
+	}
+	defer rows.Close()
+	var notes []*model.PublicNote
+	for rows.Next() {
+		var n model.PublicNote
+		if err := rows.Scan(&n.ID, &n.UserID, &n.SubjectID, &n.Title, &n.Visibility, &n.LikesCount, &n.Version, &n.CreatedAt, &n.UpdatedAt); err != nil {
+			return nil, "", fmt.Errorf("scan public note: %w", err)
+		}
+		notes = append(notes, &n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	var nextCursor string
+	if len(notes) > limit {
+		nextCursor = notes[limit-1].ID
+		notes = notes[:limit]
+	}
+	return notes, nextCursor, nil
+}
+
 // Update aplica un cambio parcial de metadata con versionado optimista: la
 // sentencia exige que la fila siga en expectedVersion y, si el UPDATE afecta una
 // fila, incrementa version en la misma operación. Si no afecta ninguna fila pero

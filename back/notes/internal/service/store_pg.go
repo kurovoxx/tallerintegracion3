@@ -28,6 +28,9 @@ func (p *PGNoteStore) GetByID(ctx context.Context, id string) (*model.Note, erro
 func (p *PGNoteStore) ListByUser(ctx context.Context, userID, cursor string, limit int) ([]*model.Note, string, error) {
 	return p.repo.ListByUser(ctx, nil, userID, cursor, limit)
 }
+func (p *PGNoteStore) ListPublicByUser(ctx context.Context, userID, cursor string, limit int) ([]*model.PublicNote, string, error) {
+	return p.repo.ListPublicByUser(ctx, nil, userID, cursor, limit)
+}
 func (p *PGNoteStore) Update(ctx context.Context, id string, title *string, visibility *string, expectedVersion int64) (*model.Note, error) {
 	return p.repo.Update(ctx, nil, id, title, visibility, expectedVersion)
 }
@@ -96,6 +99,12 @@ func (p *PGSavedStore) ListByUser(ctx context.Context, userID string) ([]*model.
 func (p *PGSavedStore) CountByNote(ctx context.Context, noteID string) (int, error) {
 	return p.repo.CountByNote(ctx, nil, noteID)
 }
+func (p *PGSavedStore) CountByNotes(ctx context.Context, noteIDs []string) (map[string]int, error) {
+	return p.repo.CountByNotes(ctx, nil, noteIDs)
+}
+func (p *PGSavedStore) ExistsByNotes(ctx context.Context, userID string, noteIDs []string) (map[string]bool, error) {
+	return p.repo.ExistsByNotes(ctx, nil, userID, noteIDs)
+}
 
 type PGLikeStore struct {
 	repo *repository.LikeRepository
@@ -112,6 +121,9 @@ func (p *PGLikeStore) Delete(ctx context.Context, noteID, userID string) (bool, 
 }
 func (p *PGLikeStore) Exists(ctx context.Context, noteID, userID string) (bool, error) {
 	return p.repo.Exists(ctx, nil, noteID, userID)
+}
+func (p *PGLikeStore) ExistsByNotes(ctx context.Context, userID string, noteIDs []string) (map[string]bool, error) {
+	return p.repo.ExistsByNotes(ctx, nil, userID, noteIDs)
 }
 func (p *PGLikeStore) LikeAtomic(ctx context.Context, noteID, userID string) error {
 	return p.repo.LikeAtomic(ctx, noteID, userID)

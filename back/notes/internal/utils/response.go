@@ -53,6 +53,9 @@ const (
 	// ErrUnsupportedMediaType: el contenido real del archivo no pertenece a la
 	// whitelist estricta de adjuntos (image/jpeg, image/png, application/pdf).
 	ErrUnsupportedMediaType = "unsupported_media_type"
+	// ErrServiceUnavailable: una dependencia servicio-a-servicio (Identity) no
+	// respondió; el cliente puede reintentar más tarde.
+	ErrServiceUnavailable = "service_unavailable"
 )
 
 func MessageForCode(code string) string {
@@ -83,6 +86,8 @@ func MessageForCode(code string) string {
 		return "Apunte no disponible (eliminado por el autor)"
 	case ErrAlreadyShared:
 		return "Este apunte ya está compartido en este grupo"
+	case ErrServiceUnavailable:
+		return "Servicio no disponible temporalmente"
 	case ErrFileTooLarge:
 		return "Archivo muy grande"
 	case ErrRateLimited:
@@ -114,6 +119,8 @@ func StatusForCode(code string) int {
 		return http.StatusUnsupportedMediaType
 	case ErrRateLimited:
 		return http.StatusTooManyRequests
+	case ErrServiceUnavailable:
+		return http.StatusServiceUnavailable
 	default:
 		return http.StatusInternalServerError
 	}

@@ -306,6 +306,66 @@ func (h *NoteHandler) ListMy(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"notes": out, "next_cursor": next})
 }
 
+// publicProfileNoteResponse es el DTO de GET /public-users/:public_id/notes.
+// No incluye user_id (UUID interno), external_file_id, sync_status ni content:
+// el autor solo se identifica por el public_id de la ruta.
+type publicProfileNoteResponse struct {
+	ID         string  `json:"id"`
+	Title      string  `json:"title"`
+	SubjectID  *string `json:"subject_id,omitempty"`
+	Visibility string  `json:"visibility"`
+	LikesCount int     `json:"likes_count"`
+	SavesCount int     `json:"saves_count"`
+	IsLiked    bool    `json:"is_liked"`
+	IsSaved    bool    `json:"is_saved"`
+	CreatedAt  string  `json:"created_at"`
+	UpdatedAt  string  `json:"updated_at"`
+}
+
+// GET /public-users/:public_id/notes
+// Resuelve el public_id vía Identity y lista los apuntes públicos del autor.
+// La visibilidad del perfil es independiente: un perfil privado no oculta sus
+// apuntes públicos. Cache-Control se fija antes de cualquier salida (200/400/
+// 404/503) para que ningún intermediario reutilice la respuesta autenticada.
+func (h *NoteHandler) ListPublicByPublicID(c *gin.Context) {
+	defer traceNotesOperation(c, "/public-users/:public_id/notes")()
+	c.Header("Cache-Control", "private, no-store")
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		respondNotesError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		return
+	}
+	publicID := c.Param("public_id")
+	cursor := c.Query("cursor")
+	limit := 20
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if v, err := strconv.Atoi(limitStr); err == nil {
+			limit = v
+		}
+	}
+	notes, next, err := h.svc.ListPublicByPublicID(c.Request.Context(), userID, publicID, cursor, limit)
+	if err != nil {
+		handleServiceError(c, err)
+		return
+	}
+	out := make([]publicProfileNoteResponse, 0, len(notes))
+	for _, n := range notes {
+		out = append(out, publicProfileNoteResponse{
+			ID:         n.ID,
+			Title:      n.Title,
+			SubjectID:  n.SubjectID,
+			Visibility: n.Visibility,
+			LikesCount: n.LikesCount,
+			SavesCount: n.SavesCount,
+			IsLiked:    n.IsLiked,
+			IsSaved:    n.IsSaved,
+			CreatedAt:  n.CreatedAt.UTC().Format(time.RFC3339),
+			UpdatedAt:  n.UpdatedAt.UTC().Format(time.RFC3339),
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"notes": out, "next_cursor": next})
+}
+
 // PATCH /notes/{id}
 type patchRequest struct {
 	Title      *string `json:"title" binding:"omitempty,min=1,max=300"`

@@ -189,6 +189,13 @@ func (s *NoteService) observedNotesListByUser(ctx context.Context, userID, curso
 	return result0, result1, err
 }
 
+func (s *NoteService) observedNotesListPublicByUser(ctx context.Context, userID, cursor string, limit int) ([]*model.PublicNote, string, error) {
+	started := time.Now()
+	result0, result1, err := s.notes.ListPublicByUser(ctx, userID, cursor, limit)
+	logNotesResult(ctx, started, "DB notes.ListPublicByUser", "", err, "user_id", userID, "limit", limit, "notes_count", len(result0))
+	return result0, result1, err
+}
+
 func (s *NoteService) observedNotesUpdate(ctx context.Context, id string, title *string, visibility *string, expectedVersion int64) (*model.Note, error) {
 	started := time.Now()
 	result0, err := s.notes.Update(ctx, id, title, visibility, expectedVersion)

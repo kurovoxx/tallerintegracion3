@@ -33,6 +33,24 @@ type Note struct {
 	Content *string `json:"content,omitempty"`
 }
 
+// PublicNote es la fila mínima de un apunte público de un autor (base de
+// GET /public-users/:public_id/notes).
+// Excluye deliberadamente external_file_id, sync_status, forked_from_note_id,
+// content (Markdown) y cualquier identificador interno de Drive: el listado
+// público solo alimenta tarjetas/resúmenes. La consulta del repositorio
+// selecciona únicamente estas columnas.
+type PublicNote struct {
+	ID         string    `json:"id"`
+	UserID     string    `json:"user_id"`
+	SubjectID  *string   `json:"subject_id,omitempty"`
+	Title      string    `json:"title"`
+	Visibility string    `json:"visibility"`
+	LikesCount int       `json:"likes_count"`
+	Version    int64     `json:"version"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
 type Attachment struct {
 	ID             string    `json:"id"`
 	NoteID         string    `json:"note_id"`
@@ -108,6 +126,22 @@ type SavedNoteView struct {
 type PublicNoteView struct {
 	ID         string    `json:"id"`
 	UserID     string    `json:"user_id"`
+	Title      string    `json:"title"`
+	SubjectID  *string   `json:"subject_id,omitempty"`
+	Visibility string    `json:"visibility"`
+	LikesCount int       `json:"likes_count"`
+	SavesCount int       `json:"saves_count"`
+	IsLiked    bool      `json:"is_liked"`
+	IsSaved    bool      `json:"is_saved"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// PublicProfileNoteView es un elemento de GET /public-users/:public_id/notes.
+// Omite deliberadamente user_id (UUID interno) y cualquier identificador de
+// Drive: el autor solo se identifica por el public_id de la ruta.
+type PublicProfileNoteView struct {
+	ID         string    `json:"id"`
 	Title      string    `json:"title"`
 	SubjectID  *string   `json:"subject_id,omitempty"`
 	Visibility string    `json:"visibility"`

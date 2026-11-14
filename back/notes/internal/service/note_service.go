@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/drive"
+	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/identity"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/repository"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/utils"
@@ -426,6 +427,12 @@ type NoteStore interface {
 	Create(ctx context.Context, noteID string, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string, syncStatus string) (*model.Note, error)
 	GetByID(ctx context.Context, id string) (*model.Note, error)
 	ListByUser(ctx context.Context, userID, cursor string, limit int) ([]*model.Note, string, error)
+	// ListPublicByUser lista solo apuntes públicos del autor indicado con el
+	// cursor keyset (created_at DESC, id DESC). El store debe rechazar
+	// (devolver lista vacía) cursores que no sean públicos, no tengan archivo
+	// Drive o no pertenezcan al autor, sin relajar los filtros
+	// visibility='public' y external_file_id IS NOT NULL.
+	ListPublicByUser(ctx context.Context, userID, cursor string, limit int) ([]*model.PublicNote, string, error)
 	// Update aplica el cambio de metadata con versionado optimista: solo muta
 	// si la fila sigue en expectedVersion; si otro writer la cambió devuelve
 	// repository.ErrConflict (o un error equivalente del store).
@@ -505,6 +512,13 @@ type SharedStore interface {
 	WithNoteLock(ctx context.Context, noteID string, fn func(context.Context) error) error
 }
 
+// PublicProfileResolver resuelve el public_id de Identity al UUID interno.
+// El adaptador gRPC vive en back/notes/internal/identity; los tests inyectan
+// dobles en memoria. Nil => 503 en el endpoint que lo necesita.
+type PublicProfileResolver interface {
+	ResolvePublicProfile(ctx context.Context, publicID string) (string, error)
+}
+
 // SocialResolver verifica pertenencia/membership y seguidores. En producción se
 // inyecta el adaptador HTTP a Social (SocialHTTPAdapter); los resolvers en
 // memoria/noop solo se usan en tests.
@@ -539,6 +553,8 @@ type NoteService struct {
 	drive           drive.Client
 	social          SocialResolver
 	members         GroupMemberDirectory
+	// publicProfiles resuelve public_id (H-05). Independiente de Drive.
+	publicProfiles PublicProfileResolver
 	// driveEmails resuelve el correo de la cuenta Google Drive de cada miembro
 	// (restricted). Si es nil, se usa members.ListMemberEmails (fallback previo).
 	driveEmails DriveEmailDirectory
@@ -585,6 +601,12 @@ func NewNoteService(notes NoteStore, attachments AttachmentStore, saved SavedSto
 		social:      social,
 		members:     NewNoopMemberDirectory(),
 	}
+}
+
+// SetPublicProfileResolver inyecta el cliente Identity que resuelve el
+// public_id del perfil público. No depende de STORAGE_MODE.
+func (s *NoteService) SetPublicProfileResolver(r PublicProfileResolver) {
+	s.publicProfiles = r
 }
 
 // SetMemberDirectory inyecta el directorio de correos de miembros usado por el
@@ -1035,6 +1057,87 @@ func (s *NoteService) ListMy(ctx context.Context, userID string, cursor string, 
 		notes = []*model.Note{}
 	}
 	return notes, next, nil
+}
+
+// ListPublicByPublicID: GET /public-users/:public_id/notes.
+// Resuelve el public_id a UUID vía Identity (gRPC interno) y lista los apuntes
+// visibility='public' con external_file_id no nulo del autor, con el cursor
+// keyset (created_at DESC, id DESC).
+//   - public_id con formato inválido o inexistente → 404 genérico.
+//   - perfil privado: sus apuntes públicos siguen listándose para cualquier
+//     usuario autenticado (la visibilidad del perfil solo oculta sus datos en
+//     Auth); los apuntes privados nunca aparecen.
+//   - Identity caído, sin clave interna o respuesta inválida → 503.
+//   - autor válido sin apuntes listables → 200 con lista vacía.
+//   - cursor mal formado → 400; cursor inexistente, privado, sin archivo o de
+//     otro autor → lista vacía (fail-closed; nunca reinicia la paginación).
+//
+// Límite: 20 por defecto, 100 máximo; valores fuera de rango se normalizan.
+func (s *NoteService) ListPublicByPublicID(ctx context.Context, requesterID, rawPublicID, cursor string, limit int) ([]*model.PublicProfileNoteView, string, error) {
+	if strings.TrimSpace(requesterID) == "" {
+		return nil, "", newServiceError(utils.ErrUnauthorized)
+	}
+	publicID := utils.NormalizePublicID(rawPublicID)
+	if !utils.ValidatePublicID(publicID) {
+		return nil, "", newServiceErrorMsg(utils.ErrNotFound, "usuario no encontrado")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if cursor != "" && !utils.ValidateUUID(cursor) {
+		return nil, "", newServiceErrorMsg(utils.ErrBadRequest, "cursor inválido")
+	}
+	if s.publicProfiles == nil {
+		return nil, "", newServiceError(utils.ErrServiceUnavailable)
+	}
+	// La visibilidad del perfil no filtra este listado (decisión del equipo):
+	// un perfil privado oculta sus datos en Auth, no sus apuntes públicos.
+	userID, err := s.publicProfiles.ResolvePublicProfile(ctx, publicID)
+	if err != nil {
+		switch {
+		case errors.Is(err, identity.ErrNotFound), errors.Is(err, identity.ErrInvalid):
+			return nil, "", newServiceErrorMsg(utils.ErrNotFound, "usuario no encontrado")
+		default:
+			log.Printf("notes: no se pudo resolver public_id vía Identity: %v", err)
+			return nil, "", newServiceError(utils.ErrServiceUnavailable)
+		}
+	}
+	if !utils.ValidateUUID(userID) {
+		log.Printf("notes: Identity devolvió un user_id no UUID para public_id resuelto")
+		return nil, "", newServiceError(utils.ErrServiceUnavailable)
+	}
+	notes, next, err := s.observedNotesListPublicByUser(ctx, userID, cursor, limit)
+	if err != nil {
+		return nil, "", ErrInternalDatabase
+	}
+	targets := make([]interactionTarget, 0, len(notes))
+	for _, n := range notes {
+		targets = append(targets, interactionTarget{id: n.ID, likesCount: n.LikesCount})
+	}
+	stats, err := s.interactionsForTargets(ctx, requesterID, targets)
+	if err != nil {
+		return nil, "", err
+	}
+	out := make([]*model.PublicProfileNoteView, 0, len(notes))
+	for _, n := range notes {
+		st := stats[n.ID]
+		out = append(out, &model.PublicProfileNoteView{
+			ID:         n.ID,
+			Title:      n.Title,
+			SubjectID:  n.SubjectID,
+			Visibility: n.Visibility,
+			LikesCount: st.LikesCount,
+			SavesCount: st.SavesCount,
+			IsLiked:    st.IsLiked,
+			IsSaved:    st.IsSaved,
+			CreatedAt:  n.CreatedAt,
+			UpdatedAt:  n.UpdatedAt,
+		})
+	}
+	return out, next, nil
 }
 
 // Update: solo autor, actualiza título/visibilidad en PG, contenido en Drive si

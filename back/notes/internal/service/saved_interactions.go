@@ -21,6 +21,19 @@ type PublicNoteLister interface {
 	ListPublic(ctx context.Context, excludeUserID, query, subjectID, cursor string, limit int) ([]*model.Note, string, error)
 }
 
+// SavedBatchStore permite resolver saves_count, is_saved e is_liked de una
+// página completa con un número constante de consultas (sin N+1). Es opcional:
+// un store que no lo implementa degrada al camino por nota.
+type SavedBatchStore interface {
+	CountByNotes(ctx context.Context, noteIDs []string) (map[string]int, error)
+	ExistsByNotes(ctx context.Context, userID string, noteIDs []string) (map[string]bool, error)
+}
+
+// LikeBatchStore permite resolver is_liked de una página en una consulta.
+type LikeBatchStore interface {
+	ExistsByNotes(ctx context.Context, userID string, noteIDs []string) (map[string]bool, error)
+}
+
 const (
 	savedListDefaultLimit = 20
 	savedListMaxLimit     = 50
@@ -62,22 +75,100 @@ func (s *NoteService) missingNoteError(ctx context.Context, requesterID, noteID 
 	return notFoundNote()
 }
 
-// interactionsFor arma los contadores exactos sin verificar acceso (el
-// llamador ya lo hizo). likes_count sale de la columna desnormalizada que
-// LikeAtomic/UnlikeAtomic mantienen en la misma transacción.
-func (s *NoteService) interactionsFor(ctx context.Context, requesterID string, note *model.Note) (*model.NoteInteractions, error) {
-	out := &model.NoteInteractions{NoteID: note.ID, LikesCount: note.LikesCount}
-	var err error
-	if out.SavesCount, err = s.saved.CountByNote(ctx, note.ID); err != nil {
-		return nil, ErrInternalDatabase
+// interactionTarget es la metadata mínima que ya trae la fila del apunte
+// (likes_count desnormalizado) para armar las interacciones de una página.
+type interactionTarget struct {
+	id         string
+	likesCount int
+}
+
+// interactionsForTargets arma los contadores exactos de una página sin
+// verificar acceso (el llamador ya lo hizo). likes_count sale de la columna
+// desnormalizada que LikeAtomic/UnlikeAtomic mantienen en la misma
+// transacción; saves_count/is_liked/is_saved se resuelven en lote cuando el
+// store lo soporta (3 consultas por página) y por nota como fallback.
+func (s *NoteService) interactionsForTargets(ctx context.Context, requesterID string, targets []interactionTarget) (map[string]*model.NoteInteractions, error) {
+	out := make(map[string]*model.NoteInteractions, len(targets))
+	if len(targets) == 0 {
+		return out, nil
 	}
-	if out.IsLiked, err = s.likes.Exists(ctx, note.ID, requesterID); err != nil {
-		return nil, ErrInternalDatabase
+	ids := make([]string, 0, len(targets))
+	for _, t := range targets {
+		ids = append(ids, t.id)
 	}
-	if out.IsSaved, err = s.saved.Exists(ctx, requesterID, note.ID); err != nil {
-		return nil, ErrInternalDatabase
+
+	saves := make(map[string]int, len(ids))
+	if batch, ok := s.saved.(SavedBatchStore); ok {
+		got, err := batch.CountByNotes(ctx, ids)
+		if err != nil {
+			return nil, ErrInternalDatabase
+		}
+		saves = got
+	} else {
+		for _, t := range targets {
+			count, err := s.saved.CountByNote(ctx, t.id)
+			if err != nil {
+				return nil, ErrInternalDatabase
+			}
+			saves[t.id] = count
+		}
+	}
+
+	liked := make(map[string]bool, len(ids))
+	if batch, ok := s.likes.(LikeBatchStore); ok {
+		got, err := batch.ExistsByNotes(ctx, requesterID, ids)
+		if err != nil {
+			return nil, ErrInternalDatabase
+		}
+		liked = got
+	} else {
+		for _, t := range targets {
+			exists, err := s.likes.Exists(ctx, t.id, requesterID)
+			if err != nil {
+				return nil, ErrInternalDatabase
+			}
+			liked[t.id] = exists
+		}
+	}
+
+	savedSet := make(map[string]bool, len(ids))
+	if batch, ok := s.saved.(SavedBatchStore); ok {
+		got, err := batch.ExistsByNotes(ctx, requesterID, ids)
+		if err != nil {
+			return nil, ErrInternalDatabase
+		}
+		savedSet = got
+	} else {
+		for _, t := range targets {
+			exists, err := s.saved.Exists(ctx, requesterID, t.id)
+			if err != nil {
+				return nil, ErrInternalDatabase
+			}
+			savedSet[t.id] = exists
+		}
+	}
+
+	for _, t := range targets {
+		out[t.id] = &model.NoteInteractions{
+			NoteID:     t.id,
+			LikesCount: t.likesCount,
+			SavesCount: saves[t.id],
+			IsLiked:    liked[t.id],
+			IsSaved:    savedSet[t.id],
+		}
 	}
 	return out, nil
+}
+
+// interactionsFor conserva la firma de un solo apunte y reutiliza el camino
+// batch (con fallback por nota), de modo que GET /notes/{id}/stats mantiene 3
+// consultas exactas.
+func (s *NoteService) interactionsFor(ctx context.Context, requesterID string, note *model.Note) (*model.NoteInteractions, error) {
+	got, err := s.interactionsForTargets(ctx, requesterID, []interactionTarget{{id: note.ID, likesCount: note.LikesCount}})
+	if err != nil {
+		return nil, err
+	}
+	return got[note.ID], nil
 }
 
 // Interactions devuelve likes_count, saves_count, is_liked e is_saved de un
@@ -304,16 +395,22 @@ func (s *NoteService) ListPublic(ctx context.Context, requesterID, query, subjec
 	if err != nil {
 		return nil, "", ErrInternalDatabase
 	}
+	targets := make([]interactionTarget, 0, len(notes))
+	for _, n := range notes {
+		targets = append(targets, interactionTarget{id: n.ID, likesCount: n.LikesCount})
+	}
+	// Una sola resolución batch por página: nunca 3 consultas por apunte.
+	stats, err := s.interactionsForTargets(ctx, requesterID, targets)
+	if err != nil {
+		return nil, "", err
+	}
 	out := make([]*model.PublicNoteView, 0, len(notes))
 	for _, n := range notes {
-		stats, err := s.interactionsFor(ctx, requesterID, n)
-		if err != nil {
-			return nil, "", err
-		}
+		st := stats[n.ID]
 		out = append(out, &model.PublicNoteView{
 			ID: n.ID, UserID: n.UserID, Title: n.Title, SubjectID: n.SubjectID,
-			Visibility: n.Visibility, LikesCount: stats.LikesCount,
-			SavesCount: stats.SavesCount, IsLiked: stats.IsLiked, IsSaved: stats.IsSaved,
+			Visibility: n.Visibility, LikesCount: st.LikesCount,
+			SavesCount: st.SavesCount, IsLiked: st.IsLiked, IsSaved: st.IsSaved,
 			CreatedAt: n.CreatedAt, UpdatedAt: n.UpdatedAt,
 		})
 	}
