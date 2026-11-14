@@ -211,6 +211,67 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('muestra la foto subida desde la app (data URL)', (tester) async {
+    const png =
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    final profiles = _profileService(
+      body: <String, dynamic>{
+        'public_id': _publicId,
+        'display_name': 'Ana Pública',
+        'photo_url': 'data:image/png;base64,$png',
+        'institution': 'UCT',
+        'visibility': 'public',
+      },
+    );
+    final notes = _notesApi();
+    addTearDown(profiles.dispose);
+    addTearDown(notes.dispose);
+
+    await _pump(tester, profiles: profiles, notes: notes);
+
+    final avatar = find.byKey(const ValueKey('public-profile-avatar'));
+    expect(
+      find.descendant(
+        of: avatar,
+        matching: find.byWidgetPredicate(
+          (w) => w is Image && w.image is MemoryImage,
+        ),
+      ),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('una foto remota no se carga: muestra las iniciales', (
+    tester,
+  ) async {
+    final profiles = _profileService(
+      body: <String, dynamic>{
+        'public_id': _publicId,
+        'display_name': 'Ana Pública',
+        'photo_url': 'https://tracker.example/foto.png',
+        'institution': 'UCT',
+        'visibility': 'public',
+      },
+    );
+    final notes = _notesApi();
+    addTearDown(profiles.dispose);
+    addTearDown(notes.dispose);
+
+    await _pump(tester, profiles: profiles, notes: notes);
+
+    final avatar = find.byKey(const ValueKey('public-profile-avatar'));
+    expect(
+      find.descendant(of: avatar, matching: find.byType(Image)),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: avatar, matching: find.text('AP')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('VER APUNTE abre la vista previa del apunte', (tester) async {
     final profiles = _profileService();
     final notes = _notesApi();
