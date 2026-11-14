@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/model"
@@ -268,6 +269,52 @@ func TestProfileService_UpdateProfile_PhotoURLLargo_400(t *testing.T) {
 	}
 	if *repo.store[uid].PhotoURL != "https://old.jpg" {
 		t.Fatal("photo_url no debe modificarse en PATCH inválido")
+	}
+}
+
+func TestProfileService_UpdateProfile_DataURLFotoValida(t *testing.T) {
+	repo := newMockRepo()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = &model.Profile{UserID: uid, DisplayName: "A", Visibility: "public"}
+	svc := NewProfileService(repo)
+	photo := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
+	updated, err := svc.UpdateProfile(context.Background(), uid, repository.ProfileUpdateRequest{PhotoURL: &photo})
+	if err != nil {
+		t.Fatalf("data URL de imagen no debe fallar: %v", err)
+	}
+	if updated.PhotoURL == nil || *updated.PhotoURL != photo {
+		t.Fatalf("se esperaba foto %q, got %+v", photo, updated.PhotoURL)
+	}
+}
+
+func TestProfileService_UpdateProfile_DataURLFotoDemasiadoLarga_400(t *testing.T) {
+	repo := newMockRepo()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = &model.Profile{UserID: uid, DisplayName: "A", Visibility: "public", PhotoURL: strPtr("https://old.jpg")}
+	svc := NewProfileService(repo)
+	largo := "data:image/png;base64," + strings.Repeat("A", maxProfilePhotoDataURLLen)
+	_, err := svc.UpdateProfile(context.Background(), uid, repository.ProfileUpdateRequest{PhotoURL: &largo})
+	if err == nil {
+		t.Fatal("esperado invalid_photo_url por data URL demasiado larga")
+	}
+	se, ok := err.(*ServiceError)
+	if !ok || se.Code != "invalid_photo_url" {
+		t.Fatalf("esperado invalid_photo_url, got %v", err)
+	}
+	if *repo.store[uid].PhotoURL != "https://old.jpg" {
+		t.Fatal("photo_url no debe modificarse en PATCH inválido")
+	}
+}
+
+func TestProfileService_UpdateProfile_DataURLSinBase64_400(t *testing.T) {
+	repo := newMockRepo()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = &model.Profile{UserID: uid, DisplayName: "A", Visibility: "public"}
+	svc := NewProfileService(repo)
+	photo := "data:image/png,no-es-base64"
+	_, err := svc.UpdateProfile(context.Background(), uid, repository.ProfileUpdateRequest{PhotoURL: &photo})
+	if err == nil {
+		t.Fatal("esperado invalid_photo_url por data URL sin base64")
 	}
 }
 

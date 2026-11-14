@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -16,6 +17,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 import '../auth/account_deletion_dialog.dart';
 import '../auth/google_drive_service.dart';
+import 'profile_photo_crop.dart';
 
 const String kSubjectApproved = 'approved';
 const String kSubjectInProgress = 'in_progress';
@@ -81,6 +83,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String? _errorMessage;
 
   UserProfile? _profile;
+  // null = sin cambios; '' = quitar foto; data URL = foto recortada pendiente.
+  String? _draftPhotoUrl;
   late final ProfileService _service;
   AccountDeletionService? _ownedDeletionService;
   bool _deletionDialogOpen = false;
@@ -112,6 +116,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void _sessionChanged() {
     setState(() {
       _profile = null;
+      _draftPhotoUrl = null;
       _driveStatus = _DriveStatus.checking;
       _isLoading = true;
       _isEditing = false;
@@ -166,6 +171,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _isLoading = true;
       _hasError = false;
       _isEditing = false;
+      _draftPhotoUrl = null;
       _errorMessage = null;
     });
 
@@ -209,6 +215,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _descriptionController.text = p.description ?? '';
 
     setState(() {
+      _draftPhotoUrl = null;
       _draftVisibility = p.visibility == 'private' ? 'private' : 'public';
       _isEditing = true;
     });
@@ -216,7 +223,101 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   void _cancelEditing() {
     if (_isSaving) return;
-    setState(() => _isEditing = false);
+    setState(() {
+      _draftPhotoUrl = null;
+      _isEditing = false;
+    });
+  }
+
+  String get _photoPreviewUrl => _draftPhotoUrl ?? _profile?.photoUrl ?? '';
+
+  Future<void> _pickAndCropPhoto({required bool saveImmediately}) async {
+    if (_isSaving) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final bytes = await pickProfilePhotoBytes();
+      if (bytes == null) return;
+      if (bytes.length > 12 * 1024 * 1024) {
+        if (!mounted) return;
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'La imagen supera 12 MB. Elige una foto más liviana.',
+            ),
+          ),
+        );
+        return;
+      }
+      if (!mounted) return;
+      final cropped = await showProfilePhotoCropDialog(context, bytes);
+      if (cropped == null) return;
+      final dataUrl = profilePhotoToDataUrl(cropped);
+      if (saveImmediately) {
+        await _saveProfilePhoto(dataUrl, messenger);
+      } else if (mounted) {
+        setState(() => _draftPhotoUrl = dataUrl);
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Foto lista. Guarda los cambios para aplicarla.'),
+          ),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo procesar la imagen. Prueba con otra foto.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    }
+  }
+
+  Future<void> _saveProfilePhoto(
+    String dataUrl,
+    ScaffoldMessengerState messenger,
+  ) async {
+    final revision = SessionManager.revision.value;
+    setState(() => _isSaving = true);
+    try {
+      final updated = await _service.patchProfile(<String, dynamic>{
+        'photo_url': dataUrl,
+      });
+      if (!mounted || !_sameSession(revision)) return;
+      setState(() {
+        _profile = updated;
+        _draftPhotoUrl = null;
+      });
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Foto de perfil actualizada.'),
+          backgroundColor: AppColors.border,
+        ),
+      );
+    } on ProfileApiException catch (_) {
+      if (!mounted || !_sameSession(revision)) return;
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo guardar la foto. Inténtalo de nuevo.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    } catch (_) {
+      if (!mounted || !_sameSession(revision)) return;
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo guardar la foto. Inténtalo de nuevo.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    } finally {
+      if (_sameSession(revision)) setState(() => _isSaving = false);
+    }
+  }
+
+  void _removeDraftPhoto() {
+    if (_isSaving) return;
+    setState(() => _draftPhotoUrl = '');
   }
 
   // Contrato real: PATCH /profile/me (parcial).
@@ -234,11 +335,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
         'institution': _institutionController.text.trim(),
         'description': _descriptionController.text.trim(),
         'visibility': _draftVisibility,
+        if (_draftPhotoUrl != null) 'photo_url': _draftPhotoUrl,
       };
       final updated = await _service.patchProfile(patch);
       if (!mounted || !_sameSession(revision)) return;
       setState(() {
         _profile = updated;
+        _draftPhotoUrl = null;
         _isEditing = false;
       });
 
@@ -750,9 +853,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
 
     final avatar = _Avatar(
+      key: const ValueKey('profile-avatar'),
       name: name,
-      photoUrl: p.photoUrl ?? '',
+      photoUrl: _photoPreviewUrl,
       size: isDesktop ? 112 : 88,
+      onEdit: _canEdit ? () => _pickAndCropPhoto(saveImmediately: true) : null,
     );
 
     return _ProfileCard(
@@ -1009,6 +1114,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            _buildEditPhotoSection(isDesktop),
+            const SizedBox(height: AppDimens.spaceLg),
             _ProfileTextField(
               label: 'NOMBRE COMPLETO',
               controller: _nameController,
@@ -1032,8 +1139,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               textInputAction: TextInputAction.next,
               maxLength: 200,
               validator: (value) {
-                if ((value?.trim().length ?? 0) > 200)
+                if ((value?.trim().length ?? 0) > 200) {
                   return 'Máximo 200 caracteres';
+                }
                 return null;
               },
             ),
@@ -1047,8 +1155,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               textInputAction: TextInputAction.next,
               maxLength: 30,
               validator: (value) {
-                if ((value?.trim().length ?? 0) > 30)
+                if ((value?.trim().length ?? 0) > 30) {
                   return 'Máximo 30 caracteres';
+                }
                 return null;
               },
             ),
@@ -1095,6 +1204,100 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildEditPhotoSection(bool isDesktop) {
+    final p = _profile!;
+    final name = p.displayName.trim().isEmpty
+        ? 'Sin nombre'
+        : p.displayName.trim();
+    final hasPhoto = _photoPreviewUrl.trim().isNotEmpty;
+    final actions = Column(
+      crossAxisAlignment: isDesktop
+          ? CrossAxisAlignment.start
+          : CrossAxisAlignment.center,
+      children: [
+        const AppFieldLabel('FOTO DE PERFIL'),
+        const SizedBox(height: AppDimens.spaceSm),
+        const Text(
+          'Si la imagen no es cuadrada, podrás elegir la porción que se verá '
+          'en tu avatar antes de guardarla.',
+          textAlign: TextAlign.start,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            height: 1.4,
+            color: AppColors.mutedStrong,
+          ),
+        ),
+        const SizedBox(height: AppDimens.spaceMd),
+        Wrap(
+          spacing: AppDimens.spaceSm,
+          runSpacing: AppDimens.spaceSm,
+          alignment: isDesktop ? WrapAlignment.start : WrapAlignment.center,
+          children: [
+            NeobrutalistButton(
+              label: hasPhoto ? 'CAMBIAR FOTO' : 'AGREGAR FOTO',
+              icon: Icons.photo_camera_rounded,
+              variant: NeobrutalistButtonVariant.accent,
+              onPressed: _isSaving
+                  ? null
+                  : () => _pickAndCropPhoto(saveImmediately: false),
+            ),
+            if (hasPhoto)
+              NeobrutalistButton(
+                label: 'QUITAR FOTO',
+                icon: Icons.delete_outline_rounded,
+                variant: NeobrutalistButtonVariant.secondary,
+                onPressed: _isSaving ? null : _removeDraftPhoto,
+              ),
+          ],
+        ),
+      ],
+    );
+
+    return Container(
+      padding: const EdgeInsets.all(AppDimens.spaceMd),
+      decoration: BoxDecoration(
+        color: AppColors.bg,
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
+      ),
+      child: isDesktop
+          ? Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _Avatar(
+                  key: const ValueKey('profile-edit-avatar'),
+                  name: name,
+                  photoUrl: _photoPreviewUrl,
+                  size: 96,
+                  onEdit: _isSaving
+                      ? null
+                      : () => _pickAndCropPhoto(saveImmediately: false),
+                ),
+                const SizedBox(width: AppDimens.spaceLg),
+                Expanded(child: actions),
+              ],
+            )
+          : Column(
+              children: [
+                _Avatar(
+                  key: const ValueKey('profile-edit-avatar'),
+                  name: name,
+                  photoUrl: _photoPreviewUrl,
+                  size: 96,
+                  onEdit: _isSaving
+                      ? null
+                      : () => _pickAndCropPhoto(saveImmediately: false),
+                ),
+                const SizedBox(height: AppDimens.spaceLg),
+                actions,
+              ],
+            ),
     );
   }
 
@@ -1376,15 +1579,51 @@ class _ProfileTextField extends StatelessWidget {
   }
 }
 
-class _Avatar extends StatelessWidget {
+class _Avatar extends StatefulWidget {
   final String name;
   final String photoUrl;
   final double size;
-  const _Avatar({required this.name, this.photoUrl = '', this.size = 84});
+  final VoidCallback? onEdit;
+  const _Avatar({
+    super.key,
+    required this.name,
+    this.photoUrl = '',
+    this.size = 84,
+    this.onEdit,
+  });
+
+  @override
+  State<_Avatar> createState() => _AvatarState();
+}
+
+class _AvatarState extends State<_Avatar> {
+  bool _hovering = false;
+
+  @override
+  void didUpdateWidget(_Avatar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.onEdit == null) _hovering = false;
+  }
+
+  ImageProvider<Object>? get _photoProvider {
+    final url = widget.photoUrl.trim();
+    if (url.isEmpty) return null;
+    const marker = ';base64,';
+    if (url.startsWith('data:image/')) {
+      final comma = url.indexOf(marker);
+      if (comma <= 0) return null;
+      try {
+        return MemoryImage(base64Decode(url.substring(comma + marker.length)));
+      } on FormatException {
+        return null;
+      }
+    }
+    return NetworkImage(url);
+  }
 
   @override
   Widget build(BuildContext context) {
-    final initials = name
+    final initials = widget.name
         .trim()
         .split(RegExp(r'\s+'))
         .where((p) => p.isNotEmpty)
@@ -1395,35 +1634,90 @@ class _Avatar extends StatelessWidget {
     final fallback = Text(
       initials.isEmpty ? 'U' : initials,
       style: TextStyle(
-        fontSize: size * 0.32,
+        fontSize: widget.size * 0.32,
         fontWeight: FontWeight.w900,
         color: AppColors.text,
       ),
     );
+    final provider = _photoProvider;
 
-    return Container(
-      width: size,
-      height: size,
-      alignment: Alignment.center,
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: AppColors.accentYellow,
-        border: Border.all(
-          color: AppColors.border,
-          width: AppDimens.borderWidth,
+    return MouseRegion(
+      cursor: widget.onEdit == null
+          ? MouseCursor.defer
+          : SystemMouseCursors.click,
+      onEnter: widget.onEdit == null
+          ? null
+          : (_) => setState(() => _hovering = true),
+      onExit: widget.onEdit == null
+          ? null
+          : (_) => setState(() => _hovering = false),
+      child: SizedBox.square(
+        dimension: widget.size,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Container(
+              alignment: Alignment.center,
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(
+                color: AppColors.accentYellow,
+                border: Border.all(
+                  color: AppColors.border,
+                  width: AppDimens.borderWidth,
+                ),
+                borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
+                boxShadow: AppShadows.badge,
+              ),
+              child: provider == null
+                  ? fallback
+                  : Image(
+                      image: provider,
+                      fit: BoxFit.cover,
+                      width: widget.size,
+                      height: widget.size,
+                      gaplessPlayback: true,
+                      errorBuilder: (_, _, _) => fallback,
+                    ),
+            ),
+            if (_hovering && widget.onEdit != null)
+              Positioned.fill(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
+                  child: Semantics(
+                    button: true,
+                    label: 'Cambiar foto de perfil',
+                    child: GestureDetector(
+                      key: const ValueKey('profile-photo-edit'),
+                      onTap: widget.onEdit,
+                      child: Container(
+                        color: AppColors.border.withAlpha(95),
+                        alignment: Alignment.center,
+                        child: Container(
+                          width: 38,
+                          height: 38,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: AppColors.accentYellow,
+                            border: Border.all(
+                              color: AppColors.border,
+                              width: AppDimens.borderWidth,
+                            ),
+                            boxShadow: AppShadows.badge,
+                          ),
+                          child: const Icon(
+                            Icons.edit_rounded,
+                            size: 19,
+                            color: AppColors.text,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
-        borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
-        boxShadow: AppShadows.badge,
       ),
-      child: photoUrl.isNotEmpty
-          ? Image.network(
-              photoUrl,
-              fit: BoxFit.cover,
-              width: size,
-              height: size,
-              errorBuilder: (_, _, _) => fallback,
-            )
-          : fallback,
     );
   }
 }
