@@ -58,6 +58,12 @@ service IdentityService {
   // Avisa que Google rechazó el token de Calendar (401/403) para marcar
   // revoked_at. Idempotente y sin fuga de existencia: sin fila también es OK.
   rpc ReportCalendarRevoked(ReportCalendarRevokedRequest) returns (ReportCalendarRevokedResponse);
+
+  // H-05: resuelve identity.users.public_id al UUID interno. Solo para
+  // servicios internos autorizados (x-internal-key); el UUID nunca se expone
+  // en la respuesta HTTP pública de Notes. Formato inválido = InvalidArgument;
+  // inexistente = NotFound; fallo de BD = Internal.
+  rpc ResolvePublicProfile(ResolvePublicProfileRequest) returns (ResolvePublicProfileResponse);
 }
 
 // Proveedor OAuth (identity.oauth_connections.provider).
@@ -128,3 +134,13 @@ message ReportCalendarRevokedRequest {
 
 // Vacía a propósito: la operación es idempotente y no filtra existencia.
 message ReportCalendarRevokedResponse {}
+
+message ResolvePublicProfileRequest {
+  // 12 caracteres Crockford Base32 en minúsculas; se normaliza a minúsculas.
+  string public_id = 1;
+}
+
+message ResolvePublicProfileResponse {
+  // UUID interno de identity.users. Uso exclusivo servicio-a-servicio.
+  string user_id = 1;
+}

@@ -30,6 +30,7 @@ func validProfilePhotoURL(v string) bool {
 // Permite mockear en tests sin tocar la BD.
 type ProfileRepository interface {
 	GetByUserID(ctx context.Context, userID string) (*model.Profile, error)
+	GetPublicByPublicID(ctx context.Context, publicID string) (*model.PublicProfile, error)
 	Update(ctx context.Context, userID string, req repository.ProfileUpdateRequest) (*model.Profile, error)
 }
 
@@ -83,6 +84,53 @@ func (s *ProfileService) GetProfile(ctx context.Context, userID string) (*model.
 	}
 	s.fillEmail(ctx, profile)
 	return profile, nil
+}
+
+// GetPublicProfileByPublicID resuelve GET /profile/public/:public_id.
+// El public_id se normaliza a minúsculas y se valida estrictamente; un UUID,
+// un nombre o cualquier otro dato personal no son aceptados. Reglas:
+//   - requesterID vacío → 401 (defensa en profundidad; lo exige el middleware).
+//   - public_id inválido o inexistente → 404 profile_not_found.
+//   - Perfil privado consultado por un tercero → 404 (no revela su existencia).
+//   - Perfil privado consultado por su dueño → 200.
+//   - Cualquier visibilidad distinta de "public" se trata como privada.
+//   - La foto solo se entrega si es una imagen subida desde la app (data URL
+//     de imagen en base64). Una URL remota se omite: mostrarla haría que la
+//     app de quien consulta contactara a un servidor ajeno.
+func (s *ProfileService) GetPublicProfileByPublicID(ctx context.Context, requesterID, rawPublicID string) (*model.PublicProfile, error) {
+	requesterID = strings.TrimSpace(requesterID)
+	if requesterID == "" {
+		return nil, NewServiceError(utils.ErrUnauthorized)
+	}
+	publicID := utils.NormalizePublicID(rawPublicID)
+	if !utils.ValidatePublicID(publicID) {
+		return nil, &ServiceError{Code: "profile_not_found", Message: "Perfil no encontrado"}
+	}
+	profile, err := s.repo.GetPublicByPublicID(ctx, publicID)
+	if err != nil {
+		return nil, err
+	}
+	if profile == nil {
+		return nil, &ServiceError{Code: "profile_not_found", Message: "Perfil no encontrado"}
+	}
+	if profile.Visibility != model.VisibilityPublic && requesterID != profile.UserID {
+		return nil, &ServiceError{Code: "profile_not_found", Message: "Perfil no encontrado"}
+	}
+	profile.PhotoURL = publicPhotoURL(profile.PhotoURL)
+	return profile, nil
+}
+
+// publicPhotoURL devuelve la foto solo si es una data URL de imagen en base64
+// (la que guarda el recorte de foto de la app); cualquier otro valor se omite.
+func publicPhotoURL(photo *string) *string {
+	if photo == nil {
+		return nil
+	}
+	v := strings.TrimSpace(*photo)
+	if !strings.HasPrefix(v, profilePhotoDataURLPrefix) || !strings.Contains(v, profilePhotoDataURLBase64) {
+		return nil
+	}
+	return &v
 }
 
 // UpdateProfile aplica PATCH parcial solo al perfil del user_id autenticado.

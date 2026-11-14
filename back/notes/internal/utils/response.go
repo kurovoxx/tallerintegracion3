@@ -47,12 +47,17 @@ const (
 	ErrNoteDeleted = "note_deleted"
 	// ErrAlreadyShared: la nota ya está compartida en ese grupo (409).
 	ErrAlreadyShared = "already_shared"
+	// ErrAlreadyCopied: el usuario ya tiene un clon vivo de ese apunte (409).
+	ErrAlreadyCopied = "already_copied"
 	ErrFileTooLarge      = "file_too_large"
 	ErrInvalidAccessMode = "invalid_access_mode"
 	ErrRateLimited       = "rate_limited"
 	// ErrUnsupportedMediaType: el contenido real del archivo no pertenece a la
 	// whitelist estricta de adjuntos (image/jpeg, image/png, application/pdf).
 	ErrUnsupportedMediaType = "unsupported_media_type"
+	// ErrServiceUnavailable: una dependencia servicio-a-servicio (Identity) no
+	// respondió; el cliente puede reintentar más tarde.
+	ErrServiceUnavailable = "service_unavailable"
 )
 
 func MessageForCode(code string) string {
@@ -83,12 +88,16 @@ func MessageForCode(code string) string {
 		return "Apunte no disponible (eliminado por el autor)"
 	case ErrAlreadyShared:
 		return "Este apunte ya está compartido en este grupo"
+	case ErrAlreadyCopied:
+		return "Ya copiaste este apunte a tus apuntes"
 	case ErrFileTooLarge:
 		return "Archivo muy grande"
 	case ErrRateLimited:
 		return "Demasiadas solicitudes"
 	case ErrUnsupportedMediaType:
 		return "Tipo de archivo no permitido"
+	case ErrServiceUnavailable:
+		return "Servicio no disponible temporalmente"
 	default:
 		return "Error"
 	}
@@ -104,7 +113,7 @@ func StatusForCode(code string) int {
 		return http.StatusForbidden
 	case ErrNotFound, ErrNoteUnavailable:
 		return http.StatusNotFound
-	case ErrConflict, ErrAlreadySaved, ErrAlreadyLiked, ErrAlreadyShared:
+	case ErrConflict, ErrAlreadySaved, ErrAlreadyLiked, ErrAlreadyShared, ErrAlreadyCopied:
 		return http.StatusConflict
 	case ErrNoteDeleted:
 		return http.StatusGone
@@ -114,6 +123,8 @@ func StatusForCode(code string) int {
 		return http.StatusUnsupportedMediaType
 	case ErrRateLimited:
 		return http.StatusTooManyRequests
+	case ErrServiceUnavailable:
+		return http.StatusServiceUnavailable
 	default:
 		return http.StatusInternalServerError
 	}

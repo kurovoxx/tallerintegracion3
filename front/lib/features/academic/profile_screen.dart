@@ -17,7 +17,12 @@ import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 import '../auth/account_deletion_dialog.dart';
 import '../auth/google_drive_service.dart';
+import '../notes/notes_api.dart';
 import 'profile_photo_crop.dart';
+import 'public_profile_screen.dart';
+
+/// Resultado de comprobar un perfil antes de abrirlo desde «Buscar perfil».
+enum _ProfileLookup { found, notFound, unavailable }
 
 const String kSubjectApproved = 'approved';
 const String kSubjectInProgress = 'in_progress';
@@ -65,11 +70,17 @@ class ProfileScreen extends StatefulWidget {
     this.userData,
     ProfileService? service,
     AccountDeletionService? accountDeletionService,
+    NotesApi? notesApi,
   }) : _serviceOverride = service,
-       _accountDeletionOverride = accountDeletionService;
+       _accountDeletionOverride = accountDeletionService,
+       _notesApiOverride = notesApi;
 
   final ProfileService? _serviceOverride;
   final AccountDeletionService? _accountDeletionOverride;
+
+  /// Cliente de Notes inyectable (pruebas) para comprobar si un perfil
+  /// privado existe antes de abrirlo desde «Buscar perfil».
+  final NotesApi? _notesApiOverride;
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -98,6 +109,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // Viaja como login_hint en OAuth y como expected_email al backend,
   // que lo compara con el email real de userinfo (anti cuenta equivocada).
   final _googleEmailController = TextEditingController();
+  final _publicProfileSearchController = TextEditingController();
+  String? _publicProfileSearchError;
+  bool _searchingProfile = false;
   String _draftVisibility = 'public';
   _DriveStatus _driveStatus = _DriveStatus.idle;
 
@@ -126,6 +140,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _phoneController.clear();
       _institutionController.clear();
       _descriptionController.clear();
+      _publicProfileSearchController.clear();
+      _publicProfileSearchError = null;
     });
     if (SessionManager.isLoggedIn) {
       _restoreDriveStatus();
@@ -158,6 +174,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _institutionController.dispose();
     _descriptionController.dispose();
     _googleEmailController.dispose();
+    _publicProfileSearchController.dispose();
     if (widget._serviceOverride == null) _service.dispose();
     _ownedDeletionService?.dispose();
     super.dispose();
@@ -566,10 +583,106 @@ class _ProfileScreenState extends State<ProfileScreen> {
     await _restoreDriveStatus();
   }
 
-  void _handleShare() {
+  /// «Compartir perfil»: copia el enlace `sigma-academy://perfil/<public_id>`
+  /// construido con el identificador público (nunca con el UUID interno ni
+  /// otro dato personal). Solo copia: no registra ni abre deep links.
+  Future<void> _handleShareProfile() async {
+    final link = publicProfileLink(_profile?.publicId ?? '');
+    if (link == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No se pudo obtener el enlace de tu perfil. Vuelve a iniciar sesión.',
+          ),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
+    try {
+      await Clipboard.setData(ClipboardData(text: link));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo copiar el enlace. Inténtalo nuevamente.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Enlace de perfil copiado al portapapeles')),
+      const SnackBar(
+        content: Text('Enlace del perfil copiado al portapapeles.'),
+        backgroundColor: AppColors.border,
+      ),
     );
+  }
+
+  /// «Buscar perfil»: interpreta el ID o enlace pegado, comprueba que el
+  /// perfil existe y lo abre en pantalla completa. No busca por nombre,
+  /// correo, teléfono ni UUID, y no abre enlaces externos.
+  Future<void> _handleSearchProfile() async {
+    if (_searchingProfile) return;
+    final parsed = parsePublicIdInput(_publicProfileSearchController.text);
+    if (!parsed.isValid) {
+      setState(() {
+        _publicProfileSearchError = publicIdInputMessage(parsed.error!);
+      });
+      return;
+    }
+    final publicId = parsed.publicId!;
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _publicProfileSearchError = null;
+      _searchingProfile = true;
+    });
+    final lookup = await _lookupPublicProfile(publicId);
+    if (!mounted) return;
+    setState(() {
+      _searchingProfile = false;
+      switch (lookup) {
+        case _ProfileLookup.found:
+          break;
+        case _ProfileLookup.notFound:
+          _publicProfileSearchError = 'No encontramos un perfil con ese ID.';
+        case _ProfileLookup.unavailable:
+          _publicProfileSearchError =
+              'No pudimos buscar el perfil en este momento. Inténtalo más tarde.';
+      }
+    });
+    if (lookup == _ProfileLookup.found) {
+      await openPublicProfile(context, publicId);
+    }
+  }
+
+  /// Un perfil privado responde 404 en Auth pero conserva sus apuntes
+  /// públicos en Notes; solo es «inexistente» si Notes también responde 404.
+  Future<_ProfileLookup> _lookupPublicProfile(String publicId) async {
+    try {
+      await _service.getPublicProfile(publicId);
+      return _ProfileLookup.found;
+    } on ProfileApiException catch (e) {
+      if (e.statusCode != 404) return _ProfileLookup.unavailable;
+    } catch (_) {
+      return _ProfileLookup.unavailable;
+    }
+    final notes = widget._notesApiOverride ?? NotesApi();
+    try {
+      await notes.listPublicByPublicId(publicId, limit: 1);
+      return _ProfileLookup.found;
+    } on NotesApiException catch (e) {
+      return e.statusCode == 404
+          ? _ProfileLookup.notFound
+          : _ProfileLookup.unavailable;
+    } catch (_) {
+      return _ProfileLookup.unavailable;
+    } finally {
+      if (widget._notesApiOverride == null) notes.dispose();
+    }
   }
 
   Future<void> _handleLogout() async {
@@ -717,9 +830,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
 
     final shareButton = NeobrutalistIconButton(
+      key: const ValueKey('profile-share-link'),
       icon: Icons.share_rounded,
       tooltip: 'Compartir perfil',
-      onPressed: _handleShare,
+      onPressed: _handleShareProfile,
     );
 
     // Salida rápida para tests: un tap, sin diálogos ni scroll.
@@ -748,6 +862,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (_profile == null) return const [SizedBox.shrink()];
     return [
       _buildIdentityCard(isDesktop),
+      const SizedBox(height: AppDimens.spaceLg),
+      _buildProfileSearchCard(isDesktop),
       const SizedBox(height: AppDimens.spaceLg),
       _buildPersonalDataCard(isDesktop),
       const SizedBox(height: AppDimens.spaceLg),
@@ -878,6 +994,80 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 identityText,
               ],
             ),
+    );
+  }
+
+  Widget _buildProfileSearchCard(bool isDesktop) {
+    final searchButton = NeobrutalistButton(
+      key: const ValueKey('public-profile-open'),
+      label: _searchingProfile ? 'BUSCANDO…' : 'BUSCAR',
+      icon: Icons.person_search_rounded,
+      variant: NeobrutalistButtonVariant.info,
+      expand: !isDesktop,
+      onPressed: _searchingProfile ? null : _handleSearchProfile,
+    );
+
+    return _ProfileCard(
+      title: 'Buscar perfil',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Encuentra el perfil de otra persona utilizando el enlace que te '
+            'compartió.',
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+              color: AppColors.mutedStrong,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: AppDimens.spaceMd),
+          TextField(
+            key: const ValueKey('public-profile-search'),
+            controller: _publicProfileSearchController,
+            enabled: !_searchingProfile,
+            onSubmitted: (_) => _handleSearchProfile(),
+            onChanged: (_) {
+              // El error deja de ser válido en cuanto el usuario corrige el
+              // texto; se limpia al editar para no bloquear el campo.
+              if (_publicProfileSearchError != null) {
+                setState(() => _publicProfileSearchError = null);
+              }
+            },
+            style: const TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 14,
+              color: AppColors.text,
+            ),
+            decoration:
+                appInputDecoration('Pega aquí el enlace del perfil').copyWith(
+                  prefixIcon: const Icon(
+                    Icons.person_search_rounded,
+                    size: 18,
+                    color: AppColors.text,
+                  ),
+                  errorText: _publicProfileSearchError,
+                  errorMaxLines: 3,
+                ),
+          ),
+          if (_searchingProfile) ...[
+            const SizedBox(height: AppDimens.spaceSm),
+            const LinearProgressIndicator(
+              key: ValueKey('public-profile-searching'),
+              color: AppColors.border,
+              backgroundColor: AppColors.surface,
+            ),
+          ],
+          const SizedBox(height: AppDimens.spaceMd),
+          isDesktop
+              ? Align(
+                  alignment: Alignment.centerRight,
+                  child: SizedBox(width: 240, child: searchButton),
+                )
+              : searchButton,
+        ],
+      ),
     );
   }
 

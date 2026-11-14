@@ -77,6 +77,11 @@ type Client interface {
 	// CopyFile clona archivo: descarga de src y crea nuevo en Drive de dst. El
 	// clon se indexa con appProperties de la nueva nota (newNoteID) y su dueño.
 	CopyFile(ctx context.Context, srcUserID string, srcFileID string, dstUserID string, newNoteID string, newTitle string) (string, error)
+	// CopyAttachment clona un binario (imagen/PDF/...) al Drive del usuario que
+	// copia el apunte, preservando MIME y nombre. Devuelve externalFileID y
+	// fileURL del nuevo archivo. Exige OAuth del destino; usa el token del
+	// autor solo como fallback de descarga para archivos no compartidos.
+	CopyAttachment(ctx context.Context, srcUserID string, srcFileID string, dstUserID string, newNoteID string, fileName string, fileType string, isInline bool) (string, string, error)
 	// FindFileByNoteID busca el archivo .md asociado a una nota por su
 	// appProperties notes_note_id (dueño = ownerUserID) y devuelve su fileID;
 	// "" sin error cuando no existe. Permite recuperar huérfanos tras un crash.
@@ -425,6 +430,42 @@ func (m *MockClient) CopyFile(ctx context.Context, srcUserID string, srcFileID s
 	m.files[newID] = &mockFile{ID: newID, OwnerID: dstUserID, Title: newTitle, Content: src.Content, MimeType: MimeMarkdown, AppProperties: noteFileProperties(dstUserID, newNoteID)}
 	_ = srcUserID
 	return newID, nil
+}
+
+// CopyAttachment clona un binario al Drive del usuario destino reutilizando
+// UploadAttachment (mismo indexado por appProperties, mismo MIME/nombre). La
+// descarga exige OAuth del destino y cae al token del autor solo como
+// fallback, igual que CopyFile.
+func (m *MockClient) CopyAttachment(ctx context.Context, srcUserID string, srcFileID string, dstUserID string, newNoteID string, fileName string, fileType string, isInline bool) (string, string, error) {
+	if err := m.checkOAuth(dstUserID); err != nil {
+		return "", "", err
+	}
+	if m.CopyErr != nil {
+		return "", "", m.CopyErr
+	}
+	m.mu.RLock()
+	src, ok := m.files[srcFileID]
+	if ok {
+		if err, hasErr := m.GetErr[srcFileID]; hasErr && err != nil {
+			ok = false
+		}
+	}
+	var data []byte
+	if ok {
+		data = append([]byte(nil), src.Data...)
+		if strings.TrimSpace(fileName) == "" {
+			fileName = src.Title
+		}
+		if strings.TrimSpace(fileType) == "" {
+			fileType = src.MimeType
+		}
+	}
+	m.mu.RUnlock()
+	if !ok {
+		return "", "", &DriveError{Code: 404, Message: "Nota no disponible en almacenamiento remoto"}
+	}
+	_ = srcUserID
+	return m.UploadAttachment(ctx, dstUserID, newNoteID, fileName, fileType, data, isInline)
 }
 
 // FindFileByNoteID replica Files.List con query appProperties: devuelve el

@@ -32,6 +32,28 @@ func (m *mockProfileRepo) GetByUserID(ctx context.Context, userID string) (*mode
 	return nil, nil
 }
 
+func (m *mockProfileRepo) GetPublicByPublicID(ctx context.Context, publicID string) (*model.PublicProfile, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	if publicID == "" {
+		return nil, nil
+	}
+	for _, p := range m.store {
+		if p.PublicID != publicID {
+			continue
+		}
+		return &model.PublicProfile{
+			UserID:      p.UserID,
+			PublicID:    p.PublicID,
+			DisplayName: p.DisplayName,
+			Institution: p.Institution,
+			Visibility:  p.Visibility,
+		}, nil
+	}
+	return nil, nil
+}
+
 func (m *mockProfileRepo) Update(ctx context.Context, userID string, req repository.ProfileUpdateRequest) (*model.Profile, error) {
 	if m.err != nil {
 		return nil, m.err
@@ -130,6 +152,16 @@ func TestProfileService_GetProfile_SinUserID_401(t *testing.T) {
 	se, ok := err.(*ServiceError)
 	if !ok || se.Code != "unauthorized" {
 		t.Fatalf("esperado unauthorized, got %v", err)
+	}
+}
+
+// assertProfileNotFound exige el mismo 404 genérico para perfiles privados de
+// terceros e inexistentes, de modo que no se filtre su existencia.
+func assertProfileNotFound(t *testing.T, err error) {
+	t.Helper()
+	se, ok := err.(*ServiceError)
+	if !ok || se.Code != "profile_not_found" {
+		t.Fatalf("esperado ServiceError profile_not_found, got %v", err)
 	}
 }
 
@@ -476,5 +508,40 @@ func TestProfileService_UpdateProfile_SinAuth_401(t *testing.T) {
 	se, ok := err.(*ServiceError)
 	if !ok || se.Code != "unauthorized" {
 		t.Fatalf("esperado unauthorized, got %v", err)
+	}
+}
+
+// --- H-05: perfil público por public_id ---
+
+func TestProfileService_GetPublicProfileByPublicID_NormalizaYResuelve(t *testing.T) {
+	repo := newMockRepo()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = &model.Profile{
+		UserID:      uid,
+		PublicID:    "a8kp92mqwx7r",
+		DisplayName: "Agustín",
+		Visibility:  model.VisibilityPublic,
+	}
+	svc := NewProfileService(repo)
+	p, err := svc.GetPublicProfileByPublicID(context.Background(), "550e8400-e29b-41d4-a716-446655440002", "  A8KP92MQWX7R  ")
+	if err != nil {
+		t.Fatalf("esperado sin error, got %v", err)
+	}
+	if p.PublicID != "a8kp92mqwx7r" || p.UserID != uid {
+		t.Fatalf("perfil resuelto incorrecto: %+v", p)
+	}
+}
+
+func TestProfileService_GetPublicProfileByPublicID_PrivadoDueno_200(t *testing.T) {
+	repo := newMockRepo()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = &model.Profile{UserID: uid, PublicID: "a8kp92mqwx7r", DisplayName: "Dueño", Visibility: model.VisibilityPrivate}
+	svc := NewProfileService(repo)
+	p, err := svc.GetPublicProfileByPublicID(context.Background(), uid, "a8kp92mqwx7r")
+	if err != nil {
+		t.Fatalf("el dueño debe ver su perfil privado: %v", err)
+	}
+	if p.PublicID != "a8kp92mqwx7r" {
+		t.Fatalf("public_id = %q", p.PublicID)
 	}
 }

@@ -22,6 +22,9 @@ func NewProfileHandler(svc *service.ProfileService) *ProfileHandler {
 }
 
 type profileResponse struct {
+	// PublicID vive en identity.users (no en identity.profiles) y es el único
+	// identificador que se comparte fuera de la cuenta.
+	PublicID    string  `json:"public_id"`
 	DisplayName string  `json:"display_name"`
 	PhotoURL    *string `json:"photo_url"`
 	Phone       *string `json:"phone"`
@@ -31,6 +34,18 @@ type profileResponse struct {
 	// Email (identity.users) agregado de forma backward-compatible:
 	// clientes viejos lo ignoran; se omite si no se pudo resolver.
 	Email *string `json:"email,omitempty"`
+}
+
+// publicProfileByPublicIDResponse es el DTO de GET /profile/public/:public_id.
+// Expone nombre, institución, foto (solo imagen subida desde la app),
+// public_id y visibility. No incluye user_id, email, phone ni la descripción,
+// que es privada.
+type publicProfileByPublicIDResponse struct {
+	PublicID    string  `json:"public_id"`
+	DisplayName string  `json:"display_name"`
+	PhotoURL    *string `json:"photo_url"`
+	Institution *string `json:"institution"`
+	Visibility  string  `json:"visibility"`
 }
 
 // patchProfileRequest acepta actualización parcial.
@@ -94,6 +109,7 @@ func (h *ProfileHandler) GetProfile(c *gin.Context) {
 	}
 	logAuthOp(c, "GetProfile", http.StatusOK, userID, started, "")
 	c.JSON(http.StatusOK, profileResponse{
+		PublicID:    profile.PublicID,
 		DisplayName: profile.DisplayName,
 		PhotoURL:    profile.PhotoURL,
 		Phone:       profile.Phone,
@@ -101,6 +117,47 @@ func (h *ProfileHandler) GetProfile(c *gin.Context) {
 		Description: profile.Description,
 		Visibility:  profile.Visibility,
 		Email:       profile.Email,
+	})
+}
+
+// GetPublicProfileByPublicID maneja GET /profile/public/:public_id.
+// El solicitante sale exclusivamente del JWT. La ruta aplica PrivateNoStore
+// antes de RequireAuth y el handler reafirma Cache-Control: private, no-store
+// para que ningún intermediario reutilice una respuesta autenticada.
+func (h *ProfileHandler) GetPublicProfileByPublicID(c *gin.Context) {
+	started := time.Now()
+	c.Header("Cache-Control", "private, no-store")
+
+	requesterID, ok := middleware.GetUserID(c)
+	if !ok || requesterID == "" {
+		utils.RespondError(c, http.StatusUnauthorized, utils.ErrUnauthorized, utils.MessageForCode(utils.ErrUnauthorized))
+		logAuthOp(c, "GetPublicProfileByPublicID", http.StatusUnauthorized, "", started, "code="+utils.ErrUnauthorized)
+		return
+	}
+
+	profile, err := h.svc.GetPublicProfileByPublicID(c.Request.Context(), requesterID, c.Param("public_id"))
+	if err != nil {
+		if se, ok := err.(*service.ServiceError); ok {
+			status := utils.StatusForCode(se.Code)
+			if se.Code == "profile_not_found" {
+				status = http.StatusNotFound
+			}
+			utils.RespondError(c, status, se.Code, se.Message)
+			logAuthOp(c, "GetPublicProfileByPublicID", status, requesterID, started, "code="+se.Code)
+			return
+		}
+		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
+		logAuthOp(c, "GetPublicProfileByPublicID", http.StatusInternalServerError, requesterID, started, "code=internal_error")
+		return
+	}
+
+	logAuthOp(c, "GetPublicProfileByPublicID", http.StatusOK, requesterID, started, "")
+	c.JSON(http.StatusOK, publicProfileByPublicIDResponse{
+		PublicID:    profile.PublicID,
+		DisplayName: profile.DisplayName,
+		PhotoURL:    profile.PhotoURL,
+		Institution: profile.Institution,
+		Visibility:  profile.Visibility,
 	})
 }
 
@@ -174,6 +231,7 @@ func (h *ProfileHandler) PatchProfile(c *gin.Context) {
 	logAuthOp(c, "PatchProfile", http.StatusOK, userID, started, fields)
 
 	c.JSON(http.StatusOK, profileResponse{
+		PublicID:    updated.PublicID,
 		DisplayName: updated.DisplayName,
 		PhotoURL:    updated.PhotoURL,
 		Phone:       updated.Phone,

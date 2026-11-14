@@ -28,13 +28,43 @@ func (r *ProfileRepository) GetByUserID(ctx context.Context, userID string) (*mo
 		return nil, fmt.Errorf("user_id vacío")
 	}
 	var p model.Profile
-	query := `SELECT user_id, display_name, photo_url, phone, institution, description, visibility, updated_at FROM identity.profiles WHERE user_id = $1`
-	err := r.pool.QueryRow(ctx, query, userID).Scan(&p.UserID, &p.DisplayName, &p.PhotoURL, &p.Phone, &p.Institution, &p.Description, &p.Visibility, &p.UpdatedAt)
+	query := `
+		SELECT p.user_id, p.display_name, p.photo_url, p.phone, p.institution,
+		       p.description, p.visibility, p.updated_at, u.public_id
+		FROM identity.profiles p
+		JOIN identity.users u ON u.id = p.user_id
+		WHERE p.user_id = $1`
+	err := r.pool.QueryRow(ctx, query, userID).Scan(&p.UserID, &p.DisplayName, &p.PhotoURL, &p.Phone, &p.Institution, &p.Description, &p.Visibility, &p.UpdatedAt, &p.PublicID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("get profile: %w", err)
+	}
+	return &p, nil
+}
+
+// GetPublicByPublicID resuelve un perfil público por identity.users.public_id.
+// Si el usuario existe pero no tiene fila de perfil, retorna (nil,nil): la
+// vista pública necesita los campos de profiles. No selecciona email, phone ni
+// descripción.
+func (r *ProfileRepository) GetPublicByPublicID(ctx context.Context, publicID string) (*model.PublicProfile, error) {
+	publicID = strings.TrimSpace(publicID)
+	if publicID == "" {
+		return nil, fmt.Errorf("public_id vacío")
+	}
+	var p model.PublicProfile
+	query := `
+		SELECT p.user_id, p.display_name, p.photo_url, p.institution, p.visibility, u.public_id
+		FROM identity.users u
+		JOIN identity.profiles p ON p.user_id = u.id
+		WHERE u.public_id = $1`
+	err := r.pool.QueryRow(ctx, query, publicID).Scan(&p.UserID, &p.DisplayName, &p.PhotoURL, &p.Institution, &p.Visibility, &p.PublicID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get public profile by public_id: %w", err)
 	}
 	return &p, nil
 }
@@ -120,15 +150,17 @@ func (r *ProfileRepository) Update(ctx context.Context, userID string, req Profi
 	setClauses = append(setClauses, "updated_at = now()")
 
 	query := fmt.Sprintf(`
-		UPDATE identity.profiles
+		UPDATE identity.profiles p
 		SET %s
-		WHERE user_id = $%d
-		RETURNING user_id, display_name, photo_url, phone, institution, description, visibility, updated_at
+		FROM identity.users u
+		WHERE p.user_id = $%d AND u.id = p.user_id
+		RETURNING p.user_id, p.display_name, p.photo_url, p.phone, p.institution,
+		          p.description, p.visibility, p.updated_at, u.public_id
 	`, strings.Join(setClauses, ", "), argIdx)
 	args = append(args, userID)
 
 	var p model.Profile
-	err := r.pool.QueryRow(ctx, query, args...).Scan(&p.UserID, &p.DisplayName, &p.PhotoURL, &p.Phone, &p.Institution, &p.Description, &p.Visibility, &p.UpdatedAt)
+	err := r.pool.QueryRow(ctx, query, args...).Scan(&p.UserID, &p.DisplayName, &p.PhotoURL, &p.Phone, &p.Institution, &p.Description, &p.Visibility, &p.UpdatedAt, &p.PublicID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil

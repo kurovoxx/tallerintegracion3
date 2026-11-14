@@ -30,6 +30,7 @@ func TestHTTPRouterContract(t *testing.T) {
 		"POST /notes/:id/share": false, "PATCH /notes/:id": false,
 		"DELETE /notes/:id": false, "GET /notes/:id": false,
 		"DELETE /notes/shared/:sharedNoteId": false, "GET /groups/:id/notes": false,
+		"GET /public-users/:public_id/notes": false,
 	}
 	if len(r.Routes()) != len(expected) {
 		t.Fatalf("rutas=%d, contrato=%d", len(r.Routes()), len(expected))

@@ -55,6 +55,34 @@ func (r *LikeRepository) Exists(ctx context.Context, db DBTX, noteID, userID str
 	return exists, err
 }
 
+// ExistsByNotes resuelve en una sola consulta qué apuntes de la página tienen
+// like del usuario (evita N+1 al listar). Un id ausente del mapa = sin like.
+func (r *LikeRepository) ExistsByNotes(ctx context.Context, db DBTX, userID string, noteIDs []string) (map[string]bool, error) {
+	out := make(map[string]bool, len(noteIDs))
+	if len(noteIDs) == 0 {
+		return out, nil
+	}
+	if db == nil {
+		db = r.pool
+	}
+	rows, err := db.Query(ctx, `SELECT note_id FROM notes.note_likes WHERE user_id = $1 AND note_id = ANY($2::uuid[])`, userID, noteIDs)
+	if err != nil {
+		return nil, fmt.Errorf("exists likes by notes: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var noteID string
+		if err := rows.Scan(&noteID); err != nil {
+			return nil, fmt.Errorf("scan like note_id: %w", err)
+		}
+		out[noteID] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("exists likes rows: %w", err)
+	}
+	return out, nil
+}
+
 func (r *LikeRepository) CountByNote(ctx context.Context, db DBTX, noteID string) (int, error) {
 	if db == nil {
 		db = r.pool

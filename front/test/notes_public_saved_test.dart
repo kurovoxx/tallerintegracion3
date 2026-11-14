@@ -181,4 +181,100 @@ void main() {
     expect(find.text('Álgebra'), findsNothing);
     expect(find.text('Redes'), findsOneWidget);
   });
+
+  group('NotesApi perfil público', () {
+    const publicId = 'a8kp92mqwx7r';
+
+    test('usa /public-users/:public_id/notes y parsea notes', () async {
+      final api = await _api(
+        MockClient((req) async {
+          expect(req.url.path, '/public-users/$publicId/notes');
+          expect(req.url.queryParameters['limit'], '20');
+          return _json({
+            'notes': [
+              {
+                'id': _a,
+                'title': 'Cálculo',
+                'visibility': 'public',
+                ..._stats(_a, likes: 2, saves: 1, liked: true),
+                'created_at': '2026-11-01T10:00:00Z',
+                'updated_at': '2026-11-02T10:00:00Z',
+              },
+            ],
+            'next_cursor': 'next',
+          }, 200);
+        }),
+      );
+      final page = await api.listPublicByPublicId(publicId);
+      expect(page.items, hasLength(1));
+      expect(page.items.single.title, 'Cálculo');
+      expect(page.items.single.interactions.isLiked, isTrue);
+      expect(page.nextCursor, 'next');
+    });
+
+    test('404 se traduce a profile_not_found', () async {
+      final api = await _api(
+        MockClient((req) async {
+          return _json({
+            'error': {'code': 'profile_not_found', 'message': 'x'},
+          }, 404);
+        }),
+      );
+      await expectLater(
+        api.listPublicByPublicId(publicId),
+        throwsA(
+          isA<NotesApiException>()
+              .having((e) => e.statusCode, 'statusCode', 404)
+              .having((e) => e.code, 'code', 'profile_not_found'),
+        ),
+      );
+    });
+
+    test('rechaza UUID sin llamar al backend', () async {
+      var calls = 0;
+      final api = await _api(
+        MockClient((req) async {
+          calls++;
+          return _json({}, 200);
+        }),
+      );
+      await expectLater(
+        api.listPublicByPublicId('550e8400-e29b-41d4-a716-446655440000'),
+        throwsA(
+          isA<NotesApiException>().having(
+            (e) => e.code,
+            'code',
+            'invalid_public_id',
+          ),
+        ),
+      );
+      expect(calls, 0);
+    });
+  });
+
+  group('NotesApi copia y vista previa', () {
+    test('already_copied tiene un mensaje claro', () {
+      expect(
+        notesFriendlyMessage(409, 'already_copied'),
+        'Ya copiaste este apunte a tus apuntes.',
+      );
+    });
+
+    test('NoteDetail conserva los adjuntos de GET /notes/{id}', () {
+      final detail = NoteDetail.fromJson({
+        'id': _a,
+        'title': 'Con imagen',
+        'visibility': 'public',
+        'content': '![](attachment:$_b)',
+        'attachments': [
+          {'id': _b, 'file_type': 'image/png', 'file_name': 'a.png'},
+          'basura',
+        ],
+      });
+      expect(detail.attachments, hasLength(1));
+      expect(detail.attachments.single['id'], _b);
+      // copyWith (like/guardar) no debe perder los adjuntos del visor.
+      expect(detail.copyWith(isLiked: true).attachments, hasLength(1));
+    });
+  });
 }

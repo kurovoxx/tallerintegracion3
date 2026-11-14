@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/middleware"
@@ -27,6 +30,26 @@ func (m *mockProfileRepoHandler) GetByUserID(ctx context.Context, userID string)
 	if p, ok := m.store[userID]; ok {
 		cp := *p
 		return &cp, nil
+	}
+	return nil, nil
+}
+
+func (m *mockProfileRepoHandler) GetPublicByPublicID(ctx context.Context, publicID string) (*model.PublicProfile, error) {
+	if publicID == "" {
+		return nil, nil
+	}
+	for _, p := range m.store {
+		if p.PublicID != publicID {
+			continue
+		}
+		return &model.PublicProfile{
+			UserID:      p.UserID,
+			PublicID:    p.PublicID,
+			DisplayName: p.DisplayName,
+			PhotoURL:    p.PhotoURL,
+			Institution: p.Institution,
+			Visibility:  p.Visibility,
+		}, nil
 	}
 	return nil, nil
 }
@@ -452,5 +475,256 @@ func TestProfileHandler_PatchProfile_SemanticaNullYOmitido(t *testing.T) {
 	}
 	if repo.store[uid].Description != nil {
 		t.Fatal("description \"\" debe ser NULL")
+	}
+}
+
+// seedPublicProfile crea un perfil con todos los campos sensibles para
+// comprobar que el DTO público no los filtra.
+func seedPublicProfile(repo *mockProfileRepoHandler, uid, visibility string) {
+	repo.store[uid] = &model.Profile{
+		UserID:      uid,
+		PublicID:    "a8kp92mqwx7r",
+		DisplayName: "Perfil " + visibility,
+		PhotoURL:    strPtrH("https://cdn.test/foto.jpg"),
+		Phone:       strPtrH("+56912345678"),
+		Institution: strPtrH("UCT"),
+		Description: strPtrH("Descripción"),
+		Visibility:  visibility,
+		Email:       strPtrH("privado@example.com"),
+	}
+}
+
+// fakeAccountGate simula el gate de borrado de cuenta que RequireAuth consulta
+// antes de llegar al handler.
+type fakeAccountGate struct {
+	active bool
+	err    error
+}
+
+func (f fakeAccountGate) AcquireRequest(context.Context, string) (func(), bool, error) {
+	return func() {}, f.active, f.err
+}
+
+func newPublicProfileJWT(t *testing.T) *service.JWTService {
+	t.Helper()
+	jwtSvc, err := service.NuevoJWTService(service.ConfiguracionJWT{
+		ClaveSecreta: []byte("clave-public-profile-cache-control"),
+		Issuer:       "apuntes-auth",
+		Audience:     "apuntes-client",
+		Duracion:     15 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("crear JWTService: %v", err)
+	}
+	return jwtSvc
+}
+
+// publicProfileRouter reproduce el orden real de la ruta: PrivateNoStore antes
+// de RequireAuth, de modo que los rechazos tempranos también lleven la cabecera.
+func publicProfileRouter(t *testing.T, h *ProfileHandler, gate middleware.AccountAccessGate) (*gin.Engine, *service.JWTService) {
+	t.Helper()
+	jwtSvc := newPublicProfileJWT(t)
+	mw := middleware.NewAuthMiddleware(jwtSvc)
+	if gate != nil {
+		mw = middleware.NewAuthMiddleware(jwtSvc, gate)
+	}
+	r := gin.New()
+	r.GET("/profile/public/:public_id", middleware.PrivateNoStore(), mw.RequireAuth(), h.GetPublicProfileByPublicID)
+	return r, jwtSvc
+}
+
+// Cache-Control debe cubrir toda la cadena de GET /profile/public/:public_id:
+// respuestas del handler (200/404) y rechazos emitidos por RequireAuth antes
+// del handler (401/423/503).
+func TestProfileHandler_GetPublicProfileByPublicID_CacheControlCubreCadenaCompleta(t *testing.T) {
+	repo := newMockRepoHandler()
+	targetUID := "550e8400-e29b-41d4-a716-446655440001"
+	target := "a8kp92mqwx7r"
+	requester := "550e8400-e29b-41d4-a716-446655440002"
+	seedPublicProfile(repo, targetUID, model.VisibilityPublic)
+	h, _ := setupProfileHandler(repo)
+
+	do := func(t *testing.T, r *gin.Engine, targetID, authorization string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/profile/public/"+targetID, nil)
+		if authorization != "" {
+			req.Header.Set("Authorization", authorization)
+		}
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+	validToken := func(t *testing.T, jwtSvc *service.JWTService) string {
+		t.Helper()
+		token, err := jwtSvc.GenerarAccessToken(service.UsuarioAutenticado{ID: requester})
+		if err != nil {
+			t.Fatalf("generar token: %v", err)
+		}
+		return token.AccessToken
+	}
+	assertCache := func(t *testing.T, w *httptest.ResponseRecorder, wantStatus int) {
+		t.Helper()
+		if w.Code != wantStatus {
+			t.Fatalf("status = %d, want %d (%s)", w.Code, wantStatus, w.Body.String())
+		}
+		if got := w.Header().Get("Cache-Control"); got != "private, no-store" {
+			t.Fatalf("Cache-Control = %q, want private, no-store", got)
+		}
+	}
+
+	t.Run("200", func(t *testing.T) {
+		r, jwtSvc := publicProfileRouter(t, h, nil)
+		assertCache(t, do(t, r, target, "Bearer "+validToken(t, jwtSvc)), http.StatusOK)
+	})
+
+	t.Run("404", func(t *testing.T) {
+		r, jwtSvc := publicProfileRouter(t, h, nil)
+		assertCache(t, do(t, r, "zzzzzzzzzzzz", "Bearer "+validToken(t, jwtSvc)), http.StatusNotFound)
+	})
+
+	t.Run("401 sin authorization", func(t *testing.T) {
+		r, _ := publicProfileRouter(t, h, nil)
+		assertCache(t, do(t, r, target, ""), http.StatusUnauthorized)
+	})
+
+	t.Run("401 token invalido", func(t *testing.T) {
+		r, _ := publicProfileRouter(t, h, nil)
+		assertCache(t, do(t, r, target, "Bearer token-invalido"), http.StatusUnauthorized)
+	})
+
+	t.Run("423 cuenta en borrado", func(t *testing.T) {
+		r, jwtSvc := publicProfileRouter(t, h, fakeAccountGate{active: false})
+		assertCache(t, do(t, r, target, "Bearer "+validToken(t, jwtSvc)), http.StatusLocked)
+	})
+
+	t.Run("503 gate no disponible", func(t *testing.T) {
+		r, jwtSvc := publicProfileRouter(t, h, fakeAccountGate{active: true, err: errors.New("db caida")})
+		assertCache(t, do(t, r, target, "Bearer "+validToken(t, jwtSvc)), http.StatusServiceUnavailable)
+	})
+}
+
+// --- H-05: GET /profile/public/:public_id ---
+
+func newPublicIDContext(userID, publicID string) (*gin.Context, *httptest.ResponseRecorder) {
+	c, w := newContextWithAuth("GET", "/profile/public/"+publicID, nil, userID)
+	c.Params = gin.Params{{Key: "public_id", Value: publicID}}
+	return c, w
+}
+
+func TestProfileHandler_GetPublicProfileByPublicID_200_SinDatosSensibles(t *testing.T) {
+	repo := newMockRepoHandler()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = &model.Profile{
+		UserID:      uid,
+		PublicID:    "a8kp92mqwx7r",
+		DisplayName: "Agustín",
+		PhotoURL:    strPtrH("https://cdn.test/foto.jpg"),
+		Phone:       strPtrH("+56912345678"),
+		Email:       strPtrH("a@test.invalid"),
+		Institution: strPtrH("UCT"),
+		Description: strPtrH("Descripción privada"),
+		Visibility:  "public",
+	}
+	h, _ := setupProfileHandler(repo)
+	c, w := newPublicIDContext("550e8400-e29b-41d4-a716-446655440002", "A8KP92MQWX7R")
+	h.GetPublicProfileByPublicID(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("esperado 200, got %d %s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("Cache-Control"); got != "private, no-store" {
+		t.Fatalf("Cache-Control = %q", got)
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json inválido: %v", err)
+	}
+	if resp["public_id"] != "a8kp92mqwx7r" || resp["display_name"] != "Agustín" || resp["institution"] != "UCT" {
+		t.Fatalf("respuesta incorrecta: %v", resp)
+	}
+	// La descripción, el correo, el teléfono y el UUID nunca se exponen.
+	for _, forbidden := range []string{"user_id", "email", "phone", "description"} {
+		if _, ok := resp[forbidden]; ok {
+			t.Fatalf("la respuesta pública no debe incluir %q: %v", forbidden, resp)
+		}
+	}
+	// Una foto remota no se entrega: la app de quien consulta no debe
+	// contactar a un servidor ajeno.
+	if resp["photo_url"] != nil {
+		t.Fatalf("una URL remota no debe exponerse en el perfil público: %v", resp["photo_url"])
+	}
+}
+
+// La foto subida desde la app (data URL de imagen) sí se muestra en el
+// perfil público; un perfil privado ajeno con foto sigue respondiendo 404.
+func TestProfileHandler_GetPublicProfileByPublicID_FotoSubidaEnLaApp(t *testing.T) {
+	repo := newMockRepoHandler()
+	photo := "data:image/png;base64,iVBORw0KGgo="
+	pub := "550e8400-e29b-41d4-a716-446655440001"
+	priv := "550e8400-e29b-41d4-a716-446655440003"
+	repo.store[pub] = &model.Profile{UserID: pub, PublicID: "a8kp92mqwx7r", DisplayName: "Pública", PhotoURL: strPtrH(photo), Visibility: "public"}
+	repo.store[priv] = &model.Profile{UserID: priv, PublicID: "b8kp92mqwx7r", DisplayName: "Privada", PhotoURL: strPtrH(photo), Visibility: "private"}
+	h, _ := setupProfileHandler(repo)
+
+	c, w := newPublicIDContext("550e8400-e29b-41d4-a716-446655440002", "a8kp92mqwx7r")
+	h.GetPublicProfileByPublicID(c)
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusOK {
+		t.Fatalf("esperado 200 JSON, got %d %s", w.Code, w.Body.String())
+	}
+	if resp["photo_url"] != photo {
+		t.Fatalf("la foto subida en la app debe mostrarse: %v", resp["photo_url"])
+	}
+
+	c, w = newPublicIDContext("550e8400-e29b-41d4-a716-446655440002", "b8kp92mqwx7r")
+	h.GetPublicProfileByPublicID(c)
+	if w.Code != http.StatusNotFound || strings.Contains(w.Body.String(), "base64") {
+		t.Fatalf("un perfil privado ajeno no debe exponer su foto: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestProfileHandler_GetPublicProfileByPublicID_404_PrivadoTercero(t *testing.T) {
+	repo := newMockRepoHandler()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = &model.Profile{UserID: uid, PublicID: "a8kp92mqwx7r", DisplayName: "Privado", Visibility: "private"}
+	h, _ := setupProfileHandler(repo)
+	c, w := newPublicIDContext("550e8400-e29b-41d4-a716-446655440002", "a8kp92mqwx7r")
+	h.GetPublicProfileByPublicID(c)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("esperado 404, got %d %s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("Cache-Control"); got != "private, no-store" {
+		t.Fatalf("Cache-Control = %q", got)
+	}
+}
+
+func TestProfileHandler_GetPublicProfileByPublicID_404_FormatoInvalido(t *testing.T) {
+	repo := newMockRepoHandler()
+	h, _ := setupProfileHandler(repo)
+	cases := []string{"no-es-id", "a8kp92mqwx7l", "550e8400-e29b-41d4-a716-446655440001"}
+	for _, in := range cases {
+		c, w := newPublicIDContext("550e8400-e29b-41d4-a716-446655440002", in)
+		h.GetPublicProfileByPublicID(c)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("%q: esperado 404, got %d %s", in, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestProfileHandler_GetProfile_200_IncluyePublicID(t *testing.T) {
+	repo := newMockRepoHandler()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = &model.Profile{UserID: uid, PublicID: "a8kp92mqwx7r", DisplayName: "A", Visibility: "public"}
+	h, _ := setupProfileHandler(repo)
+	c, w := newContextWithAuth("GET", "/profile/me", nil, uid)
+	h.GetProfile(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("esperado 200, got %d", w.Code)
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json inválido: %v", err)
+	}
+	if resp["public_id"] != "a8kp92mqwx7r" {
+		t.Fatalf("public_id ausente o incorrecto: %v", resp)
 	}
 }

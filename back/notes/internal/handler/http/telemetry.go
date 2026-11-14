@@ -17,7 +17,7 @@ func traceNotesOperation(c *gin.Context, route string) func() {
 	started := time.Now()
 	userID, _ := middleware.GetUserID(c)
 	noteID := c.Param("id")
-	if route == "/notes/shared/:id" || route == "/groups/:id/notes" {
+	if route == "/notes/shared/:id" || route == "/groups/:id/notes" || route == "/public-users/:public_id/notes" {
 		noteID = ""
 	}
 	attachmentID := c.Param("attachmentId")
