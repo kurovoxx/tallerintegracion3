@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../features/academic/attendance_screen.dart';
@@ -58,6 +60,11 @@ class _MainShellState extends State<MainShell> {
   Overview? _overview;
   String? _sidebarError;
   bool _loadingSidebar = false;
+  // Puntito rojo de la campana: se refresca al abrir el shell, al cerrar la
+  // bandeja y cada minuto (el backend no expone un contador dedicado).
+  int _unreadNotifications = 0;
+  bool _loadingUnread = false;
+  Timer? _unreadTimer;
 
   @override
   void initState() {
@@ -72,6 +79,11 @@ class _MainShellState extends State<MainShell> {
     SocialService.groupsChanged.addListener(_onGroupsChanged);
     _loadSidebar();
     _loadProfile();
+    _loadUnreadNotifications();
+    _unreadTimer = Timer.periodic(
+      const Duration(minutes: 1),
+      (_) => _loadUnreadNotifications(),
+    );
   }
 
   void _onProfileChanged() {
@@ -87,10 +99,33 @@ class _MainShellState extends State<MainShell> {
       context: context,
       builder: (_) => NotificationInbox(service: _social),
     );
+    // Marcar leídas o eliminar dentro del diálogo cambia el puntito.
+    if (!mounted) return;
+    await _loadUnreadNotifications();
+  }
+
+  /// Cuenta notificaciones no leídas. Best-effort: un fallo de red no debe
+  /// romper el shell ni mostrar errores en el sidebar.
+  Future<void> _loadUnreadNotifications() async {
+    if (_loadingUnread) return;
+    _loadingUnread = true;
+    try {
+      final items = await _social.myNotifications();
+      if (!mounted) return;
+      final unread = items.where((n) => !n.read).length;
+      if (unread != _unreadNotifications) {
+        setState(() => _unreadNotifications = unread);
+      }
+    } catch (_) {
+      // Silencioso: el indicador se reintenta en el próximo ciclo.
+    } finally {
+      _loadingUnread = false;
+    }
   }
 
   @override
   void dispose() {
+    _unreadTimer?.cancel();
     ProfileService.current.removeListener(_onProfileChanged);
     SocialService.groupsChanged.removeListener(_onGroupsChanged);
     if (widget._serviceOverride == null) _social.dispose();
@@ -198,6 +233,7 @@ class _MainShellState extends State<MainShell> {
       icon: Icons.notifications_rounded,
       label: 'Notificaciones',
       section: 'ESPACIO DE TRABAJO GENERAL',
+      showUnreadDot: true,
     ),
   ];
 
@@ -408,6 +444,7 @@ class _MainShellState extends State<MainShell> {
                     label: item.label,
                     isSelected: isSelected,
                     isCollapsed: isCollapsed,
+                    showDot: item.showUnreadDot && _unreadNotifications > 0,
                     onTap: () => _onSelectPage(index),
                   ),
                 ],
@@ -507,12 +544,15 @@ class _NavItem {
     required this.label,
     required this.section,
     this.short,
+    this.showUnreadDot = false,
   });
 
   final IconData icon;
   final String label;
   final String? short;
   final String section;
+  // Solo Notificaciones: pinta el puntito rojo si hay no leídas.
+  final bool showUnreadDot;
 }
 
 class _SidebarTile extends StatelessWidget {
@@ -522,6 +562,7 @@ class _SidebarTile extends StatelessWidget {
     required this.isSelected,
     required this.isCollapsed,
     required this.onTap,
+    this.showDot = false,
   });
 
   final IconData icon;
@@ -529,6 +570,8 @@ class _SidebarTile extends StatelessWidget {
   final bool isSelected;
   final bool isCollapsed;
   final VoidCallback onTap;
+  /// Puntito rojo de "hay notificaciones sin leer" sobre el ícono.
+  final bool showDot;
 
   @override
   Widget build(BuildContext context) {
@@ -557,7 +600,32 @@ class _SidebarTile extends StatelessWidget {
                 ? MainAxisAlignment.center
                 : MainAxisAlignment.start,
             children: <Widget>[
-              Icon(icon, size: 20, color: AppColors.text),
+              Stack(
+                clipBehavior: Clip.none,
+                children: <Widget>[
+                  Icon(icon, size: 20, color: AppColors.text),
+                  if (showDot)
+                    Positioned(
+                      right: -3,
+                      top: -2,
+                      child: Container(
+                        key: const ValueKey('notifications-unread-dot'),
+                        width: 9,
+                        height: 9,
+                        decoration: BoxDecoration(
+                          color: AppColors.error,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: isSelected
+                                ? AppColors.accentYellow
+                                : AppColors.surface,
+                            width: 1.5,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
               if (!isCollapsed) ...<Widget>[
                 const SizedBox(width: AppDimens.spaceSm),
                 Expanded(

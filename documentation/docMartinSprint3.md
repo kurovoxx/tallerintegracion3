@@ -313,6 +313,7 @@ Antes solo se veía el título y la hora de creación de la notificación; el en
 | Fan-out | Sin cambios: una notificación por miembro del grupo excepto el creador (regla 4.8) |
 | Respuesta `GET /notifications/me` | Incluye `group_name`, `title`, `description`, `link`, `scheduled_at`, `read`, `read_at`, `created_at` |
 | Front | La bandeja muestra grupo, título, "Reunión: fecha · hora", descripción y botón "Abrir enlace" cuando existe |
+| Indicador | Puntito rojo sobre la campana del sidebar cuando hay notificaciones sin leer; se refresca al abrir el shell, al cerrar la bandeja y cada 60 s |
 
 ### Flujo de los datos
 
@@ -339,6 +340,8 @@ Antes solo se veía el título y la hora de creación de la notificación; el en
 | `front/lib/core/services/social_service.dart` | `createMeeting` acepta y envía `link`. |
 | `front/lib/features/workspace/schedule_meeting_screen.dart` | Envía el campo ENLACE / SALA y muestra "Abrir enlace" en las próximas reuniones. |
 | `front/lib/features/notifications/notification_inbox.dart` | Muestra grupo, hora de la reunión y descripción; botón/ícono para abrir el enlace. |
+| `front/lib/core/widgets/main_shell.dart` | Cuenta no leídas (`GET /notifications/me`) al iniciar, cada 60 s y al cerrar la bandeja; pinta el puntito rojo en el ítem "Notificaciones". |
+| `front/test/main_shell_unread_dot_test.dart` | Test de widget: con una notificación no leída aparece el puntito; con todas leídas no aparece. |
 | `front/lib/core/models/social_models.dart` | `MeetingItem.link`. |
 
 ### Verificación
