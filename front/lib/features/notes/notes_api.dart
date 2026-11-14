@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../../core/models/profile_models.dart';
 import '../../core/services/api_config.dart';
 import '../../core/services/authed_client.dart';
 import '../../core/services/session_manager.dart';
@@ -59,6 +60,8 @@ String notesFriendlyMessage(int? status, String? code, {String? fallback}) {
       return 'Ya tenías este apunte en tus guardados.';
     case 'already_liked':
       return 'Ya le diste like a este apunte.';
+    case 'already_copied':
+      return 'Ya copiaste este apunte a tus apuntes.';
     case 'rate_limited':
       return 'Demasiadas copias seguidas. Espera un minuto e inténtalo de nuevo.';
   }
@@ -120,6 +123,7 @@ class NoteDetail {
     this.isSaved = false,
     this.isOwn = false,
     this.updatedAt,
+    this.attachments = const <Map<String, dynamic>>[],
   });
 
   final String id;
@@ -134,6 +138,11 @@ class NoteDetail {
   final bool isSaved;
   final bool isOwn;
   final DateTime? updatedAt;
+
+  /// Adjuntos reales de la nota (`GET /notes/{id}` los devuelve en
+  /// `attachments`). El visor los necesita para resolver `attachment:<uuid>` y
+  /// mostrar las imágenes sin exponer URLs internas de Drive.
+  final List<Map<String, dynamic>> attachments;
 
   bool get isPublic => visibility == 'public';
 
@@ -150,6 +159,12 @@ class NoteDetail {
     isSaved: j['is_saved'] == true,
     isOwn: j['is_own'] == true,
     updatedAt: DateTime.tryParse(j['updated_at']?.toString() ?? ''),
+    attachments:
+        (j['attachments'] as List?)
+            ?.whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList(growable: false) ??
+        const <Map<String, dynamic>>[],
   );
 
   NoteDetail copyWith({
@@ -170,6 +185,7 @@ class NoteDetail {
     isSaved: isSaved ?? this.isSaved,
     isOwn: isOwn,
     updatedAt: updatedAt,
+    attachments: attachments,
   );
 }
 
@@ -247,6 +263,52 @@ class PublicNoteSummary {
       userId: (j['user_id'] as String?) ?? '',
       title: (j['title'] as String?) ?? 'Sin título',
       subjectId: j['subject_id'] as String?,
+      updatedAt: DateTime.tryParse(j['updated_at']?.toString() ?? ''),
+      interactions: NoteInteractions.fromJson(j, id),
+    );
+  }
+}
+
+/// Apunte público de un perfil (GET /public-users/:public_id/notes).
+/// No incluye el UUID del autor: el perfil se identifica por public_id.
+class PublicProfileNote {
+  const PublicProfileNote({
+    required this.id,
+    required this.title,
+    required this.interactions,
+    this.subjectId,
+    this.visibility = 'public',
+    this.createdAt,
+    this.updatedAt,
+  });
+
+  final String id;
+  final String title;
+  final String? subjectId;
+  final String visibility;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
+  final NoteInteractions interactions;
+
+  PublicProfileNote copyWith({NoteInteractions? interactions}) =>
+      PublicProfileNote(
+        id: id,
+        title: title,
+        subjectId: subjectId,
+        visibility: visibility,
+        createdAt: createdAt,
+        updatedAt: updatedAt,
+        interactions: interactions ?? this.interactions,
+      );
+
+  factory PublicProfileNote.fromJson(Map<String, dynamic> j) {
+    final id = (j['id'] as String?) ?? '';
+    return PublicProfileNote(
+      id: id,
+      title: (j['title'] as String?) ?? 'Sin título',
+      subjectId: j['subject_id'] as String?,
+      visibility: (j['visibility'] as String?) ?? 'public',
+      createdAt: DateTime.tryParse(j['created_at']?.toString() ?? ''),
       updatedAt: DateTime.tryParse(j['updated_at']?.toString() ?? ''),
       interactions: NoteInteractions.fromJson(j, id),
     );
@@ -392,6 +454,9 @@ class NotesApi {
 
   final http.Client _client;
   final String _baseUrl;
+
+  /// Base efectiva del servicio de notas (inyectable en tests/Android).
+  String get baseUrl => _baseUrl;
 
   void dispose() => _client.close();
 
@@ -736,6 +801,58 @@ class NotesApi {
     final items = (body['items'] as List? ?? const [])
         .whereType<Map>()
         .map((e) => PublicNoteSummary.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+    return NotesPage(items, (body['next_cursor'] as String?) ?? '');
+  }
+
+  /// GET /public-users/:public_id/notes — apuntes públicos del autor.
+  /// Notes resuelve el public_id contra Identity; el 404 es idéntico para un
+  /// ID inválido, un perfil inexistente y un perfil privado ajeno. El 503
+  /// indica que Identity no pudo resolver el perfil en ese momento.
+  Future<NotesPage<PublicProfileNote>> listPublicByPublicId(
+    String rawPublicId, {
+    String? cursor,
+    int limit = 20,
+  }) async {
+    final publicId = normalizePublicId(rawPublicId);
+    if (publicId == null) {
+      throw NotesApiException(
+        'El ID de perfil no es válido.',
+        statusCode: 400,
+        code: 'invalid_public_id',
+      );
+    }
+    final res = await _send(
+      'GET',
+      '/public-users/$publicId/notes',
+      query: <String, String>{
+        if ((cursor ?? '').isNotEmpty) 'cursor': cursor!,
+        'limit': '$limit',
+      },
+    );
+    if (res.statusCode == 404) {
+      throw NotesApiException(
+        'No encontramos ese perfil o es privado. Revisa el ID.',
+        statusCode: 404,
+        code: 'profile_not_found',
+      );
+    }
+    if (res.statusCode == 502 ||
+        res.statusCode == 503 ||
+        res.statusCode == 504) {
+      throw NotesApiException(
+        'No pudimos verificar el perfil en este momento. Inténtalo más tarde.',
+        statusCode: res.statusCode,
+        code: 'profile_service_unavailable',
+      );
+    }
+    if (res.statusCode != 200) {
+      throw _friendly(res, 'No se pudieron cargar los apuntes del perfil.');
+    }
+    final body = _decodeMap(res);
+    final items = (body['notes'] as List? ?? const [])
+        .whereType<Map>()
+        .map((e) => PublicProfileNote.fromJson(Map<String, dynamic>.from(e)))
         .toList();
     return NotesPage(items, (body['next_cursor'] as String?) ?? '');
   }
