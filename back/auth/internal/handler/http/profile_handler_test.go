@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,6 +46,7 @@ func (m *mockProfileRepoHandler) GetPublicByPublicID(ctx context.Context, public
 			UserID:      p.UserID,
 			PublicID:    p.PublicID,
 			DisplayName: p.DisplayName,
+			PhotoURL:    p.PhotoURL,
 			Institution: p.Institution,
 			Visibility:  p.Visibility,
 		}, nil
@@ -639,11 +641,44 @@ func TestProfileHandler_GetPublicProfileByPublicID_200_SinDatosSensibles(t *test
 	if resp["public_id"] != "a8kp92mqwx7r" || resp["display_name"] != "Agustín" || resp["institution"] != "UCT" {
 		t.Fatalf("respuesta incorrecta: %v", resp)
 	}
-	// Solo nombre e institución: la descripción es privada.
-	for _, forbidden := range []string{"user_id", "email", "phone", "description", "photo_url"} {
+	// La descripción, el correo, el teléfono y el UUID nunca se exponen.
+	for _, forbidden := range []string{"user_id", "email", "phone", "description"} {
 		if _, ok := resp[forbidden]; ok {
 			t.Fatalf("la respuesta pública no debe incluir %q: %v", forbidden, resp)
 		}
+	}
+	// Una foto remota no se entrega: la app de quien consulta no debe
+	// contactar a un servidor ajeno.
+	if resp["photo_url"] != nil {
+		t.Fatalf("una URL remota no debe exponerse en el perfil público: %v", resp["photo_url"])
+	}
+}
+
+// La foto subida desde la app (data URL de imagen) sí se muestra en el
+// perfil público; un perfil privado ajeno con foto sigue respondiendo 404.
+func TestProfileHandler_GetPublicProfileByPublicID_FotoSubidaEnLaApp(t *testing.T) {
+	repo := newMockRepoHandler()
+	photo := "data:image/png;base64,iVBORw0KGgo="
+	pub := "550e8400-e29b-41d4-a716-446655440001"
+	priv := "550e8400-e29b-41d4-a716-446655440003"
+	repo.store[pub] = &model.Profile{UserID: pub, PublicID: "a8kp92mqwx7r", DisplayName: "Pública", PhotoURL: strPtrH(photo), Visibility: "public"}
+	repo.store[priv] = &model.Profile{UserID: priv, PublicID: "b8kp92mqwx7r", DisplayName: "Privada", PhotoURL: strPtrH(photo), Visibility: "private"}
+	h, _ := setupProfileHandler(repo)
+
+	c, w := newPublicIDContext("550e8400-e29b-41d4-a716-446655440002", "a8kp92mqwx7r")
+	h.GetPublicProfileByPublicID(c)
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusOK {
+		t.Fatalf("esperado 200 JSON, got %d %s", w.Code, w.Body.String())
+	}
+	if resp["photo_url"] != photo {
+		t.Fatalf("la foto subida en la app debe mostrarse: %v", resp["photo_url"])
+	}
+
+	c, w = newPublicIDContext("550e8400-e29b-41d4-a716-446655440002", "b8kp92mqwx7r")
+	h.GetPublicProfileByPublicID(c)
+	if w.Code != http.StatusNotFound || strings.Contains(w.Body.String(), "base64") {
+		t.Fatalf("un perfil privado ajeno no debe exponer su foto: %d %s", w.Code, w.Body.String())
 	}
 }
 
