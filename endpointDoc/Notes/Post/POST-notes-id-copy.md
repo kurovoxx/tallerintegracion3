@@ -69,6 +69,7 @@ No crea permisos de Drive (el clon es privado). No copia shares.
 - **Petición:** `POST $notesBaseUrl/notes/<id>/copy` (`L1967`) con `_authHeaders()` (Bearer `SessionManager.token`), **sin** `X-Idempotency-Key`, timeout 8 s, vía `AuthedHttp.run`.
 - **Respuesta:** con 201 añade `note_id` a `_ownedNoteIds` y lanza `_syncFromBackend()` para traer el clon con `GET /notes/me` y guardarlo en Drift (`L1974-1988`). Muestra "Sin conexión: no se pudo guardar la copia." o "No se pudo guardar la copia. Inténtalo más tarde." en error (`L4167-4170`).
 - `AllNotesScreen` lista las notas de `GET /notes/me` (todas propias), así que en la práctica el botón solo aparece para notas que la pantalla no reconoce como propias (`_isMine`, `L1770-1773`).
+- **Archivo en Drive:** el clon se crea como `<título>.md` con MIME `text/markdown`; al editarlo, `RealDriveClient.UpdateFile` conserva la extensión `.md` y sube el contenido como `text/markdown` (antes perdía la extensión y Drive lo cambiaba a `text/plain`).
 - **Vista previa de un apunte de otro perfil:** `PublicNotePreviewScreen` (`front/lib/features/notes/public_note_preview_screen.dart`) → botón **Copiar a mis apuntes** → `NotesApi.copyNote` con una `X-Idempotency-Key` estable por apertura; `already_copied` deja el apunte como copiado.
 - **Otros microservicios:** No se encontró invocación en el código revisado.
 - **Tests/scripts:** `scripts/test-notes-e2e.py:137-140` (copia la propia nota con clave de idempotencia).
