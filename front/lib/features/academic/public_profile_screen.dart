@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 import '../../core/models/profile_models.dart';
@@ -152,7 +154,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
       } else {
         _notesLoading = true;
         _notesError = null;
-          _notesNotFound = false;
+        _notesNotFound = false;
         _items = const [];
         _cursor = '';
       }
@@ -446,7 +448,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: <Widget>[
-          _PublicAvatar(name: name),
+          _PublicAvatar(name: name, photoDataUrl: profile.photoDataUrl),
           const SizedBox(width: AppDimens.spaceLg),
           Expanded(
             child: Column(
@@ -647,11 +649,26 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
   }
 }
 
-/// Avatar con las iniciales del nombre (la foto del perfil no es pública).
+/// Avatar del perfil: la foto subida desde la app (data URL) o, si no hay o
+/// no se puede decodificar, las iniciales del nombre.
 class _PublicAvatar extends StatelessWidget {
-  const _PublicAvatar({required this.name});
+  const _PublicAvatar({required this.name, this.photoDataUrl});
 
   final String name;
+  final String? photoDataUrl;
+
+  ImageProvider<Object>? get _photo {
+    final url = photoDataUrl;
+    if (url == null) return null;
+    const marker = ';base64,';
+    final at = url.indexOf(marker);
+    if (at <= 0) return null;
+    try {
+      return MemoryImage(base64Decode(url.substring(at + marker.length)));
+    } on FormatException {
+      return null;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -663,10 +680,21 @@ class _PublicAvatar extends StatelessWidget {
         .take(2)
         .map((part) => part[0].toUpperCase())
         .join();
+    final fallback = Text(
+      initials.isEmpty ? 'U' : initials,
+      style: const TextStyle(
+        fontSize: 26,
+        fontWeight: FontWeight.w900,
+        color: AppColors.text,
+      ),
+    );
+    final photo = _photo;
     return Container(
+      key: const ValueKey('public-profile-avatar'),
       width: size,
       height: size,
       alignment: Alignment.center,
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: AppColors.accentYellow,
         border: Border.all(
@@ -676,14 +704,16 @@ class _PublicAvatar extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
         boxShadow: AppShadows.badge,
       ),
-      child: Text(
-        initials.isEmpty ? 'U' : initials,
-        style: const TextStyle(
-          fontSize: 26,
-          fontWeight: FontWeight.w900,
-          color: AppColors.text,
-        ),
-      ),
+      child: photo == null
+          ? fallback
+          : Image(
+              image: photo,
+              fit: BoxFit.cover,
+              width: size,
+              height: size,
+              gaplessPlayback: true,
+              errorBuilder: (_, _, _) => fallback,
+            ),
     );
   }
 }

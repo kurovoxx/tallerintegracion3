@@ -67,8 +67,8 @@ class UserProfile {
   };
 }
 
-/// Vista pública de GET /profile/public/:public_id: solo nombre e
-/// institución. Deliberadamente no contiene user_id, email, phone, foto ni la
+/// Vista pública de GET /profile/public/:public_id: nombre, institución y
+/// foto. Deliberadamente no contiene user_id, email, phone ni la
 /// descripción, que es privada.
 class PublicProfile {
   const PublicProfile({
@@ -76,12 +76,17 @@ class PublicProfile {
     required this.displayName,
     required this.visibility,
     this.institution,
+    this.photoDataUrl,
   });
 
   final String publicId;
   final String displayName;
   final String? institution;
   final String visibility;
+
+  /// Foto subida desde la app (data URL de imagen en base64). Una URL remota
+  /// se descarta: abrirla haría que esta app contactara a un servidor ajeno.
+  final String? photoDataUrl;
 
   bool get isPublic => visibility == 'public';
 
@@ -90,7 +95,15 @@ class PublicProfile {
     displayName: (j['display_name'] as String?) ?? '',
     institution: j['institution'] as String?,
     visibility: (j['visibility'] as String?) ?? 'public',
+    photoDataUrl: imageDataUrlOrNull(j['photo_url'] as String?),
   );
+}
+
+/// Devuelve [value] solo si es una data URL de imagen en base64.
+String? imageDataUrlOrNull(String? value) {
+  final v = value?.trim() ?? '';
+  if (!v.startsWith('data:image/') || !v.contains(';base64,')) return null;
+  return v;
 }
 
 class ProfileApiException implements Exception {
