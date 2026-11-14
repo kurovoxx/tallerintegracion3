@@ -20,14 +20,16 @@ type Profile struct {
 }
 
 // PublicProfile es la vista pública de un perfil (GET /profile/public/:public_id).
-// Solo contiene nombre, institución y visibilidad: el repositorio no
-// selecciona email, phone, foto ni la descripción (privada), de modo que esos
-// datos nunca llegan al handler. UserID se usa únicamente para comparar con el
-// solicitante y no se serializa.
+// Contiene nombre, institución, foto y visibilidad: el repositorio no
+// selecciona email, phone ni la descripción (privada), de modo que esos datos
+// nunca llegan al handler. La foto solo se entrega si es una imagen subida
+// desde la app (data URL); ver ProfileService.GetPublicProfileByPublicID.
+// UserID se usa únicamente para comparar con el solicitante y no se serializa.
 type PublicProfile struct {
 	UserID      string  `json:"-"`
 	PublicID    string  `json:"public_id"`
 	DisplayName string  `json:"display_name"`
+	PhotoURL    *string `json:"photo_url"`
 	Institution *string `json:"institution"`
 	Visibility  string  `json:"visibility"` // public | private
 }

@@ -94,6 +94,9 @@ func (s *ProfileService) GetProfile(ctx context.Context, userID string) (*model.
 //   - Perfil privado consultado por un tercero → 404 (no revela su existencia).
 //   - Perfil privado consultado por su dueño → 200.
 //   - Cualquier visibilidad distinta de "public" se trata como privada.
+//   - La foto solo se entrega si es una imagen subida desde la app (data URL
+//     de imagen en base64). Una URL remota se omite: mostrarla haría que la
+//     app de quien consulta contactara a un servidor ajeno.
 func (s *ProfileService) GetPublicProfileByPublicID(ctx context.Context, requesterID, rawPublicID string) (*model.PublicProfile, error) {
 	requesterID = strings.TrimSpace(requesterID)
 	if requesterID == "" {
@@ -113,7 +116,21 @@ func (s *ProfileService) GetPublicProfileByPublicID(ctx context.Context, request
 	if profile.Visibility != model.VisibilityPublic && requesterID != profile.UserID {
 		return nil, &ServiceError{Code: "profile_not_found", Message: "Perfil no encontrado"}
 	}
+	profile.PhotoURL = publicPhotoURL(profile.PhotoURL)
 	return profile, nil
+}
+
+// publicPhotoURL devuelve la foto solo si es una data URL de imagen en base64
+// (la que guarda el recorte de foto de la app); cualquier otro valor se omite.
+func publicPhotoURL(photo *string) *string {
+	if photo == nil {
+		return nil
+	}
+	v := strings.TrimSpace(*photo)
+	if !strings.HasPrefix(v, profilePhotoDataURLPrefix) || !strings.Contains(v, profilePhotoDataURLBase64) {
+		return nil
+	}
+	return &v
 }
 
 // UpdateProfile aplica PATCH parcial solo al perfil del user_id autenticado.
