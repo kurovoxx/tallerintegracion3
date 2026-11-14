@@ -35,7 +35,7 @@ La prioridad se aplica al estado actual del proyecto y no significa que una func
 
 ### SHOULD
 
-**RN-IDENT-09.** La visibilidad del perfil admite los valores `public` y `private`. La configuración debe mantenerse persistida aunque el flujo completo de consulta pública de perfiles no se encuentre implementado todavía.
+**RN-IDENT-09.** La visibilidad del perfil admite los valores `public` y `private`. Los datos de un perfil `private` solo puede consultarlos su dueño; para cualquier otro usuario autenticado `GET /profile/public/:public_id` responde `404` sin revelar su existencia. Sus apuntes públicos siguen visibles (RN-PERFIL-06).
 
 ---
 
@@ -48,6 +48,14 @@ La prioridad se aplica al estado actual del proyecto y no significa que una func
 **RN-PERFIL-02.** La actualización del perfil es parcial: los campos que no son enviados deben conservar su valor anterior.
 
 **RN-PERFIL-03.** Un request inválido debe rechazarse antes de persistir cambios parciales no deseados.
+
+**RN-PERFIL-05.** El perfil público (`GET /profile/public/:public_id`) expone únicamente `public_id`, `display_name`, `institution` y `visibility`. La descripción del perfil es privada. Nunca se devuelven `user_id`, `email`, `phone`, `photo_url`, `description`, tokens ni datos internos. Todas las respuestas incluyen `Cache-Control: private, no-store`, también las emitidas por el middleware de autenticación (401, 423 y 503).
+
+**RN-PERFIL-06.** La visibilidad del perfil y la de los apuntes son independientes (decisión aprobada por el Scrum Master). Un perfil `private` oculta sus datos a otros usuarios, pero sus apuntes marcados como `public` siguen listándose en `GET /public-users/:public_id/notes` para cualquier usuario autenticado. Los apuntes privados nunca aparecen. La app muestra «Perfil privado» junto a esos apuntes.
+
+**RN-PERFIL-07.** `identity.users.public_id` es un identificador público de 12 caracteres Crockford Base32 en minúsculas (`^[0-9a-hj-km-np-tv-z]{12}$`, 60 bits), único, no nulo y generado por PostgreSQL (migración `006_public_profile_id.sql`). Es lo único que se comparte («Compartir perfil» copia el ID). El cliente normaliza a minúsculas y rechaza estrictamente `i`, `l`, `o`, `u`, UUID, nombres, correos, teléfonos y enlaces; no convierte `l`/`o` a `1`/`0` ni busca por datos personales.
+
+**RN-PERFIL-08.** `GET /profile/public/:public_id` responde `404` para un `public_id` inválido, inexistente o de un perfil privado ajeno; `GET /public-users/:public_id/notes` responde `404` solo para un `public_id` inválido o inexistente. Ambos responden `503` cuando Identity no puede resolver el perfil. Un autor válido sin apuntes públicos devuelve `200` con lista vacía; un fallo de infraestructura nunca se disfraza de lista vacía.
 
 ### SHOULD
 
@@ -106,6 +114,12 @@ La prioridad se aplica al estado actual del proyecto y no significa que una func
 **RN-NOTES-12.** Si un archivo es eliminado directamente desde Google Drive, la aplicación solo debe considerarlo eliminado cuando la ausencia pueda confirmarse de forma inequívoca, por ejemplo porque el archivo no existe o se encuentra en la papelera.
 
 **RN-NOTES-13.** Las actualizaciones de una nota deben protegerse frente a modificaciones antiguas que intenten sobrescribir silenciosamente una versión más reciente.
+
+**RN-NOTES-19.** El listado de apuntes de un perfil (`GET /public-users/:public_id/notes`) devuelve exclusivamente notas con `visibility='public'` **y** `external_file_id` no nulo. Nunca incluye notas privadas, aunque estén compartidas por grupo o enlace. El DTO no expone el UUID del autor, `external_file_id`, `sync_status`, `forked_from_note_id` ni contenido Markdown.
+
+**RN-NOTES-20.** Ese listado se pagina por cursor con orden estable `created_at DESC, id DESC`, límite por defecto 20 y máximo 100. El cursor debe pertenecer a una nota pública con archivo Drive del mismo autor; un cursor inexistente, privado, sin archivo o de otro autor no devuelve resultados ni permite saltarse los filtros. Un cursor mal formado responde `400`.
+
+**RN-NOTES-21.** Copiar un apunte copia también sus adjuntos (imágenes y PDF) al Drive de quien copia y reescribe sus referencias `attachment:<uuid>`; la copia no depende de los archivos del autor. Un usuario solo puede tener una copia viva de cada apunte: la segunda responde `409 already_copied`.
 
 ### SHOULD
 
