@@ -10,6 +10,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 
 const int kProfilePhotoOutputSize = 384;
+const int kProfilePhotoThumbOutputSize = 96;
 const double kProfilePhotoMaxZoom = 4;
 const String kProfilePhotoDataUrlPrefix = 'data:image/png;base64,';
 
@@ -28,6 +29,14 @@ Future<Uint8List?> pickProfilePhotoBytes() async {
 
 String profilePhotoToDataUrl(Uint8List bytes) =>
     '$kProfilePhotoDataUrlPrefix${base64Encode(bytes)}';
+
+/// Foto completa y miniatura generadas desde el mismo recorte.
+class ProfilePhotoCropResult {
+  const ProfilePhotoCropResult({required this.fullPng, required this.thumbPng});
+
+  final Uint8List fullPng;
+  final Uint8List thumbPng;
+}
 
 /// Centro (0..1) limitado para que el recorte cuadrado nunca salga de la foto.
 Offset profilePhotoCenterClamped({
@@ -73,7 +82,7 @@ Rect profilePhotoSourceRect({
 }
 
 /// Diálogo de ajuste: arrastrar mueve la foto, los botones acercan/alejan.
-Future<Uint8List?> showProfilePhotoCropDialog(
+Future<ProfilePhotoCropResult?> showProfilePhotoCropDialog(
   BuildContext context,
   Uint8List bytes,
 ) async {
@@ -86,7 +95,7 @@ Future<Uint8List?> showProfilePhotoCropDialog(
     return null;
   }
   try {
-    return await showDialog<Uint8List>(
+    return await showDialog<ProfilePhotoCropResult>(
       context: context,
       barrierDismissible: false,
       barrierColor: AppColors.scrim,
@@ -159,8 +168,21 @@ class _ProfilePhotoCropDialogState extends State<_ProfilePhotoCropDialog> {
     if (_saving) return;
     setState(() => _saving = true);
     try {
-      final bytes = await _cropToPng(widget.image, _sourceRect);
-      if (mounted) Navigator.of(context).pop(bytes);
+      final full = await _cropToPng(
+        widget.image,
+        _sourceRect,
+        kProfilePhotoOutputSize,
+      );
+      final thumb = await _cropToPng(
+        widget.image,
+        _sourceRect,
+        kProfilePhotoThumbOutputSize,
+      );
+      if (mounted) {
+        Navigator.of(
+          context,
+        ).pop(ProfilePhotoCropResult(fullPng: full, thumbPng: thumb));
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -335,10 +357,14 @@ class _ProfilePhotoCropDialogState extends State<_ProfilePhotoCropDialog> {
   }
 }
 
-Future<Uint8List> _cropToPng(ui.Image image, Rect sourceRect) async {
+Future<Uint8List> _cropToPng(
+  ui.Image image,
+  Rect sourceRect,
+  int outputSize,
+) async {
   final recorder = ui.PictureRecorder();
   final canvas = Canvas(recorder);
-  final side = kProfilePhotoOutputSize.toDouble();
+  final side = outputSize.toDouble();
   canvas.drawImageRect(
     image,
     sourceRect,
@@ -346,10 +372,7 @@ Future<Uint8List> _cropToPng(ui.Image image, Rect sourceRect) async {
     Paint()..filterQuality = FilterQuality.high,
   );
   final picture = recorder.endRecording();
-  final cropped = await picture.toImage(
-    kProfilePhotoOutputSize,
-    kProfilePhotoOutputSize,
-  );
+  final cropped = await picture.toImage(outputSize, outputSize);
   final data = await cropped.toByteData(format: ui.ImageByteFormat.png);
   picture.dispose();
   cropped.dispose();

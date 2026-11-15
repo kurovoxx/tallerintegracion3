@@ -138,18 +138,35 @@ func (m *MemoryGroupStore) IsMember(_ context.Context, groupID, userID string) (
 	return m.find(groupID, userID) != nil, nil
 }
 
-func (m *MemoryGroupStore) ListMembers(_ context.Context, groupID string) ([]*model.GroupMembership, error) {
+func (m *MemoryGroupStore) ListMembers(ctx context.Context, groupID string) ([]*model.GroupMembership, error) {
+	return m.ListMembersLimit(ctx, groupID, 0)
+}
+
+func (m *MemoryGroupStore) ListMembersLimit(_ context.Context, groupID string, limit int) ([]*model.GroupMembership, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.groups[groupID]; !ok {
 		return nil, errors.New("group_not_found")
 	}
-	out := make([]*model.GroupMembership, 0, len(m.member[groupID]))
-	for _, ms := range m.member[groupID] {
+	all := m.member[groupID]
+	if limit > 0 && limit < len(all) {
+		all = all[:limit]
+	}
+	out := make([]*model.GroupMembership, 0, len(all))
+	for _, ms := range all {
 		cp := *ms
 		out = append(out, &cp)
 	}
 	return out, nil
+}
+
+func (m *MemoryGroupStore) CountMembers(_ context.Context, groupID string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.groups[groupID]; !ok {
+		return 0, errors.New("group_not_found")
+	}
+	return len(m.member[groupID]), nil
 }
 
 func (m *MemoryGroupStore) KickMember(_ context.Context, groupID, adminID, targetUserID string) error {

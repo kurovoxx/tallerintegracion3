@@ -8,7 +8,7 @@ Lista los miembros de un grupo con rol, fecha de ingreso y, si Identity responde
 - Request: `GetMembersRequest{group_id:"<uuid>"}`.
 
 ## Res
-- OK: `GetMembersResponse{members:[Member{user_id, role, joined_at, email, display_name}]}`. `email`/`display_name` vacíos si Identity falla (best-effort).
+- OK: `GetMembersResponse{members:[Member{user_id, role, joined_at, email, display_name, photo_thumb_url}]}`. `email`/`display_name`/`photo_thumb_url` vacíos si Identity falla (best-effort).
 - `InvalidArgument`: uuid inválido. `NotFound`: grupo inexistente. `Unauthenticated`. `Internal`.
 
 ## Flujo

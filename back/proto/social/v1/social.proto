@@ -102,6 +102,9 @@ message Member {
   // resolver (best-effort, nunca hacen fallar la llamada).
   optional string email = 4;
   optional string display_name = 5;
+  // Miniatura de la foto de perfil resuelta contra Identity; ausente si el
+  // usuario no tiene foto o aún no generó su miniatura.
+  optional string photo_thumb_url = 6;
 }
 
 message AccountDeletionCleanupRequest {

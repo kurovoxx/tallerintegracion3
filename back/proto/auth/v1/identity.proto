@@ -82,13 +82,17 @@ message GetUserResponse {
   string email = 2;
   // Ausente si el usuario no tiene nombre público (model.PublicUser).
   optional string display_name = 3;
+  // Miniatura de la foto de perfil (data URL o URL remota corta). Ausente si
+  // el usuario no tiene foto o aún no generó su miniatura.
+  optional string photo_thumb_url = 4;
 }
 
-// Usuario público (model.PublicUser): solo user_id/email/display_name.
+// Usuario público (model.PublicUser): solo datos no sensibles.
 message User {
   string user_id = 1;
   string email = 2;
   optional string display_name = 3;
+  optional string photo_thumb_url = 4;
 }
 
 message LookupUsersRequest {

@@ -5,6 +5,7 @@ import '../../core/services/session_manager.dart';
 import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import '../../core/widgets/user_avatar.dart';
 import 'cleanup_shared_notes_checkbox.dart';
 
 /// Pestaña "MIEMBROS" del grupo: lista integrantes con su rol, permite ver su
@@ -104,18 +105,6 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
     }
   }
 
-  String _initials(GroupMember m) {
-    final label = m.displayLabel.trim();
-    final parts = label.split(RegExp(r'\s+')).where((p) => p.isNotEmpty);
-    if (parts.length >= 2) {
-      return '${parts.first[0]}${parts.elementAt(1)[0]}'.toUpperCase();
-    }
-    if (label.isNotEmpty) {
-      return label.substring(0, label.length >= 2 ? 2 : 1).toUpperCase();
-    }
-    return '??';
-  }
-
   Future<void> _showInfo(GroupMember m) async {
     await showNeobrutalistDialog<void>(
       context: context,
@@ -127,7 +116,10 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _field('Nombre', m.displayLabel),
-            _field('Correo', m.email?.trim().isNotEmpty == true ? m.email! : '—'),
+            _field(
+              'Correo',
+              m.email?.trim().isNotEmpty == true ? m.email! : '—',
+            ),
             _field('Rol', m.role == 'admin' ? 'Admin' : 'Miembro'),
             _field(
               'Se unió',
@@ -172,11 +164,9 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
     );
   }
 
-  Future<void> _confirmModeration(
-    GroupMember m, {
-    required bool ban,
-  }) async {
-    var cleanupSharedNotes = true; // Marcada por defecto; el usuario puede quitarla.
+  Future<void> _confirmModeration(GroupMember m, {required bool ban}) async {
+    var cleanupSharedNotes =
+        true; // Marcada por defecto; el usuario puede quitarla.
     final cleanup = await showNeobrutalistDialog<bool>(
       context: context,
       dialog: NeobrutalistDialog(
@@ -199,8 +189,7 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
               const SizedBox(height: AppDimens.spaceMd),
               CleanupSharedNotesCheckbox(
                 value: cleanupSharedNotes,
-                onChanged: (v) =>
-                    setDialogState(() => cleanupSharedNotes = v),
+                onChanged: (v) => setDialogState(() => cleanupSharedNotes = v),
               ),
             ],
           ),
@@ -255,10 +244,8 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
         '¿Transferir tu rol de admin a $name? Pasarás a ser miembro y perderás '
             'los permisos de gestión.',
         'Administración transferida a $name.',
-        () => _service.transferAdmin(
-          groupId: _groupId,
-          newAdminUserId: m.userId,
-        ),
+        () =>
+            _service.transferAdmin(groupId: _groupId, newAdminUserId: m.userId),
       ),
     };
     final ok = await showNeobrutalistDialog<bool>(
@@ -527,24 +514,16 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
 
   Widget _avatar(GroupMember m) {
     final isAdmin = m.role == 'admin';
-    return Container(
-      width: 44,
-      height: 44,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: isAdmin ? AppColors.accentBlueDeep : AppColors.surfaceLow,
-        border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
-        borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
-        boxShadow: AppShadows.badge,
-      ),
-      child: Text(
-        _initials(m),
-        style: TextStyle(
-          fontWeight: FontWeight.w900,
-          fontSize: 15,
-          color: isAdmin ? AppColors.surface : AppColors.text,
-        ),
-      ),
+    return UserAvatar(
+      name: m.displayLabel,
+      photoUrl: m.photoThumbUrl,
+      size: 44,
+      backgroundColor: isAdmin
+          ? AppColors.accentBlueDeep
+          : AppColors.surfaceLow,
+      foregroundColor: isAdmin ? AppColors.surface : AppColors.text,
+      borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
+      boxShadow: AppShadows.badge,
     );
   }
 }

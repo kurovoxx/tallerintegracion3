@@ -51,6 +51,9 @@ type GroupStore interface {
 	RegenerateInviteToken(ctx context.Context, groupID string, userID string) (string, error)
 	IsMember(ctx context.Context, groupID string, userID string) (bool, error)
 	ListMembers(ctx context.Context, groupID string) ([]*model.GroupMembership, error)
+	// ListMembersLimit lista como máximo limit miembros (limit <= 0 = todos).
+	ListMembersLimit(ctx context.Context, groupID string, limit int) ([]*model.GroupMembership, error)
+	CountMembers(ctx context.Context, groupID string) (int, error)
 	KickMember(ctx context.Context, groupID, adminID, targetUserID string) error
 	BanMember(ctx context.Context, groupID, adminID, targetUserID string) error
 	ChangeMemberRole(ctx context.Context, groupID, adminID, targetUserID, newRole string) error
@@ -259,6 +262,10 @@ func (s *GroupService) GetGroup(ctx context.Context, groupID, userID string) (*m
 	if err != nil {
 		return nil, mapStoreErr(err)
 	}
+	memberCount, err := s.groups.CountMembers(ctx, groupID)
+	if err != nil {
+		return nil, mapStoreErr(err)
+	}
 
 	view := &model.GroupView{
 		ID:                     group.ID,
@@ -268,6 +275,7 @@ func (s *GroupService) GetGroup(ctx context.Context, groupID, userID string) (*m
 		NotesRestrictedToStaff: group.NotesRestrictedToStaff,
 		CreatedAt:              group.CreatedAt,
 		Role:                   role,
+		MemberCount:            memberCount,
 	}
 	if role == model.RoleAdmin {
 		view.InviteToken = group.InviteToken
@@ -363,6 +371,13 @@ func (s *GroupService) JoinGroup(ctx context.Context, groupID string, inviteToke
 }
 
 func (s *GroupService) ListMembers(ctx context.Context, groupID string, userID string) ([]*model.GroupMembership, error) {
+	return s.ListMembersLimit(ctx, groupID, userID, 0)
+}
+
+// ListMembersLimit es ListMembers con un tope opcional para la vista previa
+// de grupos. limit <= 0 devuelve todos; el tope se aplica antes de enriquecer
+// con Identity para no resolver ni serializar fotos que no se van a mostrar.
+func (s *GroupService) ListMembersLimit(ctx context.Context, groupID string, userID string, limit int) ([]*model.GroupMembership, error) {
 	if userID == "" {
 		return nil, ErrUnauthorized
 	}
@@ -378,7 +393,7 @@ func (s *GroupService) ListMembers(ctx context.Context, groupID string, userID s
 		return nil, ErrForbidden
 	}
 
-	members, err := s.groups.ListMembers(ctx, groupID)
+	members, err := s.groups.ListMembersLimit(ctx, groupID, limit)
 	if err != nil {
 		return nil, mapStoreErr(err)
 	}
@@ -427,7 +442,14 @@ func (s *GroupService) ListMemberEmailsInternal(ctx context.Context, groupID str
 // Best-effort: si el directorio falla, devuelve miembros sin nombres
 // (campos omitidos por omitempty, backward-compatible).
 func (s *GroupService) ListMembersEnriched(ctx context.Context, groupID string, userID string) ([]model.MemberView, error) {
-	members, err := s.ListMembers(ctx, groupID, userID)
+	return s.ListMembersEnrichedLimit(ctx, groupID, userID, 0)
+}
+
+// ListMembersEnrichedLimit aplica el tope antes del lookup a Identity. Se usa
+// en la vista previa de grupos (p. ej. limit=3) para no traer miniaturas de
+// todos los integrantes hasta que se abra la pestaña MIEMBROS.
+func (s *GroupService) ListMembersEnrichedLimit(ctx context.Context, groupID string, userID string, limit int) ([]model.MemberView, error) {
+	members, err := s.ListMembersLimit(ctx, groupID, userID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -497,6 +519,7 @@ func (s *GroupService) enrichMembers(ctx context.Context, members []*model.Group
 		}
 		if p, ok := names[m.UserID]; ok {
 			v.DisplayName = p.DisplayName
+			v.PhotoThumbURL = p.PhotoThumbURL
 			if strings.TrimSpace(p.Email) != "" {
 				v.Email = &p.Email
 			}

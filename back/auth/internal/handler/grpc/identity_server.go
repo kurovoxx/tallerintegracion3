@@ -79,9 +79,11 @@ func (s *IdentityServer) GetUser(ctx context.Context, req *identityv1.GetUserReq
 		return nil, status.Error(codes.NotFound, "user_not_found")
 	}
 	u := out[0]
-	resp := &identityv1.GetUserResponse{UserId: u.UserID, Email: u.Email}
-	if u.DisplayName != nil {
-		resp.DisplayName = u.DisplayName
+	resp := &identityv1.GetUserResponse{
+		UserId:        u.UserID,
+		Email:         u.Email,
+		DisplayName:   u.DisplayName,
+		PhotoThumbUrl: u.PhotoThumbURL,
 	}
 	return resp, nil
 }
@@ -107,7 +109,12 @@ func (s *IdentityServer) LookupUsers(ctx context.Context, req *identityv1.Lookup
 	}
 	users := make([]*identityv1.User, 0, len(out))
 	for _, u := range out {
-		users = append(users, &identityv1.User{UserId: u.UserID, Email: u.Email, DisplayName: u.DisplayName})
+		users = append(users, &identityv1.User{
+			UserId:        u.UserID,
+			Email:         u.Email,
+			DisplayName:   u.DisplayName,
+			PhotoThumbUrl: u.PhotoThumbURL,
+		})
 	}
 	return &identityv1.LookupUsersResponse{Users: users}, nil
 }

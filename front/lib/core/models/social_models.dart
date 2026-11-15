@@ -121,10 +121,10 @@ class Overview {
   }
 }
 
-// GET /groups/:id -> GroupView (group_handler.go:119 Get).
+// GET /groups/:id -> GroupView (group_handler.go Get).
 // Campos reales: id, name, description?, owner_user_id,
-// notes_restricted_to_staff, invite_token? (solo admin), created_at, role.
-// No trae member_count ni subject: no mostrarlos como reales.
+// notes_restricted_to_staff, invite_token? (solo admin), created_at, role,
+// member_count. No trae subject: no mostrarlo como real.
 class GroupDetail {
   GroupDetail({
     required this.id,
@@ -135,6 +135,7 @@ class GroupDetail {
     this.inviteToken,
     this.createdAt,
     required this.role,
+    this.memberCount = 0,
   });
 
   final String id;
@@ -145,6 +146,7 @@ class GroupDetail {
   final String? inviteToken;
   final DateTime? createdAt;
   final String role;
+  final int memberCount;
 
   factory GroupDetail.fromJson(Map<String, dynamic> j) {
     DateTime? created;
@@ -160,6 +162,7 @@ class GroupDetail {
       inviteToken: j['invite_token'] as String?,
       createdAt: created,
       role: _str(j, 'role', 'member'),
+      memberCount: _int(j, 'member_count'),
     );
   }
 }
@@ -304,6 +307,7 @@ class GroupMember {
     this.joinedAt,
     this.displayName,
     this.email,
+    this.photoThumbUrl,
   });
 
   final String id;
@@ -313,6 +317,7 @@ class GroupMember {
   final DateTime? joinedAt;
   final String? displayName;
   final String? email;
+  final String? photoThumbUrl;
 
   /// Nombre humano sin inventar: display_name, email o id corto.
   /// Nunca es un UUID desnudo como etiqueta principal.
@@ -338,6 +343,8 @@ class GroupMember {
     if (name != null && name.trim().isEmpty) name = null;
     String? mail = j['email'] as String?;
     if (mail != null && mail.trim().isEmpty) mail = null;
+    String? photo = j['photo_thumb_url'] as String?;
+    if (photo != null && photo.trim().isEmpty) photo = null;
     return GroupMember(
       id: _str(j, 'id'),
       groupId: _str(j, 'group_id'),
@@ -346,6 +353,7 @@ class GroupMember {
       joinedAt: joined,
       displayName: name,
       email: mail,
+      photoThumbUrl: photo,
     );
   }
 }

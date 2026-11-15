@@ -70,6 +70,14 @@ func (m *mockProfileRepoHandler) Update(ctx context.Context, userID string, req 
 			p.PhotoURL = &v
 		}
 	}
+	if req.PhotoThumbURL != nil {
+		if *req.PhotoThumbURL == "" {
+			p.PhotoThumbURL = nil
+		} else {
+			v := *req.PhotoThumbURL
+			p.PhotoThumbURL = &v
+		}
+	}
 	if req.Phone != nil {
 		if *req.Phone == "" {
 			p.Phone = nil

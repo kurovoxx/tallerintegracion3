@@ -230,9 +230,12 @@ func (r *UserRepository) GetEmailByID(ctx context.Context, userID string) (strin
 	return email, nil
 }
 
-// GetPublicByIDs resuelve datos públicos mínimos (email + display_name) para
-// una lista de user_ids. Una sola query (sin N+1): join users + profiles.
-// IDs inválidos o inexistentes simplemente no aparecen en el resultado.
+// GetPublicByIDs resuelve datos públicos mínimos (email + display_name +
+// miniatura de foto) para una lista de user_ids. Una sola query (sin N+1):
+// join users + profiles. IDs inválidos o inexistentes simplemente no aparecen
+// en el resultado. Para perfiles antiguos con URL remota se usa esa URL como
+// miniatura; las data URLs completas sin miniatura se omiten para no mover
+// cientos de KB entre servicios.
 func (r *UserRepository) GetPublicByIDs(ctx context.Context, userIDs []string) ([]model.PublicUser, error) {
 	clean := make([]string, 0, len(userIDs))
 	seen := make(map[string]struct{}, len(userIDs))
@@ -250,7 +253,18 @@ func (r *UserRepository) GetPublicByIDs(ctx context.Context, userIDs []string) (
 	if len(clean) == 0 {
 		return []model.PublicUser{}, nil
 	}
-	rows, err := r.pool.Query(ctx, `SELECT u.id, u.email, p.display_name FROM identity.users u LEFT JOIN identity.profiles p ON p.user_id = u.id WHERE u.id = ANY($1::uuid[])`, clean)
+	rows, err := r.pool.Query(ctx, `
+		SELECT u.id, u.email, p.display_name,
+		       COALESCE(
+		           p.photo_thumb_url,
+		           CASE
+		               WHEN p.photo_url IS NOT NULL AND length(p.photo_url) <= 500
+		               THEN p.photo_url
+		           END
+		       ) AS photo_thumb_url
+		FROM identity.users u
+		LEFT JOIN identity.profiles p ON p.user_id = u.id
+		WHERE u.id = ANY($1::uuid[])`, clean)
 	if err != nil {
 		return nil, fmt.Errorf("get public by ids: %w", err)
 	}
@@ -258,7 +272,7 @@ func (r *UserRepository) GetPublicByIDs(ctx context.Context, userIDs []string) (
 	out := make([]model.PublicUser, 0, len(clean))
 	for rows.Next() {
 		var pu model.PublicUser
-		if err := rows.Scan(&pu.UserID, &pu.Email, &pu.DisplayName); err != nil {
+		if err := rows.Scan(&pu.UserID, &pu.Email, &pu.DisplayName, &pu.PhotoThumbURL); err != nil {
 			return nil, fmt.Errorf("get public by ids: %w", err)
 		}
 		out = append(out, pu)

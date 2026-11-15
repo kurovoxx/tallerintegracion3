@@ -29,12 +29,12 @@ func (r *ProfileRepository) GetByUserID(ctx context.Context, userID string) (*mo
 	}
 	var p model.Profile
 	query := `
-		SELECT p.user_id, p.display_name, p.photo_url, p.phone, p.institution,
-		       p.description, p.visibility, p.updated_at, u.public_id
+		SELECT p.user_id, p.display_name, p.photo_url, p.photo_thumb_url, p.phone,
+		       p.institution, p.description, p.visibility, p.updated_at, u.public_id
 		FROM identity.profiles p
 		JOIN identity.users u ON u.id = p.user_id
 		WHERE p.user_id = $1`
-	err := r.pool.QueryRow(ctx, query, userID).Scan(&p.UserID, &p.DisplayName, &p.PhotoURL, &p.Phone, &p.Institution, &p.Description, &p.Visibility, &p.UpdatedAt, &p.PublicID)
+	err := r.pool.QueryRow(ctx, query, userID).Scan(&p.UserID, &p.DisplayName, &p.PhotoURL, &p.PhotoThumbURL, &p.Phone, &p.Institution, &p.Description, &p.Visibility, &p.UpdatedAt, &p.PublicID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
@@ -73,12 +73,13 @@ func (r *ProfileRepository) GetPublicByPublicID(ctx context.Context, publicID st
 // Nil = no actualizar. *string con valor "" (trim) = set NULL (borrar).
 // Visibility nil = no actualizar.
 type ProfileUpdateRequest struct {
-	DisplayName *string
-	PhotoURL    *string
-	Phone       *string
-	Institution *string
-	Description *string
-	Visibility  *string
+	DisplayName   *string
+	PhotoURL      *string
+	PhotoThumbURL *string
+	Phone         *string
+	Institution   *string
+	Description   *string
+	Visibility    *string
 }
 
 // Update aplica PATCH parcial. Solo actualiza campos no-nil.
@@ -111,6 +112,14 @@ func (r *ProfileRepository) Update(ctx context.Context, userID string, req Profi
 			add("photo_url", nil)
 		} else {
 			add("photo_url", v)
+		}
+	}
+	if req.PhotoThumbURL != nil {
+		v := strings.TrimSpace(*req.PhotoThumbURL)
+		if v == "" {
+			add("photo_thumb_url", nil)
+		} else {
+			add("photo_thumb_url", v)
 		}
 	}
 	if req.Phone != nil {
@@ -154,13 +163,13 @@ func (r *ProfileRepository) Update(ctx context.Context, userID string, req Profi
 		SET %s
 		FROM identity.users u
 		WHERE p.user_id = $%d AND u.id = p.user_id
-		RETURNING p.user_id, p.display_name, p.photo_url, p.phone, p.institution,
-		          p.description, p.visibility, p.updated_at, u.public_id
+		RETURNING p.user_id, p.display_name, p.photo_url, p.photo_thumb_url, p.phone,
+		          p.institution, p.description, p.visibility, p.updated_at, u.public_id
 	`, strings.Join(setClauses, ", "), argIdx)
 	args = append(args, userID)
 
 	var p model.Profile
-	err := r.pool.QueryRow(ctx, query, args...).Scan(&p.UserID, &p.DisplayName, &p.PhotoURL, &p.Phone, &p.Institution, &p.Description, &p.Visibility, &p.UpdatedAt, &p.PublicID)
+	err := r.pool.QueryRow(ctx, query, args...).Scan(&p.UserID, &p.DisplayName, &p.PhotoURL, &p.PhotoThumbURL, &p.Phone, &p.Institution, &p.Description, &p.Visibility, &p.UpdatedAt, &p.PublicID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil

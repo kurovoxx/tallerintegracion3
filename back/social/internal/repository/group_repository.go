@@ -210,6 +210,13 @@ func (r *GroupRepository) IsMember(ctx context.Context, groupID string, userID s
 
 // ListMembers retorna el listado de miembros de un grupo con sus roles
 func (r *GroupRepository) ListMembers(ctx context.Context, groupID string) ([]*model.GroupMembership, error) {
+	return r.ListMembersLimit(ctx, groupID, 0)
+}
+
+// ListMembersLimit lista como máximo limit miembros (limit <= 0 = todos).
+// La vista previa de grupos usa un tope chico para no leer ni enriquecer más
+// filas de las que se muestran.
+func (r *GroupRepository) ListMembersLimit(ctx context.Context, groupID string, limit int) ([]*model.GroupMembership, error) {
 	var exists bool
 	if err := r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM social.groups WHERE id = $1)`, groupID).Scan(&exists); err != nil {
 		return nil, err
@@ -218,12 +225,18 @@ func (r *GroupRepository) ListMembers(ctx context.Context, groupID string) ([]*m
 		return nil, errors.New("group_not_found")
 	}
 
-	rows, err := r.pool.Query(ctx, `
+	query := `
 		SELECT id, group_id, user_id, role, joined_at 
 		FROM social.group_memberships 
 		WHERE group_id = $1 
-		ORDER BY joined_at ASC
-	`, groupID)
+		ORDER BY joined_at ASC`
+	args := []any{groupID}
+	if limit > 0 {
+		query += " LIMIT $2"
+		args = append(args, limit)
+	}
+
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -245,6 +258,17 @@ func (r *GroupRepository) ListMembers(ctx context.Context, groupID string) ([]*m
 		return []*model.GroupMembership{}, nil
 	}
 	return members, nil
+}
+
+// CountMembers cuenta integrantes sin traer sus filas. Se usa en la cabecera
+// del grupo para no pedir la lista completa solo para mostrar el total.
+func (r *GroupRepository) CountMembers(ctx context.Context, groupID string) (int, error) {
+	var count int
+	err := r.pool.QueryRow(ctx, `SELECT count(*) FROM social.group_memberships WHERE group_id = $1`, groupID).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 // requireAdminTx valida dentro de la transacción que userID sea admin del grupo.

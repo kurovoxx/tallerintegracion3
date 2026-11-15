@@ -596,8 +596,11 @@ type Member struct {
 	JoinedAt *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=joined_at,json=joinedAt,proto3" json:"joined_at,omitempty"`
 	// Datos públicos resueltos contra Identity; ausentes si no se pudieron
 	// resolver (best-effort, nunca hacen fallar la llamada).
-	Email         *string `protobuf:"bytes,4,opt,name=email,proto3,oneof" json:"email,omitempty"`
-	DisplayName   *string `protobuf:"bytes,5,opt,name=display_name,json=displayName,proto3,oneof" json:"display_name,omitempty"`
+	Email       *string `protobuf:"bytes,4,opt,name=email,proto3,oneof" json:"email,omitempty"`
+	DisplayName *string `protobuf:"bytes,5,opt,name=display_name,json=displayName,proto3,oneof" json:"display_name,omitempty"`
+	// Miniatura de la foto de perfil resuelta contra Identity; ausente si el
+	// usuario no tiene foto o aún no generó su miniatura.
+	PhotoThumbUrl *string `protobuf:"bytes,6,opt,name=photo_thumb_url,json=photoThumbUrl,proto3,oneof" json:"photo_thumb_url,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -663,6 +666,13 @@ func (x *Member) GetEmail() string {
 func (x *Member) GetDisplayName() string {
 	if x != nil && x.DisplayName != nil {
 		return *x.DisplayName
+	}
+	return ""
+}
+
+func (x *Member) GetPhotoThumbUrl() string {
+	if x != nil && x.PhotoThumbUrl != nil {
+		return *x.PhotoThumbUrl
 	}
 	return ""
 }
@@ -867,15 +877,17 @@ const file_v1_social_proto_rawDesc = "" +
 	"\x16GetMemberEmailsRequest\x12\x19\n" +
 	"\bgroup_id\x18\x01 \x01(\tR\agroupId\"1\n" +
 	"\x17GetMemberEmailsResponse\x12\x16\n" +
-	"\x06emails\x18\x01 \x03(\tR\x06emails\"\xdd\x01\n" +
+	"\x06emails\x18\x01 \x03(\tR\x06emails\"\x9e\x02\n" +
 	"\x06Member\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12#\n" +
 	"\x04role\x18\x02 \x01(\x0e2\x0f.social.v1.RoleR\x04role\x127\n" +
 	"\tjoined_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bjoinedAt\x12\x19\n" +
 	"\x05email\x18\x04 \x01(\tH\x00R\x05email\x88\x01\x01\x12&\n" +
-	"\fdisplay_name\x18\x05 \x01(\tH\x01R\vdisplayName\x88\x01\x01B\b\n" +
+	"\fdisplay_name\x18\x05 \x01(\tH\x01R\vdisplayName\x88\x01\x01\x12+\n" +
+	"\x0fphoto_thumb_url\x18\x06 \x01(\tH\x02R\rphotoThumbUrl\x88\x01\x01B\b\n" +
 	"\x06_emailB\x0f\n" +
-	"\r_display_name\"W\n" +
+	"\r_display_nameB\x12\n" +
+	"\x10_photo_thumb_url\"W\n" +
 	"\x1dAccountDeletionCleanupRequest\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x1d\n" +
 	"\n" +
