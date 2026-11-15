@@ -80,10 +80,7 @@ class _NotificationInboxState extends State<NotificationInbox> {
     } on SocialApiException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(e.message),
-          backgroundColor: AppColors.error,
-        ),
+        SnackBar(content: Text(e.message), backgroundColor: AppColors.error),
       );
     } catch (_) {
       if (!mounted) return;
@@ -106,20 +103,22 @@ class _NotificationInboxState extends State<NotificationInbox> {
       setState(() {
         _items = [
           for (final item in _items)
-            if (item.id == n.id) MeetingNotification(
-              id: item.id,
-              meetingId: item.meetingId,
-              groupId: item.groupId,
-              title: item.title,
-              scheduledAt: item.scheduledAt,
-              read: true,
-              readAt: DateTime.now(),
-              createdAt: item.createdAt,
-              description: item.description,
-              link: item.link,
-              groupName: item.groupName,
-            )
-            else item,
+            if (item.id == n.id)
+              MeetingNotification(
+                id: item.id,
+                meetingId: item.meetingId,
+                groupId: item.groupId,
+                title: item.title,
+                scheduledAt: item.scheduledAt,
+                read: true,
+                readAt: DateTime.now(),
+                createdAt: item.createdAt,
+                description: item.description,
+                link: item.link,
+                groupName: item.groupName,
+              )
+            else
+              item,
         ];
       });
     } catch (_) {
@@ -133,7 +132,9 @@ class _NotificationInboxState extends State<NotificationInbox> {
     final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (opened || !mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('No se pudo abrir el enlace de la reunión.')),
+      const SnackBar(
+        content: Text('No se pudo abrir el enlace de la reunión.'),
+      ),
     );
   }
 
@@ -145,32 +146,43 @@ class _NotificationInboxState extends State<NotificationInbox> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text(
-        'NOTIFICACIONES',
-        style: TextStyle(
-          fontWeight: FontWeight.w900,
-          color: AppColors.text,
-        ),
-      ),
-      content: SizedBox(
-        width: 420,
-        height: 520,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    final unreadCount = _items.where((n) => !n.read).length;
+    // Alto acotado: el marco no ocupa toda la pantalla y la lista hace su
+    // propio scroll dentro del espacio restante.
+    final maxHeight = (MediaQuery.sizeOf(context).height - 48).clamp(
+      260.0,
+      600.0,
+    );
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: maxHeight),
+      child: NeobrutalistDialog(
+        title: 'Notificaciones',
+        maxWidth: 460,
+        expandContent: true,
+        content: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Row(
               children: [
                 const Expanded(
                   child: Text(
-                    'Tus notificaciones',
+                    'TUS RECORDATORIOS DE REUNIONES',
                     style: TextStyle(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 13,
-                      color: AppColors.text,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 11.5,
+                      letterSpacing: 0.4,
+                      color: AppColors.mutedStrong,
                     ),
                   ),
                 ),
+                if (!_loading && unreadCount > 0) ...[
+                  NeobrutalistBadge(
+                    label: unreadCount == 1 ? '1 nueva' : '$unreadCount nuevas',
+                    tone: NeobrutalistTone.accent,
+                    compact: true,
+                  ),
+                  const SizedBox(width: AppDimens.spaceSm),
+                ],
                 NeobrutalistIconButton(
                   icon: Icons.close_rounded,
                   tooltip: 'Cerrar',
@@ -179,84 +191,104 @@ class _NotificationInboxState extends State<NotificationInbox> {
                 ),
               ],
             ),
-            Container(height: 2, color: AppColors.border),
-            Expanded(
-              child: _buildList(),
-            ),
+            const SizedBox(height: AppDimens.spaceMd),
+            Expanded(child: _buildList()),
           ],
         ),
+        actions: [
+          NeobrutalistButton(
+            label: 'Cerrar',
+            icon: Icons.close_rounded,
+            variant: NeobrutalistButtonVariant.secondary,
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+        ],
       ),
-      actions: [
-        NeobrutalistButton(
-          label: 'Cerrar',
-          icon: Icons.close_rounded,
-          variant: NeobrutalistButtonVariant.secondary,
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-      ],
     );
   }
 
-  Widget _buildList() {
-    if (_loading) {
-      return const Center(
-        child: CircularProgressIndicator(strokeWidth: 2),
-      );
-    }
-    if (_error != null) {
-      return Center(
+  /// Estado vacío/error como pieza neobrutalista (borde, sombra dura, relieve).
+  Widget _stateCard({
+    required IconData icon,
+    required String title,
+    required String message,
+    Widget? action,
+  }) {
+    return Center(
+      child: NeobrutalistCard(
+        backgroundColor: AppColors.surfaceLow,
+        shadow: AppShadows.hard3,
+        padding: const EdgeInsets.all(AppDimens.spaceXl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.cloud_off_rounded, size: 28, color: AppColors.muted),
-            const SizedBox(height: AppDimens.spaceSm),
-            Text(
-              _error!,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: AppColors.mutedStrong,
+            Container(
+              width: 44,
+              height: 44,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: AppColors.accentYellow,
+                border: Border.all(
+                  color: AppColors.border,
+                  width: AppDimens.borderWidth,
+                ),
+                boxShadow: AppShadows.badge,
               ),
+              child: Icon(icon, size: 22, color: AppColors.text),
             ),
             const SizedBox(height: AppDimens.spaceMd),
-            NeobrutalistButton(
-              label: 'Reintentar',
-              icon: Icons.refresh_rounded,
-              variant: NeobrutalistButtonVariant.secondary,
-              onPressed: _load,
-            ),
-          ],
-        ),
-      );
-    }
-    if (_items.isEmpty) {
-      return const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.notifications_none_rounded, size: 32, color: AppColors.muted),
-            SizedBox(height: AppDimens.spaceSm),
             Text(
-              'SIN NOTIFICACIONES',
-              style: TextStyle(
-                fontSize: 12,
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 12.5,
                 fontWeight: FontWeight.w900,
+                letterSpacing: 0.4,
                 color: AppColors.text,
               ),
             ),
-            SizedBox(height: AppDimens.spaceXs),
+            const SizedBox(height: AppDimens.spaceXs),
             Text(
-              'Aquí verás los recordatorios de tus reuniones.',
+              message,
               textAlign: TextAlign.center,
-              style: TextStyle(
+              style: const TextStyle(
                 fontSize: 11.5,
                 fontWeight: FontWeight.w700,
                 color: AppColors.mutedStrong,
               ),
             ),
+            if (action != null) ...[
+              const SizedBox(height: AppDimens.spaceMd),
+              action,
+            ],
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildList() {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+    }
+    if (_error != null) {
+      return _stateCard(
+        icon: Icons.cloud_off_rounded,
+        title: 'SIN CONEXIÓN',
+        message: _error!,
+        action: NeobrutalistButton(
+          label: 'Reintentar',
+          icon: Icons.refresh_rounded,
+          variant: NeobrutalistButtonVariant.secondary,
+          onPressed: _load,
+        ),
+      );
+    }
+    if (_items.isEmpty) {
+      return _stateCard(
+        icon: Icons.notifications_none_rounded,
+        title: 'SIN NOTIFICACIONES',
+        message: 'Aquí verás los recordatorios de tus reuniones.',
       );
     }
     return ListView.builder(
@@ -310,7 +342,9 @@ class _NotificationInboxState extends State<NotificationInbox> {
                         ),
                         if (n.link?.isNotEmpty ?? false)
                           InkWell(
-                            borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+                            borderRadius: BorderRadius.circular(
+                              AppDimens.radiusChip,
+                            ),
                             onTap: () => _openLink(n.link!),
                             child: const Icon(
                               Icons.open_in_new_rounded,
@@ -372,7 +406,9 @@ class _NotificationInboxState extends State<NotificationInbox> {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: AppDimens.spaceMd),
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppDimens.spaceMd,
+              ),
               child: Row(
                 children: [
                   NeobrutalistBadge(
@@ -391,7 +427,9 @@ class _NotificationInboxState extends State<NotificationInbox> {
                       horizontal: AppDimens.spaceMd,
                       vertical: AppDimens.spaceSm,
                     ),
-                    onPressed: _deleting.contains(n.id) ? null : () => _delete(n.id),
+                    onPressed: _deleting.contains(n.id)
+                        ? null
+                        : () => _delete(n.id),
                   ),
                 ],
               ),

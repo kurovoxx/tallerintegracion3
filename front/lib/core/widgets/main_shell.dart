@@ -95,9 +95,9 @@ class _MainShellState extends State<MainShell> {
   }
 
   void _openInbox() async {
-    await showDialog(
+    await showNeobrutalistDialog<void>(
       context: context,
-      builder: (_) => NotificationInbox(service: _social),
+      dialog: NotificationInbox(service: _social),
     );
     // Marcar leídas o eliminar dentro del diálogo cambia el puntito.
     if (!mounted) return;
@@ -570,6 +570,7 @@ class _SidebarTile extends StatelessWidget {
   final bool isSelected;
   final bool isCollapsed;
   final VoidCallback onTap;
+
   /// Puntito rojo de "hay notificaciones sin leer" sobre el ícono.
   final bool showDot;
 

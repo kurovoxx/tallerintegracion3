@@ -1059,8 +1059,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
               fontSize: 14,
               color: AppColors.text,
             ),
-            decoration:
-                appInputDecoration('Pega aquí el enlace del perfil').copyWith(
+            decoration: appInputDecoration('Pega aquí el enlace del perfil')
+                .copyWith(
                   prefixIcon: const Icon(
                     Icons.person_search_rounded,
                     size: 18,
@@ -1159,7 +1159,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final connectButton = NeobrutalistButton(
       label: connecting ? 'CONECTANDO...' : 'CONECTAR DRIVE',
       icon: Icons.add_link_rounded,
-      variant: NeobrutalistButtonVariant.info,
+      // CTA primaria de la tarjeta: amarillo resaltador, borde de acción.
+      variant: NeobrutalistButtonVariant.accent,
+      borderWidth: AppDimens.borderWidthAction,
       expand: !isDesktop,
       onPressed: busy ? null : _handleConnectDrive,
     );
@@ -1251,19 +1253,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
           const SizedBox(height: AppDimens.spaceLg),
           if (!connected) ...[
-            TextField(
-              controller: _googleEmailController,
-              keyboardType: TextInputType.emailAddress,
-              enabled: !busy,
-              decoration: const InputDecoration(
-                labelText: 'TU CORREO DE GOOGLE',
-                hintText: 'tucorreo@gmail.com',
-                helperText:
-                    'Se usa para abrir tu cuenta y verificar la conexión. Nunca se comparte.',
-                helperMaxLines: 2,
+            const AppFieldLabel('TU CORREO DE GOOGLE'),
+            const SizedBox(height: AppDimens.spaceSm),
+            // Caja neobrutalista: mismo decorado que el resto de inputs.
+            DecoratedBox(
+              decoration: const BoxDecoration(boxShadow: AppShadows.badge),
+              child: TextField(
+                controller: _googleEmailController,
+                keyboardType: TextInputType.emailAddress,
+                enabled: !busy,
+                decoration: appInputDecoration('tucorreo@gmail.com'),
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                  color: AppColors.text,
+                ),
               ),
             ),
-            const SizedBox(height: AppDimens.spaceMd),
+            const SizedBox(height: AppDimens.spaceSm),
+            const Text(
+              'Se usa para abrir tu cuenta y verificar la conexión. Nunca se comparte.',
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
+                color: AppColors.mutedStrong,
+              ),
+            ),
+            const SizedBox(height: AppDimens.spaceLg),
           ],
           driveActions,
         ],

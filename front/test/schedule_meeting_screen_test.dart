@@ -142,9 +142,18 @@ void main() {
 
     expect(find.text('TÍTULO DE LA REUNIÓN'), findsOneWidget);
     final form = find.byType(Form);
+    // Agendar + Añadir invitado (ambos neobrutalistas, sin TextButton Material).
     expect(
       find.descendant(of: form, matching: find.byType(NeobrutalistButton)),
+      findsNWidgets(2),
+    );
+    expect(
+      find.descendant(of: form, matching: find.text('AÑADIR INVITADO')),
       findsOneWidget,
+    );
+    expect(
+      find.descendant(of: form, matching: find.byType(TextButton)),
+      findsNothing,
     );
     expect(
       find.descendant(of: form, matching: find.text('PRÓXIMAS REUNIONES')),

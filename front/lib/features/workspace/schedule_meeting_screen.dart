@@ -144,7 +144,9 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
     final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (opened || !mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('No se pudo abrir el enlace de la reunión.')),
+      const SnackBar(
+        content: Text('No se pudo abrir el enlace de la reunión.'),
+      ),
     );
   }
 
@@ -388,7 +390,8 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                                       setState(() => _guests.remove(email));
                                     } else if (email.isEmpty) {
                                       setState(
-                                        () => _guestError = 'Este integrante no tiene correo disponible. Escríbelo abajo para invitarlo.',
+                                        () => _guestError =
+                                            'Este integrante no tiene correo disponible. Escríbelo abajo para invitarlo.',
                                       );
                                     } else {
                                       _addGuest(email, _memberLabel(member));
@@ -408,19 +411,32 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                             ),
                           ),
                           const SizedBox(height: AppDimens.spaceSm),
-                          TextField(
-                            controller: _emailCtrl,
-                            decoration: InputDecoration(
-                              labelText: 'Correo del invitado',
-                              errorText: _guestError,
+                          _FieldShell(
+                            child: TextField(
+                              controller: _emailCtrl,
+                              decoration: appInputDecoration(
+                                'Correo del invitado',
+                              ).copyWith(errorText: _guestError),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13,
+                                color: AppColors.text,
+                              ),
+                              keyboardType: TextInputType.emailAddress,
+                              onSubmitted: (value) => _addGuest(value),
                             ),
-                            keyboardType: TextInputType.emailAddress,
-                            onSubmitted: (value) => _addGuest(value),
                           ),
-                          TextButton(
-                            onPressed: () => _addGuest(_emailCtrl.text),
-                            child: const Text('Añadir invitado'),
+                          const SizedBox(height: AppDimens.spaceMd),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: NeobrutalistButton(
+                              label: 'Añadir invitado',
+                              icon: Icons.add_rounded,
+                              variant: NeobrutalistButtonVariant.info,
+                              onPressed: () => _addGuest(_emailCtrl.text),
+                            ),
                           ),
+                          const SizedBox(height: AppDimens.spaceSm),
                           Wrap(
                             spacing: 8,
                             children: [
