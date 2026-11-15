@@ -74,6 +74,14 @@ func (m *mockProfileRepo) Update(ctx context.Context, userID string, req reposit
 			p.PhotoURL = &v
 		}
 	}
+	if req.PhotoThumbURL != nil {
+		if *req.PhotoThumbURL == "" {
+			p.PhotoThumbURL = nil
+		} else {
+			v := *req.PhotoThumbURL
+			p.PhotoThumbURL = &v
+		}
+	}
 	if req.Phone != nil {
 		if *req.Phone == "" {
 			p.Phone = nil
@@ -316,6 +324,65 @@ func TestProfileService_UpdateProfile_DataURLFotoValida(t *testing.T) {
 	}
 	if updated.PhotoURL == nil || *updated.PhotoURL != photo {
 		t.Fatalf("se esperaba foto %q, got %+v", photo, updated.PhotoURL)
+	}
+}
+
+func TestProfileService_UpdateProfile_ThumbValida(t *testing.T) {
+	repo := newMockRepo()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = &model.Profile{UserID: uid, DisplayName: "A", Visibility: "public"}
+	svc := NewProfileService(repo)
+	photo := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
+	thumb := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAC"
+	updated, err := svc.UpdateProfile(context.Background(), uid, repository.ProfileUpdateRequest{
+		PhotoURL:      &photo,
+		PhotoThumbURL: &thumb,
+	})
+	if err != nil {
+		t.Fatalf("miniatura válida no debe fallar: %v", err)
+	}
+	if updated.PhotoThumbURL == nil || *updated.PhotoThumbURL != thumb {
+		t.Fatalf("se esperaba miniatura %q, got %+v", thumb, updated.PhotoThumbURL)
+	}
+}
+
+func TestProfileService_UpdateProfile_ThumbDemasiadoLarga_400(t *testing.T) {
+	repo := newMockRepo()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = &model.Profile{UserID: uid, DisplayName: "A", Visibility: "public", PhotoThumbURL: strPtr("https://old-thumb.jpg")}
+	svc := NewProfileService(repo)
+	largo := "data:image/png;base64," + strings.Repeat("A", maxProfilePhotoThumbDataURLLen)
+	_, err := svc.UpdateProfile(context.Background(), uid, repository.ProfileUpdateRequest{PhotoThumbURL: &largo})
+	if err == nil {
+		t.Fatal("esperado invalid_photo_thumb_url por data URL demasiado larga")
+	}
+	se, ok := err.(*ServiceError)
+	if !ok || se.Code != "invalid_photo_thumb_url" {
+		t.Fatalf("esperado invalid_photo_thumb_url, got %v", err)
+	}
+	if *repo.store[uid].PhotoThumbURL != "https://old-thumb.jpg" {
+		t.Fatal("photo_thumb_url no debe modificarse en PATCH inválido")
+	}
+}
+
+func TestProfileService_UpdateProfile_FotoSinThumbLimpiaMiniatura(t *testing.T) {
+	repo := newMockRepo()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = &model.Profile{
+		UserID:        uid,
+		DisplayName:   "A",
+		Visibility:    "public",
+		PhotoURL:      strPtr("https://old.jpg"),
+		PhotoThumbURL: strPtr("https://old-thumb.jpg"),
+	}
+	svc := NewProfileService(repo)
+	photo := "https://new.jpg"
+	updated, err := svc.UpdateProfile(context.Background(), uid, repository.ProfileUpdateRequest{PhotoURL: &photo})
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+	if updated.PhotoThumbURL != nil {
+		t.Fatalf("miniatura vieja debe limpiarse, got %v", *updated.PhotoThumbURL)
 	}
 }
 

@@ -216,16 +216,20 @@ class SocialService {
     return Workspace.fromJson(body);
   }
 
-  // GET /groups/:id/members — lista directa de integrantes.
-  // Ver back/social/internal/handler/http/group_handler.go:185 ListMembers.
-  Future<List<GroupMember>> listMembers(String groupId) async {
+  // GET /groups/:id/members?limit=N — lista directa de integrantes.
+  // limit es opcional: la vista previa pide solo los avatares visibles.
+  // Ver back/social/internal/handler/http/group_handler.go ListMembers.
+  Future<List<GroupMember>> listMembers(String groupId, {int? limit}) async {
     final id = groupId.trim();
     if (id.isEmpty) {
       throw SocialApiException('groupId vacío.', code: 'invalid_group_id');
     }
+    final uri = Uri.parse(
+      '$baseUrl/groups/$id/members',
+    ).replace(queryParameters: limit == null ? null : {'limit': '$limit'});
     final res = await AuthedHttp.run(
       () => _client
-          .get(Uri.parse('$baseUrl/groups/$id/members'), headers: _headers())
+          .get(uri, headers: _headers())
           .timeout(const Duration(seconds: 10)),
     );
     if (res.statusCode != 200) throw _toError(res);
@@ -851,10 +855,7 @@ class SocialService {
     }
     final res = await AuthedHttp.run(
       () => _client
-          .delete(
-            Uri.parse('$baseUrl/notifications/$nid'),
-            headers: _headers(),
-          )
+          .delete(Uri.parse('$baseUrl/notifications/$nid'), headers: _headers())
           .timeout(const Duration(seconds: 10)),
     );
     if (res.statusCode != 204 && res.statusCode != 200) {

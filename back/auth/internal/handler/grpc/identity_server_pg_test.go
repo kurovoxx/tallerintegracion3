@@ -39,7 +39,8 @@ CREATE TABLE identity.users (
 CREATE TABLE identity.profiles (
     user_id uuid PRIMARY KEY REFERENCES identity.users(id) ON DELETE CASCADE,
     display_name varchar(100) NOT NULL,
-    photo_url varchar(500),
+    photo_url text,
+    photo_thumb_url text,
     phone varchar(30),
     institution varchar(200),
     description text,

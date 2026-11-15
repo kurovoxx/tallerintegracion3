@@ -9,7 +9,7 @@
 
 ## Res
 
-- `200`: GroupView con id, name, description?, owner_user_id, notes_restricted_to_staff, created_at y role. invite_token solo aparece para admin.
+- `200`: GroupView con id, name, description?, owner_user_id, notes_restricted_to_staff, created_at, role y member_count. invite_token solo aparece para admin.
 - 401 sesión no válida; 403 no miembro; 404 grupo ausente o UUID inválido; 500 error interno. respondGroupError devuelve {"error":"mensaje"}; el middleware de auth usa {"error":{"code":"...","message":"..."}}.
 - No cambia datos.
 
@@ -22,12 +22,12 @@
 
 1. `main()` registra `GET /groups/:id` (`back/social/cmd/server/main.go:274`).
 2. `GroupHandler.Get` lee el actor y el ID del grupo (`back/social/internal/handler/http/group_handler.go:116-128`).
-3. `GroupService.GetGroup` valida UUID y membresía, consulta `GroupRepository.GetByID` y `GroupRepository.GetMemberRole` y construye `GroupView` (`back/social/internal/service/group_service.go:242-274`; `back/social/internal/repository/group_repository.go:60-78,423-434`). Solo agrega el token de invitación al rol admin.
+3. `GroupService.GetGroup` valida UUID y membresía, consulta `GroupRepository.GetByID`, `GetMemberRole` y `CountMembers`, y construye `GroupView` (`member_count`). Solo agrega el token de invitación al rol admin.
 4. `GroupHandler.Get` serializa el detalle con `200` (`back/social/internal/handler/http/group_handler.go:116-128`); las pantallas citadas en Invocación lo cargan para mostrar el grupo o administrar su invitación.
 
 ## Front
 - Cliente: `SocialService.getGroup` (`front/lib/core/services/social_service.dart:130`) → `GroupDetail.fromJson` (`front/lib/core/models/social_models.dart`).
-- Pantalla grupo (cabecera): `_GroupDetailScreenState._loadHeader` (`front/lib/features/groups/group_detail_screen.dart:117`); muestra `name` y, aparte, el conteo de integrantes sacado de `GET /groups/:id/members` (no viene en este response).
+- Pantalla grupo (cabecera): `_GroupDetailScreenState._loadHeader` muestra `name` y `member_count` directamente, sin pedir la lista de miembros.
 - Diálogo INFO de la tarjeta de grupo: `_GroupInfoDialogState._load` (`front/lib/features/groups/groups_screen.dart:552`); muestra descripción y rol.
 - Diálogo INVITAR: `_InviteDialogState._load` (`front/lib/features/groups/groups_screen.dart:797`); lee solo `invite_token` (llega únicamente si `role == admin`) para mostrarlo y copiarlo.
 - Pestaña Discord: `_GroupDiscordTabState._loadRole` (`front/lib/features/groups/group_detail_screen.dart:482`); usa solo `role == 'admin'` para habilitar el botón CONFIGURAR DISCORD.

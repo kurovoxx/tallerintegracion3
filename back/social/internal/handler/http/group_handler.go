@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -213,15 +214,26 @@ func (h *GroupHandler) RegenerateInvite(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"new_invite_token": newToken})
 }
 
-// ListMembers maneja GET /groups/{id}/members
-// Responde miembros con display_name/email cuando Identity los resuelve
-// (campos omitidos si no, backward-compatible).
+// ListMembers maneja GET /groups/{id}/members?limit=N
+// Responde miembros con display_name/email/photo_thumb_url cuando Identity los
+// resuelve (campos omitidos si no, backward-compatible). limit es opcional.
 func (h *GroupHandler) ListMembers(c *gin.Context) {
 	userID, ok := requireUser(c)
 	if !ok {
 		return
 	}
-	members, err := h.svc.ListMembersEnriched(c.Request.Context(), c.Param("id"), userID)
+	// limit es opcional: la vista previa pide solo los avatares visibles; la
+	// pestaña MIEMBROS omite el parámetro y recibe la lista completa.
+	limit := 0
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > 200 {
+			utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "limit debe ser un entero entre 1 y 200")
+			return
+		}
+		limit = n
+	}
+	members, err := h.svc.ListMembersEnrichedLimit(c.Request.Context(), c.Param("id"), userID, limit)
 	if err != nil {
 		respondGroupError(c, err, "Acceso denegado: debes ser miembro del grupo para ver los integrantes")
 		return

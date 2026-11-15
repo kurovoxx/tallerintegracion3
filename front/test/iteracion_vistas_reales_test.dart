@@ -906,12 +906,13 @@ void main() {
   group('PRE-CHECKPOINT — Chat/Header/Sprint', () {
     StreamChatConnector connectorFor(Future<ChatSession> Function() open) {
       return StreamChatConnector(
-        factory: ({
-          required String apiKey,
-          required String userToken,
-          required String userId,
-          required String channelId,
-        }) => open(),
+        factory:
+            ({
+              required String apiKey,
+              required String userToken,
+              required String userId,
+              required String channelId,
+            }) => open(),
       );
     }
 
@@ -1008,17 +1009,8 @@ void main() {
               'owner_user_id': 'u',
               'notes_restricted_to_staff': false,
               'role': 'admin',
+              'member_count': 1,
             });
-          }
-          if (request.url.servicePath.endsWith('/members')) {
-            return _ok([
-              {
-                'id': 'm1',
-                'group_id': _gid,
-                'user_id': _memberId,
-                'role': 'admin',
-              },
-            ]);
           }
           return _ok({
             'group': {'id': _gid, 'name': 'Grupo Solo', 'role': 'admin'},

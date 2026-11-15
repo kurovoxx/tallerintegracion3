@@ -58,11 +58,12 @@ func (s *SocialServer) GetMembers(ctx context.Context, req *socialv1.GetMembersR
 	members := make([]*socialv1.Member, 0, len(views))
 	for _, v := range views {
 		members = append(members, &socialv1.Member{
-			UserId:      v.UserID,
-			Role:        toRole(v.Role),
-			JoinedAt:    timestamppb.New(v.JoinedAt),
-			Email:       v.Email,
-			DisplayName: v.DisplayName,
+			UserId:        v.UserID,
+			Role:          toRole(v.Role),
+			JoinedAt:      timestamppb.New(v.JoinedAt),
+			Email:         v.Email,
+			DisplayName:   v.DisplayName,
+			PhotoThumbUrl: v.PhotoThumbURL,
 		})
 	}
 	return &socialv1.GetMembersResponse{Members: members}, nil

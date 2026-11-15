@@ -16,6 +16,7 @@ import '../../core/models/social_models.dart';
 import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import '../../core/widgets/user_avatar.dart';
 import 'cleanup_shared_notes_checkbox.dart';
 import 'group_detail_screen.dart';
 import 'notifications_bell.dart';
@@ -33,30 +34,15 @@ class GroupsScreen extends StatefulWidget {
   State<GroupsScreen> createState() => _GroupsScreenState();
 }
 
-String _initialsFor(String display) {
-  final t = display.trim();
-  if (t.isEmpty) return '?';
-  // "Agustín Vega" -> "AV". Si es email, usa las 2 primeras letras.
-  // Nunca muestra UUID: el llamador ya resolvió displayLabel.
-  final parts = t.split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
-  if (parts.length >= 2) {
-    return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
-  }
-  final clean = parts.first.replaceAll(RegExp(r'[^A-Za-zÁÉÍÓÚÑáéíóúñ0-9]'), '');
-  if (clean.length >= 2) return clean.substring(0, 2).toUpperCase();
-  if (clean.isNotEmpty) return clean[0].toUpperCase();
-  return t.substring(0, t.length >= 2 ? 2 : 1).toUpperCase();
-}
-
 class _GroupsScreenState extends State<GroupsScreen> {
   late final SocialService _service;
   bool _isLoading = true;
   bool _isCreating = false;
   String? _error;
   Overview? _overview;
-  // Iniciales reales por grupo (display_name/email). Best-effort: si falla,
-  // la card muestra solo el conteo "N integrantes" sin avatar falso.
-  Map<String, List<String>> _initialsByGroup = const {};
+  // Miembros visibles por grupo (máximo 3) con miniatura/nombre. Best-effort:
+  // si falla, la card muestra solo el conteo "N integrantes" sin avatar falso.
+  Map<String, List<GroupMember>> _previewMembersByGroup = const {};
 
   @override
   void initState() {
@@ -84,8 +70,8 @@ class _GroupsScreenState extends State<GroupsScreen> {
         _overview = ov;
         _isLoading = false;
       });
-      // Iniciales reales (best-effort, no bloquea la lista).
-      _loadInitials(ov.groups);
+      // Avatares visibles (best-effort, no bloquea la lista).
+      _loadPreviewMembers(ov.groups);
     } on SocialApiException catch (_) {
       if (!mounted) return;
       setState(() {
@@ -101,23 +87,20 @@ class _GroupsScreenState extends State<GroupsScreen> {
     }
   }
 
-  Future<void> _loadInitials(List<GroupCard> groups) async {
-    final out = <String, List<String>>{};
+  Future<void> _loadPreviewMembers(List<GroupCard> groups) async {
+    final out = <String, List<GroupMember>>{};
     for (final g in groups) {
       try {
-        final members = await _service.listMembers(g.groupId);
-        final initials = <String>[];
-        for (final m in members.take(4)) {
-          // displayLabel nunca es UUID desnudo (display_name/email o corto).
-          initials.add(_initialsFor(m.displayLabel));
-        }
-        out[g.groupId] = initials;
+        // Solo los 3 avatares que muestra la tarjeta. El resto se carga al
+        // abrir la pestaña MIEMBROS, sin traer miniaturas de más.
+        final members = await _service.listMembers(g.groupId, limit: 3);
+        out[g.groupId] = members.take(3).toList();
       } catch (_) {
         // Sin miembros legibles: la card muestra solo el conteo.
       }
     }
     if (!mounted) return;
-    setState(() => _initialsByGroup = out);
+    setState(() => _previewMembersByGroup = out);
   }
 
   Future<void> _openCreateSheet() async {
@@ -417,7 +400,8 @@ class _GroupsScreenState extends State<GroupsScreen> {
                   width: cardWidth,
                   child: _GroupCard(
                     group: group,
-                    initials: _initialsByGroup[group.groupId] ?? const [],
+                    previewMembers:
+                        _previewMembersByGroup[group.groupId] ?? const [],
                     onInvite: () => _showInvite(group),
                     onInfo: () => _showGroupInfo(group),
                   ),
@@ -1002,14 +986,14 @@ class _GroupCard extends StatelessWidget {
     required this.group,
     required this.onInvite,
     required this.onInfo,
-    this.initials = const [],
+    this.previewMembers = const [],
   });
 
   final GroupCard group;
   final VoidCallback onInvite;
   final VoidCallback onInfo;
-  // Iniciales reales desde display_name/email (máx 3 visibles).
-  final List<String> initials;
+  // Integrantes visibles (máx 3) con miniatura/nombre.
+  final List<GroupMember> previewMembers;
 
   Color _colorFor(String id) {
     if (id.isEmpty) return AppColors.accentYellow;
@@ -1119,12 +1103,14 @@ class _GroupCard extends StatelessWidget {
             ),
             child: Row(
               children: [
-                // Estilo vistas: iniciales reales apiladas. Sin miembros
+                // Estilo vistas: avatares reales apilados. Sin miembros
                 // legibles no se muestra "+N" como botón: solo el conteo.
-                if (initials.isNotEmpty) ...[
+                if (previewMembers.isNotEmpty) ...[
                   _AvatarStack(
-                    initials: initials.take(3).toList(),
-                    extra: members - initials.take(3).length,
+                    members: previewMembers.take(3).toList(),
+                    extra: members > previewMembers.take(3).length
+                        ? members - previewMembers.take(3).length
+                        : 0,
                   ),
                   const SizedBox(width: AppDimens.spaceMd),
                 ] else ...[
@@ -1257,9 +1243,9 @@ class _CodeChip extends StatelessWidget {
 }
 
 class _AvatarStack extends StatelessWidget {
-  const _AvatarStack({required this.initials, required this.extra});
+  const _AvatarStack({required this.members, required this.extra});
 
-  final List<String> initials;
+  final List<GroupMember> members;
   final int extra;
 
   static const double _size = 30;
@@ -1268,13 +1254,18 @@ class _AvatarStack extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hasExtra = extra > 0;
-    if (initials.isEmpty && !hasExtra) return const SizedBox.shrink();
+    if (members.isEmpty && !hasExtra) return const SizedBox.shrink();
 
     return Wrap(
       spacing: _gap,
       runSpacing: _gap,
       children: [
-        for (final initial in initials) _AvatarBox(label: initial),
+        for (final member in members)
+          UserAvatar(
+            name: member.displayLabel,
+            photoUrl: member.photoThumbUrl,
+            size: _size,
+          ),
         if (hasExtra) _AvatarBox(label: '+$extra', inverted: true),
       ],
     );

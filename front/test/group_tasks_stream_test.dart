@@ -212,6 +212,34 @@ void main() {
     },
   );
 
+  test('listMembers con limit envía query y parsea photo_thumb_url', () async {
+    final service = SocialService(
+      client: MockClient((request) async {
+        expect(request.url.servicePath, '/groups/$_gid/members');
+        expect(request.url.queryParameters['limit'], '3');
+        return http.Response(
+          jsonEncode([
+            {
+              'id': 'm1',
+              'group_id': _gid,
+              'user_id': 'aaaaaaaa-0000-4000-8000-000000000001',
+              'role': 'admin',
+              'display_name': 'Ana Admin',
+              'photo_thumb_url': 'data:image/png;base64,thumb',
+            },
+          ]),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }),
+    );
+    addTearDown(service.dispose);
+
+    final members = await service.listMembers(_gid, limit: 3);
+    expect(members.length, 1);
+    expect(members.first.photoThumbUrl, 'data:image/png;base64,thumb');
+  });
+
   test('GroupMember/StreamToken toleran payload parcial', () {
     final m = GroupMember.fromJson({'user_id': 'u1'});
     expect(m.role, 'member');
@@ -221,8 +249,10 @@ void main() {
       'role': 'admin',
       'display_name': 'Agustín Vega',
       'email': 'agustin@example.com',
+      'photo_thumb_url': 'https://cdn/thumb.jpg',
     });
     expect(named.displayLabel, 'Agustín Vega');
+    expect(named.photoThumbUrl, 'https://cdn/thumb.jpg');
     final t = StreamToken.fromJson({
       'token': 't',
       'channel_id': 'c',

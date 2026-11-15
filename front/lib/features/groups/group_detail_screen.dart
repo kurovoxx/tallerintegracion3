@@ -120,13 +120,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
         _detail = d;
         _loadedForId = id;
         _loadingHeader = false;
+        // El conteo viene en GET /groups/:id; no hace falta traer la lista
+        // completa (ni sus miniaturas) solo para la cabecera.
+        _memberCount = d.memberCount;
       });
-      // Conteo real de integrantes (una sola lectura, best-effort).
-      try {
-        final members = await _service.listMembers(id);
-        if (!mounted) return;
-        setState(() => _memberCount = members.length);
-      } catch (_) {}
     } on SocialApiException catch (_) {
       if (!mounted) return;
       setState(() {
@@ -164,7 +161,14 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('NOMBRE', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Color(0xFF555555))),
+              const Text(
+                'NOMBRE',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF555555),
+                ),
+              ),
               const SizedBox(height: 4),
               TextField(
                 controller: nameCtrl,
@@ -175,7 +179,14 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                 maxLength: 200,
               ),
               const SizedBox(height: 16),
-              const Text('DESCRIPCIÓN', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Color(0xFF555555))),
+              const Text(
+                'DESCRIPCIÓN',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF555555),
+                ),
+              ),
               const SizedBox(height: 4),
               TextField(
                 controller: descCtrl,
@@ -640,7 +651,7 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
     // Intentar abrir directamente en la app de Discord con varios deep links.
     final candidates = <Uri>[
       Uri.parse('discord://discord.com/invite/$inviteCode'), // URL completa
-      Uri.parse('discord://invite/$inviteCode'),             // formato corto
+      Uri.parse('discord://invite/$inviteCode'), // formato corto
     ];
 
     for (final uri in candidates) {
@@ -688,7 +699,12 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
     final path = uri.path;
 
     if (host == 'discord.com' && path.startsWith('/invite/')) {
-      return path.substring('/invite/'.length).split('/').first.split('?').first;
+      return path
+          .substring('/invite/'.length)
+          .split('/')
+          .first
+          .split('?')
+          .first;
     }
     if (host == 'discord.gg' && path.isNotEmpty) {
       return path.substring(1).split('/').first.split('?').first;
@@ -1028,4 +1044,3 @@ class GroupScheduleTab extends StatelessWidget {
     return ScheduleMeetingScreen(groupId: groupId);
   }
 }
-

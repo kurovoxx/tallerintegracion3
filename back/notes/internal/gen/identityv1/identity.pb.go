@@ -121,7 +121,10 @@ type GetUserResponse struct {
 	UserId string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	Email  string                 `protobuf:"bytes,2,opt,name=email,proto3" json:"email,omitempty"`
 	// Ausente si el usuario no tiene nombre público (model.PublicUser).
-	DisplayName   *string `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3,oneof" json:"display_name,omitempty"`
+	DisplayName *string `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3,oneof" json:"display_name,omitempty"`
+	// Miniatura de la foto de perfil (data URL o URL remota corta). Ausente si
+	// el usuario no tiene foto o aún no generó su miniatura.
+	PhotoThumbUrl *string `protobuf:"bytes,4,opt,name=photo_thumb_url,json=photoThumbUrl,proto3,oneof" json:"photo_thumb_url,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -177,12 +180,20 @@ func (x *GetUserResponse) GetDisplayName() string {
 	return ""
 }
 
-// Usuario público (model.PublicUser): solo user_id/email/display_name.
+func (x *GetUserResponse) GetPhotoThumbUrl() string {
+	if x != nil && x.PhotoThumbUrl != nil {
+		return *x.PhotoThumbUrl
+	}
+	return ""
+}
+
+// Usuario público (model.PublicUser): solo datos no sensibles.
 type User struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	Email         string                 `protobuf:"bytes,2,opt,name=email,proto3" json:"email,omitempty"`
 	DisplayName   *string                `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3,oneof" json:"display_name,omitempty"`
+	PhotoThumbUrl *string                `protobuf:"bytes,4,opt,name=photo_thumb_url,json=photoThumbUrl,proto3,oneof" json:"photo_thumb_url,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -234,6 +245,13 @@ func (x *User) GetEmail() string {
 func (x *User) GetDisplayName() string {
 	if x != nil && x.DisplayName != nil {
 		return *x.DisplayName
+	}
+	return ""
+}
+
+func (x *User) GetPhotoThumbUrl() string {
+	if x != nil && x.PhotoThumbUrl != nil {
+		return *x.PhotoThumbUrl
 	}
 	return ""
 }
@@ -720,17 +738,21 @@ const file_v1_identity_proto_rawDesc = "" +
 	"\n" +
 	"\x11v1/identity.proto\x12\videntity.v1\x1a\x1fgoogle/protobuf/timestamp.proto\")\n" +
 	"\x0eGetUserRequest\x12\x17\n" +
-	"\auser_id\x18\x01 \x01(\tR\x06userId\"y\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\"\xba\x01\n" +
 	"\x0fGetUserResponse\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\x12&\n" +
-	"\fdisplay_name\x18\x03 \x01(\tH\x00R\vdisplayName\x88\x01\x01B\x0f\n" +
-	"\r_display_name\"n\n" +
+	"\fdisplay_name\x18\x03 \x01(\tH\x00R\vdisplayName\x88\x01\x01\x12+\n" +
+	"\x0fphoto_thumb_url\x18\x04 \x01(\tH\x01R\rphotoThumbUrl\x88\x01\x01B\x0f\n" +
+	"\r_display_nameB\x12\n" +
+	"\x10_photo_thumb_url\"\xaf\x01\n" +
 	"\x04User\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\x12&\n" +
-	"\fdisplay_name\x18\x03 \x01(\tH\x00R\vdisplayName\x88\x01\x01B\x0f\n" +
-	"\r_display_name\"/\n" +
+	"\fdisplay_name\x18\x03 \x01(\tH\x00R\vdisplayName\x88\x01\x01\x12+\n" +
+	"\x0fphoto_thumb_url\x18\x04 \x01(\tH\x01R\rphotoThumbUrl\x88\x01\x01B\x0f\n" +
+	"\r_display_nameB\x12\n" +
+	"\x10_photo_thumb_url\"/\n" +
 	"\x12LookupUsersRequest\x12\x19\n" +
 	"\buser_ids\x18\x01 \x03(\tR\auserIds\">\n" +
 	"\x13LookupUsersResponse\x12'\n" +

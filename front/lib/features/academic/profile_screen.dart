@@ -96,6 +96,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   UserProfile? _profile;
   // null = sin cambios; '' = quitar foto; data URL = foto recortada pendiente.
   String? _draftPhotoUrl;
+  // Miniatura 96x96 del mismo recorte para listados de grupos.
+  String? _draftPhotoThumbUrl;
   late final ProfileService _service;
   AccountDeletionService? _ownedDeletionService;
   bool _deletionDialogOpen = false;
@@ -131,6 +133,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() {
       _profile = null;
       _draftPhotoUrl = null;
+      _draftPhotoThumbUrl = null;
       _driveStatus = _DriveStatus.checking;
       _isLoading = true;
       _isEditing = false;
@@ -189,6 +192,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _hasError = false;
       _isEditing = false;
       _draftPhotoUrl = null;
+      _draftPhotoThumbUrl = null;
       _errorMessage = null;
     });
 
@@ -233,6 +237,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     setState(() {
       _draftPhotoUrl = null;
+      _draftPhotoThumbUrl = null;
       _draftVisibility = p.visibility == 'private' ? 'private' : 'public';
       _isEditing = true;
     });
@@ -242,6 +247,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (_isSaving) return;
     setState(() {
       _draftPhotoUrl = null;
+      _draftPhotoThumbUrl = null;
       _isEditing = false;
     });
   }
@@ -268,11 +274,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
       if (!mounted) return;
       final cropped = await showProfilePhotoCropDialog(context, bytes);
       if (cropped == null) return;
-      final dataUrl = profilePhotoToDataUrl(cropped);
+      final dataUrl = profilePhotoToDataUrl(cropped.fullPng);
+      final thumbUrl = profilePhotoToDataUrl(cropped.thumbPng);
       if (saveImmediately) {
-        await _saveProfilePhoto(dataUrl, messenger);
+        await _saveProfilePhoto(dataUrl, thumbUrl, messenger);
       } else if (mounted) {
-        setState(() => _draftPhotoUrl = dataUrl);
+        setState(() {
+          _draftPhotoUrl = dataUrl;
+          _draftPhotoThumbUrl = thumbUrl;
+        });
         messenger.showSnackBar(
           const SnackBar(
             content: Text('Foto lista. Guarda los cambios para aplicarla.'),
@@ -292,6 +302,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _saveProfilePhoto(
     String dataUrl,
+    String thumbUrl,
     ScaffoldMessengerState messenger,
   ) async {
     final revision = SessionManager.revision.value;
@@ -299,11 +310,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
     try {
       final updated = await _service.patchProfile(<String, dynamic>{
         'photo_url': dataUrl,
+        'photo_thumb_url': thumbUrl,
       });
       if (!mounted || !_sameSession(revision)) return;
       setState(() {
         _profile = updated;
         _draftPhotoUrl = null;
+        _draftPhotoThumbUrl = null;
       });
       messenger.showSnackBar(
         const SnackBar(
@@ -334,7 +347,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   void _removeDraftPhoto() {
     if (_isSaving) return;
-    setState(() => _draftPhotoUrl = '');
+    setState(() {
+      _draftPhotoUrl = '';
+      _draftPhotoThumbUrl = '';
+    });
   }
 
   // Contrato real: PATCH /profile/me (parcial).
@@ -353,12 +369,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
         'description': _descriptionController.text.trim(),
         'visibility': _draftVisibility,
         if (_draftPhotoUrl != null) 'photo_url': _draftPhotoUrl,
+        if (_draftPhotoUrl != null)
+          'photo_thumb_url': _draftPhotoThumbUrl ?? '',
       };
       final updated = await _service.patchProfile(patch);
       if (!mounted || !_sameSession(revision)) return;
       setState(() {
         _profile = updated;
         _draftPhotoUrl = null;
+        _draftPhotoThumbUrl = null;
         _isEditing = false;
       });
 

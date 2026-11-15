@@ -42,8 +42,9 @@ func TestListMembersEnriched_ConNombres(t *testing.T) {
 	g := newGroup(t, svc, uAdmin)
 	joinAs(t, svc, store, g.ID, uMember)
 	name := "Miembro Uno"
+	thumb := "data:image/png;base64,thumb"
 	svc.SetUserDirectory(&fakeUserDirectory{data: map[string]UserPublic{
-		uMember: {UserID: uMember, Email: "member@example.com", DisplayName: &name},
+		uMember: {UserID: uMember, Email: "member@example.com", DisplayName: &name, PhotoThumbURL: &thumb},
 	}})
 
 	ms, err := svc.ListMembersEnriched(ctx, g.ID, uAdmin)
@@ -62,6 +63,9 @@ func TestListMembersEnriched_ConNombres(t *testing.T) {
 			}
 			if m.Email == nil || *m.Email != "member@example.com" {
 				t.Fatalf("email no enriquecido: %+v", m)
+			}
+			if m.PhotoThumbURL == nil || *m.PhotoThumbURL != "data:image/png;base64,thumb" {
+				t.Fatalf("photo_thumb_url no enriquecido: %+v", m)
 			}
 		}
 	}

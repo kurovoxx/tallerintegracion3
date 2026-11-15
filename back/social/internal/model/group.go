@@ -28,13 +28,14 @@ type GroupMembership struct {
 // DisplayName/Email se omiten cuando no se pudieron resolver
 // (backward-compatible con clientes que solo esperan IDs+rol).
 type MemberView struct {
-	ID          string    `json:"id"`
-	GroupID     string    `json:"group_id"`
-	UserID      string    `json:"user_id"`
-	Role        string    `json:"role"`
-	JoinedAt    time.Time `json:"joined_at"`
-	DisplayName *string   `json:"display_name,omitempty"`
-	Email       *string   `json:"email,omitempty"`
+	ID            string    `json:"id"`
+	GroupID       string    `json:"group_id"`
+	UserID        string    `json:"user_id"`
+	Role          string    `json:"role"`
+	JoinedAt      time.Time `json:"joined_at"`
+	DisplayName   *string   `json:"display_name,omitempty"`
+	Email         *string   `json:"email,omitempty"`
+	PhotoThumbURL *string   `json:"photo_thumb_url,omitempty"`
 }
 
 type MyGroup struct {
@@ -60,6 +61,7 @@ type GroupView struct {
 	InviteToken            string    `json:"invite_token,omitempty"`
 	CreatedAt              time.Time `json:"created_at"`
 	Role                   string    `json:"role"` // rol de quien consulta en el grupo
+	MemberCount            int       `json:"member_count"`
 }
 
 // SuccessionResult describe qué ocurrió con un grupo al eliminar la cuenta de

@@ -175,6 +175,9 @@ func TestGetGroupHidesInviteTokenFromNonAdmins(t *testing.T) {
 	if strings.Contains(w.Body.String(), "invite_token") || strings.Contains(w.Body.String(), tok) {
 		t.Fatalf("el miembro no debe ver el token: %s", w.Body)
 	}
+	if got, _ := decode(t, w)["member_count"].(float64); got != 2 {
+		t.Fatalf("member_count = %v, se esperaba 2: %s", got, w.Body)
+	}
 
 	expect(t, e.do(http.MethodGet, "/groups/"+gid, hStrang, nil), http.StatusForbidden)
 	expect(t, e.do(http.MethodGet, "/groups/dddddddd-0000-4000-8000-000000000001", hAdmin, nil), http.StatusNotFound)
@@ -228,6 +231,16 @@ func TestMembersContract(t *testing.T) {
 	if len(ms) != 2 || ms[0]["user_id"] != hAdmin || ms[0]["role"] != "admin" || ms[1]["role"] != "member" || ms[0]["joined_at"] == nil {
 		t.Fatalf("contrato [{user_id,role,joined_at}] incumplido: %s", w.Body)
 	}
+	w = e.do(http.MethodGet, "/groups/"+gid+"/members?limit=1", hMember, nil)
+	expect(t, w, http.StatusOK)
+	ms = nil
+	_ = json.Unmarshal(w.Body.Bytes(), &ms)
+	if len(ms) != 1 || ms[0]["user_id"] != hAdmin {
+		t.Fatalf("limit=1 debe devolver solo el primer miembro: %s", w.Body)
+	}
+	expect(t, e.do(http.MethodGet, "/groups/"+gid+"/members?limit=0", hMember, nil), http.StatusBadRequest)
+	expect(t, e.do(http.MethodGet, "/groups/"+gid+"/members?limit=201", hMember, nil), http.StatusBadRequest)
+	expect(t, e.do(http.MethodGet, "/groups/"+gid+"/members?limit=abc", hMember, nil), http.StatusBadRequest)
 	expect(t, e.do(http.MethodGet, "/groups/"+gid+"/members", hStrang, nil), http.StatusForbidden)
 	expect(t, e.do(http.MethodGet, "/groups/basura/members", hAdmin, nil), http.StatusNotFound)
 }

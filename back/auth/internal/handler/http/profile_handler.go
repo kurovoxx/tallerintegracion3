@@ -24,13 +24,14 @@ func NewProfileHandler(svc *service.ProfileService) *ProfileHandler {
 type profileResponse struct {
 	// PublicID vive en identity.users (no en identity.profiles) y es el único
 	// identificador que se comparte fuera de la cuenta.
-	PublicID    string  `json:"public_id"`
-	DisplayName string  `json:"display_name"`
-	PhotoURL    *string `json:"photo_url"`
-	Phone       *string `json:"phone"`
-	Institution *string `json:"institution"`
-	Description *string `json:"description"`
-	Visibility  string  `json:"visibility"`
+	PublicID      string  `json:"public_id"`
+	DisplayName   string  `json:"display_name"`
+	PhotoURL      *string `json:"photo_url"`
+	PhotoThumbURL *string `json:"photo_thumb_url"`
+	Phone         *string `json:"phone"`
+	Institution   *string `json:"institution"`
+	Description   *string `json:"description"`
+	Visibility    string  `json:"visibility"`
 	// Email (identity.users) agregado de forma backward-compatible:
 	// clientes viejos lo ignoran; se omite si no se pudo resolver.
 	Email *string `json:"email,omitempty"`
@@ -51,12 +52,13 @@ type publicProfileByPublicIDResponse struct {
 // patchProfileRequest acepta actualización parcial.
 // Punteros nil = campo no enviado (no actualizar).
 type patchProfileRequest struct {
-	DisplayName *string `json:"display_name"`
-	PhotoURL    *string `json:"photo_url"`
-	Phone       *string `json:"phone"`
-	Institution *string `json:"institution"`
-	Description *string `json:"description"`
-	Visibility  *string `json:"visibility"`
+	DisplayName   *string `json:"display_name"`
+	PhotoURL      *string `json:"photo_url"`
+	PhotoThumbURL *string `json:"photo_thumb_url"`
+	Phone         *string `json:"phone"`
+	Institution   *string `json:"institution"`
+	Description   *string `json:"description"`
+	Visibility    *string `json:"visibility"`
 	// Campos prohibidos: si el cliente intenta enviar user_id, lo ignoramos explícitamente
 	UserID *string `json:"user_id"`
 }
@@ -72,6 +74,7 @@ func profileFieldsDetail(req patchProfileRequest) string {
 	}
 	return "has_display_name=" + present(req.DisplayName) +
 		" has_photo_url=" + present(req.PhotoURL) +
+		" has_photo_thumb_url=" + present(req.PhotoThumbURL) +
 		" has_phone=" + present(req.Phone) +
 		" has_institution=" + present(req.Institution) +
 		" has_description=" + present(req.Description) +
@@ -109,14 +112,15 @@ func (h *ProfileHandler) GetProfile(c *gin.Context) {
 	}
 	logAuthOp(c, "GetProfile", http.StatusOK, userID, started, "")
 	c.JSON(http.StatusOK, profileResponse{
-		PublicID:    profile.PublicID,
-		DisplayName: profile.DisplayName,
-		PhotoURL:    profile.PhotoURL,
-		Phone:       profile.Phone,
-		Institution: profile.Institution,
-		Description: profile.Description,
-		Visibility:  profile.Visibility,
-		Email:       profile.Email,
+		PublicID:      profile.PublicID,
+		DisplayName:   profile.DisplayName,
+		PhotoURL:      profile.PhotoURL,
+		PhotoThumbURL: profile.PhotoThumbURL,
+		Phone:         profile.Phone,
+		Institution:   profile.Institution,
+		Description:   profile.Description,
+		Visibility:    profile.Visibility,
+		Email:         profile.Email,
 	})
 }
 
@@ -187,19 +191,20 @@ func (h *ProfileHandler) PatchProfile(c *gin.Context) {
 	}
 
 	// Detectar body vacío (todos nil) → 400
-	if req.DisplayName == nil && req.PhotoURL == nil && req.Phone == nil && req.Institution == nil && req.Description == nil && req.Visibility == nil {
+	if req.DisplayName == nil && req.PhotoURL == nil && req.PhotoThumbURL == nil && req.Phone == nil && req.Institution == nil && req.Description == nil && req.Visibility == nil {
 		utils.RespondError(c, http.StatusBadRequest, "bad_request", "No hay campos para actualizar")
 		logAuthOp(c, "PatchProfile", http.StatusBadRequest, userID, started, "code=bad_request")
 		return
 	}
 
 	repoReq := repository.ProfileUpdateRequest{
-		DisplayName: req.DisplayName,
-		PhotoURL:    req.PhotoURL,
-		Phone:       req.Phone,
-		Institution: req.Institution,
-		Description: req.Description,
-		Visibility:  req.Visibility,
+		DisplayName:   req.DisplayName,
+		PhotoURL:      req.PhotoURL,
+		PhotoThumbURL: req.PhotoThumbURL,
+		Phone:         req.Phone,
+		Institution:   req.Institution,
+		Description:   req.Description,
+		Visibility:    req.Visibility,
 	}
 
 	updated, err := h.svc.UpdateProfile(c.Request.Context(), userID, repoReq)
@@ -210,7 +215,7 @@ func (h *ProfileHandler) PatchProfile(c *gin.Context) {
 			// Mapear códigos específicos (404 vs 400)
 			if se.Code == "profile_not_found" {
 				status = http.StatusNotFound
-			} else if se.Code == "bad_request" || se.Code == utils.ErrInvalidVisibility || se.Code == utils.ErrInvalidDisplayName || se.Code == "invalid_photo_url" || se.Code == "invalid_phone" || se.Code == "invalid_institution" || se.Code == "invalid_description" {
+			} else if se.Code == "bad_request" || se.Code == utils.ErrInvalidVisibility || se.Code == utils.ErrInvalidDisplayName || se.Code == "invalid_photo_url" || se.Code == "invalid_photo_thumb_url" || se.Code == "invalid_phone" || se.Code == "invalid_institution" || se.Code == "invalid_description" {
 				status = http.StatusBadRequest
 			} else if se.Code == utils.ErrUnauthorized {
 				status = http.StatusUnauthorized
@@ -231,13 +236,14 @@ func (h *ProfileHandler) PatchProfile(c *gin.Context) {
 	logAuthOp(c, "PatchProfile", http.StatusOK, userID, started, fields)
 
 	c.JSON(http.StatusOK, profileResponse{
-		PublicID:    updated.PublicID,
-		DisplayName: updated.DisplayName,
-		PhotoURL:    updated.PhotoURL,
-		Phone:       updated.Phone,
-		Institution: updated.Institution,
-		Description: updated.Description,
-		Visibility:  updated.Visibility,
-		Email:       updated.Email,
+		PublicID:      updated.PublicID,
+		DisplayName:   updated.DisplayName,
+		PhotoURL:      updated.PhotoURL,
+		PhotoThumbURL: updated.PhotoThumbURL,
+		Phone:         updated.Phone,
+		Institution:   updated.Institution,
+		Description:   updated.Description,
+		Visibility:    updated.Visibility,
+		Email:         updated.Email,
 	})
 }
