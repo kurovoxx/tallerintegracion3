@@ -19,10 +19,63 @@ class AuthService {
   static const String refreshPath = '/auth/refresh';
   static const String logoutPath = '/auth/logout';
 
+  /// Código de error que devuelve POST /auth/login (403) cuando la cuenta
+  /// todavía no confirmó su correo (EMAIL_VERIFICATION_REQUIRED=true).
+  static const String emailNotVerifiedCode = 'email_not_verified';
+
   Future<LoginResult> forgotPassword(String email) => _passwordRecovery(
     '/auth/forgot-password',
     {'email': email.trim().toLowerCase()},
   );
+
+  /// POST /auth/send-verification-email {email}: solicita o reenvía el correo
+  /// de confirmación. El 200 es genérico (no confirma que la cuenta exista ni
+  /// que el correo se haya entregado); 503 `mail_unavailable` si Auth no
+  /// tiene SMTP configurado.
+  Future<LoginResult> sendVerificationEmail(String email) => _passwordRecovery(
+    '/auth/send-verification-email',
+    {'email': email.trim().toLowerCase()},
+  );
+
+  /// POST /auth/verify-email {token}: canjea el código del correo.
+  Future<VerifyEmailResult> verifyEmail(String token) async {
+    try {
+      final response = await _client
+          .post(
+            Uri.parse('$baseUrl/auth/verify-email'),
+            headers: const {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: jsonEncode({'token': token.trim()}),
+          )
+          .timeout(const Duration(seconds: 20));
+      final decoded = jsonDecode(response.body);
+      final body = decoded is Map<String, dynamic>
+          ? decoded
+          : <String, dynamic>{};
+      if (response.statusCode == 200) {
+        return body['status'] == 'already_verified'
+            ? const VerifyEmailResult(VerifyEmailOutcome.alreadyVerified)
+            : const VerifyEmailResult(VerifyEmailOutcome.verified);
+      }
+      if (response.statusCode == 400) {
+        // invalid_verification_token agrupa inválido, expirado y reemplazado
+        // por un reenvío; bad_request = código vacío.
+        return const VerifyEmailResult(VerifyEmailOutcome.invalid);
+      }
+      return VerifyEmailResult(
+        VerifyEmailOutcome.failed,
+        message: _extractErrorMessage(body, response.statusCode),
+      );
+    } catch (_) {
+      return const VerifyEmailResult(
+        VerifyEmailOutcome.failed,
+        message:
+            'No se pudo completar la solicitud. Revisa tu conexión e inténtalo de nuevo.',
+      );
+    }
+  }
 
   Future<LoginResult> resetPassword({
     required String email,
@@ -159,6 +212,7 @@ class AuthService {
 
       return LoginResult.failure(
         _extractErrorMessage(responseBody, response.statusCode),
+        errorCode: _extractErrorCode(responseBody),
       );
     } on FormatException {
       return LoginResult.failure('La API respondió con un JSON inválido.');
@@ -262,6 +316,8 @@ class AuthService {
               return 'Visibilidad inválida.';
             case 'invalid_credentials':
               return 'Credenciales inválidas.';
+            case emailNotVerifiedCode:
+              return 'Debes confirmar tu correo antes de iniciar sesión.';
             default:
               return msg;
           }
@@ -277,6 +333,16 @@ class AuthService {
     return 'No fue posible completar la solicitud. Código HTTP: $statusCode';
   }
 
+  /// `error.code` del contrato `{ "error": { "code", "message" } }`, o null.
+  String? _extractErrorCode(Map<String, dynamic> body) {
+    final err = body['error'];
+    if (err is Map) {
+      final code = err['code'];
+      if (code is String && code.isNotEmpty) return code;
+    }
+    return null;
+  }
+
   void dispose() {
     _client.close();
   }
@@ -284,19 +350,57 @@ class AuthService {
 
 /// Resultado login
 class LoginResult {
-  const LoginResult._({required this.success, this.data, this.message});
+  const LoginResult._({
+    required this.success,
+    this.data,
+    this.message,
+    this.errorCode,
+  });
 
   final bool success;
   final Map<String, dynamic>? data;
   final String? message;
 
+  /// `error.code` del backend cuando lo hay (p. ej. `email_not_verified`).
+  final String? errorCode;
+
   factory LoginResult.success(Map<String, dynamic> data) {
     return LoginResult._(success: true, data: data);
   }
 
-  factory LoginResult.failure(String message) {
-    return LoginResult._(success: false, message: message);
+  factory LoginResult.failure(String message, {String? errorCode}) {
+    return LoginResult._(
+      success: false,
+      message: message,
+      errorCode: errorCode,
+    );
   }
+}
+
+/// Resultado de POST /auth/verify-email.
+enum VerifyEmailOutcome {
+  /// 200 `verified`: la cuenta quedó confirmada ahora.
+  verified,
+
+  /// 200 `already_verified`: ya estaba confirmada.
+  alreadyVerified,
+
+  /// 400: código inválido, expirado o reemplazado por uno más reciente.
+  invalid,
+
+  /// Error de red o del servidor; [VerifyEmailResult.message] lo describe.
+  failed,
+}
+
+class VerifyEmailResult {
+  const VerifyEmailResult(this.outcome, {this.message});
+
+  final VerifyEmailOutcome outcome;
+  final String? message;
+
+  bool get confirmed =>
+      outcome == VerifyEmailOutcome.verified ||
+      outcome == VerifyEmailOutcome.alreadyVerified;
 }
 
 /// Resultado refresh
