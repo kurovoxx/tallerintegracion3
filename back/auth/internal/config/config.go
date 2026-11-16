@@ -5,6 +5,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -40,6 +42,11 @@ type Config struct {
 	// defecto del servicio (24 h); -1 = valor mal formado, rechazado al arrancar.
 	EmailVerificationURL string
 	EmailVerificationTTL time.Duration
+	// EMAIL_VERIFICATION_REQUIRED: gate de login/refresh para cuentas sin
+	// confirmar. Por defecto false. Un valor que no sea booleano deja
+	// EmailVerificationRequiredErr y el arranque se detiene.
+	EmailVerificationRequired    bool
+	EmailVerificationRequiredErr error
 }
 
 func Load() *Config {
@@ -83,6 +90,7 @@ func Load() *Config {
 	cfg.SMTPFromName = os.Getenv("SMTP_FROM_NAME")
 	cfg.SMTPTLSMode = os.Getenv("SMTP_TLS_MODE")
 	cfg.EmailVerificationURL = os.Getenv("EMAIL_VERIFICATION_URL")
+	cfg.EmailVerificationRequired, cfg.EmailVerificationRequiredErr = parseEmailVerificationRequired(os.Getenv("EMAIL_VERIFICATION_REQUIRED"))
 	if v := os.Getenv("EMAIL_VERIFICATION_TTL"); v != "" {
 		cfg.EmailVerificationTTL = -1
 		if d, err := time.ParseDuration(v); err == nil {
@@ -133,6 +141,20 @@ func Load() *Config {
 		}
 	}
 	return cfg
+}
+
+// parseEmailVerificationRequired: vacío = false (gate apagado); cualquier
+// valor no booleano es un error de configuración, nunca un false silencioso.
+func parseEmailVerificationRequired(v string) (bool, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return false, nil
+	}
+	required, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("EMAIL_VERIFICATION_REQUIRED debe ser true o false")
+	}
+	return required, nil
 }
 
 func parsePositiveInt(s string) (int, error) {

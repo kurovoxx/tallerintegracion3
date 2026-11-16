@@ -129,6 +129,18 @@ CREATE TABLE identity.email_verifications (
     consumed_at timestamptz
 );
 
+-- Control del backfill único (back/auth/db/migrations/008_email_verification_backfill.sql).
+-- Una base nueva no tiene cuentas previas: se registra el corte con 0 cuentas
+-- para que aplicar 008 después nunca confirme cuentas creadas con esta versión.
+CREATE TABLE identity.email_verification_backfill (
+    id boolean PRIMARY KEY DEFAULT true
+        CONSTRAINT email_verification_backfill_single_row CHECK (id),
+    cutoff timestamptz NOT NULL,
+    accounts_marked integer NOT NULL CHECK (accounts_marked >= 0),
+    applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+INSERT INTO identity.email_verification_backfill (cutoff, accounts_marked) VALUES (now(), 0);
+
 CREATE TABLE identity.profiles (
     user_id uuid PRIMARY KEY REFERENCES identity.users(id) ON DELETE CASCADE,
     display_name varchar(100) NOT NULL,

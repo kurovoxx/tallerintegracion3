@@ -205,3 +205,34 @@ func EmailVerificationSchemaReady(ctx context.Context, q SchemaQuerier) (bool, e
                 WHERE table_schema = 'identity' AND table_name = 'users' AND column_name = 'email_verified_at')`).Scan(&ok)
 	return ok, err
 }
+
+// IsEmailVerified implementa el gate de Login/Refresh
+// (EMAIL_VERIFICATION_REQUIRED=true). Un usuario inexistente cuenta como no
+// confirmado; Login y Refresh ya lo habrán rechazado antes por otros motivos.
+func (r *EmailVerificationRepository) IsEmailVerified(ctx context.Context, userID string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, r.statementLimit)
+	defer cancel()
+	var verified bool
+	err := r.pool.QueryRow(ctx, `SELECT email_verified_at IS NOT NULL FROM identity.users WHERE id = $1`, userID).Scan(&verified)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return verified, err
+}
+
+// EmailVerificationGateSchemaReady exige, para activar el gate, la migración
+// 007 y el backfill 008 ya ejecutado (fila de control presente). Sin el
+// backfill, el gate bloquearía a todas las cuentas antiguas.
+func EmailVerificationGateSchemaReady(ctx context.Context, q SchemaQuerier) (bool, error) {
+	ready, err := EmailVerificationSchemaReady(ctx, q)
+	if err != nil || !ready {
+		return false, err
+	}
+	var applied bool
+	err = q.QueryRow(ctx, `SELECT to_regclass('identity.email_verification_backfill') IS NOT NULL`).Scan(&applied)
+	if err != nil || !applied {
+		return false, err
+	}
+	err = q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM identity.email_verification_backfill)`).Scan(&applied)
+	return applied, err
+}

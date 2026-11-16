@@ -62,8 +62,13 @@ func main() {
 	if err := repository.VerifyAccountDeletionSchema(context.Background(), pool); err != nil {
 		log.Fatalf("%v", err)
 	}
-	if ok, err := repository.EmailVerificationSchemaReady(context.Background(), pool); err != nil || !ok {
+	verificationSchemaReady, err := repository.EmailVerificationSchemaReady(context.Background(), pool)
+	if err != nil || !verificationSchemaReady {
+		verificationSchemaReady = false
 		log.Printf("auth: ADVERTENCIA confirmación de correo sin esquema (aplica back/auth/db/migrations/007_email_verification.sql); el registro sigue funcionando sin enviar la confirmación")
+	}
+	if cfg.EmailVerificationRequiredErr != nil {
+		log.Fatalf("config email verification: %v", cfg.EmailVerificationRequiredErr)
 	}
 
 	// Wire Handler → Service → Repository (masterprompt 2) + JWT standalone integrado (3.1)
@@ -93,8 +98,14 @@ func main() {
 	} else if err := mailer.Validate(); err != nil {
 		log.Fatalf("config SMTP: %v", err)
 	}
-	resetH := httpHandler.NewPasswordResetHandler(service.NewPasswordResetService(userRepo, repository.NewPasswordResetRepository(pool), mailer))
-	verificationSvc, err := service.NewEmailVerificationService(userRepo, repository.NewEmailVerificationRepository(pool), mailer, service.EmailVerificationConfig{
+	resetRepo := repository.NewPasswordResetRepository(pool)
+	if verificationSchemaReady {
+		// Un restablecimiento exitoso también confirma el correo (requiere 007).
+		resetRepo.EnableEmailVerification()
+	}
+	resetH := httpHandler.NewPasswordResetHandler(service.NewPasswordResetService(userRepo, resetRepo, mailer))
+	verificationRepo := repository.NewEmailVerificationRepository(pool)
+	verificationSvc, err := service.NewEmailVerificationService(userRepo, verificationRepo, mailer, service.EmailVerificationConfig{
 		LinkBaseURL: cfg.EmailVerificationURL,
 		TTL:         cfg.EmailVerificationTTL,
 	})
@@ -104,6 +115,23 @@ func main() {
 	log.Printf("email verification: enabled=%v link_configured=%v ttl=%s", verificationSvc.Ready(), cfg.EmailVerificationURL != "", verificationSvc.TTL())
 	authSvc.SetEmailVerifier(verificationSvc)
 	verificationH := httpHandler.NewEmailVerificationHandler(verificationSvc)
+	// Gate de login/refresh (EMAIL_VERIFICATION_REQUIRED, apagado por defecto).
+	// Encendido exige 007 + backfill 008 (sin él se bloquearía a las cuentas
+	// antiguas) y SMTP operativo (sin correo nadie podría confirmar).
+	if cfg.EmailVerificationRequired {
+		gateReady, err := repository.EmailVerificationGateSchemaReady(context.Background(), pool)
+		if err != nil || !gateReady {
+			log.Fatalf("config email verification: EMAIL_VERIFICATION_REQUIRED=true requiere las migraciones 007_email_verification.sql y 008_email_verification_backfill.sql aplicadas")
+		}
+		if !verificationSvc.Ready() {
+			log.Fatalf("config email verification: EMAIL_VERIFICATION_REQUIRED=true requiere SMTP configurado (SMTP_PASSWORD)")
+		}
+		authSvc.SetEmailVerificationGate(verificationRepo)
+	}
+	// Las sesiones previas a la activación no se renuevan (Refresh también
+	// aplica el gate); su access token sigue valiendo hasta expirar.
+	log.Printf("email verification gate: required=%v reset_marks_verified=%v residual_access_max=%s",
+		cfg.EmailVerificationRequired, verificationSchemaReady, time.Duration(cfg.AccessExpiresIn)*time.Second)
 	deletionRepo := repository.NewAccountDeletionRepository(pool)
 	defer deletionRepo.Close()
 	authSvc.SetAccountAccessGate(deletionRepo)

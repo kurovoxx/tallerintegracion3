@@ -66,7 +66,7 @@ type logoutRequest struct {
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req loginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		log.Printf("auth login fail email=? code=bad_request ip=%s", c.ClientIP())
+		log.Printf("auth login fail code=bad_request ip=%s", c.ClientIP())
 		utils.RespondError(c, http.StatusBadRequest, "bad_request", "Request inválido")
 		return
 	}
@@ -74,15 +74,15 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	if err != nil {
 		if se, ok := err.(*service.ServiceError); ok {
 			status := utils.StatusForCode(se.Code)
-			log.Printf("auth login fail email=%s code=%s ip=%s", req.Email, se.Code, c.ClientIP())
+			log.Printf("auth login fail code=%s ip=%s", se.Code, c.ClientIP())
 			utils.RespondError(c, status, se.Code, se.Message)
 			return
 		}
-		log.Printf("auth login fail email=%s code=internal_error ip=%s err=%v", req.Email, c.ClientIP(), err)
+		log.Printf("auth login fail code=internal_error ip=%s err=%v", c.ClientIP(), err)
 		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
 		return
 	}
-	log.Printf("auth login ok email=%s ip=%s", req.Email, c.ClientIP())
+	log.Printf("auth login ok ip=%s", c.ClientIP())
 	c.JSON(http.StatusOK, loginResponse{
 		AccessToken:  res.AccessToken,
 		RefreshToken: res.RefreshToken,
@@ -105,7 +105,10 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 		if se, ok := err.(*service.ServiceError); ok {
 			status := utils.StatusForCode(se.Code)
 			// Refresh siempre es 401 para token inválido/expirado, nunca 403
-			if se.Code == utils.ErrInvalidToken || se.Code == utils.ErrTokenExpired || se.Code == utils.ErrUnauthorized {
+			// email_not_verified también es 401 en refresh: Flutter solo
+			// cierra la sesión ante un 401 (otro estado lo trata como fallo
+			// transitorio y reintentaría).
+			if se.Code == utils.ErrInvalidToken || se.Code == utils.ErrTokenExpired || se.Code == utils.ErrUnauthorized || se.Code == utils.ErrEmailNotVerified {
 				status = http.StatusUnauthorized
 			}
 			log.Printf("auth refresh fail code=%s ip=%s", se.Code, c.ClientIP())
