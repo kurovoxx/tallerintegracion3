@@ -58,4 +58,65 @@ void main() {
 
     await expectLater(service.logout('refresh-test'), completes);
   });
+
+  test('login 403 email_not_verified conserva el código y un mensaje claro', () async {
+    final service = AuthService(
+      client: MockClient(
+        (_) async => http.Response(
+          '{"error":{"code":"email_not_verified","message":"Confirma tu correo para iniciar sesión."}}',
+          403,
+        ),
+      ),
+    );
+    addTearDown(service.dispose);
+
+    final result = await service.login(
+      email: 'qa@example.test',
+      password: 'solo-fixture-de-test',
+    );
+
+    expect(result.success, isFalse);
+    expect(result.errorCode, AuthService.emailNotVerifiedCode);
+    expect(
+      result.message,
+      'Debes confirmar tu correo antes de iniciar sesión.',
+    );
+  });
+
+  test('login 401 invalid_credentials no cambia (mensaje y código)', () async {
+    final service = AuthService(
+      client: MockClient(
+        (_) async => http.Response(
+          '{"error":{"code":"invalid_credentials","message":"Credenciales inválidas"}}',
+          401,
+        ),
+      ),
+    );
+    addTearDown(service.dispose);
+
+    final result = await service.login(
+      email: 'qa@example.test',
+      password: 'otra-clave-de-test',
+    );
+
+    expect(result.success, isFalse);
+    expect(result.message, 'Credenciales inválidas.');
+    expect(result.errorCode, 'invalid_credentials');
+  });
+
+  test('login sin conexión no trae código de error', () async {
+    final service = AuthService(
+      client: MockClient((_) async => throw http.ClientException('offline')),
+    );
+    addTearDown(service.dispose);
+
+    final result = await service.login(
+      email: 'qa@example.test',
+      password: 'solo-fixture-de-test',
+    );
+
+    expect(result.success, isFalse);
+    expect(result.errorCode, isNull);
+    expect(result.message, contains('No se pudo conectar'));
+  });
 }

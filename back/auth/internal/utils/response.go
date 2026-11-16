@@ -40,6 +40,7 @@ const (
 	ErrEmailMismatch      = "email_mismatch"
 	ErrInvalidRedirect    = "invalid_redirect_uri"
 	ErrUserNotFound       = "user_not_found"
+	ErrEmailNotVerified   = "email_not_verified"
 )
 
 func MessageForCode(code string) string {
@@ -70,6 +71,8 @@ func MessageForCode(code string) string {
 		return "redirect_uri no permitido para este cliente"
 	case ErrUserNotFound:
 		return "Usuario no encontrado"
+	case ErrEmailNotVerified:
+		return "Confirma tu correo para iniciar sesión. Revisa tu bandeja de entrada o solicita un nuevo correo de confirmación."
 	default:
 		return "Error"
 	}
@@ -85,7 +88,7 @@ func StatusForCode(code string) int {
 		return http.StatusConflict
 	case ErrInvalidCredentials, ErrUnauthorized, ErrInvalidToken, ErrTokenExpired:
 		return http.StatusUnauthorized
-	case ErrForbidden:
+	case ErrForbidden, ErrEmailNotVerified:
 		return http.StatusForbidden
 	case ErrUserNotFound:
 		return http.StatusNotFound

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -7,10 +9,15 @@ import '../../core/services/auth_service.dart';
 import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/main_shell.dart';
+import 'email_not_verified_dialog.dart';
+import 'email_verification_screen.dart';
 import 'password_recovery_screen.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  const LoginScreen({super.key, this.authService});
+
+  /// Inyectable para pruebas; por defecto se crea uno propio.
+  final AuthService? authService;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -20,8 +27,12 @@ class _LoginScreenState extends State<LoginScreen> {
   static const String _rememberedEmailKey = SessionManager.rememberedEmailKey;
 
   bool isLoginTab = true;
-  final _authService = AuthService();
+  late final AuthService _authService = widget.authService ?? AuthService();
   bool _isSubmittingLogin = false;
+
+  /// Evita abrir dos veces la confirmación de correo (diálogo del 403 o
+  /// pantalla) desde este login, p. ej. con un doble toque.
+  bool _verificationOpen = false;
 
   final _loginFormKey = GlobalKey<FormState>();
   final TextEditingController _loginEmailController = TextEditingController();
@@ -78,7 +89,7 @@ class _LoginScreenState extends State<LoginScreen> {
     _regEmailController.dispose();
     _regInstitutionController.dispose();
     _regPasswordController.dispose();
-    _authService.dispose();
+    if (widget.authService == null) _authService.dispose();
     super.dispose();
   }
 
@@ -137,6 +148,15 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
 
+      // 403 email_not_verified (gate activo): diálogo con reenvío y código.
+      // Cualquier otro error conserva el aviso de siempre.
+      if (result.errorCode == AuthService.emailNotVerifiedCode) {
+        // Sin await: el botón de ingreso no debe quedar «INGRESANDO...»
+        // mientras el diálogo o la pantalla de confirmación están abiertos.
+        unawaited(_handleEmailNotVerified(_loginEmailController.text.trim()));
+        return;
+      }
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -151,6 +171,51 @@ class _LoginScreenState extends State<LoginScreen> {
       );
     } finally {
       if (mounted) setState(() => _isSubmittingLogin = false);
+    }
+  }
+
+  /// Login 403 `email_not_verified`: diálogo y, según la opción, una sola
+  /// pantalla de confirmación. El reenvío ocurre dentro del diálogo.
+  Future<void> _handleEmailNotVerified(String email) async {
+    if (_verificationOpen) return;
+    _verificationOpen = true;
+    try {
+      final action = await showEmailNotVerifiedDialog(
+        context,
+        onResend: () => _authService.sendVerificationEmail(email),
+      );
+      if (action == null || !mounted) return;
+      final resent = action == EmailNotVerifiedAction.resent;
+      await openEmailVerification(
+        context,
+        email: email,
+        authService: _authService,
+        initialCooldownSeconds: resent ? emailVerificationResendCooldown : 0,
+        initialMessage: resent ? emailVerificationResentMessage : null,
+      );
+    } finally {
+      _verificationOpen = false;
+    }
+  }
+
+  /// Abre la pantalla de confirmación salvo que ya esté abierta.
+  Future<void> _openVerification(
+    String email, {
+    int cooldownSeconds = 0,
+    String? message,
+  }) async {
+    if (_verificationOpen) return;
+    _verificationOpen = true;
+    try {
+      await openEmailVerification(
+        context,
+        email: email,
+        authService: _authService,
+        initialCooldownSeconds: cooldownSeconds,
+        initialMessage: message,
+      );
+    } finally {
+      _verificationOpen = false;
     }
   }
 
@@ -172,10 +237,11 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
 
       if (result.success) {
+        final email = _regEmailController.text.trim();
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'CUENTA CREADA - YA PUEDES INICIAR SESIÓN',
+              'CUENTA CREADA - CONFIRMA TU CORREO',
               style: TextStyle(
                 fontWeight: FontWeight.w800,
                 color: Colors.white,
@@ -187,7 +253,18 @@ class _LoginScreenState extends State<LoginScreen> {
         setState(() {
           isLoginTab = true;
           _regPasswordController.clear();
+          _loginEmailController.text = email;
         });
+        // El registro ya envió el correo: la cuenta atrás evita un reenvío
+        // inmediato que el backend descartaría en silencio.
+        unawaited(
+          _openVerification(
+            email,
+            cooldownSeconds: emailVerificationResendCooldown,
+            message:
+                'Tu cuenta fue creada. Te enviamos un código para confirmar tu correo.',
+          ),
+        );
         return;
       }
 
@@ -653,6 +730,22 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerRight,
+            child: InkWell(
+              onTap: () => _openVerification(_loginEmailController.text.trim()),
+              child: const Text(
+                '¿Tienes un código de confirmación?',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.accentBlue,
+                  decoration: TextDecoration.underline,
+                ),
+              ),
+            ),
           ),
           const SizedBox(height: 28),
           SubmitButton(

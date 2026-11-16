@@ -62,6 +62,14 @@ func main() {
 	if err := repository.VerifyAccountDeletionSchema(context.Background(), pool); err != nil {
 		log.Fatalf("%v", err)
 	}
+	verificationSchemaReady, err := repository.EmailVerificationSchemaReady(context.Background(), pool)
+	if err != nil || !verificationSchemaReady {
+		verificationSchemaReady = false
+		log.Printf("auth: ADVERTENCIA confirmación de correo sin esquema (aplica back/auth/db/migrations/007_email_verification.sql); el registro sigue funcionando sin enviar la confirmación")
+	}
+	if cfg.EmailVerificationRequiredErr != nil {
+		log.Fatalf("config email verification: %v", cfg.EmailVerificationRequiredErr)
+	}
 
 	// Wire Handler → Service → Repository (masterprompt 2) + JWT standalone integrado (3.1)
 	userRepo := repository.NewUserRepository(pool)
@@ -77,11 +85,53 @@ func main() {
 	}
 	authSvc := service.NewAuthService(userRepo, refreshRepo, jwtSvc, cfg.AccessExpiresIn, cfg.RefreshExpiresIn)
 	authH := httpHandler.NewAuthHandler(authSvc)
-	resetMailer := &service.ResetMailer{Host: cfg.SMTPHost, Port: cfg.SMTPPort, Username: cfg.SMTPUsername, Password: cfg.SMTPPassword}
-	if !resetMailer.Ready() {
-		log.Print("password recovery disabled: configure SMTP_PASSWORD")
+	// Un solo mailer SMTP para recuperación de contraseña y confirmación de
+	// correo. Sin SMTP_PASSWORD ambos quedan deshabilitados (503
+	// mail_unavailable) y el registro sigue funcionando sin enviar correo; una
+	// configuración presente pero mal formada detiene el arranque.
+	mailer := &service.SMTPMailer{
+		Host: cfg.SMTPHost, Port: cfg.SMTPPort, Username: cfg.SMTPUsername, Password: cfg.SMTPPassword,
+		From: cfg.SMTPFrom, FromName: cfg.SMTPFromName, TLSMode: cfg.SMTPTLSMode,
 	}
-	resetH := httpHandler.NewPasswordResetHandler(service.NewPasswordResetService(userRepo, repository.NewPasswordResetRepository(pool), resetMailer))
+	if cfg.SMTPPassword == "" {
+		log.Print("password recovery and email verification disabled: configure SMTP_PASSWORD")
+	} else if err := mailer.Validate(); err != nil {
+		log.Fatalf("config SMTP: %v", err)
+	}
+	resetRepo := repository.NewPasswordResetRepository(pool)
+	if verificationSchemaReady {
+		// Un restablecimiento exitoso también confirma el correo (requiere 007).
+		resetRepo.EnableEmailVerification()
+	}
+	resetH := httpHandler.NewPasswordResetHandler(service.NewPasswordResetService(userRepo, resetRepo, mailer))
+	verificationRepo := repository.NewEmailVerificationRepository(pool)
+	verificationSvc, err := service.NewEmailVerificationService(userRepo, verificationRepo, mailer, service.EmailVerificationConfig{
+		LinkBaseURL: cfg.EmailVerificationURL,
+		TTL:         cfg.EmailVerificationTTL,
+	})
+	if err != nil {
+		log.Fatalf("config email verification: %v", err)
+	}
+	log.Printf("email verification: enabled=%v link_configured=%v ttl=%s", verificationSvc.Ready(), cfg.EmailVerificationURL != "", verificationSvc.TTL())
+	authSvc.SetEmailVerifier(verificationSvc)
+	verificationH := httpHandler.NewEmailVerificationHandler(verificationSvc)
+	// Gate de login/refresh (EMAIL_VERIFICATION_REQUIRED, apagado por defecto).
+	// Encendido exige 007 + backfill 008 (sin él se bloquearía a las cuentas
+	// antiguas) y SMTP operativo (sin correo nadie podría confirmar).
+	if cfg.EmailVerificationRequired {
+		gateReady, err := repository.EmailVerificationGateSchemaReady(context.Background(), pool)
+		if err != nil || !gateReady {
+			log.Fatalf("config email verification: EMAIL_VERIFICATION_REQUIRED=true requiere las migraciones 007_email_verification.sql y 008_email_verification_backfill.sql aplicadas")
+		}
+		if !verificationSvc.Ready() {
+			log.Fatalf("config email verification: EMAIL_VERIFICATION_REQUIRED=true requiere SMTP configurado (SMTP_PASSWORD)")
+		}
+		authSvc.SetEmailVerificationGate(verificationRepo)
+	}
+	// Las sesiones previas a la activación no se renuevan (Refresh también
+	// aplica el gate); su access token sigue valiendo hasta expirar.
+	log.Printf("email verification gate: required=%v reset_marks_verified=%v residual_access_max=%s",
+		cfg.EmailVerificationRequired, verificationSchemaReady, time.Duration(cfg.AccessExpiresIn)*time.Second)
 	deletionRepo := repository.NewAccountDeletionRepository(pool)
 	defer deletionRepo.Close()
 	authSvc.SetAccountAccessGate(deletionRepo)
@@ -139,6 +189,8 @@ func main() {
 	r.POST("/auth/logout", authH.Logout)
 	r.POST("/auth/forgot-password", resetH.Forgot)
 	r.POST("/auth/reset-password", resetH.Reset)
+	r.POST("/auth/send-verification-email", verificationH.Send)
+	r.POST("/auth/verify-email", verificationH.Verify)
 	r.DELETE("/auth/account", authMw.RequireIdentity(), deletionH.Delete)
 	r.GET("/auth/account-deletion", authMw.RequireIdentity(), deletionH.Status)
 	r.POST("/auth/google-drive/connect", authMw.RequireAuth(), driveH.Connect)

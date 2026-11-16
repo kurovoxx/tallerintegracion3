@@ -56,6 +56,22 @@ type AuthService struct {
 	cfgAccessExp  int // segundos
 	cfgRefreshExp int // segundos
 	accountGate   AccountAccessGate
+	verifier      NewUserVerifier
+	emailGate     EmailVerificationGate
+}
+
+// EmailVerificationGate dice si la cuenta confirmó su correo. Solo se
+// configura con EMAIL_VERIFICATION_REQUIRED=true; con nil (defecto) Login y
+// Refresh no consultan la verificación.
+type EmailVerificationGate interface {
+	IsEmailVerified(ctx context.Context, userID string) (bool, error)
+}
+
+// NewUserVerifier envía la confirmación de correo de una cuenta recién creada.
+// No bloquea ni devuelve error: el registro ya ocurrió y no debe fallar ni
+// repetirse por un problema de correo (EmailVerificationService.SendForNewUser).
+type NewUserVerifier interface {
+	SendForNewUser(context.Context, *model.User)
 }
 
 type AccountAccessGate interface {
@@ -74,6 +90,32 @@ func NewAuthService(users UserRepository, refreshTokens RefreshTokenRepository, 
 
 func (s *AuthService) SetAccountAccessGate(gate AccountAccessGate) {
 	s.accountGate = gate
+}
+
+func (s *AuthService) SetEmailVerifier(v NewUserVerifier) {
+	s.verifier = v
+}
+
+// SetEmailVerificationGate activa el gate de Login y Refresh.
+func (s *AuthService) SetEmailVerificationGate(g EmailVerificationGate) {
+	s.emailGate = g
+}
+
+// requireVerifiedEmail devuelve email_not_verified si el gate está activo y
+// la cuenta no confirmó su correo. Se evalúa después de validar las
+// credenciales o el refresh, así que no revela si un correo está registrado.
+func (s *AuthService) requireVerifiedEmail(ctx context.Context, userID string) error {
+	if s.emailGate == nil {
+		return nil
+	}
+	verified, err := s.emailGate.IsEmailVerified(ctx, userID)
+	if err != nil {
+		return &ServiceError{Code: "internal_error", Message: "no se pudo comprobar la confirmación del correo"}
+	}
+	if !verified {
+		return NewServiceError(utils.ErrEmailNotVerified)
+	}
+	return nil
 }
 
 // Constructor legacy para compatibilidad con tests que solo usan register sin JWT
@@ -152,6 +194,11 @@ func (s *AuthService) Register(ctx context.Context, email, password string, disp
 		}
 		return nil, err
 	}
+	if s.verifier != nil {
+		// Tras el COMMIT: despacha la confirmación en segundo plano y vuelve
+		// de inmediato; el 201 no espera al SMTP ni depende de su resultado.
+		s.verifier.SendForNewUser(ctx, user)
+	}
 	return user, nil
 }
 
@@ -186,6 +233,11 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*Login
 	// Comparar bcrypt (constant time)
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return nil, NewServiceError(utils.ErrInvalidCredentials)
+	}
+	// Gate de confirmación: después de las credenciales y del estado de la
+	// cuenta, antes de emitir cualquier token.
+	if err := s.requireVerifiedEmail(ctx, user.ID); err != nil {
+		return nil, err
 	}
 	if s.jwt == nil {
 		return nil, &ServiceError{Code: "internal_error", Message: "jwt service no configurado"}
@@ -256,6 +308,10 @@ func (s *AuthService) Refresh(ctx context.Context, rawToken string) (*RefreshRes
 	}
 	if time.Now().After(rt.ExpiresAt) {
 		return nil, NewServiceError(utils.ErrTokenExpired)
+	}
+	// Una sesión anterior a la activación del gate no se puede prolongar.
+	if err := s.requireVerifiedEmail(ctx, rt.UserID); err != nil {
+		return nil, err
 	}
 	// Emitir nuevo access_token para el user_id del refresh_token
 	jwtRes, err := s.jwt.GenerarAccessToken(UsuarioAutenticado{ID: rt.UserID})

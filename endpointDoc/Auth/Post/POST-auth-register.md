@@ -35,6 +35,7 @@ Registra un nuevo usuario en la plataforma (`identity.users`) e inicializa su pe
 - **Frontend Flutter:**
   - Cliente API: `front/lib/core/services/auth_service.dart:18` (`registerPath = '/auth/register'`) y método `register(email, password)`.
   - Pantalla: `front/lib/features/auth/register_screen.dart` (formulario de registro).
+  - Tras un `201`, la pestaña de registro de `front/lib/features/auth/login_screen.dart` muestra «CUENTA CREADA - CONFIRMA TU CORREO», deja el correo en el formulario de login y abre `EmailVerificationScreen` con ese correo, el aviso «Tu cuenta fue creada…» y la cuenta atrás de reenvío (60 s, porque el registro ya envió el correo). No inicia sesión; «Volver al inicio de sesión» regresa al login.
 - **Otros Microservicios:** No es consumido por otros servicios (registro exclusivo de usuarios finales).
 
 ## 4. Flujo Técnico (Paso a Paso)
@@ -49,11 +50,18 @@ Registra un nuevo usuario en la plataforma (`identity.users`) e inicializa su pe
      - `INSERT INTO identity.profiles (user_id, display_name, visibility) VALUES ($1, $2, 'private');`
      - Captura error de violación de unicidad `23505` de PostgreSQL y lo mapea al error de dominio `ErrEmailTaken`.
    - `COMMIT` de la transacción.
+4. **Confirmación de correo (`AuthService.Register` → `EmailVerificationService.SendForNewUser`):**
+   - Después del `COMMIT`, **despacha la confirmación en segundo plano y responde de inmediato**: la emisión del token y el envío SMTP ocurren después del `201` (ver [POST /auth/send-verification-email](POST-auth-send-verification-email.md) y [POST /auth/verify-email](POST-auth-verify-email.md)). El tiempo de respuesta del registro no incluye la base del token ni el SMTP.
+   - Usa el mismo despacho que el reenvío (`EmailVerificationService.dispatchSend`): como máximo 4 envíos de confirmación en curso por réplica de Auth. Si están todos ocupados, el envío se descarta al instante (`step=dispatch status=skipped reason=busy`) **sin generar ni guardar token** y sin consumir el enfriamiento ni el tope por hora, así que un reenvío posterior funciona normalmente.
+   - **La respuesta no depende del correo:** sigue siendo `201 {id,email,created_at}` aunque el SMTP falle después, falle la persistencia del token, el envío se descarte por ocupación o SMTP esté deshabilitado (sin `SMTP_PASSWORD` no se emite token). El resultado queda en el log (`[auth] email-verification op=Register user_id=<uuid> step=... status=ok|error|skipped`) y la persona puede pedir un reenvío; repetir el registro devuelve `409 email_taken`, así que nunca se duplica la cuenta.
+   - Con `EMAIL_VERIFICATION_REQUIRED=true`, la cuenta nueva no puede iniciar sesión hasta confirmar el correo (`POST /auth/login` → `403 email_not_verified`); el registro en sí no cambia.
+   - El trabajo en segundo plano tiene contexto propio (`context.WithoutCancel` + tope de 30 s): no lo cancela que el cliente cierre la conexión. Si Auth se reinicia durante el envío, ese correo se pierde y la persona puede reenviarlo.
 
 ## 5. Dependencias y Datos Afectados
-- **Tablas PostgreSQL:** `identity.users`, `identity.profiles`.
-- **Servicios Externos / Microservicios:** Ninguno.
+- **Tablas PostgreSQL:** `identity.users`, `identity.profiles`, `identity.email_verifications` (token de confirmación, migración `007_email_verification.sql`).
+- **Servicios Externos / Microservicios:** servidor SMTP para el correo de confirmación (opcional).
 
 ## 6. Tests Asociados
 - **Unitarios:** `back/auth/internal/handler/http/auth_handler_test.go` (`TestAuthHandler_Register_Success`, `TestAuthHandler_Register_WeakPassword`).
 - **Integración:** `back/auth/internal/service/auth_integration_test.go` (`TestAuthIntegration_Register_Success`, `TestAuthIntegration_Register_DuplicateEmail_409`).
+- **Confirmación de correo al registrarse:** `back/auth/internal/handler/http/email_verification_handler_test.go` (`TestEmailVerificationHandler_RegisterSendsConfirmationAndKeepsContract`, `..._RegisterDoesNotWaitForSMTP`, `..._RegisterSucceedsWhenMailFailsOrIsDisabled`), `back/auth/internal/service/email_verification_dispatch_test.go` (`TestEmailVerificationDispatch_RegisterReturnsWithoutWaitingSMTP`, `..._RegisterAndResendShareSlots`) y `back/auth/internal/service/email_verification_integration_test.go`.
