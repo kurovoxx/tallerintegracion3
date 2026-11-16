@@ -39,7 +39,7 @@ case "$CHOICE" in
     if ! command -v flutter >/dev/null 2>&1; then echo "Flutter no encontrado"; exit 1; fi
     cd "$FRONT_DIR"
     flutter pub get
-    flutter run -d linux --dart-define=API_BASE_URL=http://localhost:8085 --dart-define=NOTES_BASE_URL=http://localhost:8082 --dart-define=SOCIAL_BASE_URL=http://localhost:8083 --dart-define=ACADEMIC_BASE_URL=http://localhost:8087
+    flutter run -d linux --dart-define=API_BASE_URL=http://localhost:8085 --dart-define=NOTES_BASE_URL=http://localhost:8082 --dart-define=SOCIAL_BASE_URL=http://localhost:8083 --dart-define=ACADEMIC_BASE_URL=http://localhost:8087 --dart-define=AI_BASE_URL=https://ia-hlepio.dev.censei.cl
     ;;
   2|windows|Windows)
     if [[ "$(uname -s)" != *"NT"* && "$(uname -s)" != *"MINGW"* ]]; then
@@ -57,7 +57,7 @@ case "$CHOICE" in
     fi
     cd "$FRONT_DIR"
     flutter pub get
-    flutter run -d windows --dart-define=API_BASE_URL=http://localhost:8085 --dart-define=NOTES_BASE_URL=http://localhost:8082 --dart-define=SOCIAL_BASE_URL=http://localhost:8083 --dart-define=ACADEMIC_BASE_URL=http://localhost:8087
+    flutter run -d windows --dart-define=API_BASE_URL=http://localhost:8085 --dart-define=NOTES_BASE_URL=http://localhost:8082 --dart-define=SOCIAL_BASE_URL=http://localhost:8083 --dart-define=ACADEMIC_BASE_URL=http://localhost:8087 --dart-define=AI_BASE_URL=https://ia-hlepio.dev.censei.cl
     ;;
   3|web|Web)
     echo ">> Web (Chrome)"
@@ -86,10 +86,12 @@ case "$CHOICE" in
     NOTES_URL="${NOTES_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-notes}"
     SOCIAL_URL="${SOCIAL_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-social}"
     ACADEMIC_URL="${ACADEMIC_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-academic}"
+    AI_URL="${AI_BASE_URL:-https://ia-hlepio.dev.censei.cl}"
     echo "API: $API_URL"
+    echo "IA: $AI_URL"
     cd "$FRONT_DIR"
     flutter pub get
-    flutter run -d linux --dart-define=API_BASE_URL="$API_URL" --dart-define=NOTES_BASE_URL="$NOTES_URL" --dart-define=SOCIAL_BASE_URL="$SOCIAL_URL" --dart-define=ACADEMIC_BASE_URL="$ACADEMIC_URL"
+    flutter run -d linux --dart-define=API_BASE_URL="$API_URL" --dart-define=NOTES_BASE_URL="$NOTES_URL" --dart-define=SOCIAL_BASE_URL="$SOCIAL_URL" --dart-define=ACADEMIC_BASE_URL="$ACADEMIC_URL" --dart-define=AI_BASE_URL="$AI_URL"
     ;;
   6|windows-deploy|wdeploy|windows_deploy)
     echo ">> Windows nativo contra dominio del Ingress (sin auth local)"
@@ -110,10 +112,12 @@ case "$CHOICE" in
     NOTES_URL="${NOTES_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-notes}"
     SOCIAL_URL="${SOCIAL_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-social}"
     ACADEMIC_URL="${ACADEMIC_BASE_URL:-https://ti3-brojas.dev.censei.cl/api-academic}"
+    AI_URL="${AI_BASE_URL:-https://ia-hlepio.dev.censei.cl}"
     echo "API: $API_URL"
+    echo "IA: $AI_URL"
     cd "$FRONT_DIR"
     flutter pub get
-    flutter run -d windows --dart-define=API_BASE_URL="$API_URL" --dart-define=NOTES_BASE_URL="$NOTES_URL" --dart-define=SOCIAL_BASE_URL="$SOCIAL_URL" --dart-define=ACADEMIC_BASE_URL="$ACADEMIC_URL"
+    flutter run -d windows --dart-define=API_BASE_URL="$API_URL" --dart-define=NOTES_BASE_URL="$NOTES_URL" --dart-define=SOCIAL_BASE_URL="$SOCIAL_URL" --dart-define=ACADEMIC_BASE_URL="$ACADEMIC_URL" --dart-define=AI_BASE_URL="$AI_URL"
     ;;
   7|windows-local|wlocal)
     echo ">> Windows nativo contra backend local (SQLite aislada)"
@@ -148,6 +152,7 @@ case "$CHOICE" in
     echo "   Notes:    $NOTES_URL"
     echo "   Social:   $SOCIAL_URL"
     echo "   Academic: $ACADEMIC_URL"
+    echo "   IA: https://ia-hlepio.dev.censei.cl"
     echo "   SQLite:   $DB_DEFINE"
     if command -v curl >/dev/null 2>&1; then
       for u in "$API_URL/health" "$NOTES_URL/health" "$SOCIAL_URL/health" "$ACADEMIC_URL/health"; do
@@ -158,7 +163,7 @@ case "$CHOICE" in
     fi
     cd "$FRONT_DIR"
     flutter pub get
-    flutter run -d windows --dart-define=API_BASE_URL="$API_URL" --dart-define=NOTES_BASE_URL="$NOTES_URL" --dart-define=SOCIAL_BASE_URL="$SOCIAL_URL" --dart-define=ACADEMIC_BASE_URL="$ACADEMIC_URL" --dart-define=APP_DB_PATH="$DB_DEFINE"
+    flutter run -d windows --dart-define=API_BASE_URL="$API_URL" --dart-define=NOTES_BASE_URL="$NOTES_URL" --dart-define=SOCIAL_BASE_URL="$SOCIAL_URL" --dart-define=ACADEMIC_BASE_URL="$ACADEMIC_URL" --dart-define=AI_BASE_URL=https://ia-hlepio.dev.censei.cl --dart-define=APP_DB_PATH="$DB_DEFINE"
     ;;
   *)
     echo "Opción inválida"

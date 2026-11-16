@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show File, Platform, Process;
+import 'dart:math';
 
 import 'package:drift/drift.dart' show Value;
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
@@ -14,6 +16,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/database/app_database.dart';
 import '../../core/database/app_database_manager.dart';
 import '../../core/database/local_notes_repository.dart';
+import '../../core/services/ai_service.dart';
 import '../../core/services/api_config.dart';
 import '../../core/services/authed_client.dart';
 import '../../core/services/session_manager.dart';
@@ -21,6 +24,8 @@ import '../../core/theme/app_theme.dart';
 import '../../core/common_widgets.dart';
 import '../../core/widgets/neobrutalism.dart';
 import '../academic/academic_mappers.dart';
+import 'attachment_bytes_opener.dart';
+import 'attachment_content.dart';
 import 'attachment_resources.dart';
 import 'note_file_picker.dart';
 import 'note_id_search_screen.dart';
@@ -30,6 +35,7 @@ import 'saved_notes_screen.dart';
 import 'authenticated_attachment_image.dart';
 import 'latex_support.dart';
 import 'note_live_editor.dart';
+import 'note_markdown_body.dart';
 
 /// Base URL del microservicio de notas. En el emulador Android `localhost` es
 /// el propio dispositivo, por eso se usa la alias 10.0.2.2 hacia el host.
@@ -108,6 +114,23 @@ Future<T> _withNotesClient<T>(
 /// de forma desproporcionada (skill 3.3, contenedor máximo de contenido).
 const double _noteEditorMaxWidth = 920;
 
+/// Por debajo de este ancho el editor de notas se trata como móvil y ocupa
+/// el 100 % de la pantalla.
+const double _noteEditorMobileBreakpoint = 600;
+
+/// Margen exterior del editor de notas (crear/editar): casi pantalla completa
+/// en escritorio (~95 %) y sin margen en móvil.
+EdgeInsets _noteEditorInset(BuildContext context) {
+  final width = MediaQuery.sizeOf(context).width;
+  return width < _noteEditorMobileBreakpoint
+      ? EdgeInsets.zero
+      : const EdgeInsets.all(AppDimens.spaceXl);
+}
+
+/// Alto mínimo útil para que el editor se estire con `Expanded`; con menos
+/// (teclado abierto, ventana muy baja) todo el formulario pasa a hacer scroll.
+const double _noteEditorExpandMinHeight = 520;
+
 class AllNotesScreen extends StatefulWidget {
   const AllNotesScreen({
     super.key,
@@ -171,6 +194,44 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   bool _showingLocalExample = false;
   int _hiddenDemoCount = 0;
   String _currentQuery = '';
+
+  // --- Conversión PDF → Markdown (microservicio IA externo) ---
+  late final AiService _aiService;
+  String? _convertedMarkdown;
+  String? _convertedFilename;
+  int? _convertedSizeBytes;
+  bool _convertingPdf = false;
+  String? _convertingWord;
+
+  /// Palabras mostradas en el botón mientras se convierte el PDF.
+  static const List<String> _kConvertingWords = <String>[
+    'Pensando',
+    'Convirtiendo',
+    'Ponderando',
+    'Cavilando',
+    'Meditando',
+    'Recapacitando',
+    'Rumiando',
+    'Discurriendo',
+    'Juzgando',
+    'Considerando',
+    'Reflexionando',
+    'ME PROYECTO',
+  ];
+
+  /// Historial de conversiones exitosas (últimas 24 h) para el rate limit
+  /// local de 5 conversiones por hora.
+  final List<DateTime> _conversionTimes = [];
+
+  /// Máximo de conversiones por hora (rate limit del servicio IA).
+  static const int _kMaxConversionsPerHour = 5;
+
+  /// Conversiones restantes en la hora actual.
+  int get _conversionsRemaining {
+    final cutoff = DateTime.now().subtract(const Duration(hours: 1));
+    final recent = _conversionTimes.where((t) => t.isAfter(cutoff)).length;
+    return (_kMaxConversionsPerHour - recent).clamp(0, _kMaxConversionsPerHour);
+  }
 
   /// Filtro de materia desde academic (UX-05): prefijo "[CODE] " en título.
   String? _subjectFilter;
@@ -301,6 +362,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     super.initState();
     _sessionOwnerId = SessionManager.currentUserId;
     _sessionRevision = SessionManager.revision.value;
+    _aiService = AiService();
     _subjectFilter = widget.initialSubjectCode?.trim().isNotEmpty == true
         ? widget.initialSubjectCode!.trim()
         : null;
@@ -2161,6 +2223,211 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     await _notesFuture;
   }
 
+  /// Abre un file picker para seleccionar un PDF y lo convierte a Markdown
+  /// usando el microservicio IA externo.
+  Future<void> _pickAndConvertPdf() async {
+    final XFile? file = await openFile(
+      acceptedTypeGroups: <XTypeGroup>[
+        XTypeGroup(
+          label: 'PDF',
+          extensions: <String>['pdf'],
+        ),
+      ],
+    );
+    if (file == null || !mounted) return;
+    setState(() {
+      _convertingPdf = true;
+      _convertingWord = _kConvertingWords[Random().nextInt(_kConvertingWords.length)];
+    });
+    try {
+      final bytes = await file.readAsBytes();
+      final result = await _aiService.convertPdfToMarkdown(bytes, file.name);
+      if (!mounted) return;
+      setState(() {
+        _convertedMarkdown = result.markdown;
+        _convertedFilename = result.filename;
+        _convertedSizeBytes = result.sizeBytes;
+        _convertingPdf = false;
+        _convertingWord = null;
+        // Registrar conversión para el rate limit local
+        _conversionTimes.add(DateTime.now());
+      });
+      _showMarkdownDialog();
+    } on AiApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _convertingPdf = false;
+        _convertingWord = null;
+      });
+      debugPrint('[IA] ApiException status=${e.statusCode} code=${e.code}: ${e.message}');
+      _notifySnack('Error IA (${e.statusCode ?? '?'})${e.code != null ? ' [${e.code}]' : ''}: ${e.message}', ok: false);
+    } catch (e, st) {
+      if (!mounted) return;
+      setState(() {
+        _convertingPdf = false;
+        _convertingWord = null;
+      });
+      debugPrint('[IA] Error inesperado: $e\n$st');
+      _notifySnack('Error al convertir PDF: $e', ok: false);
+    }
+  }
+
+  /// Abre un diálogo con el Markdown convertido y un botón para guardarlo
+  /// como una nota nueva. El diálogo tiene scroll propio para no desbordar
+  /// la pantalla cuando el texto es largo.
+  Future<void> _showMarkdownDialog() async {
+    if (_convertedMarkdown == null || !mounted) return;
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => NeobrutalistDialog(
+        title: 'PDF → Markdown',
+        cancelLabel: 'Descartar',
+        confirmLabel: 'Guardar como nota',
+        closeOnConfirm: false,
+        maxWidth: 760,
+        onConfirm: () async {
+          if (_convertedMarkdown == null || !mounted) return;
+          Navigator.of(context).pop(true);
+          await _saveConvertedNote();
+        },
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(AppDimens.spaceMd),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.picture_as_pdf_rounded,
+                    size: 18,
+                    color: AppColors.text,
+                  ),
+                  const SizedBox(width: AppDimens.spaceSm),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _convertedFilename ?? 'documento.pdf',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w900,
+                            fontSize: 12,
+                            color: AppColors.text,
+                          ),
+                        ),
+                        Text(
+                          '${_convertedSizeBytes ?? 0} bytes',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: AppColors.mutedStrong,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(
+              color: AppColors.border,
+              thickness: AppDimens.borderWidth,
+              height: 1,
+            ),
+            // Scroll propio para el texto largo
+            ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: 500),
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.all(AppDimens.spaceMd),
+                  child: SelectableText(
+                    _convertedMarkdown!,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.text,
+                      height: 1.5,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved == true && mounted) {
+      // El guardado ya se hizo dentro del onConfirm.
+    }
+  }
+
+  /// Crea una nota nueva con el Markdown convertido.
+  Future<void> _saveConvertedNote() async {
+    if (_convertedMarkdown == null || !mounted) return;
+    setState(() => _convertingPdf = true);
+    try {
+      final tempId = _newTempNoteId();
+      final note = LocalNote(
+        needsSync: false,
+        id: tempId,
+        title: _convertedFilename ?? 'Nota desde PDF',
+        content: _convertedMarkdown!,
+        visibility: 'private',
+        updatedAt: DateTime.now(),
+        ownerUserId: _ownerId(),
+      );
+      _noteTags[tempId] = 'Desde PDF';
+      if (_useMemoryFallback) {
+        setState(() {
+          _memoryFallback.insert(0, note);
+          _likesCount[tempId] = 0;
+          _isLiked[tempId] = false;
+          _isSaved[tempId] = false;
+        });
+        _applySearch(_currentQuery);
+      } else {
+        try {
+          await _db!.transaction(() async {
+            await _repo!.upsertNote(note);
+          });
+          _likesCount[tempId] = 0;
+          _isLiked[tempId] = false;
+          _isSaved[tempId] = false;
+          await _applySearch(_currentQuery);
+        } catch (e) {
+          setState(() {
+            _useMemoryFallback = true;
+            _memoryFallback = [note, ..._memoryFallback];
+            _likesCount[tempId] = 0;
+          });
+          _applySearch(_currentQuery);
+        }
+      }
+      _noteSyncState[tempId] = _NoteSyncState.syncing;
+      final syncFuture = AppDatabaseManager.instance.guard(
+        () => _completeRemoteCreation(
+          tempId: tempId,
+          note: note,
+          attachments: const [],
+          revision: SessionManager.revision.value,
+          subjectId: null,
+          attachmentsPersisted: false,
+        ),
+      );
+      _pendingNoteSyncs[tempId] = syncFuture;
+      unawaited(syncFuture);
+      _notifySnack('Nota creada desde PDF.');
+    } catch (_) {
+      if (!mounted) return;
+      _notifySnack('No se pudo guardar la nota.', ok: false);
+    } finally {
+      if (mounted) setState(() => _convertingPdf = false);
+    }
+  }
+
   /// Id remoto (UUID) de una nota, o null si solo existe en este equipo.
   String? _remoteIdOf(LocalNote note) {
     final id = _remoteIds[note.id] ?? note.id;
@@ -2495,10 +2762,14 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
-      // En desktop/web el modal por defecto se limita a 640px; lo acotamos a
-      // `_noteEditorMaxWidth` y Flutter lo centra horizontalmente para no
-      // estirar el editor al 100 % del ancho junto al sidebar.
-      constraints: const BoxConstraints(maxWidth: _noteEditorMaxWidth),
+      // En desktop/web el modal por defecto se limita a 640px. Lo abrimos a
+      // casi todo el ancho para que el modo edición (editor + vista previa)
+      // tenga espacio; la lectura se centra a `_noteEditorMaxWidth` dentro.
+      constraints: BoxConstraints(
+        maxWidth: _noteEditorInset(
+          context,
+        ).deflateSize(MediaQuery.sizeOf(context)).width,
+      ),
       builder: (_) => DraggableScrollableSheet(
         initialChildSize: 0.95,
         minChildSize: 0.5,
@@ -2535,6 +2806,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   void dispose() {
     _debounce?.cancel();
     _searchController.dispose();
+    _aiService.dispose();
     // La base es compartida y la posee AppDatabaseManager. Cerrarla aquí
     // mataba el isolate mientras una sincronización seguía en vuelo.
     if (_ownsDatabase) {
@@ -2671,6 +2943,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   void _showCreateDialog({String? initialTitle, String? subjectId}) {
     showNeobrutalistDialog<void>(
       context: context,
+      insetPadding: _noteEditorInset(context),
       dialog: _CreateNoteDialog(
         initialTitle: initialTitle ?? '',
         onCreate: (title, content, visibility, attachments) async {
@@ -3133,6 +3406,40 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           ),
           onPressed: _openPublicNotes,
         ),
+        // Loading en el botón mientras se convierte el PDF.
+        NeobrutalistButton(
+          key: const Key('notes-pdf-to-markdown'),
+          label: _convertingPdf
+              ? (_convertingWord ?? 'Convirtiendo…')
+              : 'PDF → Markdown',
+          icon: _convertingPdf
+              ? Icons.hourglass_empty_rounded
+              : Icons.picture_as_pdf_rounded,
+          variant: NeobrutalistButtonVariant.accent,
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppDimens.spaceMd,
+            vertical: AppDimens.spaceSm,
+          ),
+          onPressed: _convertingPdf || _conversionsRemaining == 0
+              ? null
+              : _pickAndConvertPdf,
+        ),
+        // Contador de conversiones restantes (rate limit: 5 por hora).
+        if (_conversionsRemaining < _kMaxConversionsPerHour)
+          Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppDimens.spaceMd,
+              vertical: AppDimens.spaceSm,
+            ),
+            child: Text(
+              'Conversiones restantes: $_conversionsRemaining/$_kMaxConversionsPerHour',
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                color: AppColors.mutedStrong,
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -4828,375 +5135,395 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
             ),
           ),
           Expanded(
-            child: ListView(
-              controller: widget.scrollController,
-              padding: const EdgeInsets.all(20),
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: widget.note.visibility == 'public'
-                            ? const Color(0xFF0055FF)
-                            : const Color(0xFFFFCC00),
-                        border: Border.all(color: Colors.black, width: 1.5),
-                      ),
-                      child: Text(
-                        widget.note.visibility.toUpperCase(),
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w900,
-                          color: widget.note.visibility == 'public'
-                              ? Colors.white
-                              : Colors.black,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF5F0E8),
-                            border: Border.all(color: Colors.black, width: 1.5),
-                          ),
-                          child: Text(
-                            widget.tag,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w800,
-                              color: Colors.black,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      _fmtDate(widget.note.updatedAt),
-                      style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF1A1A1A),
-                      ),
-                    ),
-                  ],
+            child: LayoutBuilder(builder: (context, box) => _buildBody(box)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBody(BoxConstraints box) {
+    // Lectura: columna centrada de ancho cómodo. Edición: todo el ancho.
+    final readingInset = _editing
+        ? 0.0
+        : ((box.maxWidth - _noteEditorMaxWidth) / 2).clamp(
+            0.0,
+            double.infinity,
+          );
+    // Editor alto (~60 % del sheet): deja visibles título, barra de adjuntos
+    // y botones GUARDAR/CANCELAR en una ventana de escritorio normal.
+    final editorHeight = (box.maxHeight * 0.6).clamp(320.0, double.infinity);
+    final padding = EdgeInsets.symmetric(
+      horizontal: 20 + readingInset,
+      vertical: 20,
+    );
+    final children = <Widget>[
+      Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: widget.note.visibility == 'public'
+                  ? const Color(0xFF0055FF)
+                  : const Color(0xFFFFCC00),
+              border: Border.all(color: Colors.black, width: 1.5),
+            ),
+            child: Text(
+              widget.note.visibility.toUpperCase(),
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w900,
+                color: widget.note.visibility == 'public'
+                    ? Colors.white
+                    : Colors.black,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF5F0E8),
+                  border: Border.all(color: Colors.black, width: 1.5),
                 ),
-                if (_loadingRemote) ...[
-                  const SizedBox(height: 12),
-                  const LinearProgressIndicator(
+                child: Text(
+                  widget.tag,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
                     color: Colors.black,
-                    backgroundColor: Color(0xFFF5F0E8),
                   ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'Sincronizando con Drive…',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF555555),
-                    ),
-                  ),
-                ],
-                if (_driveWarning != null) ...[
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFF3C4),
-                      border: Border.all(color: Colors.black, width: 1.5),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(
-                          Icons.warning_amber_rounded,
-                          color: Colors.black,
-                          size: 18,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            _driveWarning!,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w800,
-                              color: Colors.black,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 16),
-                if (_editing) ...[
-                  const AppFieldLabel('TÍTULO'),
-                  const SizedBox(height: 4),
-                  TextField(
-                    controller: _titleCtrl,
-                    decoration: appInputDecoration('Título'),
-                  ),
-                  const SizedBox(height: 12),
-                  const AppFieldLabel('CONTENIDO MARKDOWN / LATEX'),
-                  const SizedBox(height: 4),
-                  if (_contentCtrl != null)
-                    MarkdownLiveEditor(
-                      controller: _contentCtrl!,
-                      editor: TextField(
-                        controller: _contentCtrl,
-                        minLines: 6,
-                        maxLines: 14,
-                        decoration: appInputDecoration('Contenido Markdown'),
-                      ),
-                      previewBuilder: (text) => _NeobrutalistMarkdownBody(
-                        content: text,
-                        resources: _mergedResources,
-                        onOpenResource: _showResourceDialog,
-                      ),
-                    ),
-                  const SizedBox(height: 8),
-                  if (_contentCtrl != null) ...[
-                    _AttachmentToolbar(
-                      controller: _contentCtrl!,
-                      onChanged: () => setState(() {}),
-                      onUploaded: _onAttachmentUploadedInEdit,
-                      onWarning: (message) {
-                        if (!mounted) return;
-                        setState(() {
-                          _attachNotice = message;
-                          _attachNoticeOk = false;
-                        });
-                      },
-                    ),
-                    if (_attachNotice != null) ...[
-                      const SizedBox(height: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: _attachNoticeOk
-                              ? AppColors.subjectMint
-                              : AppColors.accentYellow,
-                          border: Border.all(
-                            color: AppColors.border,
-                            width: 1.5,
-                          ),
-                          borderRadius: BorderRadius.circular(
-                            AppDimens.radiusChip,
-                          ),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              _attachNoticeOk
-                                  ? Icons.cloud_done_rounded
-                                  : Icons.info_outline_rounded,
-                              size: 14,
-                              color: AppColors.text,
-                            ),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: Text(
-                                _attachNotice!,
-                                style: const TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w800,
-                                  color: AppColors.text,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                    _DetectedAttachmentsPreview(
-                      content: _contentCtrl!.text,
-                      // Borrar solo el snippet NO elimina el attachment (queda
-                      // en ARCHIVOS ADJUNTOS hasta pulsar su X): semántica
-                      // validada E2E, distinto del borrado con X.
-                      onRemoveSnippet: (url) {
-                        final matches = _attachments.where(
-                          (a) => urlMatchesAttachment(a, url),
-                        );
-                        if (matches.isNotEmpty) {
-                          _togglePendingRemove(matches.first);
-                        } else {
-                          _removeAttachmentUrl(_contentCtrl!, url);
-                          setState(() {});
-                        }
-                      },
-                      onPreviewResource: _showResourceDialog,
-                    ),
-                    _buildEditAttachments(),
-                  ],
-                  if (_editError != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      _editError!,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFFE63B2E),
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextButton(
-                          onPressed: _saving ? null : _cancelEdit,
-                          child: const Text(
-                            'CANCELAR',
-                            style: TextStyle(
-                              color: Colors.black,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.black,
-                            foregroundColor: Colors.white,
-                            shape: const RoundedRectangleBorder(
-                              borderRadius: BorderRadius.zero,
-                            ),
-                          ),
-                          onPressed:
-                              _saving ||
-                                  _linkingAttachment ||
-                                  _removingAttachment
-                              ? null
-                              : _confirmEdit,
-                          child: Text(
-                            _saving ? 'GUARDANDO…' : 'GUARDAR',
-                            style: const TextStyle(fontWeight: FontWeight.w900),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ] else ...[
-                  Text(
-                    _title,
-                    style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w900,
-                      color: Colors.black,
-                      height: 1.2,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Container(height: 2, color: Colors.black),
-                  const SizedBox(height: 16),
-                  _NeobrutalistMarkdownBody(
-                    content: _content,
-                    resources: _mergedResources,
-                    onOpenResource: _showResourceDialog,
-                  ),
-                ],
-                if (_mergedResources.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  Container(height: 2, color: Colors.black),
-                  const SizedBox(height: 14),
-                  const Row(
-                    children: [
-                      Icon(
-                        Icons.folder_open_rounded,
-                        size: 16,
-                        color: Colors.black,
-                      ),
-                      SizedBox(width: 6),
-                      Text(
-                        'RECURSOS ADJUNTOS',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w900,
-                          fontSize: 13,
-                          letterSpacing: 0.5,
-                          color: Colors.black,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  ..._buildResourceItems(),
-                ],
-                const SizedBox(height: 24),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    _ActionButton(
-                      icon: Icons.favorite_rounded,
-                      label: '$_likes',
-                      isActive: _liked,
-                      activeColor: AppColors.errorDeep,
-                      activeForeground: AppColors.surface,
-                      onTap: () {
-                        setState(() {
-                          _liked = !_liked;
-                          _likes += _liked ? 1 : -1;
-                        });
-                        widget.onToggleLike();
-                      },
-                    ),
-                    _ActionButton(
-                      icon: Icons.bookmark_rounded,
-                      label: 'Guardar',
-                      isActive: _saved,
-                      activeColor: AppColors.accentYellow,
-                      onTap: () {
-                        setState(() => _saved = !_saved);
-                        widget.onToggleSave();
-                      },
-                    ),
-                    _ActionButton(
-                      icon: Icons.share_rounded,
-                      label: 'Compartir',
-                      onTap: widget.onShare,
-                    ),
-                    if (!widget.isMine) ...[
-                      _ActionButton(
-                        icon: Icons.copy_rounded,
-                        label: _cloning ? '…' : 'Copiar a mis apuntes',
-                        onTap: _cloning ? () {} : _confirmClone,
-                      ),
-                    ],
-                    if (widget.isMine && !_editing) ...[
-                      _ActionButton(
-                        icon: Icons.edit_rounded,
-                        label: 'Editar',
-                        onTap: _onEditTap,
-                      ),
-                      _ActionButton(
-                        icon: Icons.delete_rounded,
-                        label: _deleting ? '…' : 'Eliminar',
-                        onTap: _deleting ? () {} : _confirmDelete,
-                      ),
-                    ],
-                  ],
                 ),
-              ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            _fmtDate(widget.note.updatedAt),
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF1A1A1A),
             ),
           ),
         ],
       ),
+      if (_loadingRemote) ...[
+        const SizedBox(height: 12),
+        const LinearProgressIndicator(
+          color: Colors.black,
+          backgroundColor: Color(0xFFF5F0E8),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Sincronizando con Drive…',
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            color: Color(0xFF555555),
+          ),
+        ),
+      ],
+      if (_driveWarning != null) ...[
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF3C4),
+            border: Border.all(color: Colors.black, width: 1.5),
+          ),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.warning_amber_rounded,
+                color: Colors.black,
+                size: 18,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _driveWarning!,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.black,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+      const SizedBox(height: 16),
+      if (_editing) ...[
+        const AppFieldLabel('TÍTULO'),
+        const SizedBox(height: 4),
+        TextField(
+          controller: _titleCtrl,
+          decoration: appInputDecoration('Título'),
+        ),
+        const SizedBox(height: 12),
+        const AppFieldLabel('CONTENIDO MARKDOWN / LATEX'),
+        const SizedBox(height: 4),
+        if (_contentCtrl != null)
+          SizedBox(
+            height: editorHeight,
+            child: MarkdownLiveEditor(
+              controller: _contentCtrl!,
+              expand: true,
+              editor: TextField(
+                controller: _contentCtrl,
+                expands: true,
+                minLines: null,
+                maxLines: null,
+                textAlignVertical: TextAlignVertical.top,
+                keyboardType: TextInputType.multiline,
+                style: const TextStyle(fontSize: 16, height: 1.45),
+                decoration: appInputDecoration('Contenido Markdown'),
+              ),
+              previewBuilder: (text) => NoteMarkdownBody(
+                content: text,
+                resources: _mergedResources,
+                onOpenResource: _showResourceDialog,
+                imageBuilder: _buildResourceImage,
+              ),
+            ),
+          ),
+        const SizedBox(height: 8),
+        if (_contentCtrl != null) ...[
+          _AttachmentToolbar(
+            controller: _contentCtrl!,
+            onChanged: () => setState(() {}),
+            onUploaded: _onAttachmentUploadedInEdit,
+            onWarning: (message) {
+              if (!mounted) return;
+              setState(() {
+                _attachNotice = message;
+                _attachNoticeOk = false;
+              });
+            },
+          ),
+          if (_attachNotice != null) ...[
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              decoration: BoxDecoration(
+                color: _attachNoticeOk
+                    ? AppColors.subjectMint
+                    : AppColors.accentYellow,
+                border: Border.all(color: AppColors.border, width: 1.5),
+                borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _attachNoticeOk
+                        ? Icons.cloud_done_rounded
+                        : Icons.info_outline_rounded,
+                    size: 14,
+                    color: AppColors.text,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      _attachNotice!,
+                      style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.text,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          _DetectedAttachmentsPreview(
+            content: _contentCtrl!.text,
+            // Borrar solo el snippet NO elimina el attachment (queda
+            // en ARCHIVOS ADJUNTOS hasta pulsar su X): semántica
+            // validada E2E, distinto del borrado con X.
+            onRemoveSnippet: (url) {
+              final matches = _attachments.where(
+                (a) => urlMatchesAttachment(a, url),
+              );
+              if (matches.isNotEmpty) {
+                _togglePendingRemove(matches.first);
+              } else {
+                _removeAttachmentUrl(_contentCtrl!, url);
+                setState(() {});
+              }
+            },
+            onPreviewResource: _showResourceDialog,
+          ),
+          _buildEditAttachments(),
+        ],
+        if (_editError != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            _editError!,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: Color(0xFFE63B2E),
+            ),
+          ),
+        ],
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: TextButton(
+                onPressed: _saving ? null : _cancelEdit,
+                child: const Text(
+                  'CANCELAR',
+                  style: TextStyle(
+                    color: Colors.black,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.black,
+                  foregroundColor: Colors.white,
+                  shape: const RoundedRectangleBorder(
+                    borderRadius: BorderRadius.zero,
+                  ),
+                ),
+                onPressed: _saving || _linkingAttachment || _removingAttachment
+                    ? null
+                    : _confirmEdit,
+                child: Text(
+                  _saving ? 'GUARDANDO…' : 'GUARDAR',
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ] else ...[
+        Text(
+          _title,
+          style: const TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.w900,
+            color: Colors.black,
+            height: 1.2,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Container(height: 2, color: Colors.black),
+        const SizedBox(height: 16),
+        NoteMarkdownBody(
+          content: _content,
+          resources: _mergedResources,
+          onOpenResource: _showResourceDialog,
+          imageBuilder: _buildResourceImage,
+        ),
+      ],
+      if (_mergedResources.isNotEmpty) ...[
+        const SizedBox(height: 16),
+        Container(height: 2, color: Colors.black),
+        const SizedBox(height: 14),
+        const Row(
+          children: [
+            Icon(Icons.folder_open_rounded, size: 16, color: Colors.black),
+            SizedBox(width: 6),
+            Text(
+              'RECURSOS ADJUNTOS',
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                fontSize: 13,
+                letterSpacing: 0.5,
+                color: Colors.black,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        ..._buildResourceItems(),
+      ],
+      const SizedBox(height: 24),
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          _ActionButton(
+            icon: Icons.favorite_rounded,
+            label: '$_likes',
+            isActive: _liked,
+            activeColor: AppColors.errorDeep,
+            activeForeground: AppColors.surface,
+            onTap: () {
+              setState(() {
+                _liked = !_liked;
+                _likes += _liked ? 1 : -1;
+              });
+              widget.onToggleLike();
+            },
+          ),
+          _ActionButton(
+            icon: Icons.bookmark_rounded,
+            label: 'Guardar',
+            isActive: _saved,
+            activeColor: AppColors.accentYellow,
+            onTap: () {
+              setState(() => _saved = !_saved);
+              widget.onToggleSave();
+            },
+          ),
+          _ActionButton(
+            icon: Icons.share_rounded,
+            label: 'Compartir',
+            onTap: widget.onShare,
+          ),
+          if (!widget.isMine) ...[
+            _ActionButton(
+              icon: Icons.copy_rounded,
+              label: _cloning ? '…' : 'Copiar a mis apuntes',
+              onTap: _cloning ? () {} : _confirmClone,
+            ),
+          ],
+          if (widget.isMine && !_editing) ...[
+            _ActionButton(
+              icon: Icons.edit_rounded,
+              label: 'Editar',
+              onTap: _onEditTap,
+            ),
+            _ActionButton(
+              icon: Icons.delete_rounded,
+              label: _deleting ? '…' : 'Eliminar',
+              onTap: _deleting ? () {} : _confirmDelete,
+            ),
+          ],
+        ],
+      ),
+    ];
+    if (_editing) {
+      // Edición: scroll no perezoso para que adjuntos y botones bajo el editor
+      // alto estén siempre construidos (y accesibles a lectores/tests).
+      return SingleChildScrollView(
+        controller: widget.scrollController,
+        padding: padding,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: children,
+        ),
+      );
+    }
+    return ListView(
+      controller: widget.scrollController,
+      padding: padding,
+      children: children,
     );
   }
 }
@@ -5314,126 +5641,172 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return NeobrutalistDialog(
-      title: 'NUEVA NOTA',
-      // Ancho del editor de notas: en escritorio permite el split-view
-      // editor + vista previa; en móvil la pantalla lo limita igual.
-      maxWidth: _noteEditorMaxWidth,
-      cancelLabel: 'CANCELAR',
-      confirmLabel: _submitting ? 'GUARDANDO…' : 'GUARDAR',
-      closeOnConfirm: false,
-      onConfirm: _submitting ? null : _submit,
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const AppFieldLabel('TÍTULO'),
-          const SizedBox(height: 4),
-          TextField(
-            controller: _titleCtrl,
-            focusNode: _titleFocus,
-            decoration: appInputDecoration('Título').copyWith(
-              errorText: _titleError,
-              errorStyle: const TextStyle(
-                color: AppColors.error,
-                fontWeight: FontWeight.w800,
-                fontSize: 12,
-              ),
-            ),
+    final editor = MarkdownLiveEditor(
+      controller: _contentCtrl,
+      expand: true,
+      editor: TextField(
+        controller: _contentCtrl,
+        expands: true,
+        minLines: null,
+        maxLines: null,
+        textAlignVertical: TextAlignVertical.top,
+        keyboardType: TextInputType.multiline,
+        style: const TextStyle(fontSize: 16, height: 1.45),
+        decoration: appInputDecoration('Contenido Markdown'),
+      ),
+      previewBuilder: (text) => NoteMarkdownBody(
+        content: text,
+        onOpenResource: _showResource,
+        imageBuilder: _buildResourceImage,
+      ),
+    );
+    final header = <Widget>[
+      const AppFieldLabel('TÍTULO'),
+      const SizedBox(height: 4),
+      TextField(
+        controller: _titleCtrl,
+        focusNode: _titleFocus,
+        decoration: appInputDecoration('Título').copyWith(
+          errorText: _titleError,
+          errorStyle: const TextStyle(
+            color: AppColors.error,
+            fontWeight: FontWeight.w800,
+            fontSize: 12,
           ),
-          const SizedBox(height: 12),
-          const AppFieldLabel('CONTENIDO MARKDOWN / LATEX'),
-          const SizedBox(height: 4),
-          MarkdownLiveEditor(
-            controller: _contentCtrl,
-            previewMaxHeight: 280,
-            editor: TextField(
-              controller: _contentCtrl,
-              minLines: 4,
-              maxLines: 10,
-              decoration: appInputDecoration('Contenido Markdown'),
+        ),
+      ),
+      const SizedBox(height: 12),
+      const AppFieldLabel('CONTENIDO MARKDOWN / LATEX'),
+      const SizedBox(height: 4),
+    ];
+    final footer = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _AttachmentToolbar(
+          queueUntilCreated: true,
+          controller: _contentCtrl,
+          onChanged: () => setState(() {}),
+          onUploaded: _onAttachmentUploaded,
+          onWarning: _onAttachmentWarning,
+        ),
+        if (_attachNotice != null) ...[
+          const SizedBox(height: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            decoration: BoxDecoration(
+              color: _attachNoticeOk
+                  ? AppColors.subjectMint
+                  : AppColors.accentYellow,
+              border: Border.all(color: AppColors.border, width: 1.5),
+              borderRadius: BorderRadius.circular(AppDimens.radiusChip),
             ),
-            previewBuilder: (text) => _NeobrutalistMarkdownBody(
-              content: text,
-              onOpenResource: _showResource,
-            ),
-          ),
-          const SizedBox(height: 8),
-          _AttachmentToolbar(
-            queueUntilCreated: true,
-            controller: _contentCtrl,
-            onChanged: () => setState(() {}),
-            onUploaded: _onAttachmentUploaded,
-            onWarning: _onAttachmentWarning,
-          ),
-          if (_attachNotice != null) ...[
-            const SizedBox(height: 6),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              decoration: BoxDecoration(
-                color: _attachNoticeOk
-                    ? AppColors.subjectMint
-                    : AppColors.accentYellow,
-                border: Border.all(color: AppColors.border, width: 1.5),
-                borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    _attachNoticeOk
-                        ? Icons.cloud_done_rounded
-                        : Icons.info_outline_rounded,
-                    size: 14,
-                    color: AppColors.text,
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      _attachNotice!,
-                      style: const TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.text,
-                      ),
+            child: Row(
+              children: [
+                Icon(
+                  _attachNoticeOk
+                      ? Icons.cloud_done_rounded
+                      : Icons.info_outline_rounded,
+                  size: 14,
+                  color: AppColors.text,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    _attachNotice!,
+                    style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.text,
                     ),
                   ),
-                ],
+                ),
+              ],
+            ),
+          ),
+        ],
+        _DetectedAttachmentsPreview(
+          content: _contentCtrl.text,
+          onRemoveSnippet: (url) {
+            _removeAttachmentUrl(_contentCtrl, url);
+            _pendingAttachments.removeWhere((a) => a.fileUrl == url);
+            _pendingAttachmentFiles.remove(url);
+            setState(() {});
+          },
+          onPreviewResource: _showResource,
+        ),
+        const SizedBox(height: 12),
+        const AppFieldLabel('VISIBILIDAD'),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Expanded(
+              child: _VisibilityOption(
+                label: 'PÚBLICO',
+                active: _visibility == 'public',
+                onTap: () => setState(() => _visibility = 'public'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _VisibilityOption(
+                label: 'PRIVADO',
+                active: _visibility == 'private',
+                onTap: () => setState(() => _visibility = 'private'),
               ),
             ),
           ],
-          _DetectedAttachmentsPreview(
-            content: _contentCtrl.text,
-            onRemoveSnippet: (url) {
-              _removeAttachmentUrl(_contentCtrl, url);
-              _pendingAttachments.removeWhere((a) => a.fileUrl == url);
-              _pendingAttachmentFiles.remove(url);
-              setState(() {});
-            },
-            onPreviewResource: _showResource,
-          ),
-          const SizedBox(height: 12),
-          const AppFieldLabel('VISIBILIDAD'),
-          const SizedBox(height: 4),
-          Row(
-            children: [
-              Expanded(
-                child: _VisibilityOption(
-                  label: 'PÚBLICO',
-                  active: _visibility == 'public',
-                  onTap: () => setState(() => _visibility = 'public'),
+        ),
+      ],
+    );
+    // SafeArea: en móvil el diálogo no tiene margen y no debe quedar bajo la
+    // barra de estado o el notch.
+    return SafeArea(
+      child: NeobrutalistDialog(
+        title: 'NUEVA NOTA',
+        // Casi pantalla completa: el ancho lo acota solo el insetPadding.
+        maxWidth: double.infinity,
+        expandContent: true,
+        cancelLabel: 'CANCELAR',
+        confirmLabel: _submitting ? 'GUARDANDO…' : 'GUARDAR',
+        closeOnConfirm: false,
+        onConfirm: _submitting ? null : _submit,
+        content: LayoutBuilder(
+          builder: (context, constraints) {
+            if (constraints.maxHeight < _noteEditorExpandMinHeight) {
+              // Poco alto (teclado abierto, ventana baja): todo hace scroll y
+              // el editor conserva un alto cómodo fijo.
+              return SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ...header,
+                    SizedBox(height: 320, child: editor),
+                    const SizedBox(height: 8),
+                    footer,
+                  ],
                 ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _VisibilityOption(
-                  label: 'PRIVADO',
-                  active: _visibility == 'private',
-                  onTap: () => setState(() => _visibility = 'private'),
+              );
+            }
+            // El editor (Expanded) se queda con todo el alto sobrante; el pie
+            // (adjuntos, visibilidad) se acota y hace scroll si crece mucho.
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                ...header,
+                Expanded(child: editor),
+                const SizedBox(height: 8),
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: constraints.maxHeight * 0.4,
+                  ),
+                  child: SingleChildScrollView(child: footer),
                 ),
-              ),
-            ],
-          ),
-        ],
+              ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -7126,15 +7499,143 @@ Widget _resourceInfoRow(String label, String value, {bool mono = false}) {
   );
 }
 
+/// Abre el visor de recursos (imagen ampliada o documento/PDF servido por el
+/// endpoint autenticado de adjuntos) fuera de [AllNotesScreen], por ejemplo
+/// desde la vista previa de un apunte de otro perfil.
+Future<void> showNoteResourceViewer(
+  BuildContext context,
+  Map<String, dynamic> resource,
+) => showNeobrutalistDialog<void>(
+  context: context,
+  dialog: _ResourceViewerDialog(resource: resource),
+);
+
 /// Visor de recurso: imagen grande (con fallback neobrutalista) o ficha técnica
 /// del documento con apertura real en el visor del sistema y copia a descargas.
-class _ResourceViewerDialog extends StatelessWidget {
+class _ResourceViewerDialog extends StatefulWidget {
   final Map<String, dynamic> resource;
-  const _ResourceViewerDialog({required this.resource});
 
+  /// Inyectables para pruebas: evitan abrir visores reales y permiten capturar
+  /// los bytes servidos por el endpoint autenticado.
+  final http.Client? client;
+  final Future<bool> Function(Uint8List, String, String)? openAttachment;
+  final Future<String?> Function(Uint8List, String, String)? saveAttachment;
+
+  const _ResourceViewerDialog({
+    required this.resource,
+    this.client,
+    this.openAttachment,
+    this.saveAttachment,
+  });
+
+  @override
+  State<_ResourceViewerDialog> createState() => _ResourceViewerDialogState();
+}
+
+class _ResourceViewerDialogState extends State<_ResourceViewerDialog> {
+  bool _busy = false;
+  AttachmentContent? _content;
+
+  Map<String, dynamic> get resource => widget.resource;
   bool get _isWindows => !kIsWeb && Platform.isWindows;
-
   String get _url => (resource['url'] ?? '') as String;
+
+  String? get _noteId {
+    final value = resource['note_id'];
+    return value is String && value.trim().isNotEmpty ? value.trim() : null;
+  }
+
+  String? get _attachmentId {
+    final value = resource['attachment_id'];
+    return value is String && value.trim().isNotEmpty ? value.trim() : null;
+  }
+
+  /// Un adjunto real siempre se sirve por el endpoint autenticado, aunque su
+  /// `file_url` sea un enlace de Drive (mock o real). Así el visor no depende
+  /// de que el archivo del autor siga compartido ni de que Drive exista.
+  bool get _hasAttachment => _noteId != null && _attachmentId != null;
+
+  Future<AttachmentContent> _loadContent() async {
+    final cached = _content;
+    if (cached != null) return cached;
+    final content = await fetchAttachmentContent(
+      baseUrl: notesBaseUrl,
+      noteId: _noteId!,
+      attachmentId: _attachmentId!,
+      fileName: (resource['name'] as String?) ?? 'adjunto',
+      client: widget.client,
+    );
+    if (mounted) setState(() => _content = content);
+    return content;
+  }
+
+  void _snack(BuildContext context, String message) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: Colors.black,
+        content: Text(
+          message,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openAttachment(BuildContext context) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final content = await _loadContent();
+      final opener = widget.openAttachment ?? openAttachmentBytes;
+      final ok = await opener(
+        content.bytes,
+        content.fileName,
+        content.mimeType,
+      );
+      if (!context.mounted) return;
+      _snack(
+        context,
+        ok
+            ? 'Abriendo ${content.fileName}…'
+            : 'No se pudo abrir el documento. Usa DESCARGAR.',
+      );
+    } on AttachmentContentException catch (e) {
+      if (!context.mounted) return;
+      _snack(context, e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _saveAttachment(BuildContext context) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final content = await _loadContent();
+      final saver = widget.saveAttachment ?? saveAttachmentBytes;
+      final dest = await saver(
+        content.bytes,
+        content.fileName,
+        content.mimeType,
+      );
+      if (!context.mounted) return;
+      _snack(
+        context,
+        dest != null
+            ? 'Documento guardado en: $dest'
+            : 'No se pudo guardar el documento.',
+      );
+    } on AttachmentContentException catch (e) {
+      if (!context.mounted) return;
+      _snack(context, e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   Future<void> _openInSystemViewer(BuildContext context, String url) async {
     final ok = await _openResourceExternally(url);
@@ -7156,6 +7657,10 @@ class _ResourceViewerDialog extends StatelessWidget {
   }
 
   Future<void> _download(BuildContext context, _ResourceFileInfo info) async {
+    if (_hasAttachment) {
+      await _saveAttachment(context);
+      return;
+    }
     String message;
     if (info.localFile != null) {
       final dest = await _copyLocalResourceToDownloads(info.localFile!);
@@ -7186,6 +7691,13 @@ class _ResourceViewerDialog extends StatelessWidget {
   }
 
   String get _primaryLabel {
+    if (_hasAttachment) {
+      if (resource['type'] == 'image') {
+        return _busy ? 'GUARDANDO…' : 'DESCARGAR';
+      }
+      if (_busy) return 'ABRIENDO…';
+      return resource['type'] == 'pdf' ? 'ABRIR PDF' : 'ABRIR DOCUMENTO';
+    }
     final info = _ResourceFileInfo.resolve(_url);
     return info.isRemote
         ? (isDriveViewerUrl(_url) ? 'ABRIR EN DRIVE' : 'ABRIR')
@@ -7197,6 +7709,14 @@ class _ResourceViewerDialog extends StatelessWidget {
   }
 
   void _onPrimary(BuildContext context) {
+    if (_hasAttachment) {
+      if (resource['type'] == 'image') {
+        _download(context, _ResourceFileInfo.resolve(_url));
+      } else {
+        _openAttachment(context);
+      }
+      return;
+    }
     final info = _ResourceFileInfo.resolve(_url);
     final isImage = resource['type'] == 'image';
     if (isImage && info.localFile != null) {
@@ -7219,7 +7739,7 @@ class _ResourceViewerDialog extends StatelessWidget {
           ? NeobrutalistButtonVariant.accent
           : NeobrutalistButtonVariant.info,
       closeOnConfirm: false,
-      onConfirm: () => _onPrimary(context),
+      onConfirm: _busy ? null : () => _onPrimary(context),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -7284,12 +7804,12 @@ class _ResourceViewerDialog extends StatelessWidget {
             )
           else
             _buildDocInfo(info),
-          if (!isImage && info.localFile != null) ...[
+          if (!isImage && (_hasAttachment || info.localFile != null)) ...[
             const SizedBox(height: 12),
             NeobrutalistButton(
-              label: 'DESCARGAR',
+              label: _busy ? 'GUARDANDO…' : 'DESCARGAR',
               variant: NeobrutalistButtonVariant.secondary,
-              onPressed: () => _download(context, info),
+              onPressed: _busy ? null : () => _download(context, info),
             ),
           ],
         ],
@@ -7301,22 +7821,29 @@ class _ResourceViewerDialog extends StatelessWidget {
   /// de disponibilidad, más el tipo de acceso (local verificado o remoto).
   Widget _buildDocInfo(_ResourceFileInfo info) {
     final isPdf = resource['type'] == 'pdf';
-    final sizeLabel = info.sizeBytes != null
+    final downloaded = _content;
+    final sizeLabel = downloaded != null
+        ? _formatFileSize(downloaded.bytes.length)
+        : info.sizeBytes != null
         ? _formatFileSize(info.sizeBytes!)
-        : info.isRemote
+        : (_hasAttachment || info.isRemote)
         ? 'Remoto'
         : '${resource['size'] ?? '—'}';
     final pathLabel =
         info.absolutePath ??
-        (info.isRemote ? _url : 'No se encontró el archivo en disco');
-    final badgeLabel = info.exists
+        (_hasAttachment
+            ? 'notes/$_noteId/attachments/$_attachmentId/content'
+            : (info.isRemote ? _url : 'No se encontró el archivo en disco'));
+    final badgeLabel = info.exists || downloaded != null
         ? 'DOCUMENTO LISTO'
+        : _hasAttachment
+        ? 'DOCUMENTO ADJUNTO'
         : info.isRemote
         ? 'DOCUMENTO REMOTO'
         : 'ARCHIVO NO ENCONTRADO';
-    final badgeColor = info.exists
+    final badgeColor = info.exists || downloaded != null
         ? AppColors.subjectMint
-        : info.isRemote
+        : (_hasAttachment || info.isRemote)
         ? AppColors.accentYellow
         : const Color(0xFFFFD6D2);
 
@@ -7372,6 +7899,8 @@ class _ResourceViewerDialog extends StatelessWidget {
             'ORIGEN',
             info.exists
                 ? 'Archivo local verificado en disco'
+                : _hasAttachment
+                ? 'Adjunto de la nota vía endpoint autenticado'
                 : info.isRemote
                 ? 'URL remota (visor/descarga externa)'
                 : 'Sin archivo asociado en disco',
@@ -7401,873 +7930,21 @@ class _ResourceViewerDialog extends StatelessWidget {
   }
 }
 
-/// Cuerpo de nota renderizado como Markdown visual neobrutalista: encabezados,
-/// negrita/cursiva, listas con bullets sólidos, bloques de código, blockquotes,
-/// imágenes embebidas (archivo local o URL remota) y chips de PDF.
-/// Renderizador Markdown/LaTeX del visor, expuesto solo para tests.
 @visibleForTesting
 Widget debugBuildNoteMarkdown(String content) =>
-    _NeobrutalistMarkdownBody(content: content, onOpenResource: (_) {});
+    NoteMarkdownBody(content: content, onOpenResource: (_) {});
 
-class _NeobrutalistMarkdownBody extends StatelessWidget {
-  final String content;
-  final List<Map<String, dynamic>> resources;
-  final ValueChanged<Map<String, dynamic>> onOpenResource;
-  const _NeobrutalistMarkdownBody({
-    required this.content,
-    required this.onOpenResource,
-    this.resources = const [],
-  });
-
-  Map<String, dynamic>? _attachmentFor(String url) {
-    // Secuencia correcta: crear nota → UUID nota → subir → UUID REAL
-    // attachment → insertar `attachment:<uuid>` → PATCH → renderer resuelve
-    // UUID → endpoint autenticado content → Image.memory.
-    // Nunca usar ID temporal, timestamp, external_file_id, filename ni URL Drive.
-    final inlineId = attachmentIdFromUrl(url);
-    if (inlineId.isNotEmpty) {
-      for (final r in resources) {
-        if ((r['attachment_id'] as String?) == inlineId) return r;
-      }
-      return null;
-    }
-    final identity = resourceIdentity(url);
-    final matches = resources.where(
-      (r) =>
-          resourceIdentity(r['url'] as String? ?? '') == identity ||
-          urlMatchesAttachment(r, identity),
-    );
-    return matches.isEmpty ? null : matches.first;
-  }
-
-  static const TextStyle _paragraphStyle = TextStyle(
-    fontSize: 14,
-    height: 1.5,
-    color: AppColors.text,
-  );
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: _buildBlocks(content),
-    );
-  }
-
-  List<Widget> _buildBlocks(String content) {
-    final lines = content.split('\n');
-    final widgets = <Widget>[];
-    final paragraph = <String>[];
-
-    void flushParagraph() {
-      if (paragraph.isNotEmpty) {
-        widgets.add(_paragraph(paragraph.join(' ')));
-        paragraph.clear();
-      }
-    }
-
-    var i = 0;
-    while (i < lines.length) {
-      final raw = lines[i];
-      final line = raw.trim();
-
-      // Bloque de código delimitado por triple backtick.
-      if (line.startsWith('```')) {
-        flushParagraph();
-        final buf = <String>[];
-        i++;
-        while (i < lines.length && !lines[i].trimLeft().startsWith('```')) {
-          buf.add(lines[i]);
-          i++;
-        }
-        i++;
-        widgets.add(_codeBlock(buf.join('\n')));
-        continue;
-      }
-
-      // Bloque LaTeX $$ ... $$ (una o varias líneas). Sin cierre: aviso y
-      // el resto se sigue mostrando como Markdown normal.
-      if (line.startsWith(r'$$')) {
-        flushParagraph();
-        if (line.length > 4 && line.endsWith(r'$$')) {
-          widgets.add(
-            SafeMath(tex: line.substring(2, line.length - 2), display: true),
-          );
-          i++;
-          continue;
-        }
-        final start = i;
-        final buf = <String>[line.substring(2)];
-        var closed = false;
-        i++;
-        while (i < lines.length) {
-          final t = lines[i].trimRight();
-          if (t.endsWith(r'$$')) {
-            buf.add(t.substring(0, t.length - 2));
-            closed = true;
-            i++;
-            break;
-          }
-          buf.add(lines[i]);
-          i++;
-        }
-        if (closed) {
-          widgets.add(SafeMath(tex: buf.join('\n'), display: true));
-        } else {
-          i = start + 1;
-          widgets.add(
-            const LatexFallback(
-              tex: r'$$',
-              reason: r'Bloque $$ sin cerrar',
-              display: true,
-            ),
-          );
-        }
-        continue;
-      }
-
-      // Encabezados # / ## / ### / #### (H1-H6; H4+ se muestran como
-      // subtítulo técnico compacto sin las almohadillas).
-      final heading = RegExp(r'^(#{1,6})\s+(.+)$').firstMatch(line);
-      if (heading != null) {
-        flushParagraph();
-        widgets.add(_heading(heading.group(1)!.length, heading.group(2)!));
-        i++;
-        continue;
-      }
-
-      // Cita / blockquote '> '.
-      if (line.startsWith('> ')) {
-        flushParagraph();
-        widgets.add(_blockquote(line.substring(2)));
-        i++;
-        continue;
-      }
-
-      // Imagen standalone ![alt](url).
-      final standaloneImg = RegExp(r'^!\[(.*?)\]\((.*?)\)$').firstMatch(line);
-      if (standaloneImg != null) {
-        flushParagraph();
-        widgets.add(
-          _blockImage(standaloneImg.group(1) ?? '', standaloneImg.group(2)!),
-        );
-        i++;
-        continue;
-      }
-
-      // Documento standalone [label](url.pdf).
-      final standaloneDoc = RegExp(
-        r'^\[(.*?)\]\((.*?)\)$',
-        caseSensitive: false,
-      ).firstMatch(line);
-      if (standaloneDoc != null && resourcesFromMarkdown(line).isNotEmpty) {
-        flushParagraph();
-        widgets.add(
-          _blockDoc(standaloneDoc.group(1) ?? '', standaloneDoc.group(2)!),
-        );
-        i++;
-        continue;
-      }
-
-      // Item de lista '- ', '* ' o '1. '.
-      final listItem = RegExp(r'^([-*]|\d+\.)\s+(.+)$').firstMatch(line);
-      if (listItem != null) {
-        flushParagraph();
-        final isOrdered = RegExp(r'^\d+\.$').hasMatch(listItem.group(1)!);
-        widgets.add(_listItem(listItem.group(2)!, isOrdered));
-        i++;
-        continue;
-      }
-
-      if (line.isEmpty) {
-        flushParagraph();
-        i++;
-        continue;
-      }
-
-      paragraph.add(line);
-      i++;
-    }
-    flushParagraph();
-    return widgets;
-  }
-
-  Widget _paragraph(String text) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Text.rich(
-        TextSpan(style: _paragraphStyle, children: _parseInlineSpans(text)),
-      ),
-    );
-  }
-
-  Widget _heading(int level, String text) {
-    // H4-H6: subtítulo técnico compacto con barra de acento y tipografía
-    // monoespaciada neobrutalista (sin mostrar '####').
-    if (level >= 4) {
-      return Padding(
-        padding: const EdgeInsets.only(top: 8, bottom: 6),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 4,
-              height: 14,
-              margin: const EdgeInsets.only(top: 2, right: 8),
-              color: level == 4 ? AppColors.accentBlueDeep : AppColors.muted,
-            ),
-            Expanded(
-              child: Text.rich(
-                TextSpan(
-                  style: const TextStyle(
-                    fontSize: 12.5,
-                    height: 1.3,
-                    fontWeight: FontWeight.w900,
-                    fontFamily: 'monospace',
-                    letterSpacing: 0.3,
-                    color: AppColors.text,
-                  ),
-                  children: _parseInlineSpans(text),
-                ),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-    final fontSize = level == 1
-        ? 20.0
-        : level == 2
-        ? 17.0
-        : 15.0;
-    final weight = level <= 2 ? FontWeight.w900 : FontWeight.w800;
-    return Padding(
-      padding: const EdgeInsets.only(top: 6, bottom: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text.rich(
-            TextSpan(
-              style: TextStyle(
-                fontSize: fontSize,
-                fontWeight: weight,
-                color: AppColors.text,
-              ),
-              children: _parseInlineSpans(text),
-            ),
-          ),
-          if (level == 1) ...[
-            const SizedBox(height: 4),
-            Container(height: 3, width: 48, color: AppColors.border),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _listItem(String text, bool ordered) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 10, bottom: 5),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 9,
-            height: 9,
-            margin: const EdgeInsets.only(top: 6, right: 9),
-            decoration: BoxDecoration(
-              color: ordered ? AppColors.border : AppColors.text,
-              borderRadius: BorderRadius.circular(ordered ? 5 : 2),
-            ),
-          ),
-          Expanded(
-            child: Text.rich(
-              TextSpan(
-                style: _paragraphStyle,
-                children: _parseInlineSpans(text),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _blockquote(String text) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: const BoxDecoration(
-        color: Color(0xFFF5F0E8),
-        border: Border(
-          left: BorderSide(color: AppColors.border, width: 3),
-          top: BorderSide(color: AppColors.border, width: 1),
-          right: BorderSide(color: AppColors.border, width: 1),
-          bottom: BorderSide(color: AppColors.border, width: 1),
-        ),
-      ),
-      child: Text.rich(
-        TextSpan(
-          style: _paragraphStyle.copyWith(fontStyle: FontStyle.italic),
-          children: _parseInlineSpans(text),
-        ),
-      ),
-    );
-  }
-
-  Widget _blockImage(String alt, String url) {
-    final resolved = _attachmentFor(url);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Align(
-        alignment: Alignment.center,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(
-            minHeight: 250,
-            maxHeight: 520,
-            maxWidth: 850,
-          ),
-          child: MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: GestureDetector(
-              onTap: () => onOpenResource({
-                'type': 'image',
-                'name': alt.isEmpty ? url : alt,
-                'url': url,
-                'size': 'Adjunto',
-              }),
-              child: Container(
-                clipBehavior: Clip.hardEdge,
-                decoration: BoxDecoration(
-                  color: AppColors.surfaceLow,
-                  border: Border.all(color: AppColors.border, width: 2),
-                  borderRadius: BorderRadius.circular(AppDimens.radius),
-                  boxShadow: AppShadows.badge,
-                ),
-                child: Stack(
-                  children: [
-                    _buildResourceImage(
-                      url: url,
-                      resource: resolved,
-                      fit: BoxFit.contain,
-                      debugLabel: 'INLINE',
-                      fallback: () => Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        color: AppColors.surfaceLow,
-                        alignment: Alignment.center,
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.broken_image_rounded,
-                              size: 16,
-                              color: AppColors.muted,
-                            ),
-                            SizedBox(width: 6),
-                            Text(
-                              'IMAGEN NO DISPONIBLE',
-                              style: TextStyle(
-                                fontSize: 9,
-                                fontWeight: FontWeight.w900,
-                                color: AppColors.muted,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      loadingBuilder: (context, child, progress) {
-                        if (progress == null) return child;
-                        return Container(
-                          width: 200,
-                          height: 64,
-                          color: AppColors.surfaceLow,
-                          alignment: Alignment.center,
-                          child: const SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2.5,
-                              color: AppColors.border,
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                    Positioned(
-                      bottom: 6,
-                      right: 6,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 7,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: AppColors.accentYellow,
-                          border: Border.all(
-                            color: AppColors.border,
-                            width: 1.5,
-                          ),
-                          borderRadius: BorderRadius.circular(
-                            AppDimens.radiusChip,
-                          ),
-                          boxShadow: AppShadows.badge,
-                        ),
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.zoom_in_rounded,
-                              size: 13,
-                              color: AppColors.text,
-                            ),
-                            SizedBox(width: 4),
-                            Text(
-                              'AMPLIAR',
-                              style: TextStyle(
-                                fontSize: 9,
-                                fontWeight: FontWeight.w900,
-                                color: AppColors.text,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    if (alt.isNotEmpty)
-                      Positioned(
-                        top: 6,
-                        left: 6,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 7,
-                            vertical: 3,
-                          ),
-                          decoration: BoxDecoration(
-                            color: AppColors.surface,
-                            border: Border.all(
-                              color: AppColors.border,
-                              width: 1.5,
-                            ),
-                            borderRadius: BorderRadius.circular(
-                              AppDimens.radiusChip,
-                            ),
-                          ),
-                          child: Text(
-                            alt,
-                            style: const TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.w900,
-                              color: AppColors.text,
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _blockDoc(String label, String url) {
-    final resource = resourcesFromMarkdown('[$label]($url)').single;
-    final name = resource['name'] as String;
-    final isPdf = resource['type'] == 'pdf';
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: GestureDetector(
-          onTap: () => onOpenResource(resource),
-          child: Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: AppColors.surface,
-              border: Border.all(color: AppColors.border, width: 2),
-              borderRadius: BorderRadius.circular(AppDimens.radius),
-              boxShadow: AppShadows.badge,
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: AppColors.errorDeep,
-                    border: Border.all(color: AppColors.border, width: 1.5),
-                    borderRadius: BorderRadius.circular(AppDimens.radius),
-                  ),
-                  child: Icon(
-                    isPdf
-                        ? Icons.picture_as_pdf_rounded
-                        : Icons.description_rounded,
-                    size: 18,
-                    color: Colors.white,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w900,
-                          color: AppColors.text,
-                        ),
-                      ),
-                      const Text(
-                        'Documento adjunto · Toca para abrir',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.muted,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 5,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppColors.accentYellow,
-                    border: Border.all(color: AppColors.border, width: 1.5),
-                    borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-                    boxShadow: AppShadows.badge,
-                  ),
-                  child: const Text(
-                    'VER',
-                    style: TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.w900,
-                      color: AppColors.text,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _codeBlock(String code) {
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 8),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF4F4F0),
-        border: Border.all(color: AppColors.border, width: 2),
-        borderRadius: BorderRadius.circular(AppDimens.radius),
-        boxShadow: AppShadows.badge,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: const BoxDecoration(
-              color: AppColors.surfaceLow,
-              border: Border(
-                bottom: BorderSide(color: AppColors.border, width: 1.5),
-              ),
-            ),
-            child: Row(
-              children: [
-                const Icon(
-                  Icons.terminal_rounded,
-                  size: 14,
-                  color: AppColors.text,
-                ),
-                const SizedBox(width: 6),
-                const Text(
-                  'CÓDIGO',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.text,
-                    letterSpacing: 0.5,
-                  ),
-                ),
-                const Spacer(),
-                Builder(
-                  builder: (ctx) => InkWell(
-                    onTap: () {
-                      Clipboard.setData(ClipboardData(text: code));
-                      ScaffoldMessenger.of(ctx).showSnackBar(
-                        const SnackBar(
-                          backgroundColor: Colors.black,
-                          duration: Duration(seconds: 1),
-                          content: Text(
-                            'Código copiado al portapapeles',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.copy_rounded,
-                          size: 12,
-                          color: AppColors.text,
-                        ),
-                        SizedBox(width: 4),
-                        Text(
-                          'COPIAR',
-                          style: TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.w900,
-                            color: AppColors.text,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(10),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: SelectableText(
-                code,
-                style: const TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 12,
-                  height: 1.4,
-                  color: AppColors.text,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Divide una línea en spans con estilos inline: **negrita**, *cursiva*,
-  /// `código`, imágenes `![alt](ruta)` y chips de enlace `[label](archivo.pdf)`.
-  /// Inline: separa primero las fórmulas `$...$` (renderizadas con
-  /// [SafeMath]) y aplica el Markdown inline al resto del texto.
-  List<InlineSpan> _parseInlineSpans(String text) {
-    if (!text.contains(r'$')) return _parseInlineMarkdown(text);
-    final spans = <InlineSpan>[];
-    for (final part in splitInlineMath(text)) {
-      if (part.isMath) {
-        spans.add(
-          WidgetSpan(
-            alignment: PlaceholderAlignment.middle,
-            child: SafeMath(tex: part.value),
-          ),
-        );
-      } else {
-        spans.addAll(_parseInlineMarkdown(part.value));
-      }
-    }
-    return spans;
-  }
-
-  List<InlineSpan> _parseInlineMarkdown(String text) {
-    final spans = <InlineSpan>[];
-    final re = RegExp(
-      r'(\*\*.+?\*\*|\*[^*\n]+?\*|!\[[^\]]*\]\([^)\s]+\)|\[[^\]]+\]\([^)\s]+\)|`[^`\n]+`)',
-      caseSensitive: false,
-    );
-    var last = 0;
-    for (final m in re.allMatches(text)) {
-      if (m.start > last) {
-        spans.add(TextSpan(text: text.substring(last, m.start)));
-      }
-      final token = m.group(0)!;
-      if (token.startsWith('**')) {
-        spans.add(
-          TextSpan(
-            text: token.substring(2, token.length - 2),
-            style: const TextStyle(
-              fontWeight: FontWeight.w900,
-              color: AppColors.text,
-            ),
-          ),
-        );
-      } else if (token.startsWith('*')) {
-        spans.add(
-          TextSpan(
-            text: token.substring(1, token.length - 1),
-            style: const TextStyle(
-              fontStyle: FontStyle.italic,
-              color: AppColors.text,
-            ),
-          ),
-        );
-      } else if (token.startsWith('`')) {
-        spans.add(
-          TextSpan(
-            text: token.substring(1, token.length - 1),
-            style: const TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 12,
-              backgroundColor: Color(0xFFF4F4F0),
-              color: AppColors.text,
-            ),
-          ),
-        );
-      } else if (token.startsWith('![')) {
-        final img = RegExp(r'!\[([^\]]*)\]\(([^)\s]+)\)').firstMatch(token);
-        if (img != null) {
-          spans.add(
-            WidgetSpan(
-              alignment: PlaceholderAlignment.middle,
-              child: _inlineImage(img.group(1) ?? '', img.group(2)!),
-            ),
-          );
-        }
-      } else if (token.startsWith('[')) {
-        final link = RegExp(r'\[([^\]]+)\]\(([^)\s]+)\)').firstMatch(token);
-        if (link != null && resourcesFromMarkdown(token).isNotEmpty) {
-          spans.add(
-            WidgetSpan(
-              alignment: PlaceholderAlignment.middle,
-              child: _pdfChip(link.group(1)!, link.group(2)!),
-            ),
-          );
-        } else {
-          spans.add(TextSpan(text: token));
-        }
-      }
-      last = m.end;
-    }
-    if (last < text.length) {
-      spans.add(TextSpan(text: text.substring(last)));
-    }
-    return spans;
-  }
-
-  Widget _inlineImage(String alt, String url) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: () => onOpenResource({
-          'type': 'image',
-          'name': alt.isEmpty ? url : alt,
-          'url': url,
-          'size': 'Adjunto',
-        }),
-        child: Container(
-          width: 200,
-          height: 132,
-          margin: const EdgeInsets.symmetric(vertical: 4),
-          clipBehavior: Clip.hardEdge,
-          decoration: BoxDecoration(
-            color: AppColors.surfaceLow,
-            border: Border.all(
-              color: AppColors.border,
-              width: AppDimens.borderWidth,
-            ),
-            borderRadius: BorderRadius.circular(AppDimens.radius),
-            boxShadow: AppShadows.badge,
-          ),
-          child: _buildResourceImage(
-            url: url,
-            resource: _attachmentFor(url),
-            fit: BoxFit.contain,
-            debugLabel: 'INLINE',
-            fallback: () => const Center(
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.broken_image_rounded,
-                    size: 16,
-                    color: AppColors.muted,
-                  ),
-                  SizedBox(width: 4),
-                  Text(
-                    'IMAGEN NO DISPONIBLE',
-                    style: TextStyle(
-                      fontSize: 8,
-                      fontWeight: FontWeight.w900,
-                      color: AppColors.muted,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _pdfChip(String label, String url) {
-    final resource = resourcesFromMarkdown('[$label]($url)').single;
-    final name = resource['name'] as String;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: () => onOpenResource(resource),
-        child: Container(
-          margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-          decoration: BoxDecoration(
-            color: AppColors.accentYellow,
-            border: Border.all(color: AppColors.border, width: 1.5),
-            borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-            boxShadow: AppShadows.badge,
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                resource['type'] == 'pdf'
-                    ? Icons.picture_as_pdf_rounded
-                    : Icons.description_rounded,
-                size: 14,
-                color: AppColors.text,
-              ),
-              const SizedBox(width: 5),
-              Flexible(
-                child: Text(
-                  name,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.text,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 4),
-              const Icon(
-                Icons.open_in_new_rounded,
-                size: 12,
-                color: AppColors.text,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
+/// Visor de recursos para pruebas: permite inyectar el cliente HTTP del
+/// endpoint autenticado y capturar los bytes entregados al abridor/descarga.
+@visibleForTesting
+Widget debugBuildResourceViewer(
+  Map<String, dynamic> resource, {
+  http.Client? client,
+  Future<bool> Function(Uint8List, String, String)? openAttachment,
+  Future<String?> Function(Uint8List, String, String)? saveAttachment,
+}) => _ResourceViewerDialog(
+  resource: resource,
+  client: client,
+  openAttachment: openAttachment,
+  saveAttachment: saveAttachment,
+);

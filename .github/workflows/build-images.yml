@@ -62,6 +62,7 @@ jobs:
               BASE_URL=/api-auth
               NOTES_BASE_URL=/api-notes
               SOCIAL_BASE_URL=/api-social
+              AI_BASE_URL=https://ia-hlepio.dev.censei.cl
     steps:
       - uses: actions/checkout@v4
 

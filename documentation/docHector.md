@@ -270,3 +270,44 @@ single-flight, limpieza y purga SQLite real en memoria),
 `front/test/account_deletion_flow_test.dart` (flujo desde Mi Perfil y responsive),
 `back/auth/internal/handler/http/account_deletion_contract_test.go` y
 `scripts/test-account-deletion-e2e.py` (stack ti3-e2e, cuentas sintéticas).
+
+## Perfil público: migraciones y rollout (4_4_1 / 4_4_2)
+
+Rama `feat/perfil-publico-final`. Trae **dos migraciones nuevas, obligatorias
+antes de desplegar** los servicios de esta rama; sin ellas el código nuevo
+falla en tiempo de ejecución (las verificaciones de arranque solo cubren las
+tablas del borrado de cuenta, así que el servicio arrancaría «sano»).
+
+| Orden | Servicio | Migración | Cambios |
+|---|---|---|---|
+| 1 | Auth | `back/auth/db/migrations/005_profile_photo.sql` (de Development, no de esta rama) | `identity.profiles.photo_url` pasa a `text` |
+| 2 | Auth | `back/auth/db/migrations/006_public_profile_id.sql` | funciones `identity.generate_public_id()` y `identity.generate_unique_public_id()` (usan `gen_random_bytes` de `pgcrypto`); columna `identity.users.public_id text`; restricciones `users_public_id_key` (UNIQUE) y `users_public_id_format` (CHECK `^[0-9a-hj-km-np-tv-z]{12}$`); rellena `public_id` de los usuarios existentes; `DEFAULT identity.generate_unique_public_id()` y `NOT NULL` |
+| 3 | Notes | `back/notes/db/migrations/006_copy_integrity_and_attachment_provenance.sql` | preflight que aborta si un usuario ya tiene más de una copia del mismo apunte; índice único parcial `uq_notes_user_forked_from (user_id, forked_from_note_id)`; columna `notes.note_attachments.copied_from_attachment_id uuid`; índice único parcial `uq_note_attachments_copy_source (note_id, copied_from_attachment_id)` |
+
+Por qué son obligatorias:
+- Auth lee `identity.users.public_id` en el login (`GetByEmail`), el registro
+  (`RETURNING ... public_id`), `GET/PATCH /profile/me` y el perfil público:
+  sin la migración 006 de Auth **nadie puede iniciar sesión**.
+- Notes lee `copied_from_attachment_id` al crear, leer y listar adjuntos: sin
+  la 006 de Notes fallan la subida de adjuntos y `GET /notes/{id}` de apuntes
+  con adjuntos. La copia usa los dos índices únicos.
+
+Rollout recomendado:
+1. Respaldar la base.
+2. Comprobar `SELECT gen_random_bytes(1);` con el rol que aplicará las
+   migraciones (pgcrypto; en Supabase está en el esquema `extensions`, que
+   debe estar en el `search_path`).
+3. Preflight de Notes 006 (debe devolver 0 filas):
+   `SELECT user_id, forked_from_note_id, count(*) FROM notes.notes WHERE forked_from_note_id IS NOT NULL GROUP BY 1, 2 HAVING count(*) > 1;`
+4. Aplicar en orden: Auth 005 (si aún no está), Auth 006, Notes 006. Son
+   idempotentes y solo añaden (el código anterior sigue funcionando: la
+   columna nueva tiene DEFAULT y las columnas nuevas no las lee).
+5. Desplegar Auth (sirve `ResolvePublicProfile` por gRPC), luego Notes (con
+   `IDENTITY_GRPC_ADDR` e `INTERNAL_API_KEY` configurados) y luego el front.
+   Notes antes que Auth no rompe nada existente, pero
+   `GET /public-users/:public_id/notes` respondería 503 hasta actualizar Auth.
+
+Detalle: tras Notes 006, el Notes anterior (si sigue desplegado) respondería
+500 en vez de 409 si alguien copia dos veces el mismo apunte; se resuelve al
+desplegar el Notes nuevo. No hay cambios de esquema fuera de estas
+migraciones: `docker/postgres/init.sql` refleja exactamente lo mismo.

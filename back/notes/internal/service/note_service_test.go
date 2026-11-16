@@ -116,8 +116,14 @@ func (f *failingNoteStore) Create(ctx context.Context, noteID string, userID str
 func (f *failingNoteStore) GetByID(ctx context.Context, id string) (*model.Note, error) {
 	return nil, nil
 }
+func (f *failingNoteStore) GetByUserAndForkedFrom(ctx context.Context, userID, forkedFromNoteID string) (*model.Note, error) {
+	return nil, nil
+}
 func (f *failingNoteStore) ListByUser(ctx context.Context, userID, cursor string, limit int) ([]*model.Note, string, error) {
 	return nil, "", nil
+}
+func (f *failingNoteStore) ListPublicByUser(ctx context.Context, userID, cursor string, limit int) ([]*model.PublicNote, string, error) {
+	return nil, "", f.err
 }
 func (f *failingNoteStore) Update(ctx context.Context, id string, title *string, visibility *string, expectedVersion int64) (*model.Note, error) {
 	return nil, nil

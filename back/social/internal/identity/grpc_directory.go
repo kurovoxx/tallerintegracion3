@@ -93,9 +93,10 @@ func (d *GRPCUserDirectory) lookup(ctx context.Context, userIDs []string) (map[s
 	for _, u := range resp.GetUsers() {
 		if strings.TrimSpace(u.GetUserId()) != "" {
 			out[u.GetUserId()] = service.UserPublic{
-				UserID:      u.GetUserId(),
-				Email:       u.GetEmail(),
-				DisplayName: u.DisplayName,
+				UserID:        u.GetUserId(),
+				Email:         u.GetEmail(),
+				DisplayName:   u.DisplayName,
+				PhotoThumbURL: u.PhotoThumbUrl,
 			}
 		}
 	}

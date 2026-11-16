@@ -80,6 +80,9 @@ func setupRouter() (*gin.Engine, *service.NoteService, *drive.MockClient, *servi
 		prot.DELETE("/notes/shared/:sharedNoteId", h.Unshare)
 		prot.GET("/groups/:id/notes", h.ListGroupNotes)
 	}
+	noStore := r.Group("")
+	noStore.Use(middleware.PrivateNoStore(), authMw.RequireAuth())
+	noStore.GET("/public-users/:public_id/notes", h.ListPublicByPublicID)
 	return r, svc, driveMock, social
 }
 

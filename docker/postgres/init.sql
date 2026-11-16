@@ -19,10 +19,64 @@ CREATE SCHEMA IF NOT EXISTS ai;
 -- IDENTITY SERVICE
 -- =====================================================
 
+-- H-05: public_id de 12 caracteres Crockford Base32 (60 bits). El DEFAULT usa
+-- el generador con reintento; la UNIQUE y el CHECK son la garantía final.
+CREATE OR REPLACE FUNCTION identity.generate_public_id()
+RETURNS text
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+DECLARE
+    alphabet CONSTANT text := '0123456789abcdefghjkmnpqrstvwxyz';
+    raw bytea := gen_random_bytes(8);
+    value bigint := 0;
+    result text := '';
+BEGIN
+    FOR i IN 0..6 LOOP
+        value := (value << 8) | get_byte(raw, i);
+    END LOOP;
+    value := (value << 4) | (get_byte(raw, 7) >> 4);
+
+    FOR i IN 0..11 LOOP
+        result := result || substr(
+            alphabet,
+            (((value >> (55 - i * 5)) & 31) + 1)::int,
+            1
+        );
+    END LOOP;
+    RETURN result;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION identity.generate_unique_public_id()
+RETURNS text
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+DECLARE
+    candidate text;
+BEGIN
+    FOR attempt IN 1..10 LOOP
+        candidate := identity.generate_public_id();
+        IF NOT EXISTS (
+            SELECT 1 FROM identity.users WHERE public_id = candidate
+        ) THEN
+            RETURN candidate;
+        END IF;
+    END LOOP;
+    RAISE EXCEPTION 'no se pudo generar un public_id único tras 10 intentos';
+END;
+$$;
+
 CREATE TABLE identity.users (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     email varchar(255) NOT NULL UNIQUE,
     password_hash varchar(255) NOT NULL,
+    public_id text NOT NULL DEFAULT identity.generate_unique_public_id()
+        CONSTRAINT users_public_id_key UNIQUE
+        CONSTRAINT users_public_id_format
+            CHECK (public_id ~ '^[0-9a-hj-km-np-tv-z]{12}$'),
+    email_verified_at timestamptz, -- NULL = correo sin confirmar (migración auth 007)
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -61,10 +115,37 @@ CREATE TABLE identity.password_resets (
     attempts integer NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 5)
 );
 
+-- Confirmación de correo: un token pendiente por usuario, solo su SHA-256
+-- (ver back/auth/db/migrations/007_email_verification.sql).
+CREATE TABLE identity.email_verifications (
+    user_id uuid PRIMARY KEY REFERENCES identity.users(id) ON DELETE CASCADE,
+    token_hash bytea NOT NULL
+        CONSTRAINT email_verifications_token_hash_key UNIQUE
+        CONSTRAINT email_verifications_token_hash_len CHECK (octet_length(token_hash) = 32),
+    expires_at timestamptz NOT NULL,
+    requested_at timestamptz NOT NULL DEFAULT now(),
+    window_started_at timestamptz NOT NULL DEFAULT now(),
+    sends_in_window integer NOT NULL DEFAULT 1 CHECK (sends_in_window >= 0),
+    consumed_at timestamptz
+);
+
+-- Control del backfill único (back/auth/db/migrations/008_email_verification_backfill.sql).
+-- Una base nueva no tiene cuentas previas: se registra el corte con 0 cuentas
+-- para que aplicar 008 después nunca confirme cuentas creadas con esta versión.
+CREATE TABLE identity.email_verification_backfill (
+    id boolean PRIMARY KEY DEFAULT true
+        CONSTRAINT email_verification_backfill_single_row CHECK (id),
+    cutoff timestamptz NOT NULL,
+    accounts_marked integer NOT NULL CHECK (accounts_marked >= 0),
+    applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+INSERT INTO identity.email_verification_backfill (cutoff, accounts_marked) VALUES (now(), 0);
+
 CREATE TABLE identity.profiles (
     user_id uuid PRIMARY KEY REFERENCES identity.users(id) ON DELETE CASCADE,
     display_name varchar(100) NOT NULL,
-    photo_url varchar(500),
+    photo_url text, -- URL remota o data URL de imagen recortada por el cliente
+    photo_thumb_url text, -- Miniatura 96x96 generada por el cliente para listados
     phone varchar(30),
     institution varchar(200),
     description text,
@@ -224,6 +305,12 @@ CREATE TABLE notes.notes (
 CREATE INDEX idx_notes_user_id ON notes.notes(user_id);
 CREATE INDEX idx_notes_subject_id ON notes.notes(subject_id);
 CREATE INDEX idx_notes_visibility ON notes.notes(visibility);
+-- Un usuario solo puede tener un clon vivo por apunte origen (ver migración
+-- 006). El índice parcial excluye las notas creadas desde cero y los clones
+-- cuyo original fue borrado (forked_from_note_id pasa a NULL).
+CREATE UNIQUE INDEX uq_notes_user_forked_from
+    ON notes.notes(user_id, forked_from_note_id)
+    WHERE forked_from_note_id IS NOT NULL;
 
 -- Archivos adjuntos (imágenes, PDF, etc), también alojados en el Drive del
 -- autor. is_inline distingue si ya está referenciado dentro del Markdown del
@@ -237,10 +324,18 @@ CREATE TABLE notes.note_attachments (
     file_name varchar(300),
     file_size_bytes int,
     is_inline boolean NOT NULL DEFAULT false,
+    -- Adjunto del apunte original del que se copió este archivo (NULL en
+    -- adjuntos subidos directamente por el autor). Ver migración 006.
+    copied_from_attachment_id uuid,
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_note_attachments_note_id ON notes.note_attachments(note_id);
+-- Idempotencia del copiado de adjuntos: un reintento reutiliza la fila ya
+-- creada para el mismo adjunto origen en el mismo clon.
+CREATE UNIQUE INDEX uq_note_attachments_copy_source
+    ON notes.note_attachments(note_id, copied_from_attachment_id)
+    WHERE copied_from_attachment_id IS NOT NULL;
 
 -- Referencia (no copia): "guardar" un apunte de otro usuario para verlo después.
 -- note_id es una referencia LÓGICA (sin FK): si el autor borra el original, el
@@ -517,6 +612,7 @@ CREATE TABLE social.meetings (
     group_id uuid NOT NULL REFERENCES social.groups(id) ON DELETE CASCADE,
     title varchar(300) NOT NULL,
     description text,
+    link varchar(1000),
     scheduled_at timestamptz NOT NULL,
     created_by_user_id uuid NOT NULL,
     notify_discord boolean NOT NULL DEFAULT true,

@@ -18,6 +18,11 @@ enum LiveEditorPane { edit, preview }
 /// La vista previa se actualiza con un debounce ligero ([debounce]) y solo
 /// si el texto cambió, para que escribir siga fluido aunque el apunte tenga
 /// muchas fórmulas.
+///
+/// Con [expand] el editor ocupa todo el alto que le dé su padre (debe ser
+/// acotado, p. ej. dentro de un `Expanded`): editor y vista previa estiran su
+/// altura y cada uno tiene su propio scroll. En ese modo [editor] debe ser un
+/// `TextField` con `expands: true`.
 class MarkdownLiveEditor extends StatefulWidget {
   const MarkdownLiveEditor({
     super.key,
@@ -27,6 +32,7 @@ class MarkdownLiveEditor extends StatefulWidget {
     this.debounce = const Duration(milliseconds: 250),
     this.splitMinWidth = 720,
     this.previewMaxHeight = 420,
+    this.expand = false,
   });
 
   /// Controlador del contenido (el mismo que usa [editor]).
@@ -41,6 +47,7 @@ class MarkdownLiveEditor extends StatefulWidget {
   final Duration debounce;
   final double splitMinWidth;
   final double previewMaxHeight;
+  final bool expand;
 
   @override
   State<MarkdownLiveEditor> createState() => _MarkdownLiveEditorState();
@@ -100,6 +107,7 @@ class _MarkdownLiveEditorState extends State<MarkdownLiveEditor> {
   Widget build(BuildContext context) {
     final preview = _PreviewPanel(
       maxHeight: widget.previewMaxHeight,
+      fill: widget.expand,
       isEmpty: _previewText.trim().isEmpty,
       child: RepaintBoundary(child: widget.previewBuilder(_previewText)),
     );
@@ -108,7 +116,9 @@ class _MarkdownLiveEditorState extends State<MarkdownLiveEditor> {
         if (constraints.maxWidth >= widget.splitMinWidth) {
           return Row(
             key: const Key('live-editor-split'),
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: widget.expand
+                ? CrossAxisAlignment.stretch
+                : CrossAxisAlignment.start,
             children: <Widget>[
               Expanded(child: widget.editor),
               const SizedBox(width: AppDimens.spaceMd),
@@ -119,7 +129,7 @@ class _MarkdownLiveEditorState extends State<MarkdownLiveEditor> {
         return Column(
           key: const Key('live-editor-tabs'),
           crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
+          mainAxisSize: widget.expand ? MainAxisSize.max : MainAxisSize.min,
           children: <Widget>[
             Wrap(
               spacing: AppDimens.spaceSm,
@@ -142,11 +152,20 @@ class _MarkdownLiveEditorState extends State<MarkdownLiveEditor> {
               ],
             ),
             const SizedBox(height: AppDimens.spaceSm),
-            IndexedStack(
-              index: _pane == LiveEditorPane.edit ? 0 : 1,
-              sizing: StackFit.passthrough,
-              children: <Widget>[widget.editor, preview],
-            ),
+            if (widget.expand)
+              Expanded(
+                child: IndexedStack(
+                  index: _pane == LiveEditorPane.edit ? 0 : 1,
+                  sizing: StackFit.expand,
+                  children: <Widget>[widget.editor, preview],
+                ),
+              )
+            else
+              IndexedStack(
+                index: _pane == LiveEditorPane.edit ? 0 : 1,
+                sizing: StackFit.passthrough,
+                children: <Widget>[widget.editor, preview],
+              ),
           ],
         );
       },
@@ -190,10 +209,14 @@ class _PreviewPanel extends StatelessWidget {
     required this.child,
     required this.maxHeight,
     required this.isEmpty,
+    this.fill = false,
   });
 
   final Widget child;
   final double maxHeight;
+
+  /// true = ocupa todo el alto del padre (scroll interno sin tope fijo).
+  final bool fill;
   final bool isEmpty;
 
   @override
@@ -211,7 +234,7 @@ class _PreviewPanel extends StatelessWidget {
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
+        mainAxisSize: fill ? MainAxisSize.max : MainAxisSize.min,
         children: <Widget>[
           Container(
             padding: const EdgeInsets.symmetric(
@@ -247,24 +270,31 @@ class _PreviewPanel extends StatelessWidget {
               ],
             ),
           ),
-          ConstrainedBox(
-            constraints: BoxConstraints(maxHeight: maxHeight),
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(AppDimens.spaceMd),
-              child: isEmpty
-                  ? const Text(
-                      r'Escribe Markdown o LaTeX ($x^2$, $$...$$) y verás el resultado aquí.',
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.muted,
-                      ),
-                    )
-                  : child,
+          if (fill)
+            Expanded(child: _scrollBody())
+          else
+            ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: maxHeight),
+              child: _scrollBody(),
             ),
-          ),
         ],
       ),
+    );
+  }
+
+  Widget _scrollBody() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(AppDimens.spaceMd),
+      child: isEmpty
+          ? const Text(
+              r'Escribe Markdown o LaTeX ($x^2$, $$...$$) y verás el resultado aquí.',
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w700,
+                color: AppColors.muted,
+              ),
+            )
+          : child,
     );
   }
 }

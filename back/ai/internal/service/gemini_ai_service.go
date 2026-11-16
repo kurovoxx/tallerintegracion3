@@ -56,6 +56,16 @@ type geminiError struct {
 	Status  string `json:"status"`
 }
 
+// sanitizeGeminiError extrae solo el mensaje de error de Gemini sin exponer
+// el cuerpo crudo (que puede filtrar la API key en URLs como ?key=...).
+func sanitizeGeminiError(statusCode int, body []byte) string {
+	var geminiResp geminiResponse
+	if err := json.Unmarshal(body, &geminiResp); err == nil && geminiResp.Error != nil {
+		return fmt.Sprintf("Gemini respondió %d: %s", statusCode, geminiResp.Error.Message)
+	}
+	return fmt.Sprintf("Gemini respondió %d: error del proveedor", statusCode)
+}
+
 // rateTracker almacena los timestamps de las requests por identificador.
 type rateTracker struct {
 	mu   sync.Mutex
@@ -91,6 +101,28 @@ func (rt *rateTracker) Allow(key string, limit int) bool {
 	valid = append(valid, now)
 	rt.store[key] = valid
 	return true
+}
+
+// Remaining devuelve cuántas conversiones le quedan al identificador en la hora actual.
+func (rt *rateTracker) Remaining(key string, limit int) int {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-1 * time.Hour)
+
+	var count int
+	for _, t := range rt.store[key] {
+		if t.After(cutoff) {
+			count++
+		}
+	}
+
+	remaining := limit - count
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
 }
 
 // GeminiAIService implementa AIService usando la API REST de Gemini.
@@ -168,12 +200,12 @@ func (s *GeminiAIService) Generate(req model.GenerateRequest) (model.GenerateRes
 		}
 
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
-			lastErr = fmt.Errorf("Gemini respondió %d: %s", resp.StatusCode, string(respBody))
+			lastErr = fmt.Errorf("%s", sanitizeGeminiError(resp.StatusCode, respBody))
 			continue // reintentar
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			return model.GenerateResponse{}, fmt.Errorf("Gemini respondió %d: %s", resp.StatusCode, string(respBody))
+			return model.GenerateResponse{}, fmt.Errorf("%s", sanitizeGeminiError(resp.StatusCode, respBody))
 		}
 
 		var geminiResp geminiResponse
@@ -282,12 +314,12 @@ func (s *GeminiAIService) ConvertPDFToMarkdown(pdfData []byte, filename string) 
 		}
 
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
-			lastErr = fmt.Errorf("Gemini respondió %d: %s", resp.StatusCode, string(respBody))
+			lastErr = fmt.Errorf("%s", sanitizeGeminiError(resp.StatusCode, respBody))
 			continue // reintentar
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			return "", fmt.Errorf("Gemini respondió %d: %s", resp.StatusCode, string(respBody))
+			return "", fmt.Errorf("%s", sanitizeGeminiError(resp.StatusCode, respBody))
 		}
 
 		var geminiResp geminiResponse

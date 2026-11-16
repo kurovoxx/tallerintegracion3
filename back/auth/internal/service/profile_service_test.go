@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/model"
@@ -31,6 +32,28 @@ func (m *mockProfileRepo) GetByUserID(ctx context.Context, userID string) (*mode
 	return nil, nil
 }
 
+func (m *mockProfileRepo) GetPublicByPublicID(ctx context.Context, publicID string) (*model.PublicProfile, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	if publicID == "" {
+		return nil, nil
+	}
+	for _, p := range m.store {
+		if p.PublicID != publicID {
+			continue
+		}
+		return &model.PublicProfile{
+			UserID:      p.UserID,
+			PublicID:    p.PublicID,
+			DisplayName: p.DisplayName,
+			Institution: p.Institution,
+			Visibility:  p.Visibility,
+		}, nil
+	}
+	return nil, nil
+}
+
 func (m *mockProfileRepo) Update(ctx context.Context, userID string, req repository.ProfileUpdateRequest) (*model.Profile, error) {
 	if m.err != nil {
 		return nil, m.err
@@ -49,6 +72,14 @@ func (m *mockProfileRepo) Update(ctx context.Context, userID string, req reposit
 		} else {
 			v := *req.PhotoURL
 			p.PhotoURL = &v
+		}
+	}
+	if req.PhotoThumbURL != nil {
+		if *req.PhotoThumbURL == "" {
+			p.PhotoThumbURL = nil
+		} else {
+			v := *req.PhotoThumbURL
+			p.PhotoThumbURL = &v
 		}
 	}
 	if req.Phone != nil {
@@ -129,6 +160,16 @@ func TestProfileService_GetProfile_SinUserID_401(t *testing.T) {
 	se, ok := err.(*ServiceError)
 	if !ok || se.Code != "unauthorized" {
 		t.Fatalf("esperado unauthorized, got %v", err)
+	}
+}
+
+// assertProfileNotFound exige el mismo 404 genérico para perfiles privados de
+// terceros e inexistentes, de modo que no se filtre su existencia.
+func assertProfileNotFound(t *testing.T, err error) {
+	t.Helper()
+	se, ok := err.(*ServiceError)
+	if !ok || se.Code != "profile_not_found" {
+		t.Fatalf("esperado ServiceError profile_not_found, got %v", err)
 	}
 }
 
@@ -268,6 +309,111 @@ func TestProfileService_UpdateProfile_PhotoURLLargo_400(t *testing.T) {
 	}
 	if *repo.store[uid].PhotoURL != "https://old.jpg" {
 		t.Fatal("photo_url no debe modificarse en PATCH inválido")
+	}
+}
+
+func TestProfileService_UpdateProfile_DataURLFotoValida(t *testing.T) {
+	repo := newMockRepo()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = &model.Profile{UserID: uid, DisplayName: "A", Visibility: "public"}
+	svc := NewProfileService(repo)
+	photo := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
+	updated, err := svc.UpdateProfile(context.Background(), uid, repository.ProfileUpdateRequest{PhotoURL: &photo})
+	if err != nil {
+		t.Fatalf("data URL de imagen no debe fallar: %v", err)
+	}
+	if updated.PhotoURL == nil || *updated.PhotoURL != photo {
+		t.Fatalf("se esperaba foto %q, got %+v", photo, updated.PhotoURL)
+	}
+}
+
+func TestProfileService_UpdateProfile_ThumbValida(t *testing.T) {
+	repo := newMockRepo()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = &model.Profile{UserID: uid, DisplayName: "A", Visibility: "public"}
+	svc := NewProfileService(repo)
+	photo := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
+	thumb := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAC"
+	updated, err := svc.UpdateProfile(context.Background(), uid, repository.ProfileUpdateRequest{
+		PhotoURL:      &photo,
+		PhotoThumbURL: &thumb,
+	})
+	if err != nil {
+		t.Fatalf("miniatura válida no debe fallar: %v", err)
+	}
+	if updated.PhotoThumbURL == nil || *updated.PhotoThumbURL != thumb {
+		t.Fatalf("se esperaba miniatura %q, got %+v", thumb, updated.PhotoThumbURL)
+	}
+}
+
+func TestProfileService_UpdateProfile_ThumbDemasiadoLarga_400(t *testing.T) {
+	repo := newMockRepo()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = &model.Profile{UserID: uid, DisplayName: "A", Visibility: "public", PhotoThumbURL: strPtr("https://old-thumb.jpg")}
+	svc := NewProfileService(repo)
+	largo := "data:image/png;base64," + strings.Repeat("A", maxProfilePhotoThumbDataURLLen)
+	_, err := svc.UpdateProfile(context.Background(), uid, repository.ProfileUpdateRequest{PhotoThumbURL: &largo})
+	if err == nil {
+		t.Fatal("esperado invalid_photo_thumb_url por data URL demasiado larga")
+	}
+	se, ok := err.(*ServiceError)
+	if !ok || se.Code != "invalid_photo_thumb_url" {
+		t.Fatalf("esperado invalid_photo_thumb_url, got %v", err)
+	}
+	if *repo.store[uid].PhotoThumbURL != "https://old-thumb.jpg" {
+		t.Fatal("photo_thumb_url no debe modificarse en PATCH inválido")
+	}
+}
+
+func TestProfileService_UpdateProfile_FotoSinThumbLimpiaMiniatura(t *testing.T) {
+	repo := newMockRepo()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = &model.Profile{
+		UserID:        uid,
+		DisplayName:   "A",
+		Visibility:    "public",
+		PhotoURL:      strPtr("https://old.jpg"),
+		PhotoThumbURL: strPtr("https://old-thumb.jpg"),
+	}
+	svc := NewProfileService(repo)
+	photo := "https://new.jpg"
+	updated, err := svc.UpdateProfile(context.Background(), uid, repository.ProfileUpdateRequest{PhotoURL: &photo})
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+	if updated.PhotoThumbURL != nil {
+		t.Fatalf("miniatura vieja debe limpiarse, got %v", *updated.PhotoThumbURL)
+	}
+}
+
+func TestProfileService_UpdateProfile_DataURLFotoDemasiadoLarga_400(t *testing.T) {
+	repo := newMockRepo()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = &model.Profile{UserID: uid, DisplayName: "A", Visibility: "public", PhotoURL: strPtr("https://old.jpg")}
+	svc := NewProfileService(repo)
+	largo := "data:image/png;base64," + strings.Repeat("A", maxProfilePhotoDataURLLen)
+	_, err := svc.UpdateProfile(context.Background(), uid, repository.ProfileUpdateRequest{PhotoURL: &largo})
+	if err == nil {
+		t.Fatal("esperado invalid_photo_url por data URL demasiado larga")
+	}
+	se, ok := err.(*ServiceError)
+	if !ok || se.Code != "invalid_photo_url" {
+		t.Fatalf("esperado invalid_photo_url, got %v", err)
+	}
+	if *repo.store[uid].PhotoURL != "https://old.jpg" {
+		t.Fatal("photo_url no debe modificarse en PATCH inválido")
+	}
+}
+
+func TestProfileService_UpdateProfile_DataURLSinBase64_400(t *testing.T) {
+	repo := newMockRepo()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = &model.Profile{UserID: uid, DisplayName: "A", Visibility: "public"}
+	svc := NewProfileService(repo)
+	photo := "data:image/png,no-es-base64"
+	_, err := svc.UpdateProfile(context.Background(), uid, repository.ProfileUpdateRequest{PhotoURL: &photo})
+	if err == nil {
+		t.Fatal("esperado invalid_photo_url por data URL sin base64")
 	}
 }
 
@@ -429,5 +575,40 @@ func TestProfileService_UpdateProfile_SinAuth_401(t *testing.T) {
 	se, ok := err.(*ServiceError)
 	if !ok || se.Code != "unauthorized" {
 		t.Fatalf("esperado unauthorized, got %v", err)
+	}
+}
+
+// --- H-05: perfil público por public_id ---
+
+func TestProfileService_GetPublicProfileByPublicID_NormalizaYResuelve(t *testing.T) {
+	repo := newMockRepo()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = &model.Profile{
+		UserID:      uid,
+		PublicID:    "a8kp92mqwx7r",
+		DisplayName: "Agustín",
+		Visibility:  model.VisibilityPublic,
+	}
+	svc := NewProfileService(repo)
+	p, err := svc.GetPublicProfileByPublicID(context.Background(), "550e8400-e29b-41d4-a716-446655440002", "  A8KP92MQWX7R  ")
+	if err != nil {
+		t.Fatalf("esperado sin error, got %v", err)
+	}
+	if p.PublicID != "a8kp92mqwx7r" || p.UserID != uid {
+		t.Fatalf("perfil resuelto incorrecto: %+v", p)
+	}
+}
+
+func TestProfileService_GetPublicProfileByPublicID_PrivadoDueno_200(t *testing.T) {
+	repo := newMockRepo()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = &model.Profile{UserID: uid, PublicID: "a8kp92mqwx7r", DisplayName: "Dueño", Visibility: model.VisibilityPrivate}
+	svc := NewProfileService(repo)
+	p, err := svc.GetPublicProfileByPublicID(context.Background(), uid, "a8kp92mqwx7r")
+	if err != nil {
+		t.Fatalf("el dueño debe ver su perfil privado: %v", err)
+	}
+	if p.PublicID != "a8kp92mqwx7r" {
+		t.Fatalf("public_id = %q", p.PublicID)
 	}
 }

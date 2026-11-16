@@ -563,6 +563,7 @@ class NeobrutalistDialog extends StatelessWidget {
     this.closeOnConfirm = true,
     this.maxWidth = 480,
     this.actions,
+    this.expandContent = false,
   });
 
   final String title;
@@ -583,6 +584,11 @@ class NeobrutalistDialog extends StatelessWidget {
   /// mientras procesa una acción irreversible.
   final List<Widget>? actions;
 
+  /// true = el marco ocupa todo el alto disponible y [content] recibe ese
+  /// espacio acotado (sin scroll envolvente), para que pueda usar
+  /// `Expanded`/`Flexible` y gestionar su propio scroll interno.
+  final bool expandContent;
+
   @override
   Widget build(BuildContext context) {
     return ConstrainedBox(
@@ -598,7 +604,7 @@ class NeobrutalistDialog extends StatelessWidget {
           boxShadow: AppShadows.dialog,
         ),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          mainAxisSize: expandContent ? MainAxisSize.max : MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
             Padding(
@@ -618,12 +624,20 @@ class NeobrutalistDialog extends StatelessWidget {
               thickness: AppDimens.borderWidth,
               height: 1,
             ),
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(20),
-                child: content,
+            if (expandContent)
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: content,
+                ),
+              )
+            else
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(20),
+                  child: content,
+                ),
               ),
-            ),
             if (actions != null && actions!.isNotEmpty) ...<Widget>[
               const Divider(
                 color: AppColors.border,
@@ -690,6 +704,7 @@ Future<T?> showNeobrutalistDialog<T>({
   required BuildContext context,
   required Widget dialog,
   bool barrierDismissible = true,
+  EdgeInsets insetPadding = const EdgeInsets.all(AppDimens.spaceXl),
 }) {
   return showDialog<T>(
     context: context,
@@ -698,7 +713,7 @@ Future<T?> showNeobrutalistDialog<T>({
     builder: (_) => Dialog(
       backgroundColor: Colors.transparent,
       elevation: 0,
-      insetPadding: const EdgeInsets.all(AppDimens.spaceXl),
+      insetPadding: insetPadding,
       child: dialog,
     ),
   );

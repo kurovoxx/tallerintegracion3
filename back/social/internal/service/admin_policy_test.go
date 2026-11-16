@@ -23,13 +23,13 @@ func TestMeetingCreate_SoloAdmins(t *testing.T) {
 	ctx := context.Background()
 	when := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
 
-	if _, err := svc.CreateMeeting(ctx, gid, member, "Daily", nil, when, nil, nil); err != ErrForbidden {
+	if _, err := svc.CreateMeeting(ctx, gid, member, "Daily", nil, nil, when, nil, nil); err != ErrForbidden {
 		t.Fatalf("miembro común no puede agendar: got %v", err)
 	}
-	if _, err := svc.CreateMeeting(ctx, gid, stranger, "Daily", nil, when, nil, nil); err != ErrForbidden {
+	if _, err := svc.CreateMeeting(ctx, gid, stranger, "Daily", nil, nil, when, nil, nil); err != ErrForbidden {
 		t.Fatalf("extraño no puede agendar: got %v", err)
 	}
-	if _, err := svc.CreateMeeting(ctx, gid, admin, "Daily", nil, when, nil, nil); err != nil {
+	if _, err := svc.CreateMeeting(ctx, gid, admin, "Daily", nil, nil, when, nil, nil); err != nil {
 		t.Fatalf("admin sí puede agendar: %v", err)
 	}
 	select {

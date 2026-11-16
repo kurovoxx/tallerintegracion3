@@ -9,7 +9,7 @@
 
 ## Res
 
-- OK: users repetidos, vacíos cuando corresponde; cada User incluye user_id, email y display_name opcional. Usuarios inexistentes se omiten; no hay orden garantizado.
+- OK: users repetidos, vacíos cuando corresponde; cada User incluye user_id, email, display_name opcional y photo_thumb_url opcional. Usuarios inexistentes se omiten; no hay orden garantizado. La foto completa nunca se devuelve.
 - `INVALID_ARGUMENT` por UUID inválido; `INTERNAL` por error de lectura.
 - No devuelve secretos ni hashes.
 
@@ -24,7 +24,7 @@
 1. `main()` instala los interceptores y registra `IdentityService` (`back/auth/cmd/server/main.go:248-252`); `NewInternalAuth` comprueba `x-internal-key` (`back/auth/internal/interceptor/auth.go:33-47`).
 2. `IdentityServer.LookupUsers` elimina IDs vacíos, valida UUIDs y aplica el límite configurado (`back/auth/internal/handler/grpc/identity_server.go:76-99`).
 3. `UsersService.Lookup` normaliza, limita y consulta los datos públicos (`back/auth/internal/service/users_service.go:30-53`); `UserRepository.GetPublicByIDs` realiza la consulta conjunta de usuarios y perfiles (`back/auth/internal/repository/user_repository.go:188-219`).
-4. `IdentityServer.LookupUsers` arma `LookupUsersResponse` (`back/auth/internal/handler/grpc/identity_server.go:76-99`). `GRPCUserDirectory.LookupUsers` en Social asocia por ID y, si Identity falla, `GroupService.enrichMembers` conserva la lista base (`back/social/internal/identity/grpc_directory.go:28-45`; `back/social/internal/service/group_service.go:468-484`).
+4. `IdentityServer.LookupUsers` arma `LookupUsersResponse` con `photo_thumb_url` (`back/auth/internal/handler/grpc/identity_server.go`). `GRPCUserDirectory.LookupUsers` en Social asocia por ID y, si Identity falla, `GroupService.enrichMembers` conserva la lista base (`back/social/internal/identity/grpc_directory.go:28-45`; `back/social/internal/service/group_service.go:468-484`).
 
 ## Tests
 

@@ -24,6 +24,7 @@ Renueva un Access Token expirado utilizando un Refresh Token activo e implementa
 - **Errores Posibles:**
   - `400 Bad Request`: `bad_request` (cuerpo malformado o sin `refresh_token`).
   - `401 Unauthorized`: `invalid_token` (token expirado, revocado, no encontrado o reutilizado fraudulentamente).
+  - `401 Unauthorized`: `email_not_verified` (solo con `EMAIL_VERIFICATION_REQUIRED=true`): el refresh es válido, pero la cuenta no confirmó su correo, típicamente una sesión iniciada antes de activar el gate. Es 401 y no 403 porque el Flutter actual solo cierra la sesión ante un 401; cualquier otro estado lo trata como fallo transitorio. El refresh **no se revoca**: tras confirmar el correo vuelve a servir.
   - `423 Locked`: `account_deletion_in_progress` (la cuenta está en proceso de borrado).
 
 ## 3. Invocación (Front / Otros Servicios)
@@ -40,6 +41,7 @@ Renueva un Access Token expirado utilizando un Refresh Token activo e implementa
    - Consulta `identity.refresh_tokens`. Si ya fue revocado, activa alarma de robo de token y revoca todas las sesiones activas de ese usuario.
    - Comprueba que `expires_at > now()`.
    - Verifica que la cuenta no esté bloqueada por borrado (`AccountAccessGate`).
+   - **Gate de confirmación** (solo con `EMAIL_VERIFICATION_REQUIRED=true`): después de validar el refresh (inexistente, revocado o expirado conservan sus errores) comprueba `email_verified_at` del usuario; si es NULL → `email_not_verified` sin emitir tokens. Así una sesión anterior a la activación no se prolonga: su access token deja de valer como máximo cuando expira (`ACCESS_TOKEN_EXPIRES_IN`, 900 s por defecto).
 3. **Rotación Transaccional (`internal/repository/refresh_token_repository.go`):**
    - Marca el token anterior como `revoked = true`.
    - Genera un nuevo Refresh Token y lo almacena con su hash SHA-256.
@@ -51,3 +53,4 @@ Renueva un Access Token expirado utilizando un Refresh Token activo e implementa
 ## 6. Tests Asociados
 - **Unitarios:** `back/auth/internal/service/auth_service_test.go` (`TestRefresh_TokenRotation`, `TestRefresh_RevokedToken_RevokesAll`).
 - **Integración:** `back/auth/internal/service/auth_integration_test.go` (`TestAuthIntegration_RefreshToken`).
+- **Gate de confirmación:** `back/auth/internal/service/email_verification_gate_test.go` (`TestEmailGate_RefreshCannotExtendUnverifiedSession`, `TestEmailGate_RefreshInvalidTokenTakesPrecedence`), `back/auth/internal/handler/http/email_verification_gate_handler_test.go` (`TestE2E_EmailVerificationGate_RefreshOfPreviousSessionIs401`).

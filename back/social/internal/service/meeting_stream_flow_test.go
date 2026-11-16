@@ -29,7 +29,7 @@ func TestMeetingStreamFlow_ConCanal_Anuncia(t *testing.T) {
 	svc, _, cli, gid, admin := streamFlowSetup(t, true)
 	waitNotification := observeMeetingNotification(t, svc)
 
-	m, err := svc.CreateMeeting(context.Background(), gid, admin, "Reunión flujo stream", nil, "2026-09-25T15:00:00Z", nil, nil)
+	m, err := svc.CreateMeeting(context.Background(), gid, admin, "Reunión flujo stream", nil, nil, "2026-09-25T15:00:00Z", nil, nil)
 	if err != nil {
 		t.Fatalf("crear no debe fallar: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestMeetingStreamFlow_SinCanal_CreadaIgual(t *testing.T) {
 	svc, _, cli, gid, admin := streamFlowSetup(t, false)
 	waitNotification := observeMeetingNotification(t, svc)
 
-	if _, err := svc.CreateMeeting(context.Background(), gid, admin, "Sin canal", nil, "2026-09-25T15:00:00Z", nil, nil); err != nil {
+	if _, err := svc.CreateMeeting(context.Background(), gid, admin, "Sin canal", nil, nil, "2026-09-25T15:00:00Z", nil, nil); err != nil {
 		t.Fatalf("sin canal igual debe crear (201): %v", err)
 	}
 	waitNotification()
@@ -69,7 +69,7 @@ func TestMeetingStreamFlow_ErrorStream_CreadaIgual(t *testing.T) {
 	waitNotification := observeMeetingNotification(t, svc)
 	cli.SendErr = &stream.StreamError{Code: 404, Message: "canal inexistente"}
 
-	if _, err := svc.CreateMeeting(context.Background(), gid, admin, "Stream roto", nil, "2026-09-25T15:00:00Z", nil, nil); err != nil {
+	if _, err := svc.CreateMeeting(context.Background(), gid, admin, "Stream roto", nil, nil, "2026-09-25T15:00:00Z", nil, nil); err != nil {
 		t.Fatalf("con Stream roto igual debe crear (201): %v", err)
 	}
 	waitNotification()

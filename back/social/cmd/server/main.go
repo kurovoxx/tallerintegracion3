@@ -311,6 +311,7 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 		protected.GET("/groups/:id/meetings", meetingH.ListMeetings)
 		protected.GET("/notifications/me", notifH.ListMine)
 		protected.POST("/notifications/:id/read", notifH.MarkRead)
+		protected.DELETE("/notifications/:id", notifH.Delete)
 		protected.GET("/groups/:id/stream-token", streamH.Token)
 		discordH.RegisterRoutes(protected)
 	}

@@ -96,7 +96,7 @@ void main() {
       await tester.tap(find.text('ENVIAR CÓDIGO'));
       await tester.pumpAndSettle();
       expect(paths.single, endsWith('/auth/forgot-password'));
-      expect(find.text('Reenviar código en 60s'), findsOneWidget);
+      expect(find.text('REENVIAR CÓDIGO EN 60S'), findsOneWidget);
       final fields = find.byType(TextFormField);
       await tester.enterText(fields.at(1), '12345678');
       await tester.enterText(fields.at(2), 'NewPassword9');

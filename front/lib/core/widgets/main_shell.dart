@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../features/academic/attendance_screen.dart';
@@ -7,12 +9,14 @@ import '../../features/academic/grade_calculator_screen.dart';
 import '../../features/academic/profile_screen.dart';
 import '../../features/academic/schedule_screen.dart';
 import '../../features/groups/groups_screen.dart';
+import '../../features/notifications/notification_inbox.dart';
 import '../../features/notes/all_notes_screen.dart';
 import '../models/social_models.dart';
 import '../services/profile_service.dart';
 import '../services/social_service.dart';
 import '../theme/app_theme.dart';
 import 'neobrutalism.dart';
+import 'user_avatar.dart';
 
 /// Shell global neobrutalista y responsivo:
 /// - expandido (> 1024 dp): sidebar 280/72 dp + canvas centrado.
@@ -57,6 +61,11 @@ class _MainShellState extends State<MainShell> {
   Overview? _overview;
   String? _sidebarError;
   bool _loadingSidebar = false;
+  // Puntito rojo de la campana: se refresca al abrir el shell, al cerrar la
+  // bandeja y cada minuto (el backend no expone un contador dedicado).
+  int _unreadNotifications = 0;
+  bool _loadingUnread = false;
+  Timer? _unreadTimer;
 
   @override
   void initState() {
@@ -71,6 +80,11 @@ class _MainShellState extends State<MainShell> {
     SocialService.groupsChanged.addListener(_onGroupsChanged);
     _loadSidebar();
     _loadProfile();
+    _loadUnreadNotifications();
+    _unreadTimer = Timer.periodic(
+      const Duration(minutes: 1),
+      (_) => _loadUnreadNotifications(),
+    );
   }
 
   void _onProfileChanged() {
@@ -81,8 +95,38 @@ class _MainShellState extends State<MainShell> {
     _loadSidebar();
   }
 
+  void _openInbox() async {
+    await showNeobrutalistDialog<void>(
+      context: context,
+      dialog: NotificationInbox(service: _social),
+    );
+    // Marcar leídas o eliminar dentro del diálogo cambia el puntito.
+    if (!mounted) return;
+    await _loadUnreadNotifications();
+  }
+
+  /// Cuenta notificaciones no leídas. Best-effort: un fallo de red no debe
+  /// romper el shell ni mostrar errores en el sidebar.
+  Future<void> _loadUnreadNotifications() async {
+    if (_loadingUnread) return;
+    _loadingUnread = true;
+    try {
+      final items = await _social.myNotifications();
+      if (!mounted) return;
+      final unread = items.where((n) => !n.read).length;
+      if (unread != _unreadNotifications) {
+        setState(() => _unreadNotifications = unread);
+      }
+    } catch (_) {
+      // Silencioso: el indicador se reintenta en el próximo ciclo.
+    } finally {
+      _loadingUnread = false;
+    }
+  }
+
   @override
   void dispose() {
+    _unreadTimer?.cancel();
     ProfileService.current.removeListener(_onProfileChanged);
     SocialService.groupsChanged.removeListener(_onGroupsChanged);
     if (widget._serviceOverride == null) _social.dispose();
@@ -186,6 +230,12 @@ class _MainShellState extends State<MainShell> {
       label: 'Perfil de Usuario',
       section: 'ESPACIO DE TRABAJO GENERAL',
     ),
+    _NavItem(
+      icon: Icons.notifications_rounded,
+      label: 'Notificaciones',
+      section: 'ESPACIO DE TRABAJO GENERAL',
+      showUnreadDot: true,
+    ),
   ];
 
   /// Selecciona una sección y cierra el drawer si está abierto.
@@ -193,6 +243,11 @@ class _MainShellState extends State<MainShell> {
     final scaffold = _scaffoldKey.currentState;
     if (scaffold != null && scaffold.isDrawerOpen) {
       Navigator.of(context).pop();
+    }
+    // Notificaciones es el último ítem: abre el diálogo en lugar de cambiar de página.
+    if (index == _navItems.length - 1) {
+      _openInbox();
+      return;
     }
     setState(() => _selectedIndex = index);
   }
@@ -390,6 +445,7 @@ class _MainShellState extends State<MainShell> {
                     label: item.label,
                     isSelected: isSelected,
                     isCollapsed: isCollapsed,
+                    showDot: item.showUnreadDot && _unreadNotifications > 0,
                     onTap: () => _onSelectPage(index),
                   ),
                 ],
@@ -397,7 +453,6 @@ class _MainShellState extends State<MainShell> {
             },
           ),
         ),
-        _buildGroupsFooter(isCollapsed: isCollapsed),
         const Divider(
           color: AppColors.border,
           thickness: AppDimens.borderWidth,
@@ -405,173 +460,6 @@ class _MainShellState extends State<MainShell> {
         ),
         _buildProfileFooter(isCollapsed: isCollapsed),
       ],
-    );
-  }
-
-  // Barra lateral global: grupos del overview.
-  // Ver back/social/internal/handler/http/view_handler.go:29 y model/views.go.
-  Widget _buildGroupsFooter({required bool isCollapsed}) {
-    if (isCollapsed) {
-      final count = _overview?.groupsCount;
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: Center(
-          child: _loadingSidebar
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : InkWell(
-                  onTap: () => _onSelectPage(_groupsIndex),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppColors.accentYellow,
-                      border: Border.all(
-                        color: AppColors.border,
-                        width: AppDimens.borderWidth,
-                      ),
-                      borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-                    ),
-                    child: Text(
-                      '${count ?? '·'}',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w900,
-                        fontSize: 11,
-                      ),
-                    ),
-                  ),
-                ),
-        ),
-      );
-    }
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: AppColors.bg,
-        border: Border.all(
-          color: AppColors.border,
-          width: AppDimens.borderWidth,
-        ),
-        borderRadius: BorderRadius.circular(AppDimens.radius),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'MIS GRUPOS',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0.6,
-                    color: AppColors.muted,
-                  ),
-                ),
-              ),
-              InkWell(
-                onTap: _loadingSidebar ? null : _loadSidebar,
-                child: const Icon(
-                  Icons.refresh_rounded,
-                  size: 14,
-                  color: AppColors.text,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          if (_loadingSidebar)
-            const Center(
-              child: SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            )
-          else if (_sidebarError != null)
-            Text(
-              _sidebarError!,
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: AppColors.mutedStrong,
-              ),
-            )
-          else if (_overview == null || _overview!.sidebarGroups.isEmpty)
-            const Text(
-              'Sin grupos. Crea uno en Grupos.',
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: AppColors.mutedStrong,
-              ),
-            )
-          else ...[
-            Builder(
-              builder: (context) {
-                final o = _overview!;
-                return Text(
-                  '${o.groupsCount} ${o.groupsCount == 1 ? 'grupo' : 'grupos'} · '
-                  '${o.adminGroupsCount} como admin',
-                  style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.text,
-                  ),
-                );
-              },
-            ),
-            const SizedBox(height: 6),
-            for (final g in _overview!.sidebarGroups.take(5))
-              InkWell(
-                onTap: () => _onSelectPage(_groupsIndex),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.groups_rounded,
-                        size: 13,
-                        color: AppColors.text,
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          g.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.text,
-                          ),
-                        ),
-                      ),
-                      Text(
-                        g.role,
-                        style: const TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.mutedStrong,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-          ],
-        ],
-      ),
     );
   }
 
@@ -595,22 +483,11 @@ class _MainShellState extends State<MainShell> {
         children: <Widget>[
           Row(
             children: <Widget>[
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: AppColors.accentYellow,
-                  border: Border.all(
-                    color: AppColors.border,
-                    width: AppDimens.borderWidth,
-                  ),
-                  borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
-                ),
-                child: const Icon(
-                  Icons.person_rounded,
-                  size: 18,
-                  color: AppColors.text,
-                ),
+              UserAvatar(
+                name: name ?? 'Mi cuenta',
+                size: 36,
+                photoUrl: profile?.photoThumbUrl ?? profile?.photoUrl,
+                borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
               ),
               if (!isCollapsed) ...<Widget>[
                 const SizedBox(width: AppDimens.spaceSm),
@@ -657,12 +534,15 @@ class _NavItem {
     required this.label,
     required this.section,
     this.short,
+    this.showUnreadDot = false,
   });
 
   final IconData icon;
   final String label;
   final String? short;
   final String section;
+  // Solo Notificaciones: pinta el puntito rojo si hay no leídas.
+  final bool showUnreadDot;
 }
 
 class _SidebarTile extends StatelessWidget {
@@ -672,6 +552,7 @@ class _SidebarTile extends StatelessWidget {
     required this.isSelected,
     required this.isCollapsed,
     required this.onTap,
+    this.showDot = false,
   });
 
   final IconData icon;
@@ -679,6 +560,9 @@ class _SidebarTile extends StatelessWidget {
   final bool isSelected;
   final bool isCollapsed;
   final VoidCallback onTap;
+
+  /// Puntito rojo de "hay notificaciones sin leer" sobre el ícono.
+  final bool showDot;
 
   @override
   Widget build(BuildContext context) {
@@ -707,7 +591,32 @@ class _SidebarTile extends StatelessWidget {
                 ? MainAxisAlignment.center
                 : MainAxisAlignment.start,
             children: <Widget>[
-              Icon(icon, size: 20, color: AppColors.text),
+              Stack(
+                clipBehavior: Clip.none,
+                children: <Widget>[
+                  Icon(icon, size: 20, color: AppColors.text),
+                  if (showDot)
+                    Positioned(
+                      right: -3,
+                      top: -2,
+                      child: Container(
+                        key: const ValueKey('notifications-unread-dot'),
+                        width: 9,
+                        height: 9,
+                        decoration: BoxDecoration(
+                          color: AppColors.error,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: isSelected
+                                ? AppColors.accentYellow
+                                : AppColors.surface,
+                            width: 1.5,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
               if (!isCollapsed) ...<Widget>[
                 const SizedBox(width: AppDimens.spaceSm),
                 Expanded(

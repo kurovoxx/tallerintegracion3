@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/kurovoxx/tallerintegracion3/back/ai/internal/middleware"
 	"github.com/kurovoxx/tallerintegracion3/back/ai/internal/service"
 )
 
@@ -21,16 +22,51 @@ type PDFToMarkdownResponse struct {
 
 // PDFHandler expone el endpoint de conversión PDF→Markdown.
 type PDFHandler struct {
-	svc service.AIService
+	svc         service.AIService
+	authMw      *middleware.AuthMiddleware
+	rateLimiter *service.RateLimiter
 }
 
-func NewPDFHandler(svc service.AIService) *PDFHandler {
-	return &PDFHandler{svc: svc}
+func NewPDFHandler(svc service.AIService, authMw *middleware.AuthMiddleware, rateLimiter *service.RateLimiter) *PDFHandler {
+	return &PDFHandler{svc: svc, authMw: authMw, rateLimiter: rateLimiter}
+}
+
+// requireAuthAndRateLimit valida el JWT y el rate limit por usuario.
+// Devuelve el user_id y true si pasó, o false si ya respondió con error.
+func (h *PDFHandler) requireAuthAndRateLimit(c *gin.Context) (string, bool) {
+	// 1. Validar JWT
+	userID, ok := middleware.GetUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": gin.H{"code": "unauthorized", "message": "user_id no encontrado en token"}})
+		c.Abort()
+		return "", false
+	}
+
+	// 2. Rate limit por usuario (5 conversiones por hora)
+	if !h.rateLimiter.Allow(userID) {
+		remaining := h.rateLimiter.Remaining(userID)
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"error": gin.H{
+				"code":    "rate_limit_exceeded",
+				"message": fmt.Sprintf("límite de %d conversiones por hora excedido. Intentá de vuelta más tarde.", h.rateLimiter.Limit()),
+				"remaining": remaining,
+			},
+		})
+		c.Abort()
+		return "", false
+	}
+
+	return userID, true
 }
 
 // ConvertPDFToMarkdown recibe un archivo PDF (multipart/form-data, campo "file")
 // y devuelve el Markdown extraído por Gemini.
 func (h *PDFHandler) ConvertPDFToMarkdown(c *gin.Context) {
+	// Validar auth y rate limit antes de procesar el archivo.
+	if _, ok := h.requireAuthAndRateLimit(c); !ok {
+		return
+	}
+
 	// Recibir el archivo.
 	file, err := c.FormFile("file")
 	if err != nil {

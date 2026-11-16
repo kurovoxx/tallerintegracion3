@@ -272,6 +272,9 @@ func TestGetGroup(t *testing.T) {
 		if v.InviteToken != "" {
 			t.Fatal("el invite_token no debe filtrarse a miembros")
 		}
+		if v.MemberCount != 2 {
+			t.Fatalf("member_count = %d, se esperaba 2", v.MemberCount)
+		}
 		raw, _ := json.Marshal(v)
 		if strings.Contains(string(raw), tok) || strings.Contains(string(raw), "invite_token") {
 			t.Fatalf("el JSON no debe incluir el token: %s", raw)
@@ -307,6 +310,15 @@ func TestListMembers(t *testing.T) {
 		}
 		if len(ms) != 2 || ms[0].UserID != uAdmin || ms[1].UserID != uMember {
 			t.Fatalf("orden inesperado: %+v", ms)
+		}
+	})
+	t.Run("limit recorta antes de enriquecer", func(t *testing.T) {
+		ms, err := svc.ListMembersLimit(ctx, g.ID, uMember, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ms) != 1 || ms[0].UserID != uAdmin {
+			t.Fatalf("limit inesperado: %+v", ms)
 		}
 	})
 	t.Run("no miembro recibe forbidden", func(t *testing.T) {

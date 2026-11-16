@@ -1,4 +1,5 @@
 import 'support/service_uri.dart';
+
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -589,8 +590,9 @@ void main() {
       );
       expect(find.text('AGENDAR REUNIÓN'), findsWidgets);
       expect(find.text('Reunión Real'), findsOneWidget);
-      // Secciones completas; Calendar no simula una conexión.
-      expect(find.text('VINCULAR CON GOOGLE CALENDAR'), findsOneWidget);
+      // Secciones completas; Calendar ya no forma parte del formulario.
+      expect(find.textContaining('ENLACE / SALA'), findsOneWidget);
+      expect(find.textContaining('GOOGLE CALENDAR'), findsNothing);
       expect(find.textContaining('INVITAR MIEMBROS'), findsOneWidget);
       expect(find.textContaining('INVITAR POR CORREO'), findsOneWidget);
       expect(tester.takeException(), isNull);
@@ -1007,17 +1009,8 @@ void main() {
               'owner_user_id': 'u',
               'notes_restricted_to_staff': false,
               'role': 'admin',
+              'member_count': 1,
             });
-          }
-          if (request.url.servicePath.endsWith('/members')) {
-            return _ok([
-              {
-                'id': 'm1',
-                'group_id': _gid,
-                'user_id': _memberId,
-                'role': 'admin',
-              },
-            ]);
           }
           return _ok({
             'group': {'id': _gid, 'name': 'Grupo Solo', 'role': 'admin'},

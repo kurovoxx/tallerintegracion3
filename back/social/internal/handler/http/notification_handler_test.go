@@ -36,6 +36,16 @@ func (f *fakeNotifRepo) MarkNotificationRead(_ context.Context, id, _ string) (b
 	return false, nil
 }
 
+func (f *fakeNotifRepo) DeleteNotification(_ context.Context, id, _ string) (bool, error) {
+	for i, it := range f.items {
+		if it.ID == id {
+			f.items = append(f.items[:i], f.items[i+1:]...)
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 type notifEnv struct {
 	router *gin.Engine
 }
@@ -51,6 +61,7 @@ func newNotifEnv(items []model.MeetingNotificationItem, mStore *service.MemoryMe
 	protected.GET("/groups/:id/meetings", meetingH.ListMeetings)
 	protected.GET("/notifications/me", notifH.ListMine)
 	protected.POST("/notifications/:id/read", notifH.MarkRead)
+	protected.DELETE("/notifications/:id", notifH.Delete)
 	return &notifEnv{router: r}
 }
 
@@ -104,6 +115,39 @@ func TestNotifications_MarkRead_Unit(t *testing.T) {
 	expect(t, doMartinReq(e.router, http.MethodPost, "/notifications/"+n1+"/read", user, nil), http.StatusNotFound)
 	expect(t, doMartinReq(e.router, http.MethodPost, "/notifications/"+uuid.NewString()+"/read", user, nil), http.StatusNotFound)
 	expect(t, doMartinReq(e.router, http.MethodPost, "/notifications/"+n1+"/read", "", nil), http.StatusUnauthorized)
+}
+
+func TestNotifications_Delete_Unit(t *testing.T) {
+	n1 := uuid.NewString()
+	n2 := uuid.NewString()
+	e := newNotifEnv([]model.MeetingNotificationItem{notifItem(n1, uuid.NewString(), false), notifItem(n2, uuid.NewString(), true)}, service.NewMemoryMeetingStore())
+	user := uuid.NewString()
+
+	// Borrar existente → 204
+	w := doMartinReq(e.router, http.MethodDelete, "/notifications/"+n1, user, nil)
+	expect(t, w, http.StatusNoContent)
+
+	// Ya borrada → 404
+	expect(t, doMartinReq(e.router, http.MethodDelete, "/notifications/"+n1, user, nil), http.StatusNotFound)
+
+	// Notificación ajena (n2 es de otro usuario en el fake: el fake no filtra por user, así que n2 sí existe y se borra)
+	// Para probar "ajena", usamos un id que no existe:
+	expect(t, doMartinReq(e.router, http.MethodDelete, "/notifications/"+uuid.NewString(), user, nil), http.StatusNotFound)
+
+	// Sin token → 401
+	expect(t, doMartinReq(e.router, http.MethodDelete, "/notifications/"+n2, "", nil), http.StatusUnauthorized)
+
+	// Después de borrar n1, solo queda n2 en el listado
+	w = doMartinReq(e.router, http.MethodGet, "/notifications/me", user, nil)
+	expect(t, w, http.StatusOK)
+	m := decode(t, w)
+	list, _ := m["data"].([]any)
+	if len(list) != 1 {
+		t.Fatalf("se esperaba 1 notificación tras borrar, got %d: %s", len(list), w.Body.String())
+	}
+	if list[0].(map[string]any)["id"] != n2 {
+		t.Fatalf("se esperaba n2, got %v", list[0])
+	}
 }
 
 func TestMeetings_List_Unit(t *testing.T) {

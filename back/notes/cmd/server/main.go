@@ -21,6 +21,7 @@ import (
 	notesv1 "github.com/kurovoxx/tallerintegracion3/back/notes/internal/gen/notesv1/v1"
 	grpcHandler "github.com/kurovoxx/tallerintegracion3/back/notes/internal/handler/grpc"
 	httpHandler "github.com/kurovoxx/tallerintegracion3/back/notes/internal/handler/http"
+	notesIdentity "github.com/kurovoxx/tallerintegracion3/back/notes/internal/identity"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/interceptor"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/middleware"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/repository"
@@ -120,6 +121,25 @@ func newGRPCDriveClient(cfg *config.Config) drive.Client {
 	})
 }
 
+// newPublicProfileResolver construye el cliente Identity que resuelve
+// public_id → UUID. Es independiente de STORAGE_MODE: se inyecta siempre, y si
+// Identity no está disponible cada llamada falla con 503 sin tumbar Notes.
+func newPublicProfileResolver(cfg *config.Config) service.PublicProfileResolver {
+	addr := strings.TrimSpace(cfg.IdentityGRPCAddr)
+	if addr == "" {
+		return nil
+	}
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Fatalf("notes: IDENTITY_GRPC_ADDR inválida %q: %v", addr, err)
+	}
+	if strings.TrimSpace(cfg.InternalAPIKey) == "" {
+		log.Println("notes: sin INTERNAL_API_KEY, Identity rechazará ResolvePublicProfile")
+	}
+	trackGRPCConn(conn)
+	return notesIdentity.NewPublicProfileClient(identityv1.NewIdentityServiceClient(conn), cfg.InternalAPIKey, cfg.SocialTimeout)
+}
+
 // grpcConns son las conexiones gRPC compartidas (vida del proceso).
 var grpcConns []*grpc.ClientConn
 
@@ -144,6 +164,7 @@ func runServer(pool *pgxpool.Pool, driveClient drive.Client, cfg *config.Config)
 	defer deletionRepo.Close()
 	social, members := newSocialAdapters(cfg)
 	svc := service.NewNoteService(noteStore, attStore, savedStore, likeStore, sharedStore, driveClient, social)
+	svc.SetPublicProfileResolver(newPublicProfileResolver(cfg))
 	svc.SetAccountDeletionRepository(deletionRepo)
 	// Directorio de correos para share restricted: adaptador HTTP real a Social
 	// (o memoria solo con DEV_SEED_SOCIAL explícito).
@@ -167,6 +188,7 @@ func runServerMemory(driveClient drive.Client, cfg *config.Config) {
 	social, members := newSocialAdapters(cfg)
 
 	svc := service.NewNoteService(noteStore, attStore, savedStore, likeStore, sharedStore, driveClient, social)
+	svc.SetPublicProfileResolver(newPublicProfileResolver(cfg))
 	svc.SetMemberDirectory(members)
 	startServers(svc, cfg, nil)
 }
@@ -233,6 +255,12 @@ func newHTTPRouter(svc *service.NoteService, cfg *config.Config, authMw *middlew
 		protected.DELETE("/notes/shared/:sharedNoteId", h.Unshare)
 		protected.GET("/groups/:id/notes", h.ListGroupNotes)
 	}
+	// Apuntes públicos de un perfil por public_id (resuelto vía Identity gRPC;
+	// sin exponer el UUID interno). PrivateNoStore va antes de RequireAuth para que
+	// también los 401/423/503 lleven Cache-Control: private, no-store.
+	publicProfileNotes := r.Group("")
+	publicProfileNotes.Use(middleware.PrivateNoStore(), authMw.RequireAuth())
+	publicProfileNotes.GET("/public-users/:public_id/notes", h.ListPublicByPublicID)
 	return r
 }
 

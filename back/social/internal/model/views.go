@@ -76,6 +76,7 @@ type MeetingItem struct {
 	ID          string    `json:"id"`
 	Title       string    `json:"title"`
 	Description *string   `json:"description,omitempty"`
+	Link        *string   `json:"link,omitempty"`
 	ScheduledAt time.Time `json:"scheduled_at"`
 }
 
@@ -90,6 +91,9 @@ type MeetingNotificationItem struct {
 	MeetingID   string
 	GroupID     string
 	Title       string
+	Description *string
+	Link        *string
+	GroupName   string
 	ScheduledAt time.Time
 	ReadAt      *time.Time
 	CreatedAt   time.Time

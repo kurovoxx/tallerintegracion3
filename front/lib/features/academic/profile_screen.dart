@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -16,6 +17,12 @@ import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 import '../auth/account_deletion_dialog.dart';
 import '../auth/google_drive_service.dart';
+import '../notes/notes_api.dart';
+import 'profile_photo_crop.dart';
+import 'public_profile_screen.dart';
+
+/// Resultado de comprobar un perfil antes de abrirlo desde «Buscar perfil».
+enum _ProfileLookup { found, notFound, unavailable }
 
 const String kSubjectApproved = 'approved';
 const String kSubjectInProgress = 'in_progress';
@@ -63,11 +70,17 @@ class ProfileScreen extends StatefulWidget {
     this.userData,
     ProfileService? service,
     AccountDeletionService? accountDeletionService,
+    NotesApi? notesApi,
   }) : _serviceOverride = service,
-       _accountDeletionOverride = accountDeletionService;
+       _accountDeletionOverride = accountDeletionService,
+       _notesApiOverride = notesApi;
 
   final ProfileService? _serviceOverride;
   final AccountDeletionService? _accountDeletionOverride;
+
+  /// Cliente de Notes inyectable (pruebas) para comprobar si un perfil
+  /// privado existe antes de abrirlo desde «Buscar perfil».
+  final NotesApi? _notesApiOverride;
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -81,6 +94,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String? _errorMessage;
 
   UserProfile? _profile;
+  // null = sin cambios; '' = quitar foto; data URL = foto recortada pendiente.
+  String? _draftPhotoUrl;
+  // Miniatura 96x96 del mismo recorte para listados de grupos.
+  String? _draftPhotoThumbUrl;
   late final ProfileService _service;
   AccountDeletionService? _ownedDeletionService;
   bool _deletionDialogOpen = false;
@@ -94,6 +111,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // Viaja como login_hint en OAuth y como expected_email al backend,
   // que lo compara con el email real de userinfo (anti cuenta equivocada).
   final _googleEmailController = TextEditingController();
+  final _publicProfileSearchController = TextEditingController();
+  String? _publicProfileSearchError;
+  bool _searchingProfile = false;
   String _draftVisibility = 'public';
   _DriveStatus _driveStatus = _DriveStatus.idle;
 
@@ -112,6 +132,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void _sessionChanged() {
     setState(() {
       _profile = null;
+      _draftPhotoUrl = null;
+      _draftPhotoThumbUrl = null;
       _driveStatus = _DriveStatus.checking;
       _isLoading = true;
       _isEditing = false;
@@ -121,6 +143,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _phoneController.clear();
       _institutionController.clear();
       _descriptionController.clear();
+      _publicProfileSearchController.clear();
+      _publicProfileSearchError = null;
     });
     if (SessionManager.isLoggedIn) {
       _restoreDriveStatus();
@@ -153,6 +177,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _institutionController.dispose();
     _descriptionController.dispose();
     _googleEmailController.dispose();
+    _publicProfileSearchController.dispose();
     if (widget._serviceOverride == null) _service.dispose();
     _ownedDeletionService?.dispose();
     super.dispose();
@@ -166,6 +191,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _isLoading = true;
       _hasError = false;
       _isEditing = false;
+      _draftPhotoUrl = null;
+      _draftPhotoThumbUrl = null;
       _errorMessage = null;
     });
 
@@ -209,6 +236,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _descriptionController.text = p.description ?? '';
 
     setState(() {
+      _draftPhotoUrl = null;
+      _draftPhotoThumbUrl = null;
       _draftVisibility = p.visibility == 'private' ? 'private' : 'public';
       _isEditing = true;
     });
@@ -216,7 +245,112 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   void _cancelEditing() {
     if (_isSaving) return;
-    setState(() => _isEditing = false);
+    setState(() {
+      _draftPhotoUrl = null;
+      _draftPhotoThumbUrl = null;
+      _isEditing = false;
+    });
+  }
+
+  String get _photoPreviewUrl => _draftPhotoUrl ?? _profile?.photoUrl ?? '';
+
+  Future<void> _pickAndCropPhoto({required bool saveImmediately}) async {
+    if (_isSaving) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final bytes = await pickProfilePhotoBytes();
+      if (bytes == null) return;
+      if (bytes.length > 12 * 1024 * 1024) {
+        if (!mounted) return;
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'La imagen supera 12 MB. Elige una foto más liviana.',
+            ),
+          ),
+        );
+        return;
+      }
+      if (!mounted) return;
+      final cropped = await showProfilePhotoCropDialog(context, bytes);
+      if (cropped == null) return;
+      final dataUrl = profilePhotoToDataUrl(cropped.fullPng);
+      final thumbUrl = profilePhotoToDataUrl(cropped.thumbPng);
+      if (saveImmediately) {
+        await _saveProfilePhoto(dataUrl, thumbUrl, messenger);
+      } else if (mounted) {
+        setState(() {
+          _draftPhotoUrl = dataUrl;
+          _draftPhotoThumbUrl = thumbUrl;
+        });
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Foto lista. Guarda los cambios para aplicarla.'),
+          ),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo procesar la imagen. Prueba con otra foto.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    }
+  }
+
+  Future<void> _saveProfilePhoto(
+    String dataUrl,
+    String thumbUrl,
+    ScaffoldMessengerState messenger,
+  ) async {
+    final revision = SessionManager.revision.value;
+    setState(() => _isSaving = true);
+    try {
+      final updated = await _service.patchProfile(<String, dynamic>{
+        'photo_url': dataUrl,
+        'photo_thumb_url': thumbUrl,
+      });
+      if (!mounted || !_sameSession(revision)) return;
+      setState(() {
+        _profile = updated;
+        _draftPhotoUrl = null;
+        _draftPhotoThumbUrl = null;
+      });
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Foto de perfil actualizada.'),
+          backgroundColor: AppColors.border,
+        ),
+      );
+    } on ProfileApiException catch (_) {
+      if (!mounted || !_sameSession(revision)) return;
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo guardar la foto. Inténtalo de nuevo.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    } catch (_) {
+      if (!mounted || !_sameSession(revision)) return;
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo guardar la foto. Inténtalo de nuevo.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    } finally {
+      if (_sameSession(revision)) setState(() => _isSaving = false);
+    }
+  }
+
+  void _removeDraftPhoto() {
+    if (_isSaving) return;
+    setState(() {
+      _draftPhotoUrl = '';
+      _draftPhotoThumbUrl = '';
+    });
   }
 
   // Contrato real: PATCH /profile/me (parcial).
@@ -234,11 +368,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
         'institution': _institutionController.text.trim(),
         'description': _descriptionController.text.trim(),
         'visibility': _draftVisibility,
+        if (_draftPhotoUrl != null) 'photo_url': _draftPhotoUrl,
+        if (_draftPhotoUrl != null)
+          'photo_thumb_url': _draftPhotoThumbUrl ?? '',
       };
       final updated = await _service.patchProfile(patch);
       if (!mounted || !_sameSession(revision)) return;
       setState(() {
         _profile = updated;
+        _draftPhotoUrl = null;
+        _draftPhotoThumbUrl = null;
         _isEditing = false;
       });
 
@@ -463,10 +602,106 @@ class _ProfileScreenState extends State<ProfileScreen> {
     await _restoreDriveStatus();
   }
 
-  void _handleShare() {
+  /// «Compartir perfil»: copia el enlace `sigma-academy://perfil/<public_id>`
+  /// construido con el identificador público (nunca con el UUID interno ni
+  /// otro dato personal). Solo copia: no registra ni abre deep links.
+  Future<void> _handleShareProfile() async {
+    final link = publicProfileLink(_profile?.publicId ?? '');
+    if (link == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No se pudo obtener el enlace de tu perfil. Vuelve a iniciar sesión.',
+          ),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
+    try {
+      await Clipboard.setData(ClipboardData(text: link));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo copiar el enlace. Inténtalo nuevamente.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Enlace de perfil copiado al portapapeles')),
+      const SnackBar(
+        content: Text('Enlace del perfil copiado al portapapeles.'),
+        backgroundColor: AppColors.border,
+      ),
     );
+  }
+
+  /// «Buscar perfil»: interpreta el ID o enlace pegado, comprueba que el
+  /// perfil existe y lo abre en pantalla completa. No busca por nombre,
+  /// correo, teléfono ni UUID, y no abre enlaces externos.
+  Future<void> _handleSearchProfile() async {
+    if (_searchingProfile) return;
+    final parsed = parsePublicIdInput(_publicProfileSearchController.text);
+    if (!parsed.isValid) {
+      setState(() {
+        _publicProfileSearchError = publicIdInputMessage(parsed.error!);
+      });
+      return;
+    }
+    final publicId = parsed.publicId!;
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _publicProfileSearchError = null;
+      _searchingProfile = true;
+    });
+    final lookup = await _lookupPublicProfile(publicId);
+    if (!mounted) return;
+    setState(() {
+      _searchingProfile = false;
+      switch (lookup) {
+        case _ProfileLookup.found:
+          break;
+        case _ProfileLookup.notFound:
+          _publicProfileSearchError = 'No encontramos un perfil con ese ID.';
+        case _ProfileLookup.unavailable:
+          _publicProfileSearchError =
+              'No pudimos buscar el perfil en este momento. Inténtalo más tarde.';
+      }
+    });
+    if (lookup == _ProfileLookup.found) {
+      await openPublicProfile(context, publicId);
+    }
+  }
+
+  /// Un perfil privado responde 404 en Auth pero conserva sus apuntes
+  /// públicos en Notes; solo es «inexistente» si Notes también responde 404.
+  Future<_ProfileLookup> _lookupPublicProfile(String publicId) async {
+    try {
+      await _service.getPublicProfile(publicId);
+      return _ProfileLookup.found;
+    } on ProfileApiException catch (e) {
+      if (e.statusCode != 404) return _ProfileLookup.unavailable;
+    } catch (_) {
+      return _ProfileLookup.unavailable;
+    }
+    final notes = widget._notesApiOverride ?? NotesApi();
+    try {
+      await notes.listPublicByPublicId(publicId, limit: 1);
+      return _ProfileLookup.found;
+    } on NotesApiException catch (e) {
+      return e.statusCode == 404
+          ? _ProfileLookup.notFound
+          : _ProfileLookup.unavailable;
+    } catch (_) {
+      return _ProfileLookup.unavailable;
+    } finally {
+      if (widget._notesApiOverride == null) notes.dispose();
+    }
   }
 
   Future<void> _handleLogout() async {
@@ -614,9 +849,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
 
     final shareButton = NeobrutalistIconButton(
+      key: const ValueKey('profile-share-link'),
       icon: Icons.share_rounded,
       tooltip: 'Compartir perfil',
-      onPressed: _handleShare,
+      onPressed: _handleShareProfile,
     );
 
     // Salida rápida para tests: un tap, sin diálogos ni scroll.
@@ -645,6 +881,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (_profile == null) return const [SizedBox.shrink()];
     return [
       _buildIdentityCard(isDesktop),
+      const SizedBox(height: AppDimens.spaceLg),
+      _buildProfileSearchCard(isDesktop),
       const SizedBox(height: AppDimens.spaceLg),
       _buildPersonalDataCard(isDesktop),
       const SizedBox(height: AppDimens.spaceLg),
@@ -750,9 +988,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
 
     final avatar = _Avatar(
+      key: const ValueKey('profile-avatar'),
       name: name,
-      photoUrl: p.photoUrl ?? '',
+      photoUrl: _photoPreviewUrl,
       size: isDesktop ? 112 : 88,
+      onEdit: _canEdit ? () => _pickAndCropPhoto(saveImmediately: true) : null,
     );
 
     return _ProfileCard(
@@ -773,6 +1013,80 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 identityText,
               ],
             ),
+    );
+  }
+
+  Widget _buildProfileSearchCard(bool isDesktop) {
+    final searchButton = NeobrutalistButton(
+      key: const ValueKey('public-profile-open'),
+      label: _searchingProfile ? 'BUSCANDO…' : 'BUSCAR',
+      icon: Icons.person_search_rounded,
+      variant: NeobrutalistButtonVariant.info,
+      expand: !isDesktop,
+      onPressed: _searchingProfile ? null : _handleSearchProfile,
+    );
+
+    return _ProfileCard(
+      title: 'Buscar perfil',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Encuentra el perfil de otra persona utilizando el enlace que te '
+            'compartió.',
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+              color: AppColors.mutedStrong,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: AppDimens.spaceMd),
+          TextField(
+            key: const ValueKey('public-profile-search'),
+            controller: _publicProfileSearchController,
+            enabled: !_searchingProfile,
+            onSubmitted: (_) => _handleSearchProfile(),
+            onChanged: (_) {
+              // El error deja de ser válido en cuanto el usuario corrige el
+              // texto; se limpia al editar para no bloquear el campo.
+              if (_publicProfileSearchError != null) {
+                setState(() => _publicProfileSearchError = null);
+              }
+            },
+            style: const TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 14,
+              color: AppColors.text,
+            ),
+            decoration: appInputDecoration('Pega aquí el enlace del perfil')
+                .copyWith(
+                  prefixIcon: const Icon(
+                    Icons.person_search_rounded,
+                    size: 18,
+                    color: AppColors.text,
+                  ),
+                  errorText: _publicProfileSearchError,
+                  errorMaxLines: 3,
+                ),
+          ),
+          if (_searchingProfile) ...[
+            const SizedBox(height: AppDimens.spaceSm),
+            const LinearProgressIndicator(
+              key: ValueKey('public-profile-searching'),
+              color: AppColors.border,
+              backgroundColor: AppColors.surface,
+            ),
+          ],
+          const SizedBox(height: AppDimens.spaceMd),
+          isDesktop
+              ? Align(
+                  alignment: Alignment.centerRight,
+                  child: SizedBox(width: 240, child: searchButton),
+                )
+              : searchButton,
+        ],
+      ),
     );
   }
 
@@ -845,7 +1159,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final connectButton = NeobrutalistButton(
       label: connecting ? 'CONECTANDO...' : 'CONECTAR DRIVE',
       icon: Icons.add_link_rounded,
-      variant: NeobrutalistButtonVariant.info,
+      // CTA primaria de la tarjeta: amarillo resaltador, borde de acción.
+      variant: NeobrutalistButtonVariant.accent,
+      borderWidth: AppDimens.borderWidthAction,
       expand: !isDesktop,
       onPressed: busy ? null : _handleConnectDrive,
     );
@@ -937,19 +1253,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
           const SizedBox(height: AppDimens.spaceLg),
           if (!connected) ...[
-            TextField(
-              controller: _googleEmailController,
-              keyboardType: TextInputType.emailAddress,
-              enabled: !busy,
-              decoration: const InputDecoration(
-                labelText: 'TU CORREO DE GOOGLE',
-                hintText: 'tucorreo@gmail.com',
-                helperText:
-                    'Se usa para abrir tu cuenta y verificar la conexión. Nunca se comparte.',
-                helperMaxLines: 2,
+            const AppFieldLabel('TU CORREO DE GOOGLE'),
+            const SizedBox(height: AppDimens.spaceSm),
+            // Caja neobrutalista: mismo decorado que el resto de inputs.
+            DecoratedBox(
+              decoration: const BoxDecoration(boxShadow: AppShadows.badge),
+              child: TextField(
+                controller: _googleEmailController,
+                keyboardType: TextInputType.emailAddress,
+                enabled: !busy,
+                decoration: appInputDecoration('tucorreo@gmail.com'),
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                  color: AppColors.text,
+                ),
               ),
             ),
-            const SizedBox(height: AppDimens.spaceMd),
+            const SizedBox(height: AppDimens.spaceSm),
+            const Text(
+              'Se usa para abrir tu cuenta y verificar la conexión. Nunca se comparte.',
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
+                color: AppColors.mutedStrong,
+              ),
+            ),
+            const SizedBox(height: AppDimens.spaceLg),
           ],
           driveActions,
         ],
@@ -1009,6 +1339,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            _buildEditPhotoSection(isDesktop),
+            const SizedBox(height: AppDimens.spaceLg),
             _ProfileTextField(
               label: 'NOMBRE COMPLETO',
               controller: _nameController,
@@ -1032,8 +1364,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               textInputAction: TextInputAction.next,
               maxLength: 200,
               validator: (value) {
-                if ((value?.trim().length ?? 0) > 200)
+                if ((value?.trim().length ?? 0) > 200) {
                   return 'Máximo 200 caracteres';
+                }
                 return null;
               },
             ),
@@ -1047,8 +1380,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               textInputAction: TextInputAction.next,
               maxLength: 30,
               validator: (value) {
-                if ((value?.trim().length ?? 0) > 30)
+                if ((value?.trim().length ?? 0) > 30) {
                   return 'Máximo 30 caracteres';
+                }
                 return null;
               },
             ),
@@ -1095,6 +1429,100 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildEditPhotoSection(bool isDesktop) {
+    final p = _profile!;
+    final name = p.displayName.trim().isEmpty
+        ? 'Sin nombre'
+        : p.displayName.trim();
+    final hasPhoto = _photoPreviewUrl.trim().isNotEmpty;
+    final actions = Column(
+      crossAxisAlignment: isDesktop
+          ? CrossAxisAlignment.start
+          : CrossAxisAlignment.center,
+      children: [
+        const AppFieldLabel('FOTO DE PERFIL'),
+        const SizedBox(height: AppDimens.spaceSm),
+        const Text(
+          'Si la imagen no es cuadrada, podrás elegir la porción que se verá '
+          'en tu avatar antes de guardarla.',
+          textAlign: TextAlign.start,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            height: 1.4,
+            color: AppColors.mutedStrong,
+          ),
+        ),
+        const SizedBox(height: AppDimens.spaceMd),
+        Wrap(
+          spacing: AppDimens.spaceSm,
+          runSpacing: AppDimens.spaceSm,
+          alignment: isDesktop ? WrapAlignment.start : WrapAlignment.center,
+          children: [
+            NeobrutalistButton(
+              label: hasPhoto ? 'CAMBIAR FOTO' : 'AGREGAR FOTO',
+              icon: Icons.photo_camera_rounded,
+              variant: NeobrutalistButtonVariant.accent,
+              onPressed: _isSaving
+                  ? null
+                  : () => _pickAndCropPhoto(saveImmediately: false),
+            ),
+            if (hasPhoto)
+              NeobrutalistButton(
+                label: 'QUITAR FOTO',
+                icon: Icons.delete_outline_rounded,
+                variant: NeobrutalistButtonVariant.secondary,
+                onPressed: _isSaving ? null : _removeDraftPhoto,
+              ),
+          ],
+        ),
+      ],
+    );
+
+    return Container(
+      padding: const EdgeInsets.all(AppDimens.spaceMd),
+      decoration: BoxDecoration(
+        color: AppColors.bg,
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
+      ),
+      child: isDesktop
+          ? Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _Avatar(
+                  key: const ValueKey('profile-edit-avatar'),
+                  name: name,
+                  photoUrl: _photoPreviewUrl,
+                  size: 96,
+                  onEdit: _isSaving
+                      ? null
+                      : () => _pickAndCropPhoto(saveImmediately: false),
+                ),
+                const SizedBox(width: AppDimens.spaceLg),
+                Expanded(child: actions),
+              ],
+            )
+          : Column(
+              children: [
+                _Avatar(
+                  key: const ValueKey('profile-edit-avatar'),
+                  name: name,
+                  photoUrl: _photoPreviewUrl,
+                  size: 96,
+                  onEdit: _isSaving
+                      ? null
+                      : () => _pickAndCropPhoto(saveImmediately: false),
+                ),
+                const SizedBox(height: AppDimens.spaceLg),
+                actions,
+              ],
+            ),
     );
   }
 
@@ -1376,15 +1804,51 @@ class _ProfileTextField extends StatelessWidget {
   }
 }
 
-class _Avatar extends StatelessWidget {
+class _Avatar extends StatefulWidget {
   final String name;
   final String photoUrl;
   final double size;
-  const _Avatar({required this.name, this.photoUrl = '', this.size = 84});
+  final VoidCallback? onEdit;
+  const _Avatar({
+    super.key,
+    required this.name,
+    this.photoUrl = '',
+    this.size = 84,
+    this.onEdit,
+  });
+
+  @override
+  State<_Avatar> createState() => _AvatarState();
+}
+
+class _AvatarState extends State<_Avatar> {
+  bool _hovering = false;
+
+  @override
+  void didUpdateWidget(_Avatar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.onEdit == null) _hovering = false;
+  }
+
+  ImageProvider<Object>? get _photoProvider {
+    final url = widget.photoUrl.trim();
+    if (url.isEmpty) return null;
+    const marker = ';base64,';
+    if (url.startsWith('data:image/')) {
+      final comma = url.indexOf(marker);
+      if (comma <= 0) return null;
+      try {
+        return MemoryImage(base64Decode(url.substring(comma + marker.length)));
+      } on FormatException {
+        return null;
+      }
+    }
+    return NetworkImage(url);
+  }
 
   @override
   Widget build(BuildContext context) {
-    final initials = name
+    final initials = widget.name
         .trim()
         .split(RegExp(r'\s+'))
         .where((p) => p.isNotEmpty)
@@ -1395,35 +1859,90 @@ class _Avatar extends StatelessWidget {
     final fallback = Text(
       initials.isEmpty ? 'U' : initials,
       style: TextStyle(
-        fontSize: size * 0.32,
+        fontSize: widget.size * 0.32,
         fontWeight: FontWeight.w900,
         color: AppColors.text,
       ),
     );
+    final provider = _photoProvider;
 
-    return Container(
-      width: size,
-      height: size,
-      alignment: Alignment.center,
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: AppColors.accentYellow,
-        border: Border.all(
-          color: AppColors.border,
-          width: AppDimens.borderWidth,
+    return MouseRegion(
+      cursor: widget.onEdit == null
+          ? MouseCursor.defer
+          : SystemMouseCursors.click,
+      onEnter: widget.onEdit == null
+          ? null
+          : (_) => setState(() => _hovering = true),
+      onExit: widget.onEdit == null
+          ? null
+          : (_) => setState(() => _hovering = false),
+      child: SizedBox.square(
+        dimension: widget.size,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Container(
+              alignment: Alignment.center,
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(
+                color: AppColors.accentYellow,
+                border: Border.all(
+                  color: AppColors.border,
+                  width: AppDimens.borderWidth,
+                ),
+                borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
+                boxShadow: AppShadows.badge,
+              ),
+              child: provider == null
+                  ? fallback
+                  : Image(
+                      image: provider,
+                      fit: BoxFit.cover,
+                      width: widget.size,
+                      height: widget.size,
+                      gaplessPlayback: true,
+                      errorBuilder: (_, _, _) => fallback,
+                    ),
+            ),
+            if (_hovering && widget.onEdit != null)
+              Positioned.fill(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
+                  child: Semantics(
+                    button: true,
+                    label: 'Cambiar foto de perfil',
+                    child: GestureDetector(
+                      key: const ValueKey('profile-photo-edit'),
+                      onTap: widget.onEdit,
+                      child: Container(
+                        color: AppColors.border.withAlpha(95),
+                        alignment: Alignment.center,
+                        child: Container(
+                          width: 38,
+                          height: 38,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: AppColors.accentYellow,
+                            border: Border.all(
+                              color: AppColors.border,
+                              width: AppDimens.borderWidth,
+                            ),
+                            boxShadow: AppShadows.badge,
+                          ),
+                          child: const Icon(
+                            Icons.edit_rounded,
+                            size: 19,
+                            color: AppColors.text,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
-        borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
-        boxShadow: AppShadows.badge,
       ),
-      child: photoUrl.isNotEmpty
-          ? Image.network(
-              photoUrl,
-              fit: BoxFit.cover,
-              width: size,
-              height: size,
-              errorBuilder: (_, _, _) => fallback,
-            )
-          : fallback,
     );
   }
 }

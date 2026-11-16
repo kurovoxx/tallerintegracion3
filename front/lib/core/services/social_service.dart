@@ -216,16 +216,20 @@ class SocialService {
     return Workspace.fromJson(body);
   }
 
-  // GET /groups/:id/members — lista directa de integrantes.
-  // Ver back/social/internal/handler/http/group_handler.go:185 ListMembers.
-  Future<List<GroupMember>> listMembers(String groupId) async {
+  // GET /groups/:id/members?limit=N — lista directa de integrantes.
+  // limit es opcional: la vista previa pide solo los avatares visibles.
+  // Ver back/social/internal/handler/http/group_handler.go ListMembers.
+  Future<List<GroupMember>> listMembers(String groupId, {int? limit}) async {
     final id = groupId.trim();
     if (id.isEmpty) {
       throw SocialApiException('groupId vacío.', code: 'invalid_group_id');
     }
+    final uri = Uri.parse(
+      '$baseUrl/groups/$id/members',
+    ).replace(queryParameters: limit == null ? null : {'limit': '$limit'});
     final res = await AuthedHttp.run(
       () => _client
-          .get(Uri.parse('$baseUrl/groups/$id/members'), headers: _headers())
+          .get(uri, headers: _headers())
           .timeout(const Duration(seconds: 10)),
     );
     if (res.statusCode != 200) throw _toError(res);
@@ -301,10 +305,7 @@ class SocialService {
     final uid = userId.trim();
     final r = role.trim();
     if (gid.isEmpty || uid.isEmpty || (r != 'admin' && r != 'member')) {
-      throw SocialApiException(
-        'Datos de rol inválidos.',
-        code: 'invalid_args',
-      );
+      throw SocialApiException('Datos de rol inválidos.', code: 'invalid_args');
     }
     final res = await AuthedHttp.run(
       () => _client
@@ -748,12 +749,13 @@ class SocialService {
   }
 
   // POST /groups/:id/meetings
-  // {title required, description?, scheduled_at RFC3339 required, notify_discord?}
+  // {title required, description?, link?, scheduled_at RFC3339 required, notify_discord?}
   // -> 201 {meeting_id}. Ver back/social/internal/handler/http/meeting_handler.go.
   Future<String> createMeeting({
     required String groupId,
     required String title,
     String? description,
+    String? link,
     required DateTime scheduledAtUtc,
     List<String> attendees = const [],
   }) async {
@@ -761,6 +763,7 @@ class SocialService {
       'title': title.trim(),
       if (description != null && description.trim().isNotEmpty)
         'description': description.trim(),
+      if (link != null && link.trim().isNotEmpty) 'link': link.trim(),
       if (attendees.isNotEmpty)
         'attendees': normalizeMeetingAttendees(attendees),
       'scheduled_at': scheduledAtUtc.toUtc().toIso8601String(),
@@ -797,10 +800,7 @@ class SocialService {
     }
     final res = await AuthedHttp.run(
       () => _client
-          .get(
-            Uri.parse('$baseUrl/groups/$id/meetings'),
-            headers: _headers(),
-          )
+          .get(Uri.parse('$baseUrl/groups/$id/meetings'), headers: _headers())
           .timeout(const Duration(seconds: 10)),
     );
     if (res.statusCode != 200) throw _toError(res);
@@ -845,6 +845,29 @@ class SocialService {
           .timeout(const Duration(seconds: 10)),
     );
     if (res.statusCode != 200) throw _toError(res);
+  }
+
+  // DELETE /notifications/:id -> 204. Elimina la notificación propia (3_5_14).
+  Future<void> deleteNotification(String id) async {
+    final nid = id.trim();
+    if (nid.isEmpty) {
+      throw SocialApiException('notification id vacío.', code: 'invalid_id');
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .delete(Uri.parse('$baseUrl/notifications/$nid'), headers: _headers())
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 204 && res.statusCode != 200) {
+      if (res.statusCode == 404) {
+        throw SocialApiException(
+          'La notificación ya no existe o no es tuya.',
+          statusCode: 404,
+          code: 'not_found',
+        );
+      }
+      throw _toError(res);
+    }
   }
 
   // POST /groups/:id/leave -> 204. Solo miembros.

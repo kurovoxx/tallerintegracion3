@@ -1,4 +1,5 @@
 import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -59,27 +60,27 @@ void main() {
   ) async {
     await t.pumpWidget(const MaterialApp(home: ScheduleMeetingScreen()));
     await t.pumpAndSettle();
-    // Calendar real: botón vincular visible, sin texto "próximamente".
-    expect(find.text('VINCULAR CON GOOGLE CALENDAR'), findsOneWidget);
+    // El formulario ya no vincula Calendar: el enlace se envía por correo.
+    expect(find.textContaining('GOOGLE CALENDAR'), findsNothing);
     expect(find.textContaining('próximamente'), findsNothing);
     expect(find.textContaining('INVITAR MIEMBROS'), findsOneWidget);
     expect(find.textContaining('INVITAR POR CORREO'), findsOneWidget);
     final field = find.widgetWithText(TextField, 'Correo del invitado');
     await t.ensureVisible(field);
     await t.enterText(field, 'Persona@Correo.cl');
-    await t.ensureVisible(find.text('Añadir invitado'));
-    await t.tap(find.text('Añadir invitado'));
+    await t.ensureVisible(find.text('AÑADIR INVITADO'));
+    await t.tap(find.text('AÑADIR INVITADO'));
     await t.pumpAndSettle();
     expect(find.byType(InputChip), findsOneWidget);
     await t.enterText(field, ' persona@correo.cl ');
-    await t.tap(find.text('Añadir invitado'));
+    await t.tap(find.text('AÑADIR INVITADO'));
     await t.pumpAndSettle();
     expect(find.byType(InputChip), findsOneWidget);
     t.widget<InputChip>(find.byType(InputChip)).onDeleted!();
     await t.pumpAndSettle();
     expect(find.byType(InputChip), findsNothing);
     await t.enterText(field, 'nombre-sin-email');
-    await t.tap(find.text('Añadir invitado'));
+    await t.tap(find.text('AÑADIR INVITADO'));
     await t.pumpAndSettle();
     expect(find.text('Ingresa un correo válido.'), findsOneWidget);
   });

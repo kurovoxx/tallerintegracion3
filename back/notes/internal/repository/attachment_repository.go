@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/model"
 )
@@ -26,13 +27,64 @@ func (r *AttachmentRepository) Create(ctx context.Context, db DBTX, noteID, exte
 	query := `
 		INSERT INTO notes.note_attachments (note_id, external_file_id, file_url, file_type, file_name, file_size_bytes, is_inline)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id, note_id, external_file_id, file_url, file_type, file_name, file_size_bytes, is_inline, created_at
+		RETURNING id, note_id, external_file_id, file_url, file_type, file_name, file_size_bytes, is_inline, copied_from_attachment_id, created_at
 	`
 	err := db.QueryRow(ctx, query, noteID, externalFileID, fileURL, fileType, fileName, fileSize, isInline).Scan(
-		&a.ID, &a.NoteID, &a.ExternalFileID, &a.FileURL, &a.FileType, &a.FileName, &a.FileSizeBytes, &a.IsInline, &a.CreatedAt,
+		&a.ID, &a.NoteID, &a.ExternalFileID, &a.FileURL, &a.FileType, &a.FileName, &a.FileSizeBytes, &a.IsInline, &a.CopiedFromAttachmentID, &a.CreatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create attachment: %w", err)
+	}
+	return &a, nil
+}
+
+// CreateCopy registra un adjunto clonado y deja constancia del adjunto origen.
+// Si la fila ya existe por un reintento, la unicidad (note_id,
+// copied_from_attachment_id) la devuelve en lugar de duplicarla.
+func (r *AttachmentRepository) CreateCopy(ctx context.Context, db DBTX, noteID, externalFileID, fileURL, fileType string, fileName *string, fileSize *int, isInline bool, copiedFromAttachmentID string) (*model.Attachment, error) {
+	if db == nil {
+		db = r.pool
+	}
+	var a model.Attachment
+	query := `
+		INSERT INTO notes.note_attachments (note_id, external_file_id, file_url, file_type, file_name, file_size_bytes, is_inline, copied_from_attachment_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8::uuid)
+		RETURNING id, note_id, external_file_id, file_url, file_type, file_name, file_size_bytes, is_inline, copied_from_attachment_id, created_at
+	`
+	err := db.QueryRow(ctx, query, noteID, externalFileID, fileURL, fileType, fileName, fileSize, isInline, copiedFromAttachmentID).Scan(
+		&a.ID, &a.NoteID, &a.ExternalFileID, &a.FileURL, &a.FileType, &a.FileName, &a.FileSizeBytes, &a.IsInline, &a.CopiedFromAttachmentID, &a.CreatedAt,
+	)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			existing, getErr := r.GetByNoteAndSource(ctx, db, noteID, copiedFromAttachmentID)
+			if getErr == nil && existing != nil {
+				return existing, nil
+			}
+		}
+		return nil, fmt.Errorf("create copied attachment: %w", err)
+	}
+	return &a, nil
+}
+
+// GetByNoteAndSource recupera el adjunto clonado que proviene de un adjunto
+// origen concreto. nil, nil si aún no se ha copiado.
+func (r *AttachmentRepository) GetByNoteAndSource(ctx context.Context, db DBTX, noteID, sourceAttachmentID string) (*model.Attachment, error) {
+	if db == nil {
+		db = r.pool
+	}
+	var a model.Attachment
+	err := db.QueryRow(ctx, `SELECT id, note_id, external_file_id, file_url, file_type, file_name, file_size_bytes, is_inline, copied_from_attachment_id, created_at
+		FROM notes.note_attachments
+		WHERE note_id = $1 AND copied_from_attachment_id = $2::uuid
+		LIMIT 1`, noteID, sourceAttachmentID).Scan(
+		&a.ID, &a.NoteID, &a.ExternalFileID, &a.FileURL, &a.FileType, &a.FileName, &a.FileSizeBytes, &a.IsInline, &a.CopiedFromAttachmentID, &a.CreatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get copied attachment: %w", err)
 	}
 	return &a, nil
 }
@@ -42,8 +94,8 @@ func (r *AttachmentRepository) GetByID(ctx context.Context, db DBTX, id string) 
 		db = r.pool
 	}
 	var a model.Attachment
-	err := db.QueryRow(ctx, `SELECT id, note_id, external_file_id, file_url, file_type, file_name, file_size_bytes, is_inline, created_at FROM notes.note_attachments WHERE id=$1`, id).Scan(
-		&a.ID, &a.NoteID, &a.ExternalFileID, &a.FileURL, &a.FileType, &a.FileName, &a.FileSizeBytes, &a.IsInline, &a.CreatedAt,
+	err := db.QueryRow(ctx, `SELECT id, note_id, external_file_id, file_url, file_type, file_name, file_size_bytes, is_inline, copied_from_attachment_id, created_at FROM notes.note_attachments WHERE id=$1`, id).Scan(
+		&a.ID, &a.NoteID, &a.ExternalFileID, &a.FileURL, &a.FileType, &a.FileName, &a.FileSizeBytes, &a.IsInline, &a.CopiedFromAttachmentID, &a.CreatedAt,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -58,7 +110,7 @@ func (r *AttachmentRepository) ListByNote(ctx context.Context, db DBTX, noteID s
 	if db == nil {
 		db = r.pool
 	}
-	rows, err := db.Query(ctx, `SELECT id, note_id, external_file_id, file_url, file_type, file_name, file_size_bytes, is_inline, created_at FROM notes.note_attachments WHERE note_id=$1 ORDER BY created_at DESC`, noteID)
+	rows, err := db.Query(ctx, `SELECT id, note_id, external_file_id, file_url, file_type, file_name, file_size_bytes, is_inline, copied_from_attachment_id, created_at FROM notes.note_attachments WHERE note_id=$1 ORDER BY created_at DESC`, noteID)
 	if err != nil {
 		return nil, fmt.Errorf("list attachments: %w", err)
 	}
@@ -66,7 +118,7 @@ func (r *AttachmentRepository) ListByNote(ctx context.Context, db DBTX, noteID s
 	var out []*model.Attachment
 	for rows.Next() {
 		var a model.Attachment
-		if err := rows.Scan(&a.ID, &a.NoteID, &a.ExternalFileID, &a.FileURL, &a.FileType, &a.FileName, &a.FileSizeBytes, &a.IsInline, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.NoteID, &a.ExternalFileID, &a.FileURL, &a.FileType, &a.FileName, &a.FileSizeBytes, &a.IsInline, &a.CopiedFromAttachmentID, &a.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, &a)

@@ -10,7 +10,7 @@
 
 ## Res
 
-- OK devuelve user_id, email y display_name opcional; solo datos públicos.
+- OK devuelve user_id, email, display_name opcional y photo_thumb_url opcional; solo datos públicos. La foto completa nunca se expone por este RPC.
 - `INVALID_ARGUMENT`: UUID inválido; `NOT_FOUND`: user_not_found; `INTERNAL`: error de repository.
 - No devuelve hashes, tokens ni datos de autenticación.
 
@@ -24,7 +24,7 @@
 1. `main()` configura los interceptores gRPC y registra `IdentityService` (`back/auth/cmd/server/main.go:248-252`); `NewInternalAuth` valida `x-internal-key` (`back/auth/internal/interceptor/auth.go:33-47`).
 2. `IdentityServer.GetUser` valida el UUID (`back/auth/internal/handler/grpc/identity_server.go:53-74`).
 3. `UsersService.Lookup` normaliza y resuelve el ID (`back/auth/internal/service/users_service.go:30-53`); `UserRepository.GetPublicByIDs` lee los campos públicos (`back/auth/internal/repository/user_repository.go:188-219`).
-4. `IdentityServer.GetUser` construye `GetUserResponse` (`back/auth/internal/handler/grpc/identity_server.go:53-74`).
+4. `IdentityServer.GetUser` construye `GetUserResponse`, incluyendo `photo_thumb_url` (`back/auth/internal/handler/grpc/identity_server.go`).
 
 ## Tests
 

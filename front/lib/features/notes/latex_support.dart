@@ -192,12 +192,21 @@ class SafeMath extends StatelessWidget {
     super.key,
     required this.tex,
     this.display = false,
-    this.fontSize = 14,
+    this.fontSize,
   });
+
+  /// Tamaño por defecto de fórmulas inline (`$...$`).
+  static const double inlineFontSize = 18;
+
+  /// Tamaño por defecto de bloques (`$$...$$`): fracciones, integrales y
+  /// sumatorias grandes y legibles.
+  static const double displayFontSize = 22;
 
   final String tex;
   final bool display;
-  final double fontSize;
+
+  /// null = [inlineFontSize] o [displayFontSize] según [display].
+  final double? fontSize;
 
   static const TexParserSettings _settings = TexParserSettings(
     // Limita la expansión de macros: ninguna fórmula puede colgar la UI.
@@ -215,7 +224,10 @@ class SafeMath extends StatelessWidget {
       result.tex!,
       mathStyle: display ? MathStyle.display : MathStyle.text,
       settings: _settings,
-      textStyle: TextStyle(fontSize: fontSize, color: AppColors.text),
+      textStyle: TextStyle(
+        fontSize: fontSize ?? (display ? displayFontSize : inlineFontSize),
+        color: AppColors.text,
+      ),
       onErrorFallback: (e) => LatexFallback(
         tex: tex,
         reason: 'Sintaxis LaTeX inválida',
@@ -228,7 +240,7 @@ class SafeMath extends StatelessWidget {
     return Semantics(
       label: 'Fórmula: $tex',
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: AppDimens.spaceSm),
+        padding: const EdgeInsets.symmetric(vertical: AppDimens.spaceLg),
         child: SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           child: Center(child: math),

@@ -8,16 +8,17 @@ import (
 
 const createMeeting = `-- name: CreateMeeting :one
 INSERT INTO social.meetings (
-  group_id, title, description, scheduled_at, created_by_user_id, notify_discord
+  group_id, title, description, link, scheduled_at, created_by_user_id, notify_discord
 ) VALUES (
-  $1, $2, $3, $4, $5, $6
-) RETURNING id, group_id, title, description, scheduled_at, created_by_user_id, notify_discord, google_calendar_event_id, created_at
+  $1, $2, $3, $4, $5, $6, $7
+) RETURNING id, group_id, title, description, link, scheduled_at, created_by_user_id, notify_discord, google_calendar_event_id, created_at
 `
 
 type CreateMeetingParams struct {
 	GroupID         pgtype.UUID
 	Title           string
 	Description     pgtype.Text
+	Link            pgtype.Text
 	ScheduledAt     pgtype.Timestamptz
 	CreatedByUserID pgtype.UUID
 	NotifyDiscord   bool
@@ -28,6 +29,7 @@ func (q *Queries) CreateMeeting(ctx context.Context, arg CreateMeetingParams) (S
 		arg.GroupID,
 		arg.Title,
 		arg.Description,
+		arg.Link,
 		arg.ScheduledAt,
 		arg.CreatedByUserID,
 		arg.NotifyDiscord,
@@ -38,6 +40,7 @@ func (q *Queries) CreateMeeting(ctx context.Context, arg CreateMeetingParams) (S
 		&i.GroupID,
 		&i.Title,
 		&i.Description,
+		&i.Link,
 		&i.ScheduledAt,
 		&i.CreatedByUserID,
 		&i.NotifyDiscord,
@@ -48,7 +51,7 @@ func (q *Queries) CreateMeeting(ctx context.Context, arg CreateMeetingParams) (S
 }
 
 const getMeetingByID = `-- name: GetMeetingByID :one
-SELECT id, group_id, title, description, scheduled_at, created_by_user_id, notify_discord, google_calendar_event_id, created_at FROM social.meetings
+SELECT id, group_id, title, description, link, scheduled_at, created_by_user_id, notify_discord, google_calendar_event_id, created_at FROM social.meetings
 WHERE id = $1 LIMIT 1
 `
 
@@ -60,6 +63,7 @@ func (q *Queries) GetMeetingByID(ctx context.Context, id pgtype.UUID) (SocialMee
 		&i.GroupID,
 		&i.Title,
 		&i.Description,
+		&i.Link,
 		&i.ScheduledAt,
 		&i.CreatedByUserID,
 		&i.NotifyDiscord,
@@ -70,7 +74,7 @@ func (q *Queries) GetMeetingByID(ctx context.Context, id pgtype.UUID) (SocialMee
 }
 
 const listMeetingsByGroup = `-- name: ListMeetingsByGroup :many
-SELECT id, group_id, title, description, scheduled_at, created_by_user_id, notify_discord, google_calendar_event_id, created_at FROM social.meetings
+SELECT id, group_id, title, description, link, scheduled_at, created_by_user_id, notify_discord, google_calendar_event_id, created_at FROM social.meetings
 WHERE group_id = $1
 ORDER BY scheduled_at ASC
 `
@@ -89,6 +93,7 @@ func (q *Queries) ListMeetingsByGroup(ctx context.Context, groupID pgtype.UUID) 
 			&i.GroupID,
 			&i.Title,
 			&i.Description,
+			&i.Link,
 			&i.ScheduledAt,
 			&i.CreatedByUserID,
 			&i.NotifyDiscord,
@@ -177,7 +182,7 @@ const updateMeetingCalendarEventID = `-- name: UpdateMeetingCalendarEventID :one
 UPDATE social.meetings SET
   google_calendar_event_id = $2
 WHERE id = $1
-RETURNING id, group_id, title, description, scheduled_at, created_by_user_id, notify_discord, google_calendar_event_id, created_at
+RETURNING id, group_id, title, description, link, scheduled_at, created_by_user_id, notify_discord, google_calendar_event_id, created_at
 `
 
 type UpdateMeetingCalendarEventIDParams struct {
@@ -193,6 +198,7 @@ func (q *Queries) UpdateMeetingCalendarEventID(ctx context.Context, arg UpdateMe
 		&i.GroupID,
 		&i.Title,
 		&i.Description,
+		&i.Link,
 		&i.ScheduledAt,
 		&i.CreatedByUserID,
 		&i.NotifyDiscord,

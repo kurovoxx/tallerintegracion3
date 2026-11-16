@@ -85,7 +85,7 @@ inexistente, eliminar la nota y sus `shared_notes`.
 | DELETE | `/groups/{id}/sprint-sheet/{taskId}` | — | `204` | — |
 | POST | `/sprint-sheet/{taskId}/hours` | `{log_date, hours}` | `201` día nuevo / `200` reemplaza las horas de ese día (upsert, sin `409`) | `403` no eres miembro; `404` tarea inexistente |
 | GET | `/sprint-sheet/{taskId}/hours?from&to` | — | `200 {data, total_hours}` | `403` no eres miembro |
-| POST | `/groups/{id}/meetings` | `{title, description?, scheduled_at}` | `201 {meeting_id}` — creación local síncrona; dispara Calendar/Discord/Stream en background | — |
+| POST | `/groups/{id}/meetings` | `{title, description?, link?, scheduled_at, attendees?}` | `201 {meeting_id}` — creación local síncrona; el `link` viaja en el correo de invitación; dispara Calendar/Discord/Stream en background | `400` enlace >500 caracteres o email inválido |
 | PUT | `/groups/{id}/discord-config` | `{server_name, invite_url, webhook_url?}` | `200` | `403` no eres admin |
 | GET | `/groups/{id}/discord-config` | — | `200 {server_name, invite_url, webhook_url}` — `webhook_url` solo para admins (`null` para miembros) | `403` no eres miembro; `404` sin configurar |
 | GET | `/groups/{id}/stream-token` *(añadido para completar el contrato)* | — | `200 {token, channel_id, api_key}` — token firmado con la API secret de Stream para que el cliente se conecte directo | `403` no eres miembro |
@@ -141,7 +141,7 @@ Orden de `groups` y `sidebar.groups`: el grupo más reciente primero. `descripti
     "sheets": [ { "id": "…", "name": "Sprint 1", "period_start": null, "period_end": null } ],
     "tasks": [ { "id": "…", "group_id": "…", "sheet_id": "…", "sheet_name": "Sprint 1", "title": "…", "assigned_to": "…", "priority": "alta", "status": "en_proceso", "estimated_hours": 2.5, "created_at": "…", "updated_at": "…" } ]
   },
-  "meetings": { "upcoming": [ { "id": "…", "title": "Daily", "description": "…", "scheduled_at": "2026-09-30T15:00:00Z" } ] },
+  "meetings": { "upcoming": [ { "id": "…", "title": "Daily", "description": "…", "link": "https://meet.google.com/…", "scheduled_at": "2026-09-30T15:00:00Z" } ] },
   "chat": { "provider": "stream", "token_endpoint": "/groups/{id}/stream-token" }
 }
 ```

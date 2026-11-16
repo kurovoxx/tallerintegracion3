@@ -206,6 +206,23 @@ func (r *RealDriveClient) GetFileContent(ctx context.Context, userID string, dri
 	return string(data), nil
 }
 
+// markdownFileName devuelve el nombre del archivo .md de una nota en Drive:
+// el título con la extensión .md, sin duplicarla si ya la trae. CreateFile ya
+// recibe el título con .md; CopyFile y UpdateFile reciben el título de la nota
+// y deben conservar la misma convención para que Drive no lo trate como otro
+// tipo de archivo.
+func markdownFileName(title string) string {
+	t := strings.TrimSpace(title)
+	if t == "" || strings.HasSuffix(strings.ToLower(t), ".md") {
+		return t
+	}
+	return t + ".md"
+}
+
+// UpdateFile renombra y/o reemplaza el contenido del .md de la nota. Al
+// renombrar conserva la extensión .md. Al subir contenido declara
+// text/markdown tanto en los metadatos como en la subida: sin tipo explícito
+// la librería detecta text/plain y Drive cambiaba el MIME del archivo.
 func (r *RealDriveClient) UpdateFile(ctx context.Context, userID string, driveFileID string, newContent *string, newTitle *string) error {
 	srv, err := r.serviceFor(ctx, userID)
 	if err != nil {
@@ -213,11 +230,14 @@ func (r *RealDriveClient) UpdateFile(ctx context.Context, userID string, driveFi
 	}
 	meta := &drive.File{}
 	if newTitle != nil {
-		meta.Name = *newTitle
+		meta.Name = markdownFileName(*newTitle)
+	}
+	if newContent != nil {
+		meta.MimeType = MimeMarkdown
 	}
 	call := srv.Files.Update(driveFileID, meta)
 	if newContent != nil {
-		call = call.Media(strings.NewReader(*newContent))
+		call = call.Media(strings.NewReader(*newContent), googleapi.ContentType(MimeMarkdown))
 	}
 	if _, err := call.Context(ctx).Do(); err != nil {
 		return mapGoogleError("UpdateFile", err)
@@ -322,7 +342,7 @@ func (r *RealDriveClient) CopyFile(ctx context.Context, srcUserID string, srcFil
 	if err != nil {
 		return "", err
 	}
-	f, err := dstSrv.Files.Create(&drive.File{Name: newTitle, MimeType: MimeMarkdown, Parents: []string{dstFolderID}, AppProperties: noteFileProperties(dstUserID, newNoteID)}).
+	f, err := dstSrv.Files.Create(&drive.File{Name: markdownFileName(newTitle), MimeType: MimeMarkdown, Parents: []string{dstFolderID}, AppProperties: noteFileProperties(dstUserID, newNoteID)}).
 		Media(bytes.NewReader(data)).
 		Fields("id").
 		Context(ctx).
@@ -332,6 +352,31 @@ func (r *RealDriveClient) CopyFile(ctx context.Context, srcUserID string, srcFil
 	}
 	log.Printf("drive: archivo copiado %s -> %s", srcFileID, f.Id)
 	return f.Id, nil
+}
+
+// CopyAttachment clona un binario adjunto al Drive del usuario que copia el
+// apunte. Descarga con el token del destino (archivo público/compartido) y cae
+// al token del autor (archivo aún no compartido); sube una copia nueva con el
+// MIME y nombre originales al Drive del destino. Nunca comparte el archivo del
+// autor ni reutiliza URLs públicas: el clon es un archivo independiente.
+func (r *RealDriveClient) CopyAttachment(ctx context.Context, srcUserID string, srcFileID string, dstUserID string, newNoteID string, fileName string, fileType string, isInline bool) (string, string, error) {
+	dstSrv, err := r.serviceFor(ctx, dstUserID)
+	if err != nil {
+		return "", "", err
+	}
+	data, err := downloadWith(dstSrv, srcFileID)
+	if err != nil {
+		srcSrv, errSrc := r.serviceFor(ctx, srcUserID)
+		if errSrc != nil {
+			return "", "", err
+		}
+		dataFallback, errFallback := downloadWith(srcSrv, srcFileID)
+		if errFallback != nil {
+			return "", "", errFallback
+		}
+		data = dataFallback
+	}
+	return r.UploadAttachment(ctx, dstUserID, newNoteID, fileName, fileType, data, isInline)
 }
 
 // downloadWith descarga el contenido crudo de un archivo con errores mapeados.

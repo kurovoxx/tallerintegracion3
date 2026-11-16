@@ -121,10 +121,10 @@ class Overview {
   }
 }
 
-// GET /groups/:id -> GroupView (group_handler.go:119 Get).
+// GET /groups/:id -> GroupView (group_handler.go Get).
 // Campos reales: id, name, description?, owner_user_id,
-// notes_restricted_to_staff, invite_token? (solo admin), created_at, role.
-// No trae member_count ni subject: no mostrarlos como reales.
+// notes_restricted_to_staff, invite_token? (solo admin), created_at, role,
+// member_count. No trae subject: no mostrarlo como real.
 class GroupDetail {
   GroupDetail({
     required this.id,
@@ -135,6 +135,7 @@ class GroupDetail {
     this.inviteToken,
     this.createdAt,
     required this.role,
+    this.memberCount = 0,
   });
 
   final String id;
@@ -145,6 +146,7 @@ class GroupDetail {
   final String? inviteToken;
   final DateTime? createdAt;
   final String role;
+  final int memberCount;
 
   factory GroupDetail.fromJson(Map<String, dynamic> j) {
     DateTime? created;
@@ -160,6 +162,7 @@ class GroupDetail {
       inviteToken: j['invite_token'] as String?,
       createdAt: created,
       role: _str(j, 'role', 'member'),
+      memberCount: _int(j, 'member_count'),
     );
   }
 }
@@ -304,6 +307,7 @@ class GroupMember {
     this.joinedAt,
     this.displayName,
     this.email,
+    this.photoThumbUrl,
   });
 
   final String id;
@@ -313,6 +317,7 @@ class GroupMember {
   final DateTime? joinedAt;
   final String? displayName;
   final String? email;
+  final String? photoThumbUrl;
 
   /// Nombre humano sin inventar: display_name, email o id corto.
   /// Nunca es un UUID desnudo como etiqueta principal.
@@ -338,6 +343,8 @@ class GroupMember {
     if (name != null && name.trim().isEmpty) name = null;
     String? mail = j['email'] as String?;
     if (mail != null && mail.trim().isEmpty) mail = null;
+    String? photo = j['photo_thumb_url'] as String?;
+    if (photo != null && photo.trim().isEmpty) photo = null;
     return GroupMember(
       id: _str(j, 'id'),
       groupId: _str(j, 'group_id'),
@@ -346,6 +353,7 @@ class GroupMember {
       joinedAt: joined,
       displayName: name,
       email: mail,
+      photoThumbUrl: photo,
     );
   }
 }
@@ -416,17 +424,21 @@ class SprintHoursList {
 // GET /groups/:id/discord-config -> 200 {server_name, invite_url,
 // webhook_url?}. 404 discord_not_configured si nunca se configuró.
 class DiscordConfig {
-  DiscordConfig({required this.serverName, required this.inviteUrl, this.webhookUrl});
+  DiscordConfig({
+    required this.serverName,
+    required this.inviteUrl,
+    this.webhookUrl,
+  });
 
   final String serverName;
   final String inviteUrl;
   final String? webhookUrl;
 
   factory DiscordConfig.fromJson(Map<String, dynamic> j) => DiscordConfig(
-        serverName: _str(j, 'server_name'),
-        inviteUrl: _str(j, 'invite_url'),
-        webhookUrl: j['webhook_url'] as String?,
-      );
+    serverName: _str(j, 'server_name'),
+    inviteUrl: _str(j, 'invite_url'),
+    webhookUrl: j['webhook_url'] as String?,
+  );
 }
 
 class MeetingItem {
@@ -434,12 +446,14 @@ class MeetingItem {
     required this.id,
     required this.title,
     this.description,
+    this.link,
     required this.scheduledAt,
   });
 
   final String id;
   final String title;
   final String? description;
+  final String? link;
   final DateTime scheduledAt;
 
   factory MeetingItem.fromJson(Map<String, dynamic> j) {
@@ -450,13 +464,15 @@ class MeetingItem {
       id: _str(j, 'id'),
       title: _str(j, 'title', 'Reunión'),
       description: j['description'] as String?,
+      link: j['link'] as String?,
       scheduledAt: when,
     );
   }
 }
 
 /// Notificación in-app de reunión (tarea 3_5_14).
-/// Backend: GET /notifications/me, POST /notifications/:id/read.
+/// Backend: GET /notifications/me, POST /notifications/:id/read,
+/// DELETE /notifications/:id.
 class MeetingNotification {
   MeetingNotification({
     required this.id,
@@ -467,6 +483,9 @@ class MeetingNotification {
     required this.read,
     this.readAt,
     required this.createdAt,
+    this.description,
+    this.link,
+    this.groupName,
   });
 
   final String id;
@@ -477,6 +496,9 @@ class MeetingNotification {
   final bool read;
   final DateTime? readAt;
   final DateTime createdAt;
+  final String? description;
+  final String? link;
+  final String? groupName;
 
   factory MeetingNotification.fromJson(Map<String, dynamic> j) {
     DateTime when = DateTime.now();
@@ -487,7 +509,8 @@ class MeetingNotification {
     if (rawRead is String) readAt = DateTime.tryParse(rawRead);
     DateTime created = DateTime.now();
     final rawCreated = j['created_at'];
-    if (rawCreated is String) created = DateTime.tryParse(rawCreated) ?? created;
+    if (rawCreated is String)
+      created = DateTime.tryParse(rawCreated) ?? created;
     final read = j['read'] is bool ? j['read'] as bool : readAt != null;
     return MeetingNotification(
       id: _str(j, 'id'),
@@ -498,6 +521,9 @@ class MeetingNotification {
       read: read,
       readAt: readAt,
       createdAt: created,
+      description: j['description'] as String?,
+      link: j['link'] as String?,
+      groupName: j['group_name'] as String?,
     );
   }
 }
