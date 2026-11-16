@@ -76,6 +76,7 @@ CREATE TABLE identity.users (
         CONSTRAINT users_public_id_key UNIQUE
         CONSTRAINT users_public_id_format
             CHECK (public_id ~ '^[0-9a-hj-km-np-tv-z]{12}$'),
+    email_verified_at timestamptz, -- NULL = correo sin confirmar (migración auth 007)
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -112,6 +113,20 @@ CREATE TABLE identity.password_resets (
     expires_at timestamptz NOT NULL,
     requested_at timestamptz NOT NULL DEFAULT now(),
     attempts integer NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 5)
+);
+
+-- Confirmación de correo: un token pendiente por usuario, solo su SHA-256
+-- (ver back/auth/db/migrations/007_email_verification.sql).
+CREATE TABLE identity.email_verifications (
+    user_id uuid PRIMARY KEY REFERENCES identity.users(id) ON DELETE CASCADE,
+    token_hash bytea NOT NULL
+        CONSTRAINT email_verifications_token_hash_key UNIQUE
+        CONSTRAINT email_verifications_token_hash_len CHECK (octet_length(token_hash) = 32),
+    expires_at timestamptz NOT NULL,
+    requested_at timestamptz NOT NULL DEFAULT now(),
+    window_started_at timestamptz NOT NULL DEFAULT now(),
+    sends_in_window integer NOT NULL DEFAULT 1 CHECK (sends_in_window >= 0),
+    consumed_at timestamptz
 );
 
 CREATE TABLE identity.profiles (

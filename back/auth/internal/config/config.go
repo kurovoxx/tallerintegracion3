@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -28,6 +29,17 @@ type Config struct {
 	GRPCPort           string // servidor gRPC Identity (IdentityService)
 	SocialGRPCAddr     string // cliente SocialService para el borrado de cuenta
 	NotesGRPCAddr      string // cliente NotesService para el borrado de cuenta
+
+	// SMTP opcional (los valores vacíos usan los defectos del mailer).
+	SMTPFrom     string // SMTP_FROM; vacío = SMTP_USERNAME
+	SMTPFromName string // SMTP_FROM_NAME; vacío = "Sigma Academy"
+	SMTPTLSMode  string // SMTP_TLS_MODE: starttls (defecto, 587) o tls (465)
+
+	// Confirmación de correo. EmailVerificationURL es la base opcional del
+	// enlace del correo (se añade ?token=...). EmailVerificationTTL: 0 =
+	// defecto del servicio (24 h); -1 = valor mal formado, rechazado al arrancar.
+	EmailVerificationURL string
+	EmailVerificationTTL time.Duration
 }
 
 func Load() *Config {
@@ -66,6 +78,16 @@ func Load() *Config {
 		GRPCPort:           os.Getenv("AUTH_GRPC_PORT"),
 		SocialGRPCAddr:     os.Getenv("SOCIAL_GRPC_ADDR"),
 		NotesGRPCAddr:      os.Getenv("NOTES_GRPC_ADDR"),
+	}
+	cfg.SMTPFrom = os.Getenv("SMTP_FROM")
+	cfg.SMTPFromName = os.Getenv("SMTP_FROM_NAME")
+	cfg.SMTPTLSMode = os.Getenv("SMTP_TLS_MODE")
+	cfg.EmailVerificationURL = os.Getenv("EMAIL_VERIFICATION_URL")
+	if v := os.Getenv("EMAIL_VERIFICATION_TTL"); v != "" {
+		cfg.EmailVerificationTTL = -1
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.EmailVerificationTTL = d
+		}
 	}
 	if cfg.GRPCPort == "" {
 		cfg.GRPCPort = os.Getenv("GRPC_PORT")

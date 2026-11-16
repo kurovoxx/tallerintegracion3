@@ -62,6 +62,9 @@ func main() {
 	if err := repository.VerifyAccountDeletionSchema(context.Background(), pool); err != nil {
 		log.Fatalf("%v", err)
 	}
+	if ok, err := repository.EmailVerificationSchemaReady(context.Background(), pool); err != nil || !ok {
+		log.Printf("auth: ADVERTENCIA confirmación de correo sin esquema (aplica back/auth/db/migrations/007_email_verification.sql); el registro sigue funcionando sin enviar la confirmación")
+	}
 
 	// Wire Handler → Service → Repository (masterprompt 2) + JWT standalone integrado (3.1)
 	userRepo := repository.NewUserRepository(pool)
@@ -77,11 +80,29 @@ func main() {
 	}
 	authSvc := service.NewAuthService(userRepo, refreshRepo, jwtSvc, cfg.AccessExpiresIn, cfg.RefreshExpiresIn)
 	authH := httpHandler.NewAuthHandler(authSvc)
-	resetMailer := &service.ResetMailer{Host: cfg.SMTPHost, Port: cfg.SMTPPort, Username: cfg.SMTPUsername, Password: cfg.SMTPPassword}
-	if !resetMailer.Ready() {
-		log.Print("password recovery disabled: configure SMTP_PASSWORD")
+	// Un solo mailer SMTP para recuperación de contraseña y confirmación de
+	// correo. Sin SMTP_PASSWORD ambos quedan deshabilitados (503
+	// mail_unavailable) y el registro sigue funcionando sin enviar correo; una
+	// configuración presente pero mal formada detiene el arranque.
+	mailer := &service.SMTPMailer{
+		Host: cfg.SMTPHost, Port: cfg.SMTPPort, Username: cfg.SMTPUsername, Password: cfg.SMTPPassword,
+		From: cfg.SMTPFrom, FromName: cfg.SMTPFromName, TLSMode: cfg.SMTPTLSMode,
 	}
-	resetH := httpHandler.NewPasswordResetHandler(service.NewPasswordResetService(userRepo, repository.NewPasswordResetRepository(pool), resetMailer))
+	if cfg.SMTPPassword == "" {
+		log.Print("password recovery and email verification disabled: configure SMTP_PASSWORD")
+	} else if err := mailer.Validate(); err != nil {
+		log.Fatalf("config SMTP: %v", err)
+	}
+	resetH := httpHandler.NewPasswordResetHandler(service.NewPasswordResetService(userRepo, repository.NewPasswordResetRepository(pool), mailer))
+	verificationSvc, err := service.NewEmailVerificationService(userRepo, repository.NewEmailVerificationRepository(pool), mailer, service.EmailVerificationConfig{
+		LinkBaseURL: cfg.EmailVerificationURL,
+		TTL:         cfg.EmailVerificationTTL,
+	})
+	if err != nil {
+		log.Fatalf("config email verification: %v", err)
+	}
+	log.Printf("email verification: enabled=%v link_configured=%v ttl=%s", verificationSvc.Ready(), cfg.EmailVerificationURL != "", verificationSvc.TTL())
+	authSvc.SetEmailVerifier(verificationSvc)
 	deletionRepo := repository.NewAccountDeletionRepository(pool)
 	defer deletionRepo.Close()
 	authSvc.SetAccountAccessGate(deletionRepo)

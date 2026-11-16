@@ -56,6 +56,14 @@ type AuthService struct {
 	cfgAccessExp  int // segundos
 	cfgRefreshExp int // segundos
 	accountGate   AccountAccessGate
+	verifier      NewUserVerifier
+}
+
+// NewUserVerifier envía la confirmación de correo de una cuenta recién creada.
+// No bloquea ni devuelve error: el registro ya ocurrió y no debe fallar ni
+// repetirse por un problema de correo (EmailVerificationService.SendForNewUser).
+type NewUserVerifier interface {
+	SendForNewUser(context.Context, *model.User)
 }
 
 type AccountAccessGate interface {
@@ -74,6 +82,10 @@ func NewAuthService(users UserRepository, refreshTokens RefreshTokenRepository, 
 
 func (s *AuthService) SetAccountAccessGate(gate AccountAccessGate) {
 	s.accountGate = gate
+}
+
+func (s *AuthService) SetEmailVerifier(v NewUserVerifier) {
+	s.verifier = v
 }
 
 // Constructor legacy para compatibilidad con tests que solo usan register sin JWT
@@ -151,6 +163,11 @@ func (s *AuthService) Register(ctx context.Context, email, password string, disp
 			return nil, NewServiceError(utils.ErrEmailTaken)
 		}
 		return nil, err
+	}
+	if s.verifier != nil {
+		// Tras el COMMIT: despacha la confirmación en segundo plano y vuelve
+		// de inmediato; el 201 no espera al SMTP ni depende de su resultado.
+		s.verifier.SendForNewUser(ctx, user)
 	}
 	return user, nil
 }
