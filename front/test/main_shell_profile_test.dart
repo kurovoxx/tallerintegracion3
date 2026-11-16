@@ -10,6 +10,12 @@ import 'package:taller_integracion_front/core/services/profile_service.dart';
 import 'package:taller_integracion_front/core/services/session_manager.dart';
 import 'package:taller_integracion_front/core/services/social_service.dart';
 import 'package:taller_integracion_front/core/widgets/main_shell.dart';
+import 'package:taller_integracion_front/core/widgets/user_avatar.dart';
+
+const _thumb =
+    'data:image/png;base64,'
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk'
+    '+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
 const _overview = {
   'user_id': 'u',
@@ -28,6 +34,7 @@ const _profile = {
   'display_name': 'Nombre Viejo',
   'visibility': 'public',
   'institution': 'UCT',
+  'photo_thumb_url': _thumb,
 };
 
 Future<void> _pumpShell(
@@ -90,6 +97,8 @@ void main() {
     await _pumpShell(tester, social, profiles);
 
     expect(find.text('Nombre Viejo'), findsOneWidget);
+    final avatar = tester.widget<UserAvatar>(find.byType(UserAvatar));
+    expect(avatar.photoUrl, _thumb);
 
     // Simula PATCH /profile/me exitoso en otra pantalla: el notifier es la
     // única fuente y el sidebar se repinta solo.

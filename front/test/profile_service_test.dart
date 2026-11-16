@@ -14,7 +14,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  test('getProfile parsea solo los 6 campos reales', () async {
+  test('getProfile parsea los campos reales y la miniatura', () async {
     SessionManager.saveSession('jwt-test', {'id': 'u'});
     addTearDown(SessionManager.clear);
     final service = ProfileService(
@@ -24,6 +24,7 @@ void main() {
           jsonEncode(<String, dynamic>{
             'display_name': 'Ana',
             'photo_url': null,
+            'photo_thumb_url': 'data:image/png;base64,thumb',
             'phone': '+569',
             'institution': 'UCT',
             'description': 'Hola',
@@ -40,6 +41,7 @@ void main() {
     expect(p.displayName, 'Ana');
     expect(p.institution, 'UCT');
     expect(p.visibility, 'public');
+    expect(p.photoThumbUrl, 'data:image/png;base64,thumb');
   });
 
   test('getProfile parsea public_id sin exponer el UUID', () async {
