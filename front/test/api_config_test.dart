@@ -40,5 +40,21 @@ void main() {
       resolveApiBaseUrl('http://localhost:18082', isWeb: true),
       'http://localhost:18082',
     );
+    expect(
+      resolveApiBaseUrl(
+        'https://ti3-brojas.dev.censei.cl/api-notes',
+        isWeb: false,
+        isAndroid: true,
+      ),
+      'https://ti3-brojas.dev.censei.cl/api-notes',
+    );
+    expect(
+      resolveApiBaseUrl(
+        'http://localhost:8082',
+        isWeb: false,
+        isAndroid: true,
+      ),
+      'http://10.0.2.2:8082',
+    );
   });
 }

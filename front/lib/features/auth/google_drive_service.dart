@@ -111,21 +111,27 @@ class GoogleDriveService {
   /// true si hay client ID configurado para iniciar el flujo OAuth.
   static bool get isConfigured => _clientId.isNotEmpty;
 
+  /// Expone el client ID efectivo (remoto o --dart-define) para servicios hermanos.
+  static String get configuredClientId => _clientId;
+
   // Scopes mínimos: drive.file (solo archivos creados por la app, dentro de
   // la carpeta "Apuntes TI3") + openid email profile (capturar el correo).
   // Nunca drive completo (vería todo el Drive) ni solo lectura (sin escritura).
   static const _scopes =
       'https://www.googleapis.com/auth/drive.file%20openid%20email%20profile';
 
-  final GoogleSignIn _googleSignIn = GoogleSignIn(
-    scopes: [
-      'https://www.googleapis.com/auth/drive.file',
-      'openid',
-      'email',
-      'profile',
-    ],
-    serverClientId: _clientId,
-  );
+  GoogleSignIn? _googleSignInInstance;
+
+  GoogleSignIn get _googleSignIn =>
+      _googleSignInInstance ??= GoogleSignIn(
+        scopes: const [
+          'https://www.googleapis.com/auth/drive.file',
+          'openid',
+          'email',
+          'profile',
+        ],
+        serverClientId: _clientId.isEmpty ? null : _clientId,
+      );
 
   /// Retorna serverAuthCode (oauth_code). En desktop abre navegador y escucha
   /// en loopback (ver getDesktopAuthCode); en móvil usa google_sign_in.

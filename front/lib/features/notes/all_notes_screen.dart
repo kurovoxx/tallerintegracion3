@@ -37,14 +37,10 @@ import 'latex_support.dart';
 import 'note_live_editor.dart';
 import 'note_markdown_body.dart';
 
-/// Base URL del microservicio de notas. En el emulador Android `localhost` es
-/// el propio dispositivo, por eso se usa la alias 10.0.2.2 hacia el host.
-String get notesBaseUrl {
-  if (!kIsWeb && Platform.isAndroid) {
-    return 'http://10.0.2.2:8082';
-  }
-  return notesApiBaseUrl;
-}
+/// Base URL del microservicio de notas. Por defecto apunta a Pillán
+/// (`notesApiBaseUrl`); en el emulador Android reescribe `localhost`/`127.0.0.1`
+/// a `10.0.2.2` únicamente cuando se configuró un backend local por `--dart-define`.
+String get notesBaseUrl => notesApiBaseUrl;
 
 /// Cliente HTTP inyectable para pruebas de subida/vinculación de adjuntos.
 /// En producción se crea (y cierra) un cliente por petición.

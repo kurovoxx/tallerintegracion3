@@ -46,14 +46,20 @@ class GoogleCalendarService {
 
   final GoogleDriveService _drive = GoogleDriveService();
 
-  final GoogleSignIn _googleSignIn = GoogleSignIn(
-    scopes: [
-      'https://www.googleapis.com/auth/calendar.events',
-      'openid',
-      'email',
-      'profile',
-    ],
-  );
+  GoogleSignIn? _googleSignInInstance;
+
+  GoogleSignIn get _googleSignIn {
+    final clientId = GoogleDriveService.configuredClientId;
+    return _googleSignInInstance ??= GoogleSignIn(
+      scopes: const [
+        'https://www.googleapis.com/auth/calendar.events',
+        'openid',
+        'email',
+        'profile',
+      ],
+      serverClientId: clientId.isEmpty ? null : clientId,
+    );
+  }
 
   /// Código OAuth con scope de Calendar + redirect real usado (puerto
   /// efímero en desktop). null = usuario canceló. En web retorna null

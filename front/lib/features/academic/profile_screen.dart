@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -437,10 +438,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
       // Config OAuth desde el backend (.env raíz como única fuente).
       await GoogleDriveService.ensureConfigured(backendBaseUrl: authApiBaseUrl);
       if (!mounted || !_sameSession(revision)) return;
-      // En web no hay localhost que capture el code: diálogo pegar-código.
+      // En web y móvil (Android/iOS) el navegador externo no vuelve a un
+      // servidor loopback en segundo plano: se usa el diálogo pegar-código.
+      final useManualCodeFlow =
+          kIsWeb ||
+          defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS;
       String? code;
       String? desktopRedirect;
-      if (kIsWeb) {
+      if (useManualCodeFlow) {
         code = await _askWebAuthCode(messenger, declaredEmail);
       } else {
         try {
