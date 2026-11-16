@@ -155,6 +155,7 @@ class UserProfile {
     required this.displayName,
     this.publicId = '',
     this.photoUrl,
+    this.photoThumbUrl,
     this.phone,
     this.institution,
     this.description,
@@ -167,6 +168,9 @@ class UserProfile {
   /// Identificador público que se comparte; nunca es el UUID interno.
   final String publicId;
   final String? photoUrl;
+
+  /// Miniatura recortada para listados/sidebar; si falta, usar photoUrl.
+  final String? photoThumbUrl;
   final String? phone;
   final String? institution;
   final String? description;
@@ -180,6 +184,7 @@ class UserProfile {
       displayName: (j['display_name'] as String?) ?? '',
       publicId: (j['public_id'] as String?) ?? '',
       photoUrl: j['photo_url'] as String?,
+      photoThumbUrl: j['photo_thumb_url'] as String?,
       phone: j['phone'] as String?,
       institution: j['institution'] as String?,
       description: j['description'] as String?,
@@ -191,6 +196,7 @@ class UserProfile {
   Map<String, dynamic> toPatchJson() => <String, dynamic>{
     'display_name': displayName,
     if (photoUrl != null) 'photo_url': photoUrl,
+    if (photoThumbUrl != null) 'photo_thumb_url': photoThumbUrl,
     if (phone != null) 'phone': phone,
     if (institution != null) 'institution': institution,
     if (description != null) 'description': description,

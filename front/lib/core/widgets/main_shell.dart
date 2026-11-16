@@ -16,6 +16,7 @@ import '../services/profile_service.dart';
 import '../services/social_service.dart';
 import '../theme/app_theme.dart';
 import 'neobrutalism.dart';
+import 'user_avatar.dart';
 
 /// Shell global neobrutalista y responsivo:
 /// - expandido (> 1024 dp): sidebar 280/72 dp + canvas centrado.
@@ -482,22 +483,11 @@ class _MainShellState extends State<MainShell> {
         children: <Widget>[
           Row(
             children: <Widget>[
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: AppColors.accentYellow,
-                  border: Border.all(
-                    color: AppColors.border,
-                    width: AppDimens.borderWidth,
-                  ),
-                  borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
-                ),
-                child: const Icon(
-                  Icons.person_rounded,
-                  size: 18,
-                  color: AppColors.text,
-                ),
+              UserAvatar(
+                name: name ?? 'Mi cuenta',
+                size: 36,
+                photoUrl: profile?.photoThumbUrl ?? profile?.photoUrl,
+                borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
               ),
               if (!isCollapsed) ...<Widget>[
                 const SizedBox(width: AppDimens.spaceSm),
