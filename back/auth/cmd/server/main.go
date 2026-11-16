@@ -103,6 +103,7 @@ func main() {
 	}
 	log.Printf("email verification: enabled=%v link_configured=%v ttl=%s", verificationSvc.Ready(), cfg.EmailVerificationURL != "", verificationSvc.TTL())
 	authSvc.SetEmailVerifier(verificationSvc)
+	verificationH := httpHandler.NewEmailVerificationHandler(verificationSvc)
 	deletionRepo := repository.NewAccountDeletionRepository(pool)
 	defer deletionRepo.Close()
 	authSvc.SetAccountAccessGate(deletionRepo)
@@ -160,6 +161,8 @@ func main() {
 	r.POST("/auth/logout", authH.Logout)
 	r.POST("/auth/forgot-password", resetH.Forgot)
 	r.POST("/auth/reset-password", resetH.Reset)
+	r.POST("/auth/send-verification-email", verificationH.Send)
+	r.POST("/auth/verify-email", verificationH.Verify)
 	r.DELETE("/auth/account", authMw.RequireIdentity(), deletionH.Delete)
 	r.GET("/auth/account-deletion", authMw.RequireIdentity(), deletionH.Status)
 	r.POST("/auth/google-drive/connect", authMw.RequireAuth(), driveH.Connect)
