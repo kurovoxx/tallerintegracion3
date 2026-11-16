@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:taller_integracion_front/core/services/auth_service.dart';
+import 'package:taller_integracion_front/core/widgets/neobrutalism.dart';
 import 'package:taller_integracion_front/features/auth/email_verification_screen.dart';
 
 import 'support/service_uri.dart';
@@ -92,12 +93,13 @@ Finder get _message => find.byKey(const ValueKey('email-verification-message'));
 String _messageText(WidgetTester tester) =>
     tester.widget<Text>(_message).data ?? '';
 
-TextButton _resendButton(WidgetTester tester) => tester.widget<TextButton>(
-  find.ancestor(
-    of: find.textContaining('Reenviar correo'),
-    matching: find.byType(TextButton),
-  ),
-);
+NeobrutalistButton _resendButton(WidgetTester tester) =>
+    tester.widget<NeobrutalistButton>(
+      find.ancestor(
+        of: find.textContaining('REENVIAR CORREO'),
+        matching: find.byType(NeobrutalistButton),
+      ),
+    );
 
 Future<void> _dispose(WidgetTester tester) async {
   // Desmonta la pantalla para cancelar la cuenta atrás.
@@ -332,7 +334,9 @@ void main() {
       await tester.pump();
 
       expect(find.text('CONFIRMANDO...'), findsOneWidget);
-      final confirm = tester.widget<FilledButton>(find.byType(FilledButton));
+      final confirm = tester.widget<NeobrutalistButton>(
+        find.widgetWithText(NeobrutalistButton, 'CONFIRMANDO...'),
+      );
       expect(confirm.onPressed, isNull);
       expect(_resendButton(tester).onPressed, isNull);
       expect(tester.widget<TextFormField>(_codeField).enabled, isFalse);
@@ -357,7 +361,7 @@ void main() {
       addTearDown(service.dispose);
       await _open(tester, service, email: ' User@Example.com ');
 
-      await tester.tap(find.text('Reenviar correo'));
+      await tester.tap(find.text('REENVIAR CORREO'));
       await tester.pump();
       await tester.pump();
 
@@ -366,13 +370,13 @@ void main() {
       ]);
       expect(_messageText(tester), emailVerificationResentMessage);
       expect(_messageText(tester), contains('spam'));
-      expect(find.text('Reenviar correo en 60s'), findsOneWidget);
+      expect(find.text('REENVIAR CORREO EN 60S'), findsOneWidget);
       expect(_resendButton(tester).onPressed, isNull);
 
       await tester.pump(const Duration(seconds: 1));
-      expect(find.text('Reenviar correo en 59s'), findsOneWidget);
+      expect(find.text('REENVIAR CORREO EN 59S'), findsOneWidget);
       await tester.pump(const Duration(seconds: 59));
-      expect(find.text('Reenviar correo'), findsOneWidget);
+      expect(find.text('REENVIAR CORREO'), findsOneWidget);
       expect(_resendButton(tester).onPressed, isNotNull);
       await _dispose(tester);
     });
@@ -394,13 +398,13 @@ void main() {
       addTearDown(service.dispose);
       await _open(tester, service);
 
-      await tester.tap(find.text('Reenviar correo'));
+      await tester.tap(find.text('REENVIAR CORREO'));
       await tester.pumpAndSettle();
       expect(_messageText(tester), contains('no está disponible'));
-      expect(find.text('Reenviar correo'), findsOneWidget); // sin cuenta atrás
+      expect(find.text('REENVIAR CORREO'), findsOneWidget); // sin cuenta atrás
 
       offline = true;
-      await tester.tap(find.text('Reenviar correo'));
+      await tester.tap(find.text('REENVIAR CORREO'));
       await tester.pumpAndSettle();
       expect(_messageText(tester), _connectionMessage);
       expect(find.textContaining('recibirás'), findsNothing);
@@ -417,7 +421,7 @@ void main() {
       );
       addTearDown(service.dispose);
       await _open(tester, service, email: 'no-es-correo');
-      await tester.tap(find.text('Reenviar correo'));
+      await tester.tap(find.text('REENVIAR CORREO'));
       await tester.pumpAndSettle();
 
       expect(calls, 0);
@@ -440,7 +444,7 @@ void main() {
       );
 
       expect(_messageText(tester), 'Tu cuenta fue creada.');
-      expect(find.text('Reenviar correo en 60s'), findsOneWidget);
+      expect(find.text('REENVIAR CORREO EN 60S'), findsOneWidget);
       expect(_resendButton(tester).onPressed, isNull);
       await _dispose(tester);
     });

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../core/services/auth_service.dart';
+import '../../core/widgets/neobrutalism.dart';
+import 'auth_form_layout.dart';
 import 'email_verification_screen.dart';
 
 /// Resultado del diálogo: el reenvío ya fue aceptado por el backend o la
@@ -18,10 +20,10 @@ Future<EmailNotVerifiedAction?> showEmailNotVerifiedDialog(
   BuildContext context, {
   required Future<LoginResult> Function() onResend,
 }) {
-  return showDialog<EmailNotVerifiedAction>(
+  return showNeobrutalistDialog<EmailNotVerifiedAction>(
     context: context,
     barrierDismissible: false,
-    builder: (_) => _EmailNotVerifiedDialog(onResend: onResend),
+    dialog: _EmailNotVerifiedDialog(onResend: onResend),
   );
 }
 
@@ -71,47 +73,45 @@ class _EmailNotVerifiedDialogState extends State<_EmailNotVerifiedDialog> {
   Widget build(BuildContext context) {
     return PopScope(
       canPop: !_sending,
-      child: AlertDialog(
-        title: const Text('Confirma tu correo'),
+      child: NeobrutalistDialog(
+        title: 'Confirma tu correo',
         content: Column(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text(
               'Tu cuenta todavía no está confirmada. Revisa tu correo y usa el '
               'código que te enviamos, o pide uno nuevo.',
+              style: authFieldTextStyle,
             ),
             if (_error != null) ...[
               const SizedBox(height: 12),
-              Text(
-                _error!,
-                key: const ValueKey('email-not-verified-error'),
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              AuthStatusMessage(
+                message: _error!,
+                kind: AuthStatusKind.error,
+                messageKey: const ValueKey('email-not-verified-error'),
               ),
             ],
           ],
         ),
         actions: [
-          TextButton(
+          NeobrutalistButton(
+            label: 'Cancelar',
+            variant: NeobrutalistButtonVariant.secondary,
             onPressed: _sending ? null : () => _close(),
-            child: const Text('Cancelar'),
           ),
-          TextButton(
+          NeobrutalistButton(
             key: const ValueKey('email-not-verified-resend'),
+            label: _sending ? 'Enviando...' : 'Reenviar correo',
+            variant: NeobrutalistButtonVariant.secondary,
             onPressed: _sending ? null : _resend,
-            child: _sending
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Text('Reenviar correo'),
           ),
-          FilledButton(
+          NeobrutalistButton(
+            label: 'Tengo un código',
+            variant: NeobrutalistButtonVariant.accent,
             onPressed: _sending
                 ? null
                 : () => _close(EmailNotVerifiedAction.haveCode),
-            child: const Text('Tengo un código'),
           ),
         ],
       ),

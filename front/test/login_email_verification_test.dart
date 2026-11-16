@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taller_integracion_front/core/services/auth_service.dart';
+import 'package:taller_integracion_front/core/widgets/neobrutalism.dart';
 import 'package:taller_integracion_front/features/auth/email_verification_screen.dart';
 import 'package:taller_integracion_front/features/auth/login_screen.dart';
 
@@ -87,12 +88,12 @@ void main() {
     await _pumpLogin(tester, backend);
     await _login(tester, 'nuevo@alu.uct.cl');
 
-    expect(find.text('Confirma tu correo'), findsOneWidget);
-    expect(find.text('Reenviar correo'), findsOneWidget);
-    expect(find.text('Tengo un código'), findsOneWidget);
+    expect(find.byType(NeobrutalistDialog), findsOneWidget);
+    expect(find.text('REENVIAR CORREO'), findsOneWidget);
+    expect(find.text('TENGO UN CÓDIGO'), findsOneWidget);
     expect(find.text('Credenciales inválidas.'), findsNothing);
 
-    await tester.tap(find.text('Tengo un código'));
+    await tester.tap(find.text('TENGO UN CÓDIGO'));
     await tester.pumpAndSettle();
 
     expect(find.byType(EmailVerificationScreen), findsOneWidget);
@@ -117,7 +118,7 @@ void main() {
       await _pumpLogin(tester, backend);
       await _login(tester, 'Nuevo@alu.uct.cl');
 
-      await tester.tap(find.text('Reenviar correo'));
+      await tester.tap(find.text('REENVIAR CORREO'));
       await tester.pumpAndSettle();
 
       expect(backend.paths, ['/auth/login', '/auth/send-verification-email']);
@@ -126,7 +127,7 @@ void main() {
       });
       expect(find.byType(EmailVerificationScreen), findsOneWidget);
       expect(find.text(emailVerificationResentMessage), findsOneWidget);
-      expect(find.textContaining('Reenviar correo en'), findsOneWidget);
+      expect(find.textContaining('REENVIAR CORREO EN'), findsOneWidget);
       await _dispose(tester);
     },
   );
@@ -144,13 +145,13 @@ void main() {
     });
     await _pumpLogin(tester, backend);
     await _login(tester, 'nuevo@alu.uct.cl');
-    await tester.tap(find.text('Reenviar correo'));
+    await tester.tap(find.text('REENVIAR CORREO'));
     await tester.pumpAndSettle();
 
     expect(find.byType(EmailVerificationScreen), findsNothing);
     expect(find.textContaining('no está disponible'), findsOneWidget);
     expect(find.text(emailVerificationResentMessage), findsNothing);
-    expect(find.text('Confirma tu correo'), findsOneWidget); // sigue abierto
+    expect(find.byType(NeobrutalistDialog), findsOneWidget); // sigue abierto
   });
 
   testWidgets('login 403: «Cancelar» cierra el diálogo sin más', (
@@ -159,10 +160,10 @@ void main() {
     final backend = _Backend({'/auth/login': (_) => _notVerified});
     await _pumpLogin(tester, backend);
     await _login(tester, 'nuevo@alu.uct.cl');
-    await tester.tap(find.text('Cancelar'));
+    await tester.tap(find.text('CANCELAR'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Confirma tu correo'), findsNothing);
+    expect(find.byType(NeobrutalistDialog), findsNothing);
     expect(find.byType(EmailVerificationScreen), findsNothing);
     expect(backend.paths, ['/auth/login']);
   });
@@ -178,7 +179,7 @@ void main() {
       await _login(tester, 'alguien@alu.uct.cl');
 
       expect(find.text('Credenciales inválidas.'), findsOneWidget);
-      expect(find.text('Confirma tu correo'), findsNothing);
+      expect(find.byType(NeobrutalistDialog), findsNothing);
       expect(find.byType(EmailVerificationScreen), findsNothing);
     },
   );
@@ -200,7 +201,7 @@ void main() {
     await _login(tester, 'alguien@alu.uct.cl');
 
     expect(find.textContaining('No se pudo conectar'), findsOneWidget);
-    expect(find.text('Confirma tu correo'), findsNothing);
+    expect(find.byType(NeobrutalistDialog), findsNothing);
   });
 
   testWidgets('registro exitoso abre la confirmación con el correo precargado', (
@@ -234,7 +235,7 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.text('Reenviar correo en 60s'), findsOneWidget);
+    expect(find.text('REENVIAR CORREO EN 60S'), findsOneWidget);
 
     // Se puede volver al login, con el correo listo para iniciar sesión.
     await tester.tap(find.text('Volver al inicio de sesión'));
@@ -281,15 +282,15 @@ void main() {
   });
 
   group('P-F1: reenvío con el diálogo abierto', () {
-    Finder dialogButton(Type type, String text) => find.descendant(
-      of: find.byType(AlertDialog),
-      matching: find.widgetWithText(type, text),
+    Finder dialogButton(String text) => find.descendant(
+      of: find.byType(NeobrutalistDialog),
+      matching: find.widgetWithText(NeobrutalistButton, text),
     );
     final resendButton = find.byKey(
       const ValueKey('email-not-verified-resend'),
     );
     bool enabled(WidgetTester tester, Finder finder) =>
-        tester.widget<ButtonStyleButton>(finder).onPressed != null;
+        tester.widget<NeobrutalistButton>(finder).onPressed != null;
     int sends(_Backend b) =>
         b.paths.where((p) => p == '/auth/send-verification-email').length;
 
@@ -308,26 +309,20 @@ void main() {
         await tester.pump();
 
         // 1. El diálogo sigue abierto mientras se espera.
-        expect(find.text('Confirma tu correo'), findsOneWidget);
+        expect(find.byType(NeobrutalistDialog), findsOneWidget);
         expect(find.byType(EmailVerificationScreen), findsNothing);
         // Indicador de carga en «Reenviar correo».
         expect(
-          find.descendant(
-            of: resendButton,
-            matching: find.byType(CircularProgressIndicator),
-          ),
+          find.descendant(of: resendButton, matching: find.text('ENVIANDO...')),
           findsOneWidget,
         );
         // 2. Todos los botones del diálogo quedan deshabilitados.
         expect(enabled(tester, resendButton), isFalse);
-        expect(enabled(tester, dialogButton(TextButton, 'Cancelar')), isFalse);
-        expect(
-          enabled(tester, dialogButton(FilledButton, 'Tengo un código')),
-          isFalse,
-        );
+        expect(enabled(tester, dialogButton('CANCELAR')), isFalse);
+        expect(enabled(tester, dialogButton('TENGO UN CÓDIGO')), isFalse);
         // 3. Un segundo toque no genera otra petición; tampoco otro login.
         await tester.tap(resendButton, warnIfMissed: false);
-        await tester.tap(find.text('Tengo un código'), warnIfMissed: false);
+        await tester.tap(find.text('TENGO UN CÓDIGO'), warnIfMissed: false);
         await tester.pump();
         expect(sends(backend), 1);
         expect(backend.paths.where((p) => p == '/auth/login').length, 1);
@@ -335,10 +330,10 @@ void main() {
         // 4. 200 → se cierra el diálogo y se abre exactamente una pantalla.
         pending.complete(_json({'message': 'genérico'}, 200));
         await tester.pumpAndSettle();
-        expect(find.text('Confirma tu correo'), findsNothing);
+        expect(find.byType(NeobrutalistDialog), findsNothing);
         expect(find.byType(EmailVerificationScreen), findsOneWidget);
         expect(find.text(emailVerificationResentMessage), findsOneWidget);
-        expect(find.text('Reenviar correo en 60s'), findsOneWidget);
+        expect(find.text('REENVIAR CORREO EN 60S'), findsOneWidget);
         expect(sends(backend), 1);
 
         await tester.tap(find.text('Volver al inicio de sesión'));
@@ -370,7 +365,7 @@ void main() {
       // 5. 503: sin pantalla y sin éxito; error dentro del diálogo.
       expect(find.byType(EmailVerificationScreen), findsNothing);
       expect(find.text(emailVerificationResentMessage), findsNothing);
-      expect(find.text('Confirma tu correo'), findsOneWidget);
+      expect(find.byType(NeobrutalistDialog), findsOneWidget);
       expect(
         find.byKey(const ValueKey('email-not-verified-error')),
         findsOneWidget,
@@ -419,8 +414,8 @@ void main() {
       await _pumpLogin(tester, backend);
       await _login(tester, 'nuevo@alu.uct.cl');
 
-      await tester.tap(find.text('Tengo un código'));
-      await tester.tap(find.text('Tengo un código'), warnIfMissed: false);
+      await tester.tap(find.text('TENGO UN CÓDIGO'));
+      await tester.tap(find.text('TENGO UN CÓDIGO'), warnIfMissed: false);
       await tester.pumpAndSettle();
 
       expect(find.byType(EmailVerificationScreen), findsOneWidget);
@@ -460,13 +455,13 @@ void main() {
       final backend = _Backend({'/auth/login': (_) => _notVerified});
       await _pumpLogin(tester, backend);
       await _login(tester, 'nuevo@alu.uct.cl');
-      await tester.tap(find.text('Cancelar'));
+      await tester.tap(find.text('CANCELAR'));
       await tester.pumpAndSettle();
-      expect(find.text('Confirma tu correo'), findsNothing);
+      expect(find.byType(NeobrutalistDialog), findsNothing);
 
       await tester.tap(find.text('INGRESAR A LA PAGINA'));
       await tester.pumpAndSettle();
-      expect(find.text('Confirma tu correo'), findsOneWidget);
+      expect(find.byType(NeobrutalistDialog), findsOneWidget);
     });
   });
 }

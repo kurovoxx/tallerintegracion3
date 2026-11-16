@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/common_widgets.dart';
 import '../../core/services/auth_service.dart';
 import '../../core/theme/app_theme.dart';
+import 'auth_form_layout.dart';
 
 /// Mensaje genérico del reenvío: el backend responde igual exista o no la
 /// cuenta, así que la app tampoco puede afirmar que el correo salió.
@@ -112,7 +113,7 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
       final text = result.outcome == VerifyEmailOutcome.alreadyVerified
           ? 'Tu correo ya estaba confirmado. Ya puedes iniciar sesión.'
           : 'Correo confirmado. Ya puedes iniciar sesión.';
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+      ScaffoldMessenger.of(context).showSnackBar(authSuccessSnackBar(text));
       Navigator.of(context).pop();
       return;
     }
@@ -154,88 +155,82 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
     });
   }
 
+  AuthStatusKind get _statusKind {
+    if (_error) return AuthStatusKind.error;
+    return _message == emailVerificationResentMessage
+        ? AuthStatusKind.success
+        : AuthStatusKind.info;
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Confirmar correo')),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 440),
-            child: Form(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text(
-                    'CONFIRMA TU CORREO',
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Te enviamos un código desde sigmaacademy.noreply@gmail.com. '
-                    'Cópialo del correo y pégalo aquí.',
-                  ),
-                  const SizedBox(height: 24),
-                  TextFormField(
-                    key: const ValueKey('email-verification-email'),
-                    controller: _email,
-                    readOnly: _busy,
-                    keyboardType: TextInputType.emailAddress,
-                    autofillHints: const [AutofillHints.email],
-                    decoration: appInputDecoration(
-                      'tu@correo.com',
-                    ).copyWith(labelText: 'Correo electrónico'),
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    key: const ValueKey('email-verification-code'),
-                    controller: _code,
-                    enabled: !_busy,
-                    autocorrect: false,
-                    enableSuggestions: false,
-                    autofillHints: const [AutofillHints.oneTimeCode],
-                    decoration: appInputDecoration(
-                      'Pega aquí el código',
-                    ).copyWith(labelText: 'Código de confirmación'),
-                    onFieldSubmitted: (_) => _verify(),
-                  ),
-                  if (_message != null) ...[
-                    const SizedBox(height: 20),
-                    Text(
-                      _message!,
-                      key: const ValueKey('email-verification-message'),
-                      style: TextStyle(
-                        color: _error
-                            ? Theme.of(context).colorScheme.error
-                            : AppColors.text,
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 24),
-                  FilledButton(
-                    onPressed: _busy ? null : _verify,
-                    child: Text(_verifying ? 'CONFIRMANDO...' : 'CONFIRMAR'),
-                  ),
-                  TextButton(
-                    onPressed: _busy || _seconds > 0 ? null : _resend,
-                    child: Text(
-                      _resending
-                          ? 'Enviando...'
-                          : (_seconds > 0
-                                ? 'Reenviar correo en ${_seconds}s'
-                                : 'Reenviar correo'),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: _busy ? null : () => Navigator.of(context).pop(),
-                    child: const Text('Volver al inicio de sesión'),
-                  ),
-                ],
-              ),
+    return AuthFormScaffold(
+      title: 'Confirmar correo',
+      child: Form(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const AuthFormHeading(
+              title: 'Confirma tu correo',
+              subtitle:
+                  'Te enviamos un código desde sigmaacademy.noreply@gmail.com. '
+                  'Cópialo del correo y pégalo aquí.',
             ),
-          ),
+            const SizedBox(height: AppDimens.spaceXl),
+            const AppFieldLabel('CORREO INSTITUCIONAL'),
+            const SizedBox(height: 6),
+            TextFormField(
+              key: const ValueKey('email-verification-email'),
+              controller: _email,
+              readOnly: _busy,
+              keyboardType: TextInputType.emailAddress,
+              autofillHints: const [AutofillHints.email],
+              style: authFieldTextStyle,
+              decoration: appInputDecoration('ejemplo@alu.uct.cl'),
+            ),
+            const SizedBox(height: 18),
+            const AppFieldLabel('CÓDIGO DE CONFIRMACIÓN'),
+            const SizedBox(height: 6),
+            TextFormField(
+              key: const ValueKey('email-verification-code'),
+              controller: _code,
+              enabled: !_busy,
+              autocorrect: false,
+              enableSuggestions: false,
+              autofillHints: const [AutofillHints.oneTimeCode],
+              style: authFieldTextStyle,
+              decoration: appInputDecoration('Pega aquí el código'),
+              onFieldSubmitted: (_) => _verify(),
+            ),
+            if (_message != null) ...[
+              const SizedBox(height: AppDimens.spaceLg),
+              AuthStatusMessage(
+                message: _message!,
+                kind: _statusKind,
+                messageKey: const ValueKey('email-verification-message'),
+              ),
+            ],
+            const SizedBox(height: AppDimens.spaceXl),
+            AuthPrimaryButton(
+              label: _verifying ? 'CONFIRMANDO...' : 'CONFIRMAR',
+              onPressed: _busy ? null : _verify,
+            ),
+            const SizedBox(height: AppDimens.spaceMd),
+            AuthSecondaryButton(
+              label: _resending
+                  ? 'Enviando...'
+                  : (_seconds > 0
+                        ? 'Reenviar correo en ${_seconds}s'
+                        : 'Reenviar correo'),
+              onPressed: _busy || _seconds > 0 ? null : _resend,
+            ),
+            const SizedBox(height: AppDimens.spaceSm),
+            AuthLink(
+              text: 'Volver al inicio de sesión',
+              onPressed: _busy ? null : () => Navigator.of(context).pop(),
+            ),
+          ],
         ),
       ),
     );
