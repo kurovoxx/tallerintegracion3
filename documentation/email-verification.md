@@ -5,10 +5,11 @@ la cuenta queda marcada como confirmada (`identity.users.email_verified_at`).
 Usa la misma cuenta SMTP que la [recuperación de contraseña](password-recovery.md)
 (remitente predeterminado `Sigma Academy <sigmaacademy.noreply@gmail.com>`).
 
-**Alcance de esta etapa:** solo la infraestructura backend (SMTP, tokens,
-endpoints, migración). **No** bloquea el login de cuentas sin confirmar, **no**
-rellena (backfill) usuarios existentes y **no** incluye pantallas Flutter. Esas
-partes son tareas posteriores.
+**Alcance:** backend de Auth. Incluye SMTP, tokens, endpoints, la migración
+007, el gate de login/refresh (`EMAIL_VERIFICATION_REQUIRED`, **apagado por
+defecto**), el backfill único de cuentas existentes (migración 008) y la
+confirmación por restablecimiento de contraseña. **No** incluye las pantallas
+Flutter (tarea posterior).
 
 ## Endpoints
 
@@ -50,12 +51,14 @@ sequenceDiagram
 | `SMTP_TLS_MODE` | no | `starttls` | `starttls` (587) o `tls` implícito (465). No existe modo sin cifrar |
 | `EMAIL_VERIFICATION_URL` | no | vacío | Base del enlace del correo; se añade `?token=...`. https absoluta sin fragmento (http solo en localhost). Vacía = el correo trae solo el código |
 | `EMAIL_VERIFICATION_TTL` | no | `24h` | Vigencia del token, duración Go entre `15m` y `168h` |
+| `EMAIL_VERIFICATION_REQUIRED` | no | `false` | Gate de login/refresh para cuentas sin confirmar (`true`/`false`; otro valor detiene el arranque). Con `true` Auth exige 007 + 008 aplicadas y SMTP configurado, o no arranca |
 
 - **Validación al arrancar:** con `SMTP_PASSWORD` presente, una configuración
   SMTP mal formada detiene Auth (`config SMTP: ...`). Un
   `EMAIL_VERIFICATION_URL` o `EMAIL_VERIFICATION_TTL` inválido también
   (`config email verification: ...`). Los mensajes nombran la variable, nunca su valor.
-- Línea de arranque: `email verification: enabled=<bool> link_configured=<bool> ttl=24h0m0s`.
+- Líneas de arranque: `email verification: enabled=<bool> link_configured=<bool> ttl=24h0m0s` y
+  `email verification gate: required=<bool> reset_marks_verified=<bool> residual_access_max=15m0s`.
 - Si falta la migración 007, Auth arranca con la advertencia
   `ADVERTENCIA confirmación de correo sin esquema`; el registro sigue funcionando.
 - **Enlace:** el frontend todavía no tiene una ruta que reciba `?token=`. Hasta
@@ -82,7 +85,74 @@ sequenceDiagram
   hubiera que retirarlas: `DROP TABLE identity.email_verifications;` y
   `ALTER TABLE identity.users DROP COLUMN email_verified_at;` (pierde qué
   cuentas confirmaron).
-- **Orden de despliegue:** migración 007 → Auth → (más adelante) front.
+- Sin 007, Auth funciona con el gate apagado (login, refresh, registro y
+  recuperación sin cambios); el reenvío falla en segundo plano con
+  `sqlstate=42703` y el canje responde 500. Con el gate encendido, Auth no arranca.
+
+## Migración `back/auth/db/migrations/008_email_verification_backfill.sql`
+
+- Marca como confirmadas, **una sola vez**, las cuentas que existían antes de
+  exigir la confirmación, para que el gate no bloquee a usuarios antiguos.
+- Tabla de control `identity.email_verification_backfill`: una única fila
+  (`id boolean` PK con `CHECK (id)`) con `cutoff`, `accounts_marked` y
+  `applied_at`. Si la fila existe, la migración no hace nada: reaplicarla nunca
+  confirma cuentas posteriores.
+- `init.sql` crea la tabla **con la fila ya insertada** (0 cuentas): una base
+  nueva nunca hace backfill aunque luego se le apliquen las migraciones.
+- Atomicidad: todo el backfill es un bloque `DO` (una sentencia, una
+  transacción, también con `psql -f` en autocommit como se aplican las
+  migraciones en Pillán). `LOCK TABLE identity.users IN SHARE ROW EXCLUSIVE
+  MODE` espera a las altas en curso y bloquea las nuevas hasta el `COMMIT`
+  (dura lo que el `UPDATE`). El corte queda en «cuentas confirmadas en la base
+  al tomar el bloqueo»: los registros simultáneos esperan y quedan después del
+  corte, sin confirmar. También serializa dos ejecuciones simultáneas de 008.
+- Solo cambia `email_verified_at IS NULL` (fecha = corte); nunca sobrescribe
+  una confirmación previa. Sin 007 falla con un mensaje claro y no deja la fila.
+- **Rollback:** la fila de control documenta qué se hizo (`cutoff`,
+  `accounts_marked`). Para deshacerlo: `UPDATE identity.users SET
+  email_verified_at = NULL WHERE email_verified_at = (SELECT cutoff FROM
+  identity.email_verification_backfill);` y borrar la fila.
+
+## Orden de despliegue
+
+1. Aplicar la migración 007.
+2. Aplicar la migración 008 **mientras sigue en servicio la versión anterior
+   de Auth**: el corte deja fuera a las cuentas creadas por la versión nueva.
+3. Desplegar Auth nuevo con `EMAIL_VERIFICATION_REQUIRED=false`.
+4. Desplegar Flutter con la pantalla de confirmación y el reenvío.
+5. Activar `EMAIL_VERIFICATION_REQUIRED=true`.
+
+Consecuencia esperada: las cuentas creadas por la versión anterior entre el
+paso 2 y el 3 quedan sin confirmar y **no recibieron correo**. Con el gate
+activo reciben `403 email_not_verified` y deben pedir el reenvío (paso 4). Las
+cuentas creadas desde el paso 3 reciben el correo al registrarse.
+
+## Gate de login y sesiones existentes
+
+- Solo `POST /auth/login` y `POST /auth/refresh` emiten sesiones; ambos aplican
+  el gate después de validar credenciales/refresh y estado de borrado, y antes
+  de emitir tokens. Registro, recuperación, confirmación, conexiones Google,
+  `/internal/*` y gRPC no emiten sesiones.
+- Login → `403 email_not_verified` (solo con la contraseña correcta: no permite
+  enumerar cuentas). Refresh → `401 email_not_verified` (el Flutter actual solo
+  cierra la sesión ante un 401); el refresh no se revoca y vuelve a servir tras
+  confirmar. Un fallo al consultar → 500, sin sesión.
+- **JWT ya emitidos:** el gate no los invalida. Auth, Notes y Social validan el
+  JWT localmente (firma, emisor, audiencia y `exp`; Auth siempre firma con
+  `exp`). Una cuenta sin confirmar con una sesión anterior a la activación
+  conserva acceso como máximo hasta que expire su access token
+  (`ACCESS_TOKEN_EXPIRES_IN`, 900 s por defecto; no se sobrescribe en ningún
+  despliegue del repositorio). Después, el refresh se rechaza y la sesión
+  termina: el acceso nunca es indefinido.
+- No se añadió una consulta por petición: el riesgo residual es de 15 minutos
+  y solo afecta a cuentas creadas por la versión nueva que iniciaron sesión con
+  el gate apagado. Comprobarlo en cada petición exigiría consultar
+  `identity.users` desde Notes y Social (hoy solo validan el JWT y su propia
+  tabla de borrados) o un claim nuevo en el JWT.
+- **Restablecimiento de contraseña:** si la 007 estaba aplicada al arrancar,
+  un restablecimiento exitoso confirma el correo en la misma sentencia que
+  cambia la contraseña (`COALESCE(email_verified_at, now())`), solo tras
+  validar el código enviado a esa dirección.
 
 ## Protección y decisiones de diseño
 
@@ -155,6 +225,11 @@ el texto de errores de SMTP o PostgreSQL (solo `smtp_stage`, `smtp_code`,
   `AUTH_TEST_DATABASE_URL=... go test ./internal/service/ -p 1 -run TestAuthIntegration_EmailVerification -count=1 -v`.
   CI las ejecuta en el job `integration` de `test-auth` (prefijo `TestAuthIntegration_`).
 - Migraciones: `scripts/validate-migrations.sh` (job `test-migrations`).
+- Gate y backfill: `TestEmailGate_*` (unitarios), `TestE2E_EmailVerificationGate_*`
+  (HTTP, job `e2e`) y `TestAuthIntegration_EmailVerification_Backfill*`,
+  `..._GateLoginRefreshFlow`, `..._GateSchemaReady`,
+  `..._PasswordResetMarksVerified` (PostgreSQL). Las suites E2E entre
+  servicios no cambian: el gate está apagado por defecto.
 - Prueba manual pendiente con SMTP real: registrar una cuenta propia de prueba,
   recibir el correo, canjear el código con `POST /auth/verify-email`, comprobar
   `email_verified_at`, reabrir el código (`already_verified`) y pedir un
@@ -162,8 +237,9 @@ el texto de errores de SMTP o PostgreSQL (solo `smtp_stage`, `smtp_code`,
 
 ## Pendiente para tareas posteriores
 
-- Gate de login para cuentas sin confirmar y política para cuentas existentes
-  (backfill o exención): hoy todas quedan con `email_verified_at` NULL.
+- Activar `EMAIL_VERIFICATION_REQUIRED=true` después de desplegar Flutter.
+- Flutter: reconocer `403 email_not_verified` en login (hoy muestra el mensaje)
+  y ofrecer confirmar o reenviar.
 - Pantalla Flutter que reciba el enlace o código y botón «Reenviar correo»;
   después, configurar `EMAIL_VERIFICATION_URL`.
 - Exponer el estado de confirmación (p. ej. en `GET /profile/me`) si el front lo necesita.

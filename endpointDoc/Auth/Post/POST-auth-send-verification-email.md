@@ -82,9 +82,10 @@ Content-Type: application/json
   [auth] email-verification op=SendVerificationEmail user_id=<uuid> step=dispatch status=skipped reason=busy
   [auth] email-verification op=SendVerificationEmail user_id=<uuid> step=dispatch status=error cause=panic
   [auth] email-verification op=SendVerificationEmail user_id=<uuid> step=send status=error smtp_stage=auth smtp_code=535
-  [auth] email-verification op=SendVerificationEmail user_id=<uuid> step=persist status=error sqlstate=42P01
+  [auth] email-verification op=SendVerificationEmail user_id=<uuid> step=persist status=error sqlstate=42703
   ```
   `smtp_stage`: `config`, `address`, `dial`, `tls`, `greeting`, `starttls`, `auth`, `mail_from`, `rcpt`, `data`.
+  `sqlstate=42703` (columna inexistente) es lo que se ve si la migración 007 no está aplicada: la emisión empieza leyendo `identity.users.email_verified_at`. `42P01` solo aparece si existe la columna pero falta la tabla `identity.email_verifications`.
 
 ## 7. Tests Asociados
 - **Unitarios:** `back/auth/internal/service/email_verification_service_test.go` (`TestEmailVerification_Request`, `..._RequestDispatchesOutsideRequest`, `..._LogsNeverLeakSecrets`), `back/auth/internal/service/email_verification_dispatch_test.go` (4 cupos, descarte inmediato sin token, cupos compartidos con el registro, liberación tras éxito/fallo/panic, concurrencia), `back/auth/internal/service/smtp_mailer_test.go` (servidor SMTP falso con TLS).

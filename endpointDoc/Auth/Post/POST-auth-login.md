@@ -26,6 +26,18 @@ Autentica a un usuario mediante email y contraseña, generando un par de tokens 
 - **Errores Posibles:**
   - `400 Bad Request`: `bad_request` (JSON malformado o campos faltantes).
   - `401 Unauthorized`: `invalid_credentials` (email no encontrado o hash de contraseña no coincide; tiempo constante contra enumeración de cuentas).
+  - `403 Forbidden`: `email_not_verified`, solo con `EMAIL_VERIFICATION_REQUIRED=true`: credenciales correctas, pero la cuenta no confirmó su correo. No se emite ningún token.
+    ```json
+    {
+      "error": {
+        "code": "email_not_verified",
+        "message": "Confirma tu correo para iniciar sesión. Revisa tu bandeja de entrada o solicita un nuevo correo de confirmación."
+      }
+    }
+    ```
+    - Solo aparece con la contraseña correcta: no permite descubrir qué correos están registrados. Contraseña incorrecta, cuenta inexistente o cuenta en borrado siguen siendo `401 invalid_credentials`.
+    - El cliente ofrece reenviar el correo ([POST /auth/send-verification-email](POST-auth-send-verification-email.md)) y canjearlo ([POST /auth/verify-email](POST-auth-verify-email.md)). El Flutter actual muestra el `message`; detectar el `code` corresponde a la tarea de Flutter.
+  - `500 Internal Server Error`: `internal_error` si falla la consulta de confirmación (gate activo): no se emite sesión.
 
 ## 3. Invocación (Front / Otros Servicios)
 - **Frontend Flutter:**
@@ -40,16 +52,19 @@ Autentica a un usuario mediante email y contraseña, generando un par de tokens 
 2. **Service (`internal/service/auth_service.go:157`):**
    - Consulta el usuario por email (`userRepo.GetByEmail`). Si no existe, realiza un dummy hash check para mitigar ataques de timing y retorna `invalid_credentials`.
    - Compara la contraseña plana con `bcrypt.CompareHashAndPassword`.
+   - **Gate de confirmación** (`requireVerifiedEmail`, solo con `EMAIL_VERIFICATION_REQUIRED=true`): después de las credenciales y del estado de borrado, y antes de emitir tokens, `EmailVerificationRepository.IsEmailVerified` ejecuta `SELECT email_verified_at IS NOT NULL FROM identity.users WHERE id = $1`. Si es `false` → `email_not_verified`. Con el gate apagado (por defecto) no se consulta nada y el comportamiento es el de antes.
    - Genera el Access Token JWT (`jwt_service.go:74`) firmado con HMAC-SHA256 (`JWT_SECRET`), emisor `iss=apuntes-auth`, audiencia `aud=apuntes-client`, duración 15 minutos (900s).
    - Genera un Refresh Token aleatorio criptoseguro de 32 bytes (64 caracteres hex) con expiración de 7 días.
 3. **Repository (`internal/repository/refresh_token_repository.go`):**
    - Calcula el hash SHA-256 del refresh token y lo inserta en `identity.refresh_tokens`.
 
 ## 5. Dependencias y Datos Afectados
-- **Tablas PostgreSQL:** `identity.users` (lectura), `identity.refresh_tokens` (inserción).
+- **Tablas PostgreSQL:** `identity.users` (lectura; `email_verified_at` con el gate activo, migraciones `007_email_verification.sql` y `008_email_verification_backfill.sql`), `identity.refresh_tokens` (inserción).
+- **Configuración:** `EMAIL_VERIFICATION_REQUIRED` (por defecto `false`). Con `true`, Auth no arranca si faltan 007/008 o SMTP (ver `documentation/email-verification.md`).
 - **Criptografía:** `bcrypt` (cost 10), `crypto/rand`, `golang-jwt/jwt/v5` (HS256).
 
 ## 6. Tests Asociados
 - **Unitarios:** `back/auth/internal/handler/http/auth_handler_test.go` (`TestLogin_Success`, `TestLogin_InvalidCredentials_401`).
 - **Cobertura:** `back/auth/internal/handler/http/auth_extra_coverage_test.go` (`TestCoverage_Login_JSONMalformado_400`, `TestCoverage_Login_EmailInexistente_401`).
 - **E2E:** `back/auth/internal/handler/http/e2e_full_flow_test.go` (`TestE2E_RegisterLoginMeRefreshLogout`).
+- **Gate de confirmación:** `back/auth/internal/service/email_verification_gate_test.go` (`TestEmailGate_*`), `back/auth/internal/handler/http/email_verification_gate_handler_test.go` (`TestE2E_EmailVerificationGate_RegisterLoginVerifyLogin`), `back/auth/internal/service/email_verification_gate_integration_test.go` (`TestAuthIntegration_EmailVerification_GateLoginRefreshFlow`).

@@ -71,7 +71,7 @@ Content-Type: application/json
 ## 5. Dependencias y Datos Afectados
 - **Tablas PostgreSQL:** `identity.users` (`email_verified_at`), `identity.email_verifications` (`consumed_at`). Migración `back/auth/db/migrations/007_email_verification.sql`.
 - **Servicios Externos:** ninguno.
-- **No cambia:** el login y el refresh no miran `email_verified_at` (el bloqueo de cuentas sin confirmar es una tarea posterior).
+- **Login y refresh:** con `EMAIL_VERIFICATION_REQUIRED=true` exigen `email_verified_at`; el canje de este endpoint es lo que desbloquea [POST /auth/login](POST-auth-login.md) (`403 email_not_verified` antes) y [POST /auth/refresh](POST-auth-refresh.md) (`401 email_not_verified` antes). Con el gate apagado (por defecto) no lo miran.
 
 ## 6. Seguridad y Logs
 - 256 bits de entropía: no se puede adivinar ni recorrer; por eso el endpoint no necesita límite de intentos.
