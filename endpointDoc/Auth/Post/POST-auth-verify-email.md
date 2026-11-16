@@ -53,7 +53,10 @@ Content-Type: application/json
 - **Headers de respuesta:** `Cache-Control: no-store` en todas las respuestas.
 
 ## 3. Invocación (Front / Otros Servicios)
-- **Frontend Flutter:** todavía no la consume. La pantalla que recibe el enlace o el código es una tarea posterior.
+- **Frontend Flutter:**
+  - Cliente API: `AuthService.verifyEmail(token)` (`front/lib/core/services/auth_service.dart`); recorta espacios y devuelve `VerifyEmailResult`: `verified`, `alreadyVerified` (200), `invalid` (cualquier 400) o `failed` (otros estados, respuesta no JSON o sin conexión, con `message`).
+  - Pantalla: `EmailVerificationScreen` (`front/lib/features/auth/email_verification_screen.dart`), con el correo precargado y un campo donde se **pega el código** del correo (sin enlaces ni deep links). Con `verified` o `already_verified` muestra «Correo confirmado. Ya puedes iniciar sesión.» o «Tu correo ya estaba confirmado…» y vuelve al login. **No** inicia sesión ni renueva una sesión anterior. Con `invalid` indica que el código es inválido, expiró o fue reemplazado y sugiere pedir otro; con `failed` muestra el mensaje y se queda en la pantalla.
+  - Se abre tras un registro exitoso, desde el diálogo del login 403 («Tengo un código») y desde el enlace fijo «¿Tienes un código de confirmación?» del login.
 - **Otros Microservicios:** no la consumen.
 
 ## 4. Flujo Técnico (Paso a Paso)

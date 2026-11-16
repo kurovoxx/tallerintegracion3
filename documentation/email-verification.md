@@ -5,11 +5,12 @@ la cuenta queda marcada como confirmada (`identity.users.email_verified_at`).
 Usa la misma cuenta SMTP que la [recuperación de contraseña](password-recovery.md)
 (remitente predeterminado `Sigma Academy <sigmaacademy.noreply@gmail.com>`).
 
-**Alcance:** backend de Auth. Incluye SMTP, tokens, endpoints, la migración
-007, el gate de login/refresh (`EMAIL_VERIFICATION_REQUIRED`, **apagado por
-defecto**), el backfill único de cuentas existentes (migración 008) y la
-confirmación por restablecimiento de contraseña. **No** incluye las pantallas
-Flutter (tarea posterior).
+**Alcance:** Auth y Flutter. En el backend: SMTP, tokens, endpoints, la
+migración 007, el gate de login/refresh (`EMAIL_VERIFICATION_REQUIRED`,
+**apagado por defecto**), el backfill único de cuentas existentes (migración
+008) y la confirmación por restablecimiento de contraseña. En Flutter: la
+pantalla de confirmación por código, el reenvío y el manejo del login 403 (ver
+«Frontend Flutter»).
 
 ## Endpoints
 
@@ -235,11 +236,69 @@ el texto de errores de SMTP o PostgreSQL (solo `smtp_stage`, `smtp_code`,
   `email_verified_at`, reabrir el código (`already_verified`) y pedir un
   reenvío (sin correo nuevo para una cuenta confirmada).
 
+## Frontend Flutter
+
+Confirmación por **código pegado**: sin enlaces ni deep links.
+`EMAIL_VERIFICATION_URL` queda vacía y el correo trae el código de 43
+caracteres en una línea propia.
+
+- **Cliente** (`front/lib/core/services/auth_service.dart`):
+  - `sendVerificationEmail(email)` → `LoginResult`;
+  - `verifyEmail(token)` → `VerifyEmailResult` (`verified`, `alreadyVerified`,
+    `invalid`, `failed`);
+  - `LoginResult.errorCode` conserva el `error.code` del login
+    (`AuthService.emailNotVerifiedCode`).
+- **Pantalla** `EmailVerificationScreen`
+  (`front/lib/features/auth/email_verification_screen.dart`):
+  - correo precargado y campo para pegar el código (se recortan los espacios
+    de los extremos);
+  - «CONFIRMAR», «Reenviar correo» con cuenta atrás de 60 s y «Volver al
+    inicio de sesión»;
+  - estados de carga que deshabilitan los botones.
+- **Confirmar:**
+  - `verified` / `already_verified` → aviso «Ya puedes iniciar sesión» y
+    vuelta al login, **sin** iniciar sesión ni renovar la anterior;
+  - `invalid` → «El código es inválido, expiró o fue reemplazado…»;
+  - error de red o servidor → su mensaje, sin salir de la pantalla.
+- **Reenviar:**
+  - 200 → aviso genérico (no revela si la cuenta existe y recomienda revisar
+    spam) y cuenta atrás;
+  - 503 `mail_unavailable` o sin conexión → su mensaje, sin afirmar que el
+    correo salió.
+- **Registro:** «CUENTA CREADA - CONFIRMA TU CORREO», correo copiado al
+  formulario de login y apertura de la pantalla con la cuenta atrás iniciada
+  (el registro ya envió el correo). No inicia sesión.
+- **Login 403 `email_not_verified`:** diálogo «Confirma tu correo»
+  (`front/lib/features/auth/email_not_verified_dialog.dart`) con:
+  - «Reenviar correo»: llama al endpoint con el diálogo abierto (indicador y
+    botones deshabilitados, sin solicitudes duplicadas). Si se acepta, cierra
+    el diálogo y abre la pantalla; si falla (503, red), muestra el error en el
+    diálogo, sin afirmar que el correo salió, y permite reintentar;
+  - «Tengo un código»: abre la pantalla con el correo del formulario;
+  - «Cancelar».
+
+  Credenciales incorrectas, errores de red y demás conservan el aviso de
+  siempre. Enlace fijo «¿Tienes un código de confirmación?» en el login.
+  `LoginScreen` impide abrir dos veces el diálogo o la pantalla (doble
+  toque) y libera la protección al volver o cancelar.
+- **Refresh `401 email_not_verified`:** sin cambios en `AuthedHttp` ni en
+  `SessionManager`. Es un refresh rechazado: la sesión se cierra una vez, sin
+  reintentos, y la app vuelve al login con «Tu sesión expiró»; el correo
+  recordado se conserva. Tras confirmar, la persona inicia sesión de nuevo.
+- **Pruebas:**
+  - `front/test/email_verification_test.dart` (servicio y pantalla);
+  - `front/test/login_email_verification_test.dart` (login y registro);
+  - `front/test/auth_service_test.dart` (login 403/401);
+  - `front/test/session_refresh_test.dart` (refresh 401
+    `email_not_verified`, una sola expiración).
+
+  Ejecutarlas con `flutter test --no-pub` para no reescribir `pubspec.lock`.
+
 ## Pendiente para tareas posteriores
 
 - Activar `EMAIL_VERIFICATION_REQUIRED=true` después de desplegar Flutter.
-- Flutter: reconocer `403 email_not_verified` en login (hoy muestra el mensaje)
-  y ofrecer confirmar o reenviar.
-- Pantalla Flutter que reciba el enlace o código y botón «Reenviar correo»;
-  después, configurar `EMAIL_VERIFICATION_URL`.
+- Opcional: aviso específico en lugar de «Tu sesión expiró» cuando el refresh
+  responde `email_not_verified` (exige pasar el motivo por la lógica de sesión).
+- Opcional: enlace de confirmación para web (token en el fragmento, P3) y
+  `EMAIL_VERIFICATION_URL`.
 - Exponer el estado de confirmación (p. ej. en `GET /profile/me`) si el front lo necesita.

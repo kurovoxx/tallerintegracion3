@@ -46,7 +46,10 @@ Content-Type: application/json
 - **Headers de respuesta:** `Cache-Control: no-store` en todas las respuestas.
 
 ## 3. Invocación (Front / Otros Servicios)
-- **Frontend Flutter:** todavía no la consume. La pantalla de confirmación y el botón «Reenviar correo» son una tarea posterior.
+- **Frontend Flutter:**
+  - Cliente API: `AuthService.sendVerificationEmail(email)` (`front/lib/core/services/auth_service.dart`), que normaliza el correo (trim + minúsculas) y devuelve `LoginResult` (`success` con el 200; si no, `message` con el texto del backend, p. ej. el de `mail_unavailable`, o «No se pudo completar la solicitud…» sin conexión o con una respuesta no JSON).
+  - Pantalla: botón «Reenviar correo» de `EmailVerificationScreen` (`front/lib/features/auth/email_verification_screen.dart`). Con 200 muestra siempre el mismo aviso genérico (`emailVerificationResentMessage`: «Si el correo está registrado y aún no fue confirmado, recibirás un nuevo código… Revisa también la carpeta de spam.») y bloquea el botón 60 s (mismo enfriamiento que el backend). Con error muestra el mensaje y **no** afirma que el correo salió ni inicia la cuenta atrás.
+  - Login: opción «Reenviar correo» del diálogo del 403 `email_not_verified` (`front/lib/features/auth/email_not_verified_dialog.dart`). La petición se hace con el diálogo abierto: «Reenviar correo» muestra un indicador y todos los botones quedan deshabilitados, así que no hay solicitudes duplicadas. Si el backend acepta, cierra el diálogo y abre una sola pantalla con el aviso genérico y la cuenta atrás; si falla (503, sin conexión), muestra el error dentro del diálogo, sin afirmar que el correo salió, y permite reintentar.
 - **Otros Microservicios:** no la consumen.
 
 ## 4. Flujo Técnico (Paso a Paso)

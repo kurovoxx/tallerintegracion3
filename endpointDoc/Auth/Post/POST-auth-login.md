@@ -43,6 +43,8 @@ Autentica a un usuario mediante email y contraseña, generando un par de tokens 
 - **Frontend Flutter:**
   - Cliente API: `front/lib/core/services/auth_service.dart:17` (`loginPath = '/auth/login'`) y método `login(email, password)`.
   - Pantalla: `front/lib/features/auth/login_screen.dart` (pantalla de inicio de sesión).
+  - `LoginResult.errorCode` conserva `error.code`. Con `403 email_not_verified` el login abre el diálogo «Confirma tu correo» (`front/lib/features/auth/email_not_verified_dialog.dart`) con «Reenviar correo» ([POST /auth/send-verification-email](POST-auth-send-verification-email.md)) y «Tengo un código» (`EmailVerificationScreen` con el correo del formulario). El resto de errores (401 `invalid_credentials`, red, etc.) muestran el aviso de siempre.
+  - Un `401 email_not_verified` en `POST /auth/refresh` lo trata la lógica de sesión existente como refresh rechazado: cierra la sesión una vez y vuelve al login («Tu sesión expiró»); el siguiente login muestra el 403 con el reenvío.
 - **Pruebas de Carga (Loadgen):**
   - Script: `scripts/fortio-kanban.sh:58` invoca `POST /auth/login` para obtener el Bearer token antes de atacar el cluster.
 

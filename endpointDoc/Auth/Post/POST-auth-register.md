@@ -35,6 +35,7 @@ Registra un nuevo usuario en la plataforma (`identity.users`) e inicializa su pe
 - **Frontend Flutter:**
   - Cliente API: `front/lib/core/services/auth_service.dart:18` (`registerPath = '/auth/register'`) y método `register(email, password)`.
   - Pantalla: `front/lib/features/auth/register_screen.dart` (formulario de registro).
+  - Tras un `201`, la pestaña de registro de `front/lib/features/auth/login_screen.dart` muestra «CUENTA CREADA - CONFIRMA TU CORREO», deja el correo en el formulario de login y abre `EmailVerificationScreen` con ese correo, el aviso «Tu cuenta fue creada…» y la cuenta atrás de reenvío (60 s, porque el registro ya envió el correo). No inicia sesión; «Volver al inicio de sesión» regresa al login.
 - **Otros Microservicios:** No es consumido por otros servicios (registro exclusivo de usuarios finales).
 
 ## 4. Flujo Técnico (Paso a Paso)
