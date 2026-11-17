@@ -26,21 +26,23 @@ func RespondSuccess(c *gin.Context, status int, payload interface{}) {
 }
 
 const (
-	ErrBadRequest      = "bad_request"
-	ErrUnauthorized    = "unauthorized"
-	ErrForbidden       = "forbidden"
-	ErrNotFound        = "not_found"
-	ErrConflict        = "conflict"
-	ErrInternal        = "internal_error"
-	ErrInvalidToken    = "invalid_token"
-	ErrTokenExpired    = "token_expired"
-	ErrInvalidName     = "invalid_name"
-	ErrInvalidRole     = "invalid_role"
-	ErrAlreadyMember   = "already_member"
-	ErrBanned          = "banned"
-	ErrInvalidInvite   = "invalid_invite_token"
-	ErrLastAdmin       = "last_admin"
-	ErrCannotKickAdmin = "cannot_kick_admin"
+	ErrBadRequest           = "bad_request"
+	ErrUnauthorized         = "unauthorized"
+	ErrForbidden            = "forbidden"
+	ErrNotFound             = "not_found"
+	ErrConflict             = "conflict"
+	ErrInternal             = "internal_error"
+	ErrInvalidToken         = "invalid_token"
+	ErrTokenExpired         = "token_expired"
+	ErrInvalidName          = "invalid_name"
+	ErrInvalidRole          = "invalid_role"
+	ErrInvalidPhotoURL      = "invalid_photo_url"
+	ErrInvalidPhotoThumbURL = "invalid_photo_thumb_url"
+	ErrAlreadyMember        = "already_member"
+	ErrBanned               = "banned"
+	ErrInvalidInvite        = "invalid_invite_token"
+	ErrLastAdmin            = "last_admin"
+	ErrCannotKickAdmin      = "cannot_kick_admin"
 )
 
 func MessageForCode(code string) string {
@@ -49,6 +51,10 @@ func MessageForCode(code string) string {
 		return "name requerido (1-200 caracteres)"
 	case ErrInvalidRole:
 		return "role debe ser admin o member"
+	case ErrInvalidPhotoURL:
+		return "photo_url inválida o excede el tamaño permitido"
+	case ErrInvalidPhotoThumbURL:
+		return "photo_thumb_url inválida o excede el tamaño permitido"
 	case ErrUnauthorized:
 		return "No autorizado: token ausente, inválido o expirado"
 	case ErrForbidden:
@@ -74,7 +80,7 @@ func MessageForCode(code string) string {
 
 func StatusForCode(code string) int {
 	switch code {
-	case ErrInvalidName, ErrInvalidRole, ErrBadRequest, ErrCannotKickAdmin, ErrLastAdmin:
+	case ErrInvalidName, ErrInvalidRole, ErrInvalidPhotoURL, ErrInvalidPhotoThumbURL, ErrBadRequest, ErrCannotKickAdmin, ErrLastAdmin:
 		return http.StatusBadRequest
 	case ErrUnauthorized, ErrInvalidToken, ErrTokenExpired:
 		return http.StatusUnauthorized

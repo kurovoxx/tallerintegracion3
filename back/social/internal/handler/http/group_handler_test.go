@@ -351,3 +351,136 @@ func TestBannedUserIsolationEndToEnd(t *testing.T) {
 	expect(t, e.do(http.MethodGet, "/groups/"+gid, hMember, nil), http.StatusForbidden)
 	expect(t, e.do(http.MethodGet, "/groups/"+gid+"/members", hMember, nil), http.StatusForbidden)
 }
+
+func groupPhotoDataURL(payload int) string {
+	return "data:image/png;base64," + strings.Repeat("A", payload)
+}
+
+func errorCode(t *testing.T, w *httptest.ResponseRecorder) string {
+	t.Helper()
+	body := decode(t, w)
+	errBody, _ := body["error"].(map[string]any)
+	code, _ := errBody["code"].(string)
+	return code
+}
+
+func TestEditGroupPhotoContract(t *testing.T) {
+	e := newEnv()
+	gid := e.createGroup(t, hAdmin)
+	e.join(t, gid, hMember)
+
+	photo := groupPhotoDataURL(4000)
+	thumb := groupPhotoDataURL(2000)
+
+	// Solo admin puede editar (incluida la foto).
+	edit := map[string]any{
+		"name":            "Grupo con foto",
+		"photo_url":       photo,
+		"photo_thumb_url": thumb,
+	}
+	expect(t, e.do(http.MethodPatch, "/groups/"+gid, hMember, edit), http.StatusForbidden)
+	expect(t, e.do(http.MethodPatch, "/groups/"+gid, hStrang, edit), http.StatusForbidden)
+
+	w := e.do(http.MethodPatch, "/groups/"+gid, hAdmin, edit)
+	expect(t, w, http.StatusOK)
+	body := decode(t, w)
+	if body["name"] != "Grupo con foto" || body["photo_url"] != photo || body["photo_thumb_url"] != thumb {
+		t.Fatalf("respuesta de edición incompleta: %s", w.Body)
+	}
+
+	// GET /groups/:id expone la foto completa y la miniatura a los miembros.
+	w = e.do(http.MethodGet, "/groups/"+gid, hMember, nil)
+	expect(t, w, http.StatusOK)
+	got := decode(t, w)
+	if got["photo_url"] != photo || got["photo_thumb_url"] != thumb {
+		t.Fatalf("GET no devuelve las fotos: %s", w.Body)
+	}
+
+	// La vista de grupos (tarjetas) solo lleva la miniatura.
+	cards, err := e.store.ListMyGroupsDetailed(context.Background(), hAdmin)
+	if err != nil || len(cards) != 1 {
+		t.Fatalf("ListMyGroupsDetailed: %v %d", err, len(cards))
+	}
+	if cards[0].PhotoThumbURL == nil || *cards[0].PhotoThumbURL != thumb {
+		t.Fatalf("la tarjeta debe usar photo_thumb_url: %+v", cards[0])
+	}
+
+	// Un PATCH sin campos de foto no las toca.
+	w = e.do(http.MethodPatch, "/groups/"+gid, hAdmin, map[string]any{"name": "Solo nombre"})
+	expect(t, w, http.StatusOK)
+	body = decode(t, w)
+	if body["photo_url"] != photo || body["photo_thumb_url"] != thumb {
+		t.Fatalf("un PATCH sin fotos no debe borrarlas: %s", w.Body)
+	}
+
+	// photo_url="" borra la foto y su miniatura para no dejar un recorte viejo.
+	w = e.do(http.MethodPatch, "/groups/"+gid, hAdmin, map[string]any{"name": "Sin foto", "photo_url": ""})
+	expect(t, w, http.StatusOK)
+	body = decode(t, w)
+	if body["photo_url"] != nil || body["photo_thumb_url"] != nil {
+		t.Fatalf("photo_url vacío debe borrar ambas fotos: %s", w.Body)
+	}
+}
+
+func TestEditGroupPhotoValidation(t *testing.T) {
+	e := newEnv()
+	gid := e.createGroup(t, hAdmin)
+
+	cases := []struct {
+		name string
+		body map[string]any
+		code string
+	}{
+		{
+			name: "foto completa excesiva",
+			body: map[string]any{
+				"name":      "Grupo",
+				"photo_url": groupPhotoDataURL(2_000_000),
+			},
+			code: "invalid_photo_url",
+		},
+		{
+			name: "miniatura excesiva",
+			body: map[string]any{
+				"name":            "Grupo",
+				"photo_thumb_url": groupPhotoDataURL(120_000),
+			},
+			code: "invalid_photo_thumb_url",
+		},
+		{
+			name: "data URL que no es imagen",
+			body: map[string]any{
+				"name":      "Grupo",
+				"photo_url": "data:text/plain;base64,AAAA",
+			},
+			code: "invalid_photo_url",
+		},
+		{
+			name: "URL remota demasiado larga",
+			body: map[string]any{
+				"name":      "Grupo",
+				"photo_url": "https://cdn.example/" + strings.Repeat("a", 500),
+			},
+			code: "invalid_photo_url",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := e.do(http.MethodPatch, "/groups/"+gid, hAdmin, tc.body)
+			expect(t, w, http.StatusBadRequest)
+			if got := errorCode(t, w); got != tc.code {
+				t.Fatalf("code = %q, se esperaba %q: %s", got, tc.code, w.Body)
+			}
+		})
+	}
+
+	// El grupo sigue sin foto tras los intentos inválidos.
+	g, err := e.store.GetByID(context.Background(), gid)
+	if err != nil || g == nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if g.PhotoURL != nil || g.PhotoThumbURL != nil {
+		t.Fatalf("no debe persistir una foto inválida: %+v", g)
+	}
+}

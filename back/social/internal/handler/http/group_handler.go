@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/middleware"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/service"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/utils"
 )
@@ -42,6 +43,10 @@ func (h *GroupHandler) RegisterRoutes(r gin.IRoutes) {
 // respondGroupError traduce los errores de dominio de grupos a HTTP.
 // forbiddenMsg personaliza el texto del 403 según la acción.
 func respondGroupError(c *gin.Context, err error, forbiddenMsg string) {
+	if se, ok := err.(*service.ServiceError); ok {
+		utils.RespondError(c, utils.StatusForCode(se.Code), se.Code, se.Message)
+		return
+	}
 	status, msg := http.StatusInternalServerError, "Error interno del servidor"
 	switch {
 	case errors.Is(err, service.ErrUnauthorized):
@@ -85,10 +90,13 @@ type createGroupRequest struct {
 }
 
 // PATCH /groups/:id
-// Body: {name, description?} — solo admins pueden editar
+// Body: {name, description?, photo_url?, photo_thumb_url?} — solo admins.
+// photo_url/photo_thumb_url aceptan data URLs o URLs http(s); "" borra la foto.
 type updateGroupRequest struct {
-	Name        string  `json:"name" binding:"required"`
-	Description *string `json:"description"`
+	Name          string  `json:"name" binding:"required"`
+	Description   *string `json:"description"`
+	PhotoURL      *string `json:"photo_url"`
+	PhotoThumbURL *string `json:"photo_thumb_url"`
 }
 
 func (h *GroupHandler) Create(c *gin.Context) {
@@ -112,7 +120,7 @@ func (h *GroupHandler) Create(c *gin.Context) {
 }
 
 // PATCH /groups/:id
-// Edita nombre y descripción del grupo. Solo admins.
+// Edita nombre, descripción y foto del grupo. Solo admins.
 func (h *GroupHandler) EditGroup(c *gin.Context) {
 	userID, ok := requireUser(c)
 	if !ok {
@@ -125,16 +133,26 @@ func (h *GroupHandler) EditGroup(c *gin.Context) {
 		return
 	}
 
-	group, err := h.svc.UpdateGroup(c.Request.Context(), c.Param("id"), userID, req.Name, req.Description)
+	update := model.GroupUpdate{
+		Name:             req.Name,
+		Description:      req.Description,
+		PhotoURL:         req.PhotoURL,
+		PhotoThumbURL:    req.PhotoThumbURL,
+		UpdatePhotoURL:   req.PhotoURL != nil,
+		UpdatePhotoThumb: req.PhotoThumbURL != nil,
+	}
+	group, err := h.svc.UpdateGroup(c.Request.Context(), c.Param("id"), userID, update)
 	if err != nil {
 		respondGroupError(c, err, "Acceso denegado: solo los administradores pueden editar el grupo")
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"id":          group.ID,
-		"name":        group.Name,
-		"description": group.Description,
+		"id":              group.ID,
+		"name":            group.Name,
+		"description":     group.Description,
+		"photo_url":       group.PhotoURL,
+		"photo_thumb_url": group.PhotoThumbURL,
 	})
 }
 
