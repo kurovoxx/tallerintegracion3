@@ -35,11 +35,18 @@ int _int(Map<String, dynamic> j, String key, [int fallback = 0]) {
   return fallback;
 }
 
+String? _optionalPhoto(Object? raw) {
+  if (raw is! String) return null;
+  final value = raw.trim();
+  return value.isEmpty ? null : value;
+}
+
 class GroupCard {
   GroupCard({
     required this.groupId,
     required this.name,
     this.description,
+    this.photoThumbUrl,
     required this.role,
     required this.memberCount,
     this.joinedAt,
@@ -48,6 +55,7 @@ class GroupCard {
   final String groupId;
   final String name;
   final String? description;
+  final String? photoThumbUrl;
   final String role;
   final int memberCount;
   final DateTime? joinedAt;
@@ -60,6 +68,7 @@ class GroupCard {
       groupId: _str(j, 'group_id'),
       name: _str(j, 'name', 'Grupo'),
       description: j['description'] as String?,
+      photoThumbUrl: _optionalPhoto(j['photo_thumb_url']),
       role: _str(j, 'role', 'member'),
       memberCount: _int(j, 'member_count'),
       joinedAt: joined,
@@ -130,6 +139,8 @@ class GroupDetail {
     required this.id,
     required this.name,
     this.description,
+    this.photoUrl,
+    this.photoThumbUrl,
     required this.ownerUserId,
     required this.notesRestrictedToStaff,
     this.inviteToken,
@@ -141,6 +152,8 @@ class GroupDetail {
   final String id;
   final String name;
   final String? description;
+  final String? photoUrl;
+  final String? photoThumbUrl;
   final String ownerUserId;
   final bool notesRestrictedToStaff;
   final String? inviteToken;
@@ -157,6 +170,8 @@ class GroupDetail {
       id: _str(j, 'id'),
       name: _str(j, 'name', 'Grupo'),
       description: j['description'] as String?,
+      photoUrl: _optionalPhoto(j['photo_url']),
+      photoThumbUrl: _optionalPhoto(j['photo_thumb_url']),
       ownerUserId: _str(j, 'owner_user_id'),
       notesRestrictedToStaff: notesRestricted is bool ? notesRestricted : false,
       inviteToken: j['invite_token'] as String?,

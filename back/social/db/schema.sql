@@ -5,6 +5,8 @@ CREATE TABLE IF NOT EXISTS social.groups (
   id uuid not null default gen_random_uuid (),
   name character varying(200) not null,
   description text null,
+  photo_url text null,
+  photo_thumb_url text null,
   owner_user_id uuid not null,
   notes_restricted_to_staff boolean not null default false,
   invite_token uuid not null default gen_random_uuid (),

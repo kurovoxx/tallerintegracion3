@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -62,8 +63,8 @@ type GroupStore interface {
 	CountAdmins(ctx context.Context, groupID string) (int, error)
 	RemoveMember(ctx context.Context, groupID, userID string) error
 	DeleteGroup(ctx context.Context, groupID string) error
-	// UpdateGroup modifica nombre y descripción. Solo admins.
-	UpdateGroup(ctx context.Context, groupID, userID string, name string, description *string) (*model.Group, error)
+	// UpdateGroup modifica nombre, descripción y foto. Solo admins.
+	UpdateGroup(ctx context.Context, groupID, userID string, update model.GroupUpdate) (*model.Group, error)
 	// HandleAccountDeletion saca al usuario de todos sus grupos aplicando la
 	// sucesión automática de admin. Es idempotente.
 	HandleAccountDeletion(ctx context.Context, userID string) ([]model.SuccessionResult, error)
@@ -103,6 +104,32 @@ type NoopGroupCreatedNotifier struct{}
 func (NoopGroupCreatedNotifier) OnGroupCreated(ctx context.Context, groupID string) {}
 
 const defaultNotesBaseURL = "http://localhost:8082"
+
+const (
+	maxGroupPhotoURLLength        = 500
+	maxGroupPhotoDataURLLen       = 2_000_000
+	maxGroupPhotoThumbDataURLLen  = 120_000
+	groupPhotoDataURLPrefix       = "data:image/"
+	groupPhotoDataURLBase64Marker = ";base64,"
+)
+
+// validGroupPhotoURL acepta URLs http(s) cortas o data URLs de imagen
+// recortadas por el cliente. El límite se ajusta para foto completa o miniatura.
+func validGroupPhotoURL(v string, maxDataURLLen int) bool {
+	if v == "" {
+		return true
+	}
+	if strings.HasPrefix(v, "data:") {
+		return strings.HasPrefix(v, groupPhotoDataURLPrefix) &&
+			strings.Contains(v, groupPhotoDataURLBase64Marker) &&
+			len(v) <= maxDataURLLen
+	}
+	if len(v) > maxGroupPhotoURLLength {
+		return false
+	}
+	u, err := url.Parse(v)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
 
 type GroupService struct {
 	groups       GroupStore
@@ -271,6 +298,8 @@ func (s *GroupService) GetGroup(ctx context.Context, groupID, userID string) (*m
 		ID:                     group.ID,
 		Name:                   group.Name,
 		Description:            group.Description,
+		PhotoURL:               group.PhotoURL,
+		PhotoThumbURL:          group.PhotoThumbURL,
 		OwnerUserID:            group.OwnerUserID,
 		NotesRestrictedToStaff: group.NotesRestrictedToStaff,
 		CreatedAt:              group.CreatedAt,
@@ -599,8 +628,8 @@ func (s *GroupService) TransferAdmin(ctx context.Context, groupID, currentAdminI
 	})
 }
 
-// UpdateGroup modifica nombre y descripción del grupo. Solo admins.
-func (s *GroupService) UpdateGroup(ctx context.Context, groupID, userID string, name string, description *string) (*model.Group, error) {
+// UpdateGroup modifica nombre, descripción y foto del grupo. Solo admins.
+func (s *GroupService) UpdateGroup(ctx context.Context, groupID, userID string, update model.GroupUpdate) (*model.Group, error) {
 	if userID == "" {
 		return nil, ErrUnauthorized
 	}
@@ -608,21 +637,54 @@ func (s *GroupService) UpdateGroup(ctx context.Context, groupID, userID string, 
 		return nil, ErrNotFound
 	}
 
-	name = utils.NormalizeName(name)
-	if err := validateName(name); err != nil {
+	update.Name = utils.NormalizeName(update.Name)
+	if err := validateName(update.Name); err != nil {
 		return nil, err
 	}
 
-	if description != nil {
-		trimmed := strings.TrimSpace(*description)
+	if update.Description != nil {
+		trimmed := strings.TrimSpace(*update.Description)
 		if trimmed == "" {
-			description = nil
+			update.Description = nil
 		} else {
-			description = &trimmed
+			update.Description = &trimmed
 		}
 	}
 
-	group, err := s.groups.UpdateGroup(ctx, groupID, userID, name, description)
+	// photo_url: "" borra la foto; si cambia sin mandar miniatura, se borra
+	// la miniatura anterior para no dejar un recorte viejo.
+	if update.UpdatePhotoURL {
+		v := ""
+		if update.PhotoURL != nil {
+			v = strings.TrimSpace(*update.PhotoURL)
+		}
+		if !validGroupPhotoURL(v, maxGroupPhotoDataURLLen) {
+			return nil, newServiceError(utils.ErrInvalidPhotoURL)
+		}
+		update.PhotoURL = nil
+		if v != "" {
+			update.PhotoURL = &v
+		}
+		if !update.UpdatePhotoThumb {
+			update.UpdatePhotoThumb = true
+			update.PhotoThumbURL = nil
+		}
+	}
+	if update.UpdatePhotoThumb {
+		v := ""
+		if update.PhotoThumbURL != nil {
+			v = strings.TrimSpace(*update.PhotoThumbURL)
+		}
+		if !validGroupPhotoURL(v, maxGroupPhotoThumbDataURLLen) {
+			return nil, newServiceError(utils.ErrInvalidPhotoThumbURL)
+		}
+		update.PhotoThumbURL = nil
+		if v != "" {
+			update.PhotoThumbURL = &v
+		}
+	}
+
+	group, err := s.groups.UpdateGroup(ctx, groupID, userID, update)
 	if err != nil {
 		return nil, mapStoreErr(err)
 	}

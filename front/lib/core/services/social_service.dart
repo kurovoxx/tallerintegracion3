@@ -142,12 +142,16 @@ class SocialService {
     return GroupDetail.fromJson(body);
   }
 
-  // PATCH /groups/:id {name, description?} -> 200 {id, name, description}.
+  // PATCH /groups/:id {name, description?, photo_url?, photo_thumb_url?}.
   // Solo admin. Ver back/social/internal/handler/http/group_handler.go EditGroup.
+  // updatePhoto=true envía ambas fotos; "" elimina la foto del grupo.
   Future<GroupDetail> updateGroup({
     required String groupId,
     required String name,
     String? description,
+    String? photoUrl,
+    String? photoThumbUrl,
+    bool updatePhoto = false,
   }) async {
     final gid = groupId.trim();
     if (gid.isEmpty) {
@@ -157,6 +161,10 @@ class SocialService {
       'name': name.trim(),
       if (description != null && description.trim().isNotEmpty)
         'description': description.trim(),
+      if (updatePhoto) ...{
+        'photo_url': photoUrl?.trim() ?? '',
+        'photo_thumb_url': photoThumbUrl?.trim() ?? '',
+      },
     };
     final res = await AuthedHttp.run(
       () => _client

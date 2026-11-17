@@ -35,10 +35,10 @@ func (r *GroupRepository) CreateWithOwner(ctx context.Context, name string, desc
 	insertGroup := `
 		INSERT INTO social.groups (name, description, owner_user_id)
 		VALUES ($1, $2, $3)
-		RETURNING id, name, description, owner_user_id, notes_restricted_to_staff, invite_token, created_at
+		RETURNING id, name, description, photo_url, photo_thumb_url, owner_user_id, notes_restricted_to_staff, invite_token, created_at
 	`
 	err = tx.QueryRow(ctx, insertGroup, name, description, ownerUserID).Scan(
-		&g.ID, &g.Name, &g.Description, &g.OwnerUserID, &g.NotesRestrictedToStaff, &g.InviteToken, &g.CreatedAt,
+		&g.ID, &g.Name, &g.Description, &g.PhotoURL, &g.PhotoThumbURL, &g.OwnerUserID, &g.NotesRestrictedToStaff, &g.InviteToken, &g.CreatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert group: %w", err)
@@ -61,12 +61,12 @@ func (r *GroupRepository) CreateWithOwner(ctx context.Context, name string, desc
 func (r *GroupRepository) GetByID(ctx context.Context, id string) (*model.Group, error) {
 	var g model.Group
 	query := `
-		SELECT id, name, description, owner_user_id, notes_restricted_to_staff, invite_token, created_at 
+		SELECT id, name, description, photo_url, photo_thumb_url, owner_user_id, notes_restricted_to_staff, invite_token, created_at
 		FROM social.groups 
 		WHERE id = $1`
 
 	err := r.pool.QueryRow(ctx, query, id).Scan(
-		&g.ID, &g.Name, &g.Description, &g.OwnerUserID, &g.NotesRestrictedToStaff, &g.InviteToken, &g.CreatedAt,
+		&g.ID, &g.Name, &g.Description, &g.PhotoURL, &g.PhotoThumbURL, &g.OwnerUserID, &g.NotesRestrictedToStaff, &g.InviteToken, &g.CreatedAt,
 	)
 
 	if err != nil {
@@ -480,7 +480,7 @@ func (r *GroupRepository) RemoveMember(ctx context.Context, groupID, userID stri
 // fecha de ingreso y cantidad de miembros (vista principal, tarea 2_3_14).
 func (r *GroupRepository) ListMyGroupsDetailed(ctx context.Context, userID string) ([]*model.GroupCard, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT g.id, g.name, g.description, m.role, m.joined_at,
+		SELECT g.id, g.name, g.description, g.photo_thumb_url, m.role, m.joined_at,
 		       (SELECT count(*) FROM social.group_memberships x WHERE x.group_id = g.id) AS member_count
 		FROM social.groups g
 		JOIN social.group_memberships m ON m.group_id = g.id
@@ -494,7 +494,7 @@ func (r *GroupRepository) ListMyGroupsDetailed(ctx context.Context, userID strin
 	cards := []*model.GroupCard{}
 	for rows.Next() {
 		var c model.GroupCard
-		if err := rows.Scan(&c.GroupID, &c.Name, &c.Description, &c.Role, &c.JoinedAt, &c.MemberCount); err != nil {
+		if err := rows.Scan(&c.GroupID, &c.Name, &c.Description, &c.PhotoThumbURL, &c.Role, &c.JoinedAt, &c.MemberCount); err != nil {
 			return nil, err
 		}
 		cards = append(cards, &c)
@@ -515,8 +515,8 @@ func (r *GroupRepository) DeleteGroup(ctx context.Context, groupID string) error
 	return nil
 }
 
-// UpdateGroup modifica nombre y descripción del grupo. Solo admins.
-func (r *GroupRepository) UpdateGroup(ctx context.Context, groupID, userID string, name string, description *string) (*model.Group, error) {
+// UpdateGroup modifica nombre, descripción y foto del grupo. Solo admins.
+func (r *GroupRepository) UpdateGroup(ctx context.Context, groupID, userID string, update model.GroupUpdate) (*model.Group, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -529,18 +529,20 @@ func (r *GroupRepository) UpdateGroup(ctx context.Context, groupID, userID strin
 		return nil, err
 	}
 
-	if strings.TrimSpace(name) == "" {
+	if strings.TrimSpace(update.Name) == "" {
 		return nil, errors.New("invalid_name")
 	}
 
 	var g model.Group
 	err = tx.QueryRow(ctx, `
 		UPDATE social.groups 
-		SET name = $1, description = $2 
-		WHERE id = $3 
-		RETURNING id, name, description, owner_user_id, notes_restricted_to_staff, invite_token, created_at
-	`, name, description, groupID).Scan(
-		&g.ID, &g.Name, &g.Description, &g.OwnerUserID, &g.NotesRestrictedToStaff, &g.InviteToken, &g.CreatedAt,
+		SET name = $1, description = $2,
+		    photo_url = CASE WHEN $3 THEN $4 ELSE photo_url END,
+		    photo_thumb_url = CASE WHEN $5 THEN $6 ELSE photo_thumb_url END
+		WHERE id = $7
+		RETURNING id, name, description, photo_url, photo_thumb_url, owner_user_id, notes_restricted_to_staff, invite_token, created_at
+	`, update.Name, update.Description, update.UpdatePhotoURL, update.PhotoURL, update.UpdatePhotoThumb, update.PhotoThumbURL, groupID).Scan(
+		&g.ID, &g.Name, &g.Description, &g.PhotoURL, &g.PhotoThumbURL, &g.OwnerUserID, &g.NotesRestrictedToStaff, &g.InviteToken, &g.CreatedAt,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {

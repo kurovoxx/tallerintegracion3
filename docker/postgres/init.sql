@@ -503,6 +503,8 @@ CREATE TABLE social.groups (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name varchar(200) NOT NULL,
     description text,
+    photo_url text,
+    photo_thumb_url text,
     owner_user_id uuid NOT NULL,
     notes_restricted_to_staff boolean NOT NULL DEFAULT false,
     invite_token uuid NOT NULL DEFAULT gen_random_uuid() UNIQUE,

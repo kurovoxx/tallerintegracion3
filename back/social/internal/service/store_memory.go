@@ -90,12 +90,13 @@ func (m *MemoryGroupStore) ListMyGroupsDetailed(_ context.Context, userID string
 		if ms := m.find(gid, userID); ms != nil {
 			g := m.groups[gid]
 			out = append(out, &model.GroupCard{
-				GroupID:     gid,
-				Name:        g.Name,
-				Description: g.Description,
-				Role:        ms.Role,
-				MemberCount: len(m.member[gid]),
-				JoinedAt:    ms.JoinedAt,
+				GroupID:       gid,
+				Name:          g.Name,
+				Description:   g.Description,
+				PhotoThumbURL: g.PhotoThumbURL,
+				Role:          ms.Role,
+				MemberCount:   len(m.member[gid]),
+				JoinedAt:      ms.JoinedAt,
 			})
 		}
 	}
@@ -276,7 +277,7 @@ func (m *MemoryGroupStore) DeleteGroup(_ context.Context, groupID string) error 
 	return nil
 }
 
-func (m *MemoryGroupStore) UpdateGroup(_ context.Context, groupID, userID string, name string, description *string) (*model.Group, error) {
+func (m *MemoryGroupStore) UpdateGroup(_ context.Context, groupID, userID string, update model.GroupUpdate) (*model.Group, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.requireAdminLocked(groupID, userID); err != nil {
@@ -286,11 +287,17 @@ func (m *MemoryGroupStore) UpdateGroup(_ context.Context, groupID, userID string
 	if !ok {
 		return nil, errors.New("group_not_found")
 	}
-	if strings.TrimSpace(name) == "" {
+	if strings.TrimSpace(update.Name) == "" {
 		return nil, errors.New("invalid_name")
 	}
-	g.Name = name
-	g.Description = description
+	g.Name = update.Name
+	g.Description = update.Description
+	if update.UpdatePhotoURL {
+		g.PhotoURL = update.PhotoURL
+	}
+	if update.UpdatePhotoThumb {
+		g.PhotoThumbURL = update.PhotoThumbURL
+	}
 	cp := *g
 	return &cp, nil
 }

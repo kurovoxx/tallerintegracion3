@@ -1039,25 +1039,35 @@ class _GroupCard extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: 52,
-                  height: 52,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: color,
-                    border: Border.all(
-                      color: AppColors.border,
-                      width: AppDimens.borderWidth,
-                    ),
-                    borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+                if (group.photoThumbUrl != null)
+                  UserAvatar(
+                    name: group.name,
+                    size: 52,
+                    photoUrl: group.photoThumbUrl,
+                    backgroundColor: color,
                     boxShadow: AppShadows.badge,
+                    fontSize: 18,
+                  )
+                else
+                  Container(
+                    width: 52,
+                    height: 52,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: color,
+                      border: Border.all(
+                        color: AppColors.border,
+                        width: AppDimens.borderWidth,
+                      ),
+                      borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+                      boxShadow: AppShadows.badge,
+                    ),
+                    child: const Icon(
+                      Icons.groups_rounded,
+                      size: 26,
+                      color: AppColors.text,
+                    ),
                   ),
-                  child: const Icon(
-                    Icons.groups_rounded,
-                    size: 26,
-                    color: AppColors.text,
-                  ),
-                ),
                 const SizedBox(width: AppDimens.spaceMd),
                 Expanded(
                   child: Column(

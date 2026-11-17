@@ -8,10 +8,23 @@ type Group struct {
 	ID                     string    `json:"id"`
 	Name                   string    `json:"name"`
 	Description            *string   `json:"description,omitempty"`
+	PhotoURL               *string   `json:"photo_url,omitempty"`
+	PhotoThumbURL          *string   `json:"photo_thumb_url,omitempty"`
 	OwnerUserID            string    `json:"owner_user_id"`
 	NotesRestrictedToStaff bool      `json:"notes_restricted_to_staff"`
 	InviteToken            string    `json:"invite_token"`
 	CreatedAt              time.Time `json:"created_at"`
+}
+
+// GroupUpdate es el PATCH de un grupo. Los flags distinguen "no enviado" de
+// "enviado vacío" para poder borrar la foto sin tocar los demás campos.
+type GroupUpdate struct {
+	Name             string
+	Description      *string
+	PhotoURL         *string
+	PhotoThumbURL    *string
+	UpdatePhotoURL   bool
+	UpdatePhotoThumb bool
 }
 
 // GroupMembership representa una fila de social.group_memberships.
@@ -56,6 +69,8 @@ type GroupView struct {
 	ID                     string    `json:"id"`
 	Name                   string    `json:"name"`
 	Description            *string   `json:"description,omitempty"`
+	PhotoURL               *string   `json:"photo_url,omitempty"`
+	PhotoThumbURL          *string   `json:"photo_thumb_url,omitempty"`
 	OwnerUserID            string    `json:"owner_user_id"`
 	NotesRestrictedToStaff bool      `json:"notes_restricted_to_staff"`
 	InviteToken            string    `json:"invite_token,omitempty"`

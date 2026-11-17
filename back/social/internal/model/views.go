@@ -9,12 +9,13 @@ import "time"
 
 // GroupCard es una tarjeta de grupo para la vista de grupos.
 type GroupCard struct {
-	GroupID     string    `json:"group_id"`
-	Name        string    `json:"name"`
-	Description *string   `json:"description,omitempty"`
-	Role        string    `json:"role"`
-	MemberCount int       `json:"member_count"`
-	JoinedAt    time.Time `json:"joined_at"`
+	GroupID       string    `json:"group_id"`
+	Name          string    `json:"name"`
+	Description   *string   `json:"description,omitempty"`
+	PhotoThumbURL *string   `json:"photo_thumb_url,omitempty"`
+	Role          string    `json:"role"`
+	MemberCount   int       `json:"member_count"`
+	JoinedAt      time.Time `json:"joined_at"`
 }
 
 // SidebarGroup es la entrada mínima de un grupo en la barra lateral global.

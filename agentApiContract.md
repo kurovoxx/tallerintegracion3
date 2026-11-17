@@ -59,6 +59,7 @@ inexistente, eliminar la nota y sus `shared_notes`.
 |---|---|---|---|---|
 | POST | `/groups` | `{name, description?}` | `201 {group_id}` — creador queda como `admin`; dispara creación de canal Stream | — |
 | GET | `/groups/{id}` | — | `200` datos del grupo y `role` del solicitante; `invite_token` solo se incluye si eres admin | `403` no eres miembro; `404` |
+| PATCH | `/groups/{id}` | `{name, description?, photo_url?, photo_thumb_url?}` | `200 {id, name, description, photo_url, photo_thumb_url}` — solo admins; `""` borra la foto y su miniatura | `403` no eres admin; `400` foto inválida o demasiado grande |
 | GET | `/groups/me` | — | `200 [{group_id, name, role}]` | — |
 | POST | `/groups/{id}/join` | `{invite_token}` | `201` — crea membresía como `member` | `403` baneado (con cualquier token, viejo o nuevo); `404` token inválido o mal formado |
 | POST | `/groups/{id}/invite/regenerate` | — | `200 {new_invite_token}` | `403` no eres admin |
