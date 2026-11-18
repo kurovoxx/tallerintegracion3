@@ -34,6 +34,12 @@ CREATE TABLE identity.users (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     email varchar(255) NOT NULL UNIQUE,
     password_hash varchar(255) NOT NULL,
+    -- Igual que el esquema real (init.sql / migración 006): código público
+    -- obligatorio, único y con formato Crockford Base32. El DEFAULT
+    -- generado del esquema real no se replica: el fixture siembra valores.
+    public_id text NOT NULL
+        CONSTRAINT users_public_id_key UNIQUE
+        CONSTRAINT users_public_id_format CHECK (public_id ~ '^[0-9a-hj-km-np-tv-z]{12}$'),
     created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE identity.profiles (
@@ -136,8 +142,9 @@ func TestIdentityServerPG(t *testing.T) {
 			t.Fatalf("fixture: %v", err)
 		}
 	}
-	exec(`INSERT INTO identity.users (id, email, password_hash) VALUES ($1, 'ada@test.invalid', 'x')`, ada)
-	exec(`INSERT INTO identity.users (id, email, password_hash) VALUES ($1, 'solo@test.invalid', 'x')`, solo)
+	const adaPublicID, soloPublicID = "a8kp92mqwx7r", "b8kp92mqwx7r"
+	exec(`INSERT INTO identity.users (id, email, password_hash, public_id) VALUES ($1, 'ada@test.invalid', 'x', $2)`, ada, adaPublicID)
+	exec(`INSERT INTO identity.users (id, email, password_hash, public_id) VALUES ($1, 'solo@test.invalid', 'x', $2)`, solo, soloPublicID)
 	exec(`INSERT INTO identity.profiles (user_id, display_name) VALUES ($1, 'Ada')`, ada)
 	fut := time.Now().Add(2 * time.Hour).Truncate(time.Second)
 	past := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
@@ -202,6 +209,10 @@ func TestIdentityServerPG(t *testing.T) {
 	if err != nil || u.GetEmail() != "ada@test.invalid" || u.GetDisplayName() != "Ada" {
 		t.Fatalf("GetUser PG = %v, %v", u, err)
 	}
+	// El código público se lee de identity.users.public_id.
+	if u.GetPublicId() != adaPublicID {
+		t.Fatalf("GetUser PG public_id = %q, se esperaba %q", u.GetPublicId(), adaPublicID)
+	}
 	s, err := c.GetUser(gctx, &identityv1.GetUserRequest{UserId: solo})
 	if err != nil || s.GetDisplayName() != "" {
 		t.Fatalf("sin perfil con nombre debe venir ausente: %v, %v", s, err)
@@ -215,6 +226,13 @@ func TestIdentityServerPG(t *testing.T) {
 	r, err := c.LookupUsers(gctx, &identityv1.LookupUsersRequest{UserIds: []string{ada, solo, ghost}})
 	if err != nil || len(r.GetUsers()) != 2 {
 		t.Fatalf("LookupUsers PG = %v, %v", r, err)
+	}
+	// Cada usuario trae su código público (incluido el que no tiene nombre).
+	wantPublic := map[string]string{ada: adaPublicID, solo: soloPublicID}
+	for _, lu := range r.GetUsers() {
+		if lu.GetPublicId() != wantPublic[lu.GetUserId()] {
+			t.Fatalf("LookupUsers PG public_id de %s = %q, se esperaba %q", lu.GetUserId(), lu.GetPublicId(), wantPublic[lu.GetUserId()])
+		}
 	}
 
 	// VerifyToken con JWT real recién emitido.
