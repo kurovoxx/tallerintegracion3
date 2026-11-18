@@ -71,14 +71,18 @@ void main() {
     await t.ensureVisible(find.text('AÑADIR INVITADO'));
     await t.tap(find.text('AÑADIR INVITADO'));
     await t.pumpAndSettle();
-    expect(find.byType(InputChip), findsOneWidget);
+    final chip = find.byKey(const Key('guest-chip-persona@correo.cl'));
+    expect(chip, findsOneWidget);
+    // Sin chips Material: el invitado es un sticker neobrutalista.
+    expect(find.byType(InputChip), findsNothing);
     await t.enterText(field, ' persona@correo.cl ');
     await t.tap(find.text('AÑADIR INVITADO'));
     await t.pumpAndSettle();
-    expect(find.byType(InputChip), findsOneWidget);
-    t.widget<InputChip>(find.byType(InputChip)).onDeleted!();
+    expect(chip, findsOneWidget);
+    await t.ensureVisible(find.byKey(const Key('guest-chip-remove')));
+    await t.tap(find.byKey(const Key('guest-chip-remove')));
     await t.pumpAndSettle();
-    expect(find.byType(InputChip), findsNothing);
+    expect(chip, findsNothing);
     await t.enterText(field, 'nombre-sin-email');
     await t.tap(find.text('AÑADIR INVITADO'));
     await t.pumpAndSettle();

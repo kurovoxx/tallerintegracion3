@@ -154,9 +154,11 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
     var picking = false;
     var saving = false;
 
-    final saved = await showDialog<bool>(
+    final saved = await showNeobrutalistDialog<bool>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
+      // Mientras guarda no se cierra tocando fuera (evita perder el estado).
+      barrierDismissible: false,
+      dialog: StatefulBuilder(
         builder: (context, setD) {
           Future<void> pickPhoto() async {
             if (saving || picking) return;
@@ -208,39 +210,97 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
           final photoProvider = userAvatarProvider(photoThumbUrl ?? photoUrl);
           final hasPhoto = photoProvider != null;
           final busy = saving || picking;
-          return AlertDialog(
-            title: const Text(
-              'EDITAR GRUPO',
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                color: Color(0xFF1A1A1A),
+          Future<void> save() async {
+            final newName = nameCtrl.text.trim();
+            if (newName.isEmpty) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('El nombre no puede estar vacío.'),
+                  backgroundColor: AppColors.error,
+                ),
+              );
+              return;
+            }
+            setD(() => saving = true);
+            try {
+              final updated = await _service.updateGroup(
+                groupId: detail.id,
+                name: newName,
+                description: descCtrl.text.trim().isEmpty
+                    ? null
+                    : descCtrl.text.trim(),
+                photoUrl: photoChanged ? photoUrl : null,
+                photoThumbUrl: photoChanged ? photoThumbUrl : null,
+                updatePhoto: photoChanged,
+              );
+              if (!mounted) return;
+              setState(() => _detail = updated);
+              if (context.mounted) Navigator.of(context).pop(true);
+            } on SocialApiException catch (_) {
+              if (!mounted) return;
+              ScaffoldMessenger.of(this.context).showSnackBar(
+                const SnackBar(
+                  content: Text('No se pudo editar el grupo.'),
+                  backgroundColor: AppColors.error,
+                ),
+              );
+              setD(() => saving = false);
+            }
+          }
+
+          const groupIcon = Icon(
+            Icons.groups_rounded,
+            size: 42,
+            color: AppColors.text,
+          );
+          const fieldStyle = TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 14,
+            color: AppColors.text,
+          );
+          const compactPadding = EdgeInsets.symmetric(
+            horizontal: AppDimens.spaceMd,
+            vertical: AppDimens.spaceSm,
+          );
+          return NeobrutalistDialog(
+            title: 'EDITAR GRUPO',
+            // Pie propio: los botones se bloquean mientras se procesa la foto
+            // o se guarda, cosa que cancel/confirm estándar no permite.
+            actions: [
+              NeobrutalistButton(
+                key: const Key('group-edit-cancel'),
+                label: 'Cancelar',
+                variant: NeobrutalistButtonVariant.secondary,
+                onPressed: busy ? null : () => Navigator.of(context).pop(false),
               ),
-            ),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text(
-                    'FOTO DEL GRUPO',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                      color: Color(0xFF555555),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Container(
+              NeobrutalistButton(
+                key: const Key('group-edit-save'),
+                label: saving ? 'Guardando...' : 'Guardar',
+                icon: Icons.save_rounded,
+                variant: NeobrutalistButtonVariant.accent,
+                onPressed: busy ? null : save,
+              ),
+            ],
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const AppFieldLabel('FOTO DEL GRUPO'),
+                const SizedBox(height: AppDimens.spaceSm),
+                Center(
+                  child: Container(
                     width: 96,
                     height: 96,
                     clipBehavior: Clip.hardEdge,
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
-                      color: const Color(0xFFFFCC00),
+                      color: AppColors.accentYellow,
                       border: Border.all(
-                        color: const Color(0xFF1A1A1A),
-                        width: 2,
+                        color: AppColors.border,
+                        width: AppDimens.borderWidth,
                       ),
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(AppDimens.radius),
+                      boxShadow: AppShadows.button,
                     ),
                     child: hasPhoto
                         ? Image(
@@ -248,136 +308,65 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                             fit: BoxFit.cover,
                             width: 96,
                             height: 96,
-                            errorBuilder: (_, _, _) => const Icon(
-                              Icons.groups_rounded,
-                              size: 42,
-                              color: Color(0xFF1A1A1A),
-                            ),
+                            errorBuilder: (_, _, _) => groupIcon,
                           )
-                        : const Icon(
-                            Icons.groups_rounded,
-                            size: 42,
-                            color: Color(0xFF1A1A1A),
-                          ),
+                        : groupIcon,
                   ),
-                  const SizedBox(height: 4),
-                  Wrap(
-                    alignment: WrapAlignment.center,
-                    children: [
-                      TextButton.icon(
-                        key: const Key('group-photo-change'),
-                        onPressed: busy ? null : pickPhoto,
-                        icon: const Icon(Icons.photo_camera_rounded, size: 18),
-                        label: Text(picking ? 'PROCESANDO...' : 'CAMBIAR FOTO'),
+                ),
+                const SizedBox(height: AppDimens.spaceMd),
+                Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: AppDimens.spaceSm,
+                  runSpacing: AppDimens.spaceSm,
+                  children: [
+                    NeobrutalistButton(
+                      key: const Key('group-photo-change'),
+                      label: picking ? 'Procesando...' : 'Cambiar foto',
+                      icon: Icons.photo_camera_rounded,
+                      variant: NeobrutalistButtonVariant.secondary,
+                      padding: compactPadding,
+                      onPressed: busy ? null : pickPhoto,
+                    ),
+                    if (hasPhoto)
+                      NeobrutalistButton(
+                        key: const Key('group-photo-remove'),
+                        label: 'Quitar',
+                        icon: Icons.delete_rounded,
+                        variant: NeobrutalistButtonVariant.danger,
+                        padding: compactPadding,
+                        onPressed: busy
+                            ? null
+                            : () => setD(() {
+                                photoUrl = null;
+                                photoThumbUrl = null;
+                                photoChanged = true;
+                              }),
                       ),
-                      if (hasPhoto)
-                        TextButton.icon(
-                          key: const Key('group-photo-remove'),
-                          onPressed: busy
-                              ? null
-                              : () => setD(() {
-                                  photoUrl = null;
-                                  photoThumbUrl = null;
-                                  photoChanged = true;
-                                }),
-                          icon: const Icon(Icons.delete_rounded, size: 18),
-                          label: const Text('QUITAR'),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      'NOMBRE',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFF555555),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  TextField(
-                    controller: nameCtrl,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      hintText: 'Nombre del grupo',
-                    ),
-                    maxLength: 200,
-                  ),
-                  const SizedBox(height: 16),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      'DESCRIPCIÓN',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFF555555),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  TextField(
-                    controller: descCtrl,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      hintText: 'Descripción (opcional)',
-                    ),
-                    maxLines: 3,
-                    maxLength: 500,
-                  ),
-                ],
-              ),
+                  ],
+                ),
+                const SizedBox(height: AppDimens.spaceLg),
+                const AppFieldLabel('NOMBRE'),
+                const SizedBox(height: 4),
+                TextField(
+                  controller: nameCtrl,
+                  enabled: !saving,
+                  style: fieldStyle,
+                  decoration: appInputDecoration('Nombre del grupo'),
+                  maxLength: 200,
+                ),
+                const SizedBox(height: AppDimens.spaceSm),
+                const AppFieldLabel('DESCRIPCIÓN'),
+                const SizedBox(height: 4),
+                TextField(
+                  controller: descCtrl,
+                  enabled: !saving,
+                  style: fieldStyle,
+                  decoration: appInputDecoration('Descripción (opcional)'),
+                  maxLines: 3,
+                  maxLength: 500,
+                ),
+              ],
             ),
-            actions: [
-              TextButton(
-                onPressed: busy ? null : () => Navigator.of(ctx).pop(false),
-                child: const Text('CANCELAR'),
-              ),
-              ElevatedButton(
-                onPressed: busy
-                    ? null
-                    : () async {
-                        final newName = nameCtrl.text.trim();
-                        if (newName.isEmpty) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('El nombre no puede estar vacío.'),
-                            ),
-                          );
-                          return;
-                        }
-                        setD(() => saving = true);
-                        try {
-                          final updated = await _service.updateGroup(
-                            groupId: detail.id,
-                            name: newName,
-                            description: descCtrl.text.trim().isEmpty
-                                ? null
-                                : descCtrl.text.trim(),
-                            photoUrl: photoChanged ? photoUrl : null,
-                            photoThumbUrl: photoChanged ? photoThumbUrl : null,
-                            updatePhoto: photoChanged,
-                          );
-                          if (!mounted) return;
-                          setState(() => _detail = updated);
-                          if (ctx.mounted) Navigator.of(ctx).pop(true);
-                        } on SocialApiException catch (_) {
-                          if (!mounted) return;
-                          ScaffoldMessenger.of(this.context).showSnackBar(
-                            const SnackBar(
-                              content: Text('No se pudo editar el grupo.'),
-                              backgroundColor: AppColors.error,
-                            ),
-                          );
-                          setD(() => saving = false);
-                        }
-                      },
-                child: Text(saving ? 'Guardando...' : 'Guardar'),
-              ),
-            ],
           );
         },
       ),

@@ -366,12 +366,15 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                             ),
                           ),
                           const SizedBox(height: AppDimens.spaceSm),
-                          if (_loadingMembers) const LinearProgressIndicator(),
-                          if (_membersError != null) Text(_membersError!),
+                          if (_loadingMembers) const _InkProgressBar(),
+                          if (_membersError != null)
+                            _InlineNotice(text: _membersError!, isError: true),
                           if (!_loadingMembers &&
                               _membersError == null &&
                               _members.isEmpty)
-                            const Text('No hay integrantes disponibles.'),
+                            const _InlineNotice(
+                              text: 'No hay integrantes disponibles.',
+                            ),
                           Wrap(
                             spacing: AppDimens.spaceSm,
                             runSpacing: AppDimens.spaceSm,
@@ -413,10 +416,32 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                           const SizedBox(height: AppDimens.spaceSm),
                           _FieldShell(
                             child: TextField(
+                              key: const Key('guest-email-field'),
                               controller: _emailCtrl,
-                              decoration: appInputDecoration(
-                                'Correo del invitado',
-                              ).copyWith(errorText: _guestError),
+                              cursorColor: AppColors.text,
+                              decoration:
+                                  appInputDecoration(
+                                    'Correo del invitado',
+                                  ).copyWith(
+                                    prefixIcon: const Icon(
+                                      Icons.alternate_email_rounded,
+                                      size: 18,
+                                      color: AppColors.text,
+                                    ),
+                                    // Borde rojo de error sin el texto Material
+                                    // flotante: el mensaje va en _InlineNotice.
+                                    enabledBorder: _guestError == null
+                                        ? null
+                                        : OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              AppDimens.radius,
+                                            ),
+                                            borderSide: const BorderSide(
+                                              color: AppColors.error,
+                                              width: AppDimens.borderWidth,
+                                            ),
+                                          ),
+                                  ),
                               style: const TextStyle(
                                 fontWeight: FontWeight.w700,
                                 fontSize: 13,
@@ -426,29 +451,41 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                               onSubmitted: (value) => _addGuest(value),
                             ),
                           ),
+                          if (_guestError != null) ...[
+                            const SizedBox(height: AppDimens.spaceSm),
+                            _InlineNotice(text: _guestError!, isError: true),
+                          ],
                           const SizedBox(height: AppDimens.spaceMd),
                           Align(
                             alignment: Alignment.centerLeft,
                             child: NeobrutalistButton(
+                              key: const Key('guest-add-button'),
                               label: 'Añadir invitado',
                               icon: Icons.add_rounded,
                               variant: NeobrutalistButtonVariant.info,
                               onPressed: () => _addGuest(_emailCtrl.text),
                             ),
                           ),
-                          const SizedBox(height: AppDimens.spaceSm),
-                          Wrap(
-                            spacing: 8,
-                            children: [
-                              for (final guest in _guests.entries)
-                                InputChip(
-                                  label: Text(guest.value),
-                                  onDeleted: () =>
-                                      setState(() => _guests.remove(guest.key)),
-                                ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
+                          if (_guests.isNotEmpty) ...[
+                            const SizedBox(height: AppDimens.spaceMd),
+                            AppFieldLabel('INVITADOS (${_guests.length})'),
+                            const SizedBox(height: AppDimens.spaceSm),
+                            Wrap(
+                              spacing: AppDimens.spaceSm,
+                              runSpacing: AppDimens.spaceSm,
+                              children: [
+                                for (final guest in _guests.entries)
+                                  _GuestStickerChip(
+                                    key: Key('guest-chip-${guest.key}'),
+                                    label: guest.value,
+                                    onRemove: () => setState(
+                                      () => _guests.remove(guest.key),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ],
+                          const SizedBox(height: AppDimens.spaceLg),
                           NeobrutalistButton(
                             label: _isSubmitting
                                 ? 'Agendando...'
@@ -811,6 +848,161 @@ class _MemberStickerChipState extends State<_MemberStickerChip> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Invitado ya añadido: sticker de tinta con su botón de quitar (reemplaza al
+/// `InputChip` Material, que traía píldora redondeada y elevación).
+class _GuestStickerChip extends StatelessWidget {
+  const _GuestStickerChip({
+    super.key,
+    required this.label,
+    required this.onRemove,
+  });
+
+  final String label;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.only(left: AppDimens.spaceMd),
+      decoration: BoxDecoration(
+        color: AppColors.accentYellow,
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
+        borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+        boxShadow: AppShadows.badge,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            Icons.mail_outline_rounded,
+            size: 13,
+            color: AppColors.text,
+          ),
+          const SizedBox(width: AppDimens.spaceXs),
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 0.3,
+                color: AppColors.text,
+              ),
+            ),
+          ),
+          const SizedBox(width: AppDimens.spaceXs),
+          Semantics(
+            button: true,
+            label: 'Quitar invitado $label',
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: GestureDetector(
+                key: const Key('guest-chip-remove'),
+                behavior: HitTestBehavior.opaque,
+                onTap: onRemove,
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: const BoxDecoration(
+                    border: Border(
+                      left: BorderSide(
+                        color: AppColors.border,
+                        width: AppDimens.borderWidth,
+                      ),
+                    ),
+                  ),
+                  child: const Icon(
+                    Icons.close_rounded,
+                    size: 14,
+                    color: AppColors.text,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Aviso en línea (error o vacío) con la tipografía del sistema: texto en
+/// negrita sobre caja de tinta, en lugar de `Text` suelto o `errorText`.
+class _InlineNotice extends StatelessWidget {
+  const _InlineNotice({required this.text, this.isError = false});
+
+  final String text;
+  final bool isError;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppDimens.spaceMd,
+        vertical: AppDimens.spaceSm,
+      ),
+      decoration: BoxDecoration(
+        color: isError ? AppColors.surface : AppColors.surfaceLow,
+        border: Border.all(
+          color: isError ? AppColors.error : AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isError ? Icons.error_outline_rounded : Icons.info_outline_rounded,
+            size: 16,
+            color: isError ? AppColors.errorDeep : AppColors.text,
+          ),
+          const SizedBox(width: AppDimens.spaceSm),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                color: isError ? AppColors.errorDeep : AppColors.text,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Barra de carga de tinta: borde de 2 px y relleno negro, sin el estilo
+/// Material por defecto.
+class _InkProgressBar extends StatelessWidget {
+  const _InkProgressBar();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 10,
+      decoration: BoxDecoration(
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+      ),
+      child: const LinearProgressIndicator(
+        minHeight: 6,
+        color: AppColors.border,
+        backgroundColor: AppColors.surfaceLow,
       ),
     );
   }
