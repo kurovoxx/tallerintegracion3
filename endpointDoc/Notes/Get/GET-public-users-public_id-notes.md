@@ -31,6 +31,7 @@ No tiene equivalente gRPC.
       "saves_count": 1,
       "is_liked": false,
       "is_saved": true,
+      "is_own": false,
       "created_at": "2026-11-01T10:00:00Z",
       "updated_at": "2026-11-02T10:00:00Z"
     }
@@ -47,6 +48,7 @@ No tiene equivalente gRPC.
 - La visibilidad del **perfil** no filtra este listado: un perfil `private`
   oculta sus datos en Auth, pero sus apuntes públicos siguen visibles para
   cualquier usuario autenticado.
+- `is_own` es `true` cuando el solicitante es el autor (buscó su propio código): la app oculta «Guardar» sin conocer el UUID.
 - `is_liked` / `is_saved` son del solicitante; los contadores se resuelven en
   lote (3 consultas por página).
 

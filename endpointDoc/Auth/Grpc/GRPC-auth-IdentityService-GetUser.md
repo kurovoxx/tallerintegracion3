@@ -10,7 +10,7 @@
 
 ## Res
 
-- OK devuelve user_id, email, display_name opcional y photo_thumb_url opcional; solo datos públicos. La foto completa nunca se expone por este RPC.
+- OK devuelve user_id, email, display_name opcional, photo_thumb_url opcional y public_id opcional (código público del perfil, campo 5); solo datos públicos. La foto completa nunca se expone por este RPC.
 - `INVALID_ARGUMENT`: UUID inválido; `NOT_FOUND`: user_not_found; `INTERNAL`: error de repository.
 - No devuelve hashes, tokens ni datos de autenticación.
 

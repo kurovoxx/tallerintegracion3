@@ -29,6 +29,7 @@ El body son los contadores exactos tras la escritura (igual que [`GET /notes/{id
 | 404 | `not_found` "nota no encontrada" | No existe o es privada sin acceso (indistinguibles) (`note_service.go:1659-1670`) |
 | 410 | `note_deleted` | El autor lo borró y era público (o ya estaba guardado) |
 | 409 | `already_saved` "Nota ya guardada" | Ya existe la fila (comprobación previa o carrera revalidada) (`L1674-1685`) |
+| 409 | `cannot_save_own_note` "No puedes guardar tus propios apuntes" | El solicitante es el autor del apunte. Se comprueba en `NoteService.Save` después del control de acceso, así que no depende de que la app oculte el botón. Los guardados propios creados antes de esta regla se conservan y se pueden quitar con `DELETE /notes/{id}/save`. |
 | 500 | `internal_error` | Fallo de Postgres, o de Social al comprobar membresía (`L632-635`) |
 | 401 / 423 / 503 | ver [COMUN §2](../COMUN-notes.md#2-autenticación-http) | Middleware |
 

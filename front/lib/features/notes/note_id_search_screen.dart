@@ -279,6 +279,8 @@ class _NoteIdSearchScreenState extends State<NoteIdSearchScreen> {
               isLiked: note.isLiked,
               isSaved: note.isSaved,
             ),
+            // El autor no puede guardar su propio apunte.
+            showSave: !note.isOwn,
             onChanged: (s) => setState(
               () => _result = note.copyWith(
                 likesCount: s.likesCount,

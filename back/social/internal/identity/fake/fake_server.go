@@ -168,6 +168,7 @@ func (s *Server) LookupUsers(ctx context.Context, req *identityv1.LookupUsersReq
 			UserId:      u.GetUserId(),
 			Email:       u.GetEmail(),
 			DisplayName: dn,
+			PublicId:    u.PublicId,
 		})
 	}
 	return &identityv1.LookupUsersResponse{Users: out}, nil

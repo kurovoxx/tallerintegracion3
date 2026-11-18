@@ -40,7 +40,6 @@ void main() {
       (tester) async {
         await pumpAt(tester, size);
 
-        expect(find.text('SIMULACIÓN'), findsOneWidget);
         expect(find.text('NOTA OBJETIVO'), findsOneWidget);
         expect(find.text('MODO DE CÁLCULO'), findsOneWidget);
         expect(find.text('NOTAS DEL SIMULADOR'), findsOneWidget);

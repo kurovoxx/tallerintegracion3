@@ -32,7 +32,8 @@ Ejemplo: `GET /notes/saved?scope=others&q=integral&availability=available&limit=
   "items": [
     {
       "saved_id": "c930dff0-…", "note_id": "1386d23f-…", "saved_at": "2026-11-05T19:54:21Z",
-      "is_available": true, "title": "Cálculo II", "user_id": "40f9076f-…",
+      "is_available": true, "title": "Cálculo II",
+      "author_public_id": "a8kp92mqwx7r",
       "subject_id": "…", "visibility": "public",
       "likes_count": 3, "saves_count": 2, "is_liked": true, "is_saved": true, "is_own": false,
       "updated_at": "2026-11-05T19:50:00Z"
@@ -40,7 +41,7 @@ Ejemplo: `GET /notes/saved?scope=others&q=integral&availability=available&limit=
     {
       "saved_id": "…", "note_id": "…", "saved_at": "…",
       "is_available": false, "unavailable_reason": "deleted",
-      "title": "Redes - Modelo OSI", "user_id": "…", "deleted_at": "2026-11-05T20:01:00Z",
+      "title": "Redes - Modelo OSI", "deleted_at": "2026-11-05T20:01:00Z",
       "likes_count": 0, "saves_count": 0, "is_liked": false, "is_saved": true, "is_own": false
     }
   ],
@@ -49,6 +50,7 @@ Ejemplo: `GET /notes/saved?scope=others&q=integral&availability=available&limit=
 ```
 
 - Orden: guardado más reciente primero. `next_cursor` vacío = no hay más páginas.
+- `author_public_id`: código público del autor (una llamada a `IdentityService.LookupUsers` por página; se omite si Identity falla y nunca se reemplaza por el UUID). La app muestra «Autor <código>» y permite abrir el perfil del autor. El UUID interno del autor (`user_id`) **ya no se serializa** (`json:"-"` en `SavedNoteView.AuthorID`); el filtro de entrada `author_id` sigue aceptando un UUID por compatibilidad.
 - `is_available=false` nunca se omite ni produce 500. `unavailable_reason`:
   - `deleted`: el autor borró el apunte. `title` sale de la lápida `notes.note_tombstones`.
   - `no_access`: el apunte existe pero el usuario ya no puede leerlo (pasó a privado o se retiró el share). Por zero-knowledge, `title` es el genérico "Apunte no disponible" y no se exponen metadatos actuales.

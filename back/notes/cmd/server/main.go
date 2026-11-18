@@ -121,10 +121,22 @@ func newGRPCDriveClient(cfg *config.Config) drive.Client {
 	})
 }
 
+// injectIdentityProfiles inyecta el cliente Identity de perfiles: resuelve
+// public_id → UUID (listado por perfil) y UUID de autor → código público
+// (listados de guardados y públicos). Sin IDENTITY_GRPC_ADDR no inyecta nada.
+func injectIdentityProfiles(svc *service.NoteService, cfg *config.Config) {
+	client := newPublicProfileResolver(cfg)
+	if client == nil {
+		return
+	}
+	svc.SetPublicProfileResolver(client)
+	svc.SetAuthorPublicIDResolver(client)
+}
+
 // newPublicProfileResolver construye el cliente Identity que resuelve
 // public_id → UUID. Es independiente de STORAGE_MODE: se inyecta siempre, y si
 // Identity no está disponible cada llamada falla con 503 sin tumbar Notes.
-func newPublicProfileResolver(cfg *config.Config) service.PublicProfileResolver {
+func newPublicProfileResolver(cfg *config.Config) *notesIdentity.PublicProfileClient {
 	addr := strings.TrimSpace(cfg.IdentityGRPCAddr)
 	if addr == "" {
 		return nil
@@ -164,7 +176,7 @@ func runServer(pool *pgxpool.Pool, driveClient drive.Client, cfg *config.Config)
 	defer deletionRepo.Close()
 	social, members := newSocialAdapters(cfg)
 	svc := service.NewNoteService(noteStore, attStore, savedStore, likeStore, sharedStore, driveClient, social)
-	svc.SetPublicProfileResolver(newPublicProfileResolver(cfg))
+	injectIdentityProfiles(svc, cfg)
 	svc.SetAccountDeletionRepository(deletionRepo)
 	// Directorio de correos para share restricted: adaptador HTTP real a Social
 	// (o memoria solo con DEV_SEED_SOCIAL explícito).
@@ -188,7 +200,7 @@ func runServerMemory(driveClient drive.Client, cfg *config.Config) {
 	social, members := newSocialAdapters(cfg)
 
 	svc := service.NewNoteService(noteStore, attStore, savedStore, likeStore, sharedStore, driveClient, social)
-	svc.SetPublicProfileResolver(newPublicProfileResolver(cfg))
+	injectIdentityProfiles(svc, cfg)
 	svc.SetMemberDirectory(members)
 	startServers(svc, cfg, nil)
 }

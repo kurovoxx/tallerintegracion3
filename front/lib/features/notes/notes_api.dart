@@ -62,6 +62,8 @@ String notesFriendlyMessage(int? status, String? code, {String? fallback}) {
       return 'Ya le diste like a este apunte.';
     case 'already_copied':
       return 'Ya copiaste este apunte a tus apuntes.';
+    case 'cannot_save_own_note':
+      return 'No puedes guardar tus propios apuntes.';
     case 'rate_limited':
       return 'Demasiadas copias seguidas. Espera un minuto e inténtalo de nuevo.';
   }
@@ -228,6 +230,14 @@ class NoteInteractions {
   );
 }
 
+/// Compara dos estados de interacción campo a campo.
+bool sameNoteInteractions(NoteInteractions a, NoteInteractions b) =>
+    a.noteId == b.noteId &&
+    a.likesCount == b.likesCount &&
+    a.savesCount == b.savesCount &&
+    a.isLiked == b.isLiked &&
+    a.isSaved == b.isSaved;
+
 /// Página de un listado con cursor (`{items, next_cursor}`).
 class NotesPage<T> {
   const NotesPage(this.items, this.nextCursor);
@@ -242,15 +252,18 @@ class NotesPage<T> {
 class PublicNoteSummary {
   const PublicNoteSummary({
     required this.id,
-    required this.userId,
     required this.title,
     required this.interactions,
     this.subjectId,
     this.updatedAt,
+    this.authorPublicId,
   });
 
   final String id;
-  final String userId;
+
+  /// Código público del autor; null si no se resolvió. La API ya no envía el
+  /// identificador interno del autor.
+  final String? authorPublicId;
   final String title;
   final String? subjectId;
   final DateTime? updatedAt;
@@ -260,7 +273,7 @@ class PublicNoteSummary {
     final id = (j['id'] as String?) ?? '';
     return PublicNoteSummary(
       id: id,
-      userId: (j['user_id'] as String?) ?? '',
+      authorPublicId: authorPublicIdFromJson(j),
       title: (j['title'] as String?) ?? 'Sin título',
       subjectId: j['subject_id'] as String?,
       updatedAt: DateTime.tryParse(j['updated_at']?.toString() ?? ''),
@@ -268,6 +281,16 @@ class PublicNoteSummary {
     );
   }
 }
+
+/// Lee `author_public_id` y lo acepta solo si tiene el formato de código
+/// público: jamás se usa el identificador interno como sustituto.
+String? authorPublicIdFromJson(Map<String, dynamic> j) =>
+    normalizePublicId((j['author_public_id'] as String?) ?? '');
+
+/// Etiqueta del autor para tarjetas: su código público o, si no se pudo
+/// resolver, solo «Autor» (nunca un fragmento del identificador interno).
+String authorBadgeLabel(String? authorPublicId) =>
+    authorPublicId == null ? 'Autor' : 'Autor $authorPublicId';
 
 /// Apunte público de un perfil (GET /public-users/:public_id/notes).
 /// No incluye el UUID del autor: el perfil se identifica por public_id.
@@ -278,6 +301,7 @@ class PublicProfileNote {
     required this.interactions,
     this.subjectId,
     this.visibility = 'public',
+    this.isOwn = false,
     this.createdAt,
     this.updatedAt,
   });
@@ -286,6 +310,9 @@ class PublicProfileNote {
   final String title;
   final String? subjectId;
   final String visibility;
+
+  /// El solicitante es el autor (buscó su propio código): no puede guardarlo.
+  final bool isOwn;
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final NoteInteractions interactions;
@@ -296,6 +323,7 @@ class PublicProfileNote {
         title: title,
         subjectId: subjectId,
         visibility: visibility,
+        isOwn: isOwn,
         createdAt: createdAt,
         updatedAt: updatedAt,
         interactions: interactions ?? this.interactions,
@@ -308,6 +336,7 @@ class PublicProfileNote {
       title: (j['title'] as String?) ?? 'Sin título',
       subjectId: j['subject_id'] as String?,
       visibility: (j['visibility'] as String?) ?? 'public',
+      isOwn: j['is_own'] == true,
       createdAt: DateTime.tryParse(j['created_at']?.toString() ?? ''),
       updatedAt: DateTime.tryParse(j['updated_at']?.toString() ?? ''),
       interactions: NoteInteractions.fromJson(j, id),
@@ -364,7 +393,7 @@ class SavedNoteItem {
     required this.isAvailable,
     required this.interactions,
     this.unavailableReason,
-    this.authorId,
+    this.authorPublicId,
     this.subjectId,
     this.isOwn = false,
     this.savedAt,
@@ -377,7 +406,10 @@ class SavedNoteItem {
   final String title;
   final bool isAvailable;
   final String? unavailableReason;
-  final String? authorId;
+
+  /// Código público del autor; null si no se resolvió. La API ya no envía el
+  /// identificador interno del autor.
+  final String? authorPublicId;
   final String? subjectId;
   final bool isOwn;
   final DateTime? savedAt;
@@ -395,7 +427,7 @@ class SavedNoteItem {
       title: (j['title'] as String?) ?? 'Apunte',
       isAvailable: j['is_available'] == true,
       unavailableReason: j['unavailable_reason'] as String?,
-      authorId: j['user_id'] as String?,
+      authorPublicId: authorPublicIdFromJson(j),
       subjectId: j['subject_id'] as String?,
       isOwn: j['is_own'] == true,
       savedAt: DateTime.tryParse(j['saved_at']?.toString() ?? ''),
@@ -765,8 +797,13 @@ class NotesApi {
     if (saved && res.statusCode == 201 && res.body.isNotEmpty) {
       return NoteInteractions.fromJson(_decodeMap(res), noteId);
     }
+    // Solo `already_saved` es idempotente («ya estaba guardado»). Cualquier
+    // otro 409 —p. ej. `cannot_save_own_note`— es un rechazo real: no se
+    // informa «Apunte guardado» y la barra revierte el cambio optimista.
     final ok = saved
-        ? (res.statusCode == 201 || res.statusCode == 409)
+        ? (res.statusCode == 201 ||
+              (res.statusCode == 409 &&
+                  _toError(res, '').code == 'already_saved'))
         : res.statusCode == 204;
     if (!ok) throw _friendly(res, 'No se pudo actualizar el guardado.');
     try {

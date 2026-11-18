@@ -35,7 +35,7 @@ La prioridad se aplica al estado actual del proyecto y no significa que una func
 
 ### SHOULD
 
-**RN-IDENT-09.** La visibilidad del perfil admite los valores `public` y `private`. Los datos de un perfil `private` solo puede consultarlos su dueño; para cualquier otro usuario autenticado `GET /profile/public/:public_id` responde `404` sin revelar su existencia. Sus apuntes públicos siguen visibles (RN-PERFIL-06).
+**RN-IDENT-09.** La visibilidad del perfil admite los valores `public` y `private`. Al buscar un perfil por su código, uno `public` muestra nombre, foto, descripción, correo, teléfono y universidad; uno `private` muestra a terceros **solo nombre y foto** (`GET /profile/public/:public_id` responde `200` sin los demás campos, que Auth descarta antes del handler). El dueño ve siempre todos sus datos. Sus apuntes públicos siguen visibles (RN-PERFIL-06). *(Actualizado en `feat/mejoras-perfiles-y-apuntes`: antes un perfil privado ajeno respondía `404` y correo, teléfono y descripción nunca se exponían.)*
 
 ---
 
@@ -53,9 +53,9 @@ La prioridad se aplica al estado actual del proyecto y no significa que una func
 
 **RN-PERFIL-06.** La visibilidad del perfil y la de los apuntes son independientes (decisión aprobada por el Scrum Master). Un perfil `private` oculta sus datos a otros usuarios, pero sus apuntes marcados como `public` siguen listándose en `GET /public-users/:public_id/notes` para cualquier usuario autenticado. Los apuntes privados nunca aparecen. La app muestra «Perfil privado» junto a esos apuntes.
 
-**RN-PERFIL-07.** `identity.users.public_id` es un identificador público de 12 caracteres Crockford Base32 en minúsculas (`^[0-9a-hj-km-np-tv-z]{12}$`, 60 bits), único, no nulo y generado por PostgreSQL (migración `006_public_profile_id.sql`). Es lo único que se comparte: el botón «Compartir perfil» de Mi Perfil copia el enlace `sigma-academy://perfil/<public_id>` (nunca el UUID interno). «Buscar perfil» («Pega aquí el enlace del perfil») acepta ese enlace, también dentro de otro texto, o el ID escrito directamente (sin distinguir mayúsculas), y rechaza UUID internos, enlaces http/https, otros esquemas o dominios, enlaces con segmentos, query o fragmento adicionales, textos con perfiles distintos, nombres, correos y teléfonos. No convierte `l`/`o` a `1`/`0`, no busca por datos personales y no registra deep links: el usuario pega el ID o el enlace en la app.
+**RN-PERFIL-07.** `identity.users.public_id` es un identificador público de 12 caracteres Crockford Base32 en minúsculas (`^[0-9a-hj-km-np-tv-z]{12}$`, 60 bits), único, no nulo y generado por PostgreSQL (migración `006_public_profile_id.sql`). Es lo único que se comparte y lo que la app muestra en lugar del UUID (ficha de integrante de un grupo y autor de apuntes guardados y públicos). El botón «Compartir perfil» de Mi Perfil copia **solo el código** (nunca un enlace ni el UUID interno). «Buscar perfil» («Ingresa el código del perfil que deseas buscar») acepta únicamente el código (sin distinguir mayúsculas ni espacios alrededor) y rechaza cualquier enlace —incluidos los antiguos `sigma-academy://perfil/...`—, UUID internos, nombres, correos y teléfonos. No convierte `l`/`o` a `1`/`0` ni busca por datos personales.
 
-**RN-PERFIL-08.** `GET /profile/public/:public_id` responde `404` para un `public_id` inválido, inexistente o de un perfil privado ajeno; `GET /public-users/:public_id/notes` responde `404` solo para un `public_id` inválido o inexistente. Ambos responden `503` cuando Identity no puede resolver el perfil. Un autor válido sin apuntes públicos devuelve `200` con lista vacía; un fallo de infraestructura nunca se disfraza de lista vacía.
+**RN-PERFIL-08.** `GET /profile/public/:public_id` responde `404` para un `public_id` inválido o inexistente (un perfil privado responde `200` solo con nombre y foto, RN-IDENT-09); `GET /public-users/:public_id/notes` responde `404` solo para un `public_id` inválido o inexistente. Ambos responden `503` cuando Identity no puede resolver el perfil. Un autor válido sin apuntes públicos devuelve `200` con lista vacía; un fallo de infraestructura nunca se disfraza de lista vacía.
 
 ### SHOULD
 
@@ -123,7 +123,7 @@ La prioridad se aplica al estado actual del proyecto y no significa que una func
 
 ### SHOULD
 
-**RN-NOTES-14.** Un usuario puede guardar una referencia a una nota accesible de otro usuario. El acceso debe volver a comprobarse cuando la referencia sea utilizada.
+**RN-NOTES-14.** Un usuario puede guardar una referencia a una nota accesible de otro usuario. El acceso debe volver a comprobarse cuando la referencia sea utilizada. El autor **no** puede guardar su propio apunte: `POST /notes/{id}/save` responde `409 cannot_save_own_note` (regla del backend; la app además oculta «Guardar»). Los guardados propios anteriores a esta regla se conservan y pueden quitarse.
 
 **RN-NOTES-15.** Si la nota original de una referencia guardada deja de existir, la referencia también deja de estar disponible.
 

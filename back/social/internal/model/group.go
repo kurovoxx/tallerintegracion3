@@ -64,8 +64,9 @@ func (p MemberPermissions) Effective(role string) MemberPermissions {
 }
 
 // MemberView enriquece GroupMembership con datos públicos de Identity.
-// DisplayName/Email se omiten cuando no se pudieron resolver
-// (backward-compatible con clientes que solo esperan IDs+rol).
+// DisplayName/Email/PublicID se omiten cuando no se pudieron resolver
+// (backward-compatible con clientes que solo esperan IDs+rol). PublicID es el
+// código público del perfil: la interfaz lo muestra en lugar de UserID.
 type MemberView struct {
 	ID       string    `json:"id"`
 	GroupID  string    `json:"group_id"`
@@ -76,6 +77,7 @@ type MemberView struct {
 	DisplayName   *string `json:"display_name,omitempty"`
 	Email         *string `json:"email,omitempty"`
 	PhotoThumbURL *string `json:"photo_thumb_url,omitempty"`
+	PublicID      *string `json:"public_id,omitempty"`
 }
 
 type MyGroup struct {

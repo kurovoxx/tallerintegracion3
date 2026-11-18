@@ -43,11 +43,17 @@ func (m *mockProfileRepo) GetPublicByPublicID(ctx context.Context, publicID stri
 		if p.PublicID != publicID {
 			continue
 		}
+		// Copia TODOS los campos que el repositorio real carga, para que las
+		// pruebas detecten cualquier filtración en el Service.
 		return &model.PublicProfile{
 			UserID:      p.UserID,
 			PublicID:    p.PublicID,
 			DisplayName: p.DisplayName,
+			PhotoURL:    p.PhotoURL,
 			Institution: p.Institution,
+			Description: p.Description,
+			Email:       p.Email,
+			Phone:       p.Phone,
 			Visibility:  p.Visibility,
 		}, nil
 	}
@@ -610,5 +616,142 @@ func TestProfileService_GetPublicProfileByPublicID_PrivadoDueno_200(t *testing.T
 	}
 	if p.PublicID != "a8kp92mqwx7r" {
 		t.Fatalf("public_id = %q", p.PublicID)
+	}
+}
+
+// --- Privacidad del perfil consultado por código (mejoras de perfiles) ---
+
+func privacyStrPtr(s string) *string { return &s }
+
+// fullProfile tiene todos los campos que un dueño puede publicar.
+func fullProfile(uid, visibility string) *model.Profile {
+	return &model.Profile{
+		UserID:      uid,
+		PublicID:    "a8kp92mqwx7r",
+		DisplayName: "Ana",
+		PhotoURL:    privacyStrPtr("data:image/png;base64,iVBORw0KGgo="),
+		Institution: privacyStrPtr("UCT"),
+		Description: privacyStrPtr("Descripción"),
+		Email:       privacyStrPtr("ana@test.invalid"),
+		Phone:       privacyStrPtr("+56912345678"),
+		Visibility:  visibility,
+	}
+}
+
+func assertOnlyNameAndPhoto(t *testing.T, p *model.PublicProfile) {
+	t.Helper()
+	if p.Institution != nil || p.Description != nil || p.Email != nil || p.Phone != nil {
+		t.Fatalf("un perfil privado ajeno solo expone nombre y foto: %+v", p)
+	}
+	if p.DisplayName == "" || p.Visibility != model.VisibilityPrivate {
+		t.Fatalf("nombre/visibilidad incorrectos: %+v", p)
+	}
+}
+
+func TestProfileService_PerfilPublico_TodosLosCampos(t *testing.T) {
+	repo := newMockRepo()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = fullProfile(uid, model.VisibilityPublic)
+	svc := NewProfileService(repo)
+	p, err := svc.GetPublicProfileByPublicID(context.Background(), "550e8400-e29b-41d4-a716-446655440002", "a8kp92mqwx7r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.PhotoURL == nil || p.Institution == nil || *p.Description != "Descripción" ||
+		*p.Email != "ana@test.invalid" || *p.Phone != "+56912345678" {
+		t.Fatalf("un perfil público debe exponer todos los campos: %+v", p)
+	}
+}
+
+// Privado ajeno: solo nombre y foto, aunque el repositorio cargue el resto.
+func TestProfileService_PerfilPrivadoAjeno_SoloNombreYFoto(t *testing.T) {
+	repo := newMockRepo()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = fullProfile(uid, model.VisibilityPrivate)
+	svc := NewProfileService(repo)
+	p, err := svc.GetPublicProfileByPublicID(context.Background(), "550e8400-e29b-41d4-a716-446655440002", "a8kp92mqwx7r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOnlyNameAndPhoto(t, p)
+	if p.PhotoURL == nil {
+		t.Fatalf("la foto subida en la app sí se muestra en un perfil privado: %+v", p)
+	}
+}
+
+// Cualquier visibilidad distinta de "public" (vacía, desconocida o con
+// mayúsculas) se trata como privada para terceros.
+func TestProfileService_VisibilidadDesconocida_EsPrivada(t *testing.T) {
+	for _, vis := range []string{"", "friends", "PUBLIC", " public"} {
+		repo := newMockRepo()
+		uid := "550e8400-e29b-41d4-a716-446655440001"
+		repo.store[uid] = fullProfile(uid, vis)
+		svc := NewProfileService(repo)
+		p, err := svc.GetPublicProfileByPublicID(context.Background(), "550e8400-e29b-41d4-a716-446655440002", "a8kp92mqwx7r")
+		if err != nil {
+			t.Fatalf("%q: %v", vis, err)
+		}
+		assertOnlyNameAndPhoto(t, p)
+	}
+}
+
+// Privado con foto remota: ni la foto se entrega (solo data URL de la app).
+func TestProfileService_PerfilPrivado_FotoRemotaOmitida(t *testing.T) {
+	repo := newMockRepo()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	prof := fullProfile(uid, model.VisibilityPrivate)
+	prof.PhotoURL = privacyStrPtr("https://tracker.example/foto.png")
+	repo.store[uid] = prof
+	svc := NewProfileService(repo)
+	p, err := svc.GetPublicProfileByPublicID(context.Background(), "550e8400-e29b-41d4-a716-446655440002", "a8kp92mqwx7r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOnlyNameAndPhoto(t, p)
+	if p.PhotoURL != nil {
+		t.Fatalf("una foto remota nunca se entrega: %v", *p.PhotoURL)
+	}
+}
+
+// Campos opcionales nulos o en blanco de un perfil público se omiten (nil),
+// nunca se devuelven como "" ni con espacios.
+func TestProfileService_PerfilPublico_OpcionalesNulosOBlancos(t *testing.T) {
+	repo := newMockRepo()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = &model.Profile{
+		UserID:      uid,
+		PublicID:    "a8kp92mqwx7r",
+		DisplayName: "Ana",
+		Institution: nil,
+		Description: privacyStrPtr("   "),
+		Email:       privacyStrPtr(""),
+		Phone:       privacyStrPtr("  +569 1234  "),
+		Visibility:  model.VisibilityPublic,
+	}
+	svc := NewProfileService(repo)
+	p, err := svc.GetPublicProfileByPublicID(context.Background(), "550e8400-e29b-41d4-a716-446655440002", "a8kp92mqwx7r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Institution != nil || p.Description != nil || p.Email != nil || p.PhotoURL != nil {
+		t.Fatalf("los vacíos deben omitirse: %+v", p)
+	}
+	if p.Phone == nil || *p.Phone != "+569 1234" {
+		t.Fatalf("teléfono recortado esperado: %v", p.Phone)
+	}
+}
+
+// El dueño de un perfil privado ve todos sus datos.
+func TestProfileService_PerfilPrivadoPropio_Completo(t *testing.T) {
+	repo := newMockRepo()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = fullProfile(uid, model.VisibilityPrivate)
+	svc := NewProfileService(repo)
+	p, err := svc.GetPublicProfileByPublicID(context.Background(), uid, "a8kp92mqwx7r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Email == nil || p.Phone == nil || p.Description == nil || p.Institution == nil {
+		t.Fatalf("el dueño debe ver todos sus datos: %+v", p)
 	}
 }

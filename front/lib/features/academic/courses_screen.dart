@@ -1427,7 +1427,7 @@ class _CourseSections extends StatelessWidget {
           (
             icon: Icons.bar_chart_rounded,
             label: 'Ver Evaluaciones',
-            variant: NeobrutalistButtonVariant.accent,
+            variant: NeobrutalistButtonVariant.secondary,
             builder: (_) =>
                 EvaluationsWindow(subjectId: subjectId, subjectName: name),
           ),

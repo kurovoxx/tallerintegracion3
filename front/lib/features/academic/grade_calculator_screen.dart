@@ -110,8 +110,8 @@ class GradeCalculatorScreen extends StatefulWidget {
     this.onSaved,
   });
 
-  /// Curso preseleccionado (UX materiales: materia de la ventana).
-  /// Si no está en la lista, se antepone.
+  /// Materia de la ventana que se usa para hidratar las notas.
+  /// Vacío = simulador local sin curso asociado.
   final String? initialCourse;
 
   /// Embebida en otra ventana (sin Scaffold/scroll/header propios:
@@ -127,16 +127,7 @@ class GradeCalculatorScreen extends StatefulWidget {
 }
 
 class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
-  static const List<String> _baseCourses = [
-    'Cálculo III',
-    'Estructuras de Datos',
-    'Física General II',
-    'Ingeniería de Software',
-  ];
-
-  late final List<String> _courses;
-
-  late String _selectedCourse;
+  late final String _selectedCourse;
   final TextEditingController _targetController = TextEditingController(
     text: '4.0',
   );
@@ -173,22 +164,11 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
   String? _backendError;
   bool _isSavingBackend = false;
   bool _isReloading = false;
-  bool _loadedFromBackend = false;
 
   @override
   void initState() {
     super.initState();
-    final initial = widget.initialCourse?.trim();
-    if (initial != null &&
-        initial.isNotEmpty &&
-        !_baseCourses.contains(initial)) {
-      _courses = [initial, ..._baseCourses];
-    } else {
-      _courses = List<String>.of(_baseCourses);
-    }
-    _selectedCourse = (initial != null && initial.isNotEmpty)
-        ? initial
-        : _courses.first;
+    _selectedCourse = widget.initialCourse?.trim() ?? '';
     _initializeNormalGrades();
     _loadFromBackend();
   }
@@ -254,7 +234,6 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
   void _resetCalculator() {
     setState(() {
       _resetResult();
-      _loadedFromBackend = false;
 
       if (_finalExamMode) {
         _finalGrade?.dispose();
@@ -317,6 +296,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
   /// [reloadEmptyMessage] sin tocar lo local. Error (sin sesión/red) →
   /// error visible + SnackBar (el botón reintenta, patrón existente).
   Future<void> _loadFromBackend({bool manual = false}) async {
+    if (_selectedCourse.isEmpty) return;
     if (manual) {
       if (_isReloading) return;
       setState(() {
@@ -416,7 +396,6 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         _backendAverage = average?.average;
         _backendAverageStatus = average?.status;
         _backendError = null;
-        _loadedFromBackend = true;
       });
       // Mismo path post-guardado: recarga lista + promedio en el padre para
       // no desincronizar (recarga fresca, sin duplicados ni IDs viejos).
@@ -568,32 +547,6 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     }
   }
 
-  /// Recordatorio compacto: todo lo de esta sección es simulación local.
-  Widget _buildSimulatorNotice() {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const NeobrutalistBadge(
-          label: 'Simulación',
-          tone: NeobrutalistTone.info,
-          compact: true,
-        ),
-        const SizedBox(width: AppDimens.spaceSm),
-        const Expanded(
-          child: Text(
-            'Prueba escenarios aquí. Nada se guarda como nota oficial hasta que uses Guardar.',
-            style: TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 11.5,
-              color: AppColors.mutedStrong,
-              height: 1.3,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
   /// Estado de la fuente oficial. En la versión embebida el promedio oficial
   /// ya lo muestra el encabezado de la pestaña, así que aquí solo se muestran
   /// errores (evita duplicar el mismo valor).
@@ -659,40 +612,6 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       'failed' || 'reprobado' => 'Reprobado',
       _ => raw,
     };
-  }
-
-  /// Aviso al cargar notas oficiales: son copias editables para simular.
-  Widget _buildEditableCopyNotice() {
-    return Container(
-      margin: const EdgeInsets.only(bottom: AppDimens.spaceMd),
-      padding: const EdgeInsets.all(AppDimens.spaceMd),
-      decoration: BoxDecoration(
-        color: AppColors.accentYellow,
-        border: Border.all(
-          color: AppColors.border,
-          width: AppDimens.borderWidth,
-        ),
-        borderRadius: BorderRadius.circular(AppDimens.radius),
-      ),
-      child: const Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.content_copy_rounded, size: 18, color: AppColors.text),
-          SizedBox(width: AppDimens.spaceSm),
-          Expanded(
-            child: Text(
-              'Copias editables: estas notas se cargaron desde tus evaluaciones oficiales. Editarlas aquí solo afecta la simulación; no se guardan hasta que uses Guardar.',
-              style: TextStyle(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w700,
-                color: AppColors.text,
-                height: 1.35,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   /// Sección de resultado: visible de inmediato, con pista cuando aún no hay.
@@ -1217,9 +1136,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       children: [
         if (!widget.embedded) _buildHeader(),
         if (!widget.embedded) const SizedBox(height: AppDimens.spaceXl),
-        _buildSimulatorNotice(),
-        const SizedBox(height: AppDimens.spaceMd),
-        if (widget.embedded)
+        if (widget.embedded && _selectedCourse.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(bottom: AppDimens.spaceSm),
             child: Text(
@@ -1236,7 +1153,6 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         const SizedBox(height: AppDimens.spaceLg),
         _buildSourceStatus(),
         _buildReloadAction(),
-        if (_loadedFromBackend) _buildEditableCopyNotice(),
         _finalExamMode ? _buildFinalExamMode() : _buildNormalMode(isDesktop),
         const SizedBox(height: AppDimens.spaceLg),
         _buildWeightSummary(),
@@ -1293,18 +1209,6 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
                   fontWeight: FontWeight.w900,
                   fontSize: 24,
                 ),
-              ),
-              const SizedBox(height: 4),
-              _CourseDropdown(
-                courses: _courses,
-                selected: _selectedCourse,
-                onChanged: (course) {
-                  setState(() {
-                    _selectedCourse = course;
-                    _resetResult();
-                  });
-                  _loadFromBackend();
-                },
               ),
             ],
           ),
@@ -1560,27 +1464,11 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     if (!widget.embedded) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(bottom: AppDimens.spaceLg),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          NeobrutalistButton(
-            label: _isReloading ? 'Cargando…' : 'Cargar notas',
-            icon: Icons.cloud_download_rounded,
-            variant: NeobrutalistButtonVariant.secondary,
-            onPressed: _isReloading
-                ? null
-                : () => _loadFromBackend(manual: true),
-          ),
-          const SizedBox(height: AppDimens.spaceXs),
-          const Text(
-            'Descarga tus notas oficiales como copias editables para simular.',
-            style: TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 11,
-              color: AppColors.mutedStrong,
-            ),
-          ),
-        ],
+      child: NeobrutalistButton(
+        label: _isReloading ? 'Cargando…' : 'Cargar notas',
+        icon: Icons.cloud_download_rounded,
+        variant: NeobrutalistButtonVariant.secondary,
+        onPressed: _isReloading ? null : () => _loadFromBackend(manual: true),
       ),
     );
   }
@@ -1685,53 +1573,6 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
 // -------------------------------------------------------------------------
 // WIDGETS PEQUEÑOS Y REUTILIZABLES
 // -------------------------------------------------------------------------
-
-class _CourseDropdown extends StatelessWidget {
-  const _CourseDropdown({
-    required this.courses,
-    required this.selected,
-    required this.onChanged,
-  });
-
-  final List<String> courses;
-  final String selected;
-  final ValueChanged<String> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        border: Border.all(color: AppColors.border, width: 2),
-        borderRadius: BorderRadius.circular(AppDimens.radius),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<String>(
-          value: selected,
-          isDense: true,
-          icon: const Icon(Icons.expand_more_rounded),
-          style: const TextStyle(
-            fontWeight: FontWeight.w800,
-            fontSize: 13,
-            color: AppColors.text,
-          ),
-          items: courses
-              .map(
-                (course) => DropdownMenuItem<String>(
-                  value: course,
-                  child: Text(course.toUpperCase()),
-                ),
-              )
-              .toList(),
-          onChanged: (value) {
-            if (value != null) onChanged(value);
-          },
-        ),
-      ),
-    );
-  }
-}
 
 class _TargetCard extends StatelessWidget {
   const _TargetCard({required this.controller, required this.onChanged});
