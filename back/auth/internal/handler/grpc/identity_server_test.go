@@ -97,8 +97,9 @@ func newTestIdentity(t *testing.T) identityv1.IdentityServiceClient {
 	t.Helper()
 	name := "Ada"
 	email := "ada@test.invalid"
+	adaPublicID := "a8kp92mqwx7r"
 	repo := &fakeUserRepo{users: map[string]model.PublicUser{
-		testAda:  {UserID: testAda, Email: email, DisplayName: &name},
+		testAda:  {UserID: testAda, Email: email, DisplayName: &name, PublicID: &adaPublicID},
 		testSolo: {UserID: testSolo, Email: "solo@test.invalid"},
 	}}
 	jwtSvc, err := service.NuevoJWTService(service.ConfiguracionJWT{
@@ -202,6 +203,32 @@ func TestIdentityServer_LookupUsers(t *testing.T) {
 	}
 	_, err = c.LookupUsers(ctx, &identityv1.LookupUsersRequest{UserIds: []string{testAda, testMal}})
 	wantCode(t, err, codes.InvalidArgument)
+}
+
+// TestIdentityServer_PublicIDEnLookup verifica que GetUser y LookupUsers
+// entregan el código público (para que Social/Notes lo muestren en lugar
+// del UUID) y que queda ausente si el usuario no lo tiene.
+func TestIdentityServer_PublicIDEnLookup(t *testing.T) {
+	c := newTestIdentity(t)
+	ctx := authedCtx()
+	u, err := c.GetUser(ctx, &identityv1.GetUserRequest{UserId: testAda})
+	if err != nil || u.GetPublicId() != "a8kp92mqwx7r" {
+		t.Fatalf("GetUser public_id = %q, %v", u.GetPublicId(), err)
+	}
+	r, err := c.LookupUsers(ctx, &identityv1.LookupUsersRequest{UserIds: []string{testAda, testSolo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]*identityv1.User{}
+	for _, x := range r.GetUsers() {
+		got[x.GetUserId()] = x
+	}
+	if got[testAda].GetPublicId() != "a8kp92mqwx7r" {
+		t.Fatalf("LookupUsers public_id = %q", got[testAda].GetPublicId())
+	}
+	if got[testSolo].PublicId != nil {
+		t.Fatalf("sin public_id debe venir ausente: %v", got[testSolo])
+	}
 }
 
 // TestIdentityServer_ResolvePublicProfile cubre resolución, normalización,

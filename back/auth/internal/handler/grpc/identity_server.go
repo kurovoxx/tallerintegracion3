@@ -84,6 +84,7 @@ func (s *IdentityServer) GetUser(ctx context.Context, req *identityv1.GetUserReq
 		Email:         u.Email,
 		DisplayName:   u.DisplayName,
 		PhotoThumbUrl: u.PhotoThumbURL,
+		PublicId:      u.PublicID,
 	}
 	return resp, nil
 }
@@ -114,6 +115,7 @@ func (s *IdentityServer) LookupUsers(ctx context.Context, req *identityv1.Lookup
 			Email:         u.Email,
 			DisplayName:   u.DisplayName,
 			PhotoThumbUrl: u.PhotoThumbURL,
+			PublicId:      u.PublicID,
 		})
 	}
 	return &identityv1.LookupUsersResponse{Users: users}, nil
