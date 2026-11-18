@@ -48,6 +48,9 @@ func (m *mockProfileRepoHandler) GetPublicByPublicID(ctx context.Context, public
 			DisplayName: p.DisplayName,
 			PhotoURL:    p.PhotoURL,
 			Institution: p.Institution,
+			Description: p.Description,
+			Email:       p.Email,
+			Phone:       p.Phone,
 			Visibility:  p.Visibility,
 		}, nil
 	}
@@ -619,7 +622,10 @@ func newPublicIDContext(userID, publicID string) (*gin.Context, *httptest.Respon
 	return c, w
 }
 
-func TestProfileHandler_GetPublicProfileByPublicID_200_SinDatosSensibles(t *testing.T) {
+// Perfil público: devuelve nombre, descripción, correo, teléfono e institución
+// (requerimiento de mejoras de perfiles, que reemplaza la exclusión anterior
+// de correo/teléfono/descripción). Nunca el UUID interno.
+func TestProfileHandler_GetPublicProfileByPublicID_200_PerfilPublicoCompleto(t *testing.T) {
 	repo := newMockRepoHandler()
 	uid := "550e8400-e29b-41d4-a716-446655440001"
 	repo.store[uid] = &model.Profile{
@@ -630,7 +636,7 @@ func TestProfileHandler_GetPublicProfileByPublicID_200_SinDatosSensibles(t *test
 		Phone:       strPtrH("+56912345678"),
 		Email:       strPtrH("a@test.invalid"),
 		Institution: strPtrH("UCT"),
-		Description: strPtrH("Descripción privada"),
+		Description: strPtrH("Me gusta el cálculo"),
 		Visibility:  "public",
 	}
 	h, _ := setupProfileHandler(repo)
@@ -649,11 +655,23 @@ func TestProfileHandler_GetPublicProfileByPublicID_200_SinDatosSensibles(t *test
 	if resp["public_id"] != "a8kp92mqwx7r" || resp["display_name"] != "Agustín" || resp["institution"] != "UCT" {
 		t.Fatalf("respuesta incorrecta: %v", resp)
 	}
-	// La descripción, el correo, el teléfono y el UUID nunca se exponen.
-	for _, forbidden := range []string{"user_id", "email", "phone", "description"} {
-		if _, ok := resp[forbidden]; ok {
-			t.Fatalf("la respuesta pública no debe incluir %q: %v", forbidden, resp)
+	want := map[string]string{
+		"description": "Me gusta el cálculo",
+		"email":       "a@test.invalid",
+		"phone":       "+56912345678",
+		"visibility":  "public",
+	}
+	for k, v := range want {
+		if resp[k] != v {
+			t.Fatalf("%s = %v, esperado %q (resp=%v)", k, resp[k], v, resp)
 		}
+	}
+	// El UUID interno nunca se expone.
+	if _, ok := resp["user_id"]; ok {
+		t.Fatalf("la respuesta pública no debe incluir user_id: %v", resp)
+	}
+	if strings.Contains(w.Body.String(), uid) {
+		t.Fatalf("el UUID interno aparece en la respuesta: %s", w.Body.String())
 	}
 	// Una foto remota no se entrega: la app de quien consulta no debe
 	// contactar a un servidor ajeno.
@@ -662,8 +680,9 @@ func TestProfileHandler_GetPublicProfileByPublicID_200_SinDatosSensibles(t *test
 	}
 }
 
-// La foto subida desde la app (data URL de imagen) sí se muestra en el
-// perfil público; un perfil privado ajeno con foto sigue respondiendo 404.
+// La foto subida desde la app (data URL de imagen) se muestra tanto en el
+// perfil público como en el privado (nombre y foto son lo único visible de un
+// perfil privado).
 func TestProfileHandler_GetPublicProfileByPublicID_FotoSubidaEnLaApp(t *testing.T) {
 	repo := newMockRepoHandler()
 	photo := "data:image/png;base64,iVBORw0KGgo="
@@ -685,23 +704,82 @@ func TestProfileHandler_GetPublicProfileByPublicID_FotoSubidaEnLaApp(t *testing.
 
 	c, w = newPublicIDContext("550e8400-e29b-41d4-a716-446655440002", "b8kp92mqwx7r")
 	h.GetPublicProfileByPublicID(c)
-	if w.Code != http.StatusNotFound || strings.Contains(w.Body.String(), "base64") {
-		t.Fatalf("un perfil privado ajeno no debe exponer su foto: %d %s", w.Code, w.Body.String())
+	resp = map[string]interface{}{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusOK {
+		t.Fatalf("esperado 200 JSON, got %d %s", w.Code, w.Body.String())
+	}
+	if resp["photo_url"] != photo || resp["display_name"] != "Privada" {
+		t.Fatalf("un perfil privado debe mostrar nombre y foto: %v", resp)
 	}
 }
 
-func TestProfileHandler_GetPublicProfileByPublicID_404_PrivadoTercero(t *testing.T) {
+// Perfil privado consultado por un tercero: 200 con SOLO nombre y foto; ni
+// descripción, correo, teléfono, institución ni el UUID interno aparecen en
+// el JSON (ni como claves ni como valores).
+func TestProfileHandler_GetPublicProfileByPublicID_PrivadoTercero_SoloNombreYFoto(t *testing.T) {
 	repo := newMockRepoHandler()
 	uid := "550e8400-e29b-41d4-a716-446655440001"
-	repo.store[uid] = &model.Profile{UserID: uid, PublicID: "a8kp92mqwx7r", DisplayName: "Privado", Visibility: "private"}
+	repo.store[uid] = &model.Profile{
+		UserID:      uid,
+		PublicID:    "a8kp92mqwx7r",
+		DisplayName: "Privado",
+		PhotoURL:    strPtrH("data:image/png;base64,iVBORw0KGgo="),
+		Phone:       strPtrH("+56900000000"),
+		Email:       strPtrH("secreto@test.invalid"),
+		Institution: strPtrH("Universidad Secreta"),
+		Description: strPtrH("Descripción oculta"),
+		Visibility:  "private",
+	}
 	h, _ := setupProfileHandler(repo)
 	c, w := newPublicIDContext("550e8400-e29b-41d4-a716-446655440002", "a8kp92mqwx7r")
 	h.GetPublicProfileByPublicID(c)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("esperado 404, got %d %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("esperado 200, got %d %s", w.Code, w.Body.String())
 	}
 	if got := w.Header().Get("Cache-Control"); got != "private, no-store" {
 		t.Fatalf("Cache-Control = %q", got)
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json inválido: %v", err)
+	}
+	if resp["display_name"] != "Privado" || resp["visibility"] != "private" || resp["photo_url"] == nil {
+		t.Fatalf("respuesta incorrecta: %v", resp)
+	}
+	for _, forbidden := range []string{"user_id", "email", "phone", "description", "institution"} {
+		if _, ok := resp[forbidden]; ok {
+			t.Fatalf("un perfil privado no debe incluir %q: %v", forbidden, resp)
+		}
+	}
+	body := w.Body.String()
+	for _, leaked := range []string{uid, "secreto@test.invalid", "+56900000000", "Universidad Secreta", "Descripción oculta"} {
+		if strings.Contains(body, leaked) {
+			t.Fatalf("el perfil privado filtra %q: %s", leaked, body)
+		}
+	}
+}
+
+// El dueño de un perfil privado sí ve todos sus datos al buscarse.
+func TestProfileHandler_GetPublicProfileByPublicID_PrivadoPropio_Completo(t *testing.T) {
+	repo := newMockRepoHandler()
+	uid := "550e8400-e29b-41d4-a716-446655440001"
+	repo.store[uid] = &model.Profile{
+		UserID: uid, PublicID: "a8kp92mqwx7r", DisplayName: "Yo",
+		Email: strPtrH("yo@test.invalid"), Phone: strPtrH("+56911111111"),
+		Description: strPtrH("Mi descripción"), Visibility: "private",
+	}
+	h, _ := setupProfileHandler(repo)
+	c, w := newPublicIDContext(uid, "a8kp92mqwx7r")
+	h.GetPublicProfileByPublicID(c)
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusOK {
+		t.Fatalf("esperado 200 JSON, got %d %s", w.Code, w.Body.String())
+	}
+	if resp["email"] != "yo@test.invalid" || resp["phone"] != "+56911111111" || resp["description"] != "Mi descripción" {
+		t.Fatalf("el dueño debe ver sus datos: %v", resp)
+	}
+	if _, ok := resp["user_id"]; ok {
+		t.Fatalf("no debe incluir user_id: %v", resp)
 	}
 }
 

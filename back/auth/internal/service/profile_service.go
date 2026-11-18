@@ -93,8 +93,11 @@ func (s *ProfileService) GetProfile(ctx context.Context, userID string) (*model.
 // un nombre o cualquier otro dato personal no son aceptados. Reglas:
 //   - requesterID vacío → 401 (defensa en profundidad; lo exige el middleware).
 //   - public_id inválido o inexistente → 404 profile_not_found.
-//   - Perfil privado consultado por un tercero → 404 (no revela su existencia).
-//   - Perfil privado consultado por su dueño → 200.
+//   - Perfil público → 200 con nombre, foto, descripción, correo, teléfono e
+//     institución.
+//   - Perfil privado consultado por un tercero → 200 SOLO con nombre y foto
+//     (más public_id y visibility): el resto se descarta aquí.
+//   - Perfil privado consultado por su dueño → 200 completo (son sus datos).
 //   - Cualquier visibilidad distinta de "public" se trata como privada.
 //   - La foto solo se entrega si es una imagen subida desde la app (data URL
 //     de imagen en base64). Una URL remota se omite: mostrarla haría que la
@@ -115,11 +118,45 @@ func (s *ProfileService) GetPublicProfileByPublicID(ctx context.Context, request
 	if profile == nil {
 		return nil, &ServiceError{Code: "profile_not_found", Message: "Perfil no encontrado"}
 	}
-	if profile.Visibility != model.VisibilityPublic && requesterID != profile.UserID {
-		return nil, &ServiceError{Code: "profile_not_found", Message: "Perfil no encontrado"}
-	}
 	profile.PhotoURL = publicPhotoURL(profile.PhotoURL)
+	if profile.Visibility != model.VisibilityPublic {
+		// Cualquier valor desconocido se presenta como "private".
+		profile.Visibility = model.VisibilityPrivate
+		if requesterID != profile.UserID {
+			return privateProfileView(profile), nil
+		}
+	}
+	profile.Institution = nonBlank(profile.Institution)
+	profile.Description = nonBlank(profile.Description)
+	profile.Email = nonBlank(profile.Email)
+	profile.Phone = nonBlank(profile.Phone)
 	return profile, nil
+}
+
+// privateProfileView construye una vista NUEVA con únicamente lo que un perfil
+// privado muestra a terceros (nombre y foto). Se copia campo a campo en lugar
+// de anular los demás para que un campo agregado al modelo en el futuro no se
+// filtre por omisión.
+func privateProfileView(p *model.PublicProfile) *model.PublicProfile {
+	return &model.PublicProfile{
+		UserID:      p.UserID,
+		PublicID:    p.PublicID,
+		DisplayName: p.DisplayName,
+		PhotoURL:    p.PhotoURL,
+		Visibility:  model.VisibilityPrivate,
+	}
+}
+
+// nonBlank devuelve nil para valores ausentes o compuestos solo de espacios.
+func nonBlank(v *string) *string {
+	if v == nil {
+		return nil
+	}
+	t := strings.TrimSpace(*v)
+	if t == "" {
+		return nil
+	}
+	return &t
 }
 
 // publicPhotoURL devuelve la foto solo si es una data URL de imagen en base64
