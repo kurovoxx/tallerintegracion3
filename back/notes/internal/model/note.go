@@ -106,6 +106,10 @@ const (
 // metadata del apunte original. Si el original ya no es accesible,
 // IsAvailable=false y UnavailableReason explica por qué; la referencia se
 // conserva para que el usuario pueda quitarla de sus guardados.
+//
+// AuthorID (UUID interno del autor) NO se serializa: solo se usa en el
+// servidor (filtros author_id/scope, is_own y resolución del código
+// público). El autor se identifica en la API por author_public_id.
 type SavedNoteView struct {
 	SavedID           string     `json:"saved_id"`
 	NoteID            string     `json:"note_id"`
@@ -113,7 +117,7 @@ type SavedNoteView struct {
 	IsAvailable       bool       `json:"is_available"`
 	UnavailableReason string     `json:"unavailable_reason,omitempty"`
 	Title             string     `json:"title"`
-	AuthorID          string     `json:"user_id,omitempty"`
+	AuthorID          string     `json:"-"`
 	SubjectID         *string    `json:"subject_id,omitempty"`
 	Visibility        string     `json:"visibility,omitempty"`
 	LikesCount        int        `json:"likes_count"`
@@ -123,13 +127,18 @@ type SavedNoteView struct {
 	IsOwn             bool       `json:"is_own"`
 	UpdatedAt         *time.Time `json:"updated_at,omitempty"`
 	DeletedAt         *time.Time `json:"deleted_at,omitempty"`
+
+	// AuthorPublicID es el código público del autor (Identity). Es lo que la
+	// interfaz muestra; se omite si Identity no lo pudo resolver.
+	AuthorPublicID string `json:"author_public_id,omitempty"`
 }
 
 // PublicNoteView es un elemento de GET /notes/public: apunte público de otro
-// usuario con sus contadores y el estado del solicitante.
+// usuario con sus contadores y el estado del solicitante. UserID (UUID interno
+// del autor) NO se serializa; el autor se identifica por author_public_id.
 type PublicNoteView struct {
 	ID         string    `json:"id"`
-	UserID     string    `json:"user_id"`
+	UserID     string    `json:"-"`
 	Title      string    `json:"title"`
 	SubjectID  *string   `json:"subject_id,omitempty"`
 	Visibility string    `json:"visibility"`
@@ -139,6 +148,9 @@ type PublicNoteView struct {
 	IsSaved    bool      `json:"is_saved"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
+
+	// AuthorPublicID es el código público del autor; ver SavedNoteView.
+	AuthorPublicID string `json:"author_public_id,omitempty"`
 }
 
 // PublicProfileNoteView es un elemento de GET /public-users/:public_id/notes.
@@ -155,6 +167,10 @@ type PublicProfileNoteView struct {
 	IsSaved    bool      `json:"is_saved"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
+
+	// IsOwn indica que el solicitante es el autor (p. ej. al buscar su propio
+	// código): la interfaz oculta «Guardar» sin conocer el UUID.
+	IsOwn bool `json:"is_own"`
 }
 
 type NoteLike struct {

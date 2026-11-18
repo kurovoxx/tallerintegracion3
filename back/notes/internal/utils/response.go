@@ -49,6 +49,9 @@ const (
 	ErrAlreadyShared = "already_shared"
 	// ErrAlreadyCopied: el usuario ya tiene un clon vivo de ese apunte (409).
 	ErrAlreadyCopied = "already_copied"
+	// ErrCannotSaveOwn: el autor intenta guardar su propio apunte (409). Sus
+	// apuntes ya están en «Mis apuntes»; guardarlos no tiene sentido.
+	ErrCannotSaveOwn     = "cannot_save_own_note"
 	ErrFileTooLarge      = "file_too_large"
 	ErrInvalidAccessMode = "invalid_access_mode"
 	ErrRateLimited       = "rate_limited"
@@ -90,6 +93,8 @@ func MessageForCode(code string) string {
 		return "Este apunte ya está compartido en este grupo"
 	case ErrAlreadyCopied:
 		return "Ya copiaste este apunte a tus apuntes"
+	case ErrCannotSaveOwn:
+		return "No puedes guardar tus propios apuntes"
 	case ErrFileTooLarge:
 		return "Archivo muy grande"
 	case ErrRateLimited:
@@ -113,7 +118,7 @@ func StatusForCode(code string) int {
 		return http.StatusForbidden
 	case ErrNotFound, ErrNoteUnavailable:
 		return http.StatusNotFound
-	case ErrConflict, ErrAlreadySaved, ErrAlreadyLiked, ErrAlreadyShared, ErrAlreadyCopied:
+	case ErrConflict, ErrAlreadySaved, ErrAlreadyLiked, ErrAlreadyShared, ErrAlreadyCopied, ErrCannotSaveOwn:
 		return http.StatusConflict
 	case ErrNoteDeleted:
 		return http.StatusGone

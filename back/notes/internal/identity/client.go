@@ -74,3 +74,32 @@ func (c *PublicProfileClient) ResolvePublicProfile(ctx context.Context, publicID
 	}
 	return userID, nil
 }
+
+// LookupPublicIDs resuelve en lote UUID -> código público mediante
+// IdentityService.LookupUsers (implementa service.AuthorPublicIDResolver).
+// Solo devuelve el public_id: el correo y el resto de datos que trae
+// LookupUsers se descartan aquí. Sin ids responde mapa vacío sin llamar.
+func (c *PublicProfileClient) LookupPublicIDs(ctx context.Context, userIDs []string) (map[string]string, error) {
+	out := map[string]string{}
+	if len(userIDs) == 0 {
+		return out, nil
+	}
+	if c == nil || c.client == nil {
+		return nil, ErrUnavailable
+	}
+	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	callCtx = metadata.AppendToOutgoingContext(callCtx, metadataInternalKey, c.key)
+	resp, err := c.client.LookupUsers(callCtx, &identityv1.LookupUsersRequest{UserIds: userIDs})
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	for _, u := range resp.GetUsers() {
+		id := strings.TrimSpace(u.GetUserId())
+		code := strings.TrimSpace(u.GetPublicId())
+		if id != "" && code != "" {
+			out[id] = code
+		}
+	}
+	return out, nil
+}

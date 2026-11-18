@@ -228,3 +228,22 @@ var (
 	_ LikeBatchStore  = (*MemoryLikeStore)(nil)
 	_ LikeBatchStore  = (*PGLikeStore)(nil)
 )
+
+// is_own permite a la interfaz ocultar «Guardar» cuando el usuario busca su
+// propio código, sin exponer el UUID del autor.
+func TestListPublicByPublicID_IsOwn(t *testing.T) {
+	svc, _, noteStore, _, _, _, _, _ := newTestService()
+	ctx := context.Background()
+	owner, other := uuid.NewString(), uuid.NewString()
+	seedPublicListNote(t, noteStore, publicNoteID(1), owner, "Público", "public", time.Now().UTC())
+	svc.SetPublicProfileResolver(&fakePublicProfileResolver{ids: map[string]string{"a8kp92mqwx7r": owner}})
+
+	mine, _, err := svc.ListPublicByPublicID(ctx, owner, "a8kp92mqwx7r", "", 20)
+	if err != nil || len(mine) != 1 || !mine[0].IsOwn {
+		t.Fatalf("el autor debe ver is_own=true: %+v, %v", mine, err)
+	}
+	theirs, _, err := svc.ListPublicByPublicID(ctx, other, "a8kp92mqwx7r", "", 20)
+	if err != nil || len(theirs) != 1 || theirs[0].IsOwn {
+		t.Fatalf("un tercero debe ver is_own=false: %+v, %v", theirs, err)
+	}
+}

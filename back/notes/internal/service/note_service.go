@@ -566,6 +566,9 @@ type NoteService struct {
 	members         GroupMemberDirectory
 	// publicProfiles resuelve public_id (H-05). Independiente de Drive.
 	publicProfiles PublicProfileResolver
+	// authorPublicIDs resuelve UUID de autor -> código público para mostrarlo
+	// en los listados (guardados y públicos). Nil => se omite el código.
+	authorPublicIDs AuthorPublicIDResolver
 	// driveEmails resuelve el correo de la cuenta Google Drive de cada miembro
 	// (restricted). Si es nil, se usa members.ListMemberEmails (fallback previo).
 	driveEmails DriveEmailDirectory
@@ -1144,6 +1147,7 @@ func (s *NoteService) ListPublicByPublicID(ctx context.Context, requesterID, raw
 			SavesCount: st.SavesCount,
 			IsLiked:    st.IsLiked,
 			IsSaved:    st.IsSaved,
+			IsOwn:      n.UserID == requesterID,
 			CreatedAt:  n.CreatedAt,
 			UpdatedAt:  n.UpdatedAt,
 		})
@@ -1787,6 +1791,13 @@ func (s *NoteService) Save(ctx context.Context, userID string, noteID string) (*
 	}
 	if !allowed {
 		return nil, notFoundNote()
+	}
+	// El autor no puede guardar su propio apunte (ya vive en «Mis apuntes»).
+	// Se valida aquí, después del control de acceso, para que la regla no
+	// dependa de que el cliente oculte el botón. Los guardados propios que ya
+	// existían se conservan y pueden quitarse con Unsave.
+	if note.UserID == userID {
+		return nil, newServiceError(utils.ErrCannotSaveOwn)
 	}
 	// Idempotencia del bookmark sin inspeccionar strings del storage: se
 	// pre-consulta Exists y, ante fallo del Save (carrera), se re-valida el

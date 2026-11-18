@@ -25,7 +25,8 @@ Lista apuntes **públicos de otros usuarios** para descubrirlos, darles like o g
 {
   "items": [
     {
-      "id": "…", "user_id": "…", "title": "Integrales dobles", "subject_id": "…",
+      "id": "…", "author_public_id": "a8kp92mqwx7r",
+      "title": "Integrales dobles", "subject_id": "…",
       "visibility": "public", "likes_count": 4, "saves_count": 2,
       "is_liked": false, "is_saved": true,
       "created_at": "2026-11-05T19:54:21Z", "updated_at": "2026-11-05T19:54:21Z"
@@ -37,6 +38,7 @@ Lista apuntes **públicos de otros usuarios** para descubrirlos, darles like o g
 
 - Solo `visibility = 'public'`, con archivo ya en Drive (`external_file_id IS NOT NULL`) y de un autor distinto al solicitante. Orden: `created_at DESC, id DESC` (keyset).
 - No incluye `content` (no descarga de Drive); para leerlo: `GET /notes/{id}`.
+- `author_public_id`: código público del autor, resuelto con UNA llamada a `IdentityService.LookupUsers` por página (`NoteService.resolveAuthorPublicIDs`). Es lo que la app muestra («Autor <código>», que abre el perfil del autor). Si Identity falla se omite (best-effort) y nunca se reemplaza por el UUID. El UUID interno del autor (`user_id`) **ya no se serializa** (`json:"-"` en `PublicNoteView.UserID`); solo se usa en el servidor.
 
 | HTTP | `error.code` | Condición |
 | --- | --- | --- |

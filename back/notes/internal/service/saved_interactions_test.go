@@ -218,7 +218,7 @@ func TestCopySavedNoteCreatesOwnPrivateCloneInCopierDrive(t *testing.T) {
 }
 
 func TestListSavedFilters(t *testing.T) {
-	svc, _, _, _, _, _, _, _ := newTestService()
+	svc, _, _, _, savedStore, _, _, _ := newTestService()
 	ctx := context.Background()
 	me, ana, beto := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	math := uuid.NewString()
@@ -227,6 +227,18 @@ func TestListSavedFilters(t *testing.T) {
 		n, err := svc.Create(ctx, owner, title, subject, "public", stringPtr("x"), "")
 		if err != nil {
 			t.Fatal(err)
+		}
+		if owner == me {
+			// Guardar un apunte propio ya no está permitido; el filtro
+			// scope=own se sigue probando con un guardado propio heredado
+			// (anterior a la regla), insertado directamente en el store.
+			if _, err := svc.Save(ctx, me, n.ID); serviceCode(t, err) != utils.ErrCannotSaveOwn {
+				t.Fatalf("guardar propio debía rechazarse: %v", err)
+			}
+			if _, err := savedStore.Save(ctx, me, n.ID); err != nil {
+				t.Fatal(err)
+			}
+			return n.ID
 		}
 		if _, err := svc.Save(ctx, me, n.ID); err != nil {
 			t.Fatal(err)
@@ -341,5 +353,47 @@ func TestListPublicExcludesOwnAndPrivateAndCanBeSaved(t *testing.T) {
 	items, _, _ = svc.ListPublic(ctx, me, "", "", "", 0)
 	if len(items) != 1 || !items[0].IsSaved || !items[0].IsLiked || items[0].LikesCount != 1 || items[0].SavesCount != 1 {
 		t.Fatalf("estado tras guardar/likear: %+v", items)
+	}
+}
+
+// TestSaveOwnNoteRejected: el autor no puede guardar su propio apunte (ni
+// público ni privado) y la regla vive en el backend; un tercero sí puede
+// guardarlo, y un guardado propio heredado se puede quitar.
+func TestSaveOwnNoteRejected(t *testing.T) {
+	svc, _, _, _, savedStore, _, _, _ := newTestService()
+	ctx := context.Background()
+	author, reader := uuid.NewString(), uuid.NewString()
+	for _, vis := range []string{"public", "private"} {
+		n, err := svc.Create(ctx, author, "Apunte "+vis, nil, vis, stringPtr("x"), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.Save(ctx, author, n.ID); serviceCode(t, err) != utils.ErrCannotSaveOwn {
+			t.Fatalf("%s: el autor no debe poder guardar su apunte: %v", vis, err)
+		}
+		if ok, _ := savedStore.Exists(ctx, author, n.ID); ok {
+			t.Fatalf("%s: no debe quedar guardado propio", vis)
+		}
+	}
+	pub, err := svc.Create(ctx, author, "Público", nil, "public", stringPtr("x"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Save(ctx, reader, pub.ID); err != nil {
+		t.Fatalf("un tercero debe poder guardar un apunte público: %v", err)
+	}
+	st, err := svc.Interactions(ctx, reader, pub.ID)
+	if err != nil || !st.IsSaved || st.SavesCount != 1 {
+		t.Fatalf("estado tras guardar: %+v, %v", st, err)
+	}
+	// Guardado propio heredado (anterior a la regla): sigue pudiendo quitarse.
+	if _, err := savedStore.Save(ctx, author, pub.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Unsave(ctx, author, pub.ID); err != nil {
+		t.Fatalf("quitar un guardado propio heredado: %v", err)
+	}
+	if ok, _ := savedStore.Exists(ctx, author, pub.ID); ok {
+		t.Fatal("el guardado propio heredado debía eliminarse")
 	}
 }
