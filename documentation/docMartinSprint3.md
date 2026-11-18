@@ -115,6 +115,143 @@ Que k8s sepa cuándo cada servicio está listo para recibir tráfico (readiness)
 - `/health` ya existía en los 4 servicios (responde `{"status":"UP"}`); se reusa para ambos probes sin cambios de handler.
 - No se modificó `docker-compose.yml` (compose ya espera que Postgres esté up vía `depends_on` implícito o el contenedor simplemente arranca; el retry de DB cubre el caso de que Postgres acepte conexiones más tarde).
 
+## 4_5_3 — Editar grupo: nombre y descripción (backend + front)
+
+> **Nota:** Esta tarea pertenecía originalmente al ámbito de Benji (Social) y fue asignada a Martín por intercambio de tareas del sprint.
+
+### Objetivo
+
+Permitir que un administrador de grupo edite el nombre y la descripción de un grupo existente, tanto en el backend (Social) como en el front (Flutter).
+
+### Alcance
+
+| Parte | Qué se hace |
+|-------|-------------|
+| **Backend (Social)** | Endpoint `PATCH /groups/:id` que recibe `{name, description?}` y valida que el solicitante sea admin del grupo. |
+| **Front (Flutter)** | Botón "Editar grupo" en `GroupDetailScreen` (solo visible para admins) que abre un diálogo con campos de texto para nombre y descripción. |
+
+### Archivos creados
+
+Ninguno nuevo (todo es modificación de existentes).
+
+### Archivos modificados
+
+| Archivo | Cambio |
+|---------|--------|
+| `back/social/internal/service/group_service.go` | Agregado `UpdateGroup` a la interfaz `GroupStore` y implementado en `GroupService` (valida UUID, normaliza nombre, llama al store). |
+| `back/social/internal/repository/group_repository.go` | Agregado `UpdateGroup` en `GroupRepository` (UPDATE SQL con `FOR UPDATE`, valida que el usuario es admin vía `requireAdminTx`). |
+| `back/social/internal/service/store_memory.go` | Agregado `UpdateGroup` en `MemoryGroupStore` para tests (valida admin vía `requireAdminLocked`). |
+| `back/social/internal/handler/http/group_handler.go` | Agregado tipo `updateGroupRequest`, handler `EditGroup` y ruta `PATCH /groups/:id` en `RegisterRoutes`. |
+| `front/lib/core/services/social_service.dart` | Agregado método `updateGroup({groupId, name, description})` que llama a `PATCH /groups/:id`. |
+| `front/lib/features/groups/group_detail_screen.dart` | Agregado botón "Editar grupo" (ícono de lápiz) en el AppBar, visible solo cuando el usuario es admin. Abre `AlertDialog` con campos de nombre y descripción. |
+| `documentation/docMartinSprint3.md` | Esta sección. |
+
+### Endpoints de la API
+
+| Método | Ruta | Body | Responde |
+|--------|------|------|----------|
+| `PATCH` | `/groups/:id` | `{name: string, description?: string}` | `200 {id, name, description}` / `403` si no es admin / `404` si no existe / `400` si nombre vacío |
+
+### Cómo interactúa con el resto del proyecto
+
+- Con la política solo-admins de Benji: el endpoint respeta el mismo modelo de permisos (solo admin puede editar).
+- Con **front**: el botón solo aparece para administradores del grupo, consistente con otras acciones de administración (regenerar invite, kick, ban, etc.).
+- Con **grupos existentes**: el cambio se refleja inmediatamente en `GET /groups/:id` y `GET /groups/me`.
+
+### Verificación
+
+- `go build ./...` + `go vet ./...` en `back/social`: OK.
+- `go test ./...` en `back/social`: todos los tests pasan.
+- `flutter analyze` en los archivos del front tocados: sin errores nuevos (solo warnings preexistentes).
+- El endpoint reusa la validación de nombre existente (`utils.ValidateName`, `utils.NormalizeName`) y la autorización de admin existente (`requireAdminTx`).
+
+### No entra
+
+- Editar otros campos del grupo (owner, notes_restricted_to_staff, invite_token).
+- Historial de cambios de nombre/descripción.
+- Notificar a miembros cuando el grupo es editado.
+
+## 4_5_4 — Build .deb Linux (CI + empaquetado)
+
+### Objetivo
+
+Generar un paquete `.deb` instalable de Sigma Academy para Linux y automatizar su construcción en GitHub Actions, para que el artefacto quede disponible en cada build y se adjunte a la Release cuando se publica un tag.
+
+### Alcance
+
+| Aspecto | Valor |
+|---------|-------|
+| Paquete Debian | `sigma-academy` (`amd64`) |
+| Nombre visible | Sigma Academy |
+| Instalación | `/opt/sigma-academy` + symlink `/usr/bin/sigma-academy` |
+| Integración de escritorio | `.desktop` en `/usr/share/applications` e ícono 512×512 en `hicolor` |
+| Versión | Se lee de `front/pubspec.yaml` (`1.0.0+1`); se puede forzar con `VERSION` |
+| Dependencias | `libc6 (>= glibc real del bundle)`, `libstdc++6`, GTK3, GLib, `libblkid1`, `liblzma5` |
+| CI | `.github/workflows/build-linux-deb.yml` |
+| Actualización | Se instala un `.deb` nuevo con versión mayor encima del anterior; los datos del usuario quedan fuera del paquete |
+
+> El binario y el `APPLICATION_ID` técnicos siguen siendo `taller_integracion_front` / `cl.uct.taller_integracion_front` para no cambiar las rutas de datos existentes. Todo lo visible al usuario dice **Sigma Academy**.
+
+### Flujo
+
+1. `scripts/build-linux-deb.sh` ejecuta `flutter build linux --release`.
+2. Arma el árbol del paquete: `DEBIAN/control`, bundle Flutter en `/opt/sigma-academy`, `.desktop`, ícono y scripts `postinst`/`postrm`.
+3. Calcula la glibc mínima real del bundle con `objdump` y la declara en `Depends` (así no instala en distros donde no arrancaría).
+4. Genera `dist/sigma-academy_<version>_<arch>.deb` con `dpkg-deb --build --root-owner-group`.
+5. El workflow instala dependencias del sistema, compila, valida el `.desktop`, instala/desinstala el paquete en el runner y sube el artifact.
+6. En tags `v*` adjunta el `.deb` y `SHA256SUMS` a la Release, y falla si el tag no coincide con la versión del paquete.
+
+### Disparadores del CI
+
+| Evento | Resultado |
+|--------|-----------|
+| Push a `Development` que toque `front/**`, el script o el workflow | Artifact `linux-deb` descargable |
+| Pull request que toque archivos de empaquetado | Validación completa del `.deb` (sin release) |
+| Tag `v*` | Release con `.deb` + checksum |
+| `workflow_dispatch` | Build manual, con `version` opcional |
+
+El runner es `ubuntu-24.04`; el paquete compilado localmente requiere glibc 2.38+ (Ubuntu 24.04 o superior). Si se necesita Ubuntu 22.04, hay que cambiar `runs-on` a `ubuntu-22.04` y volver a compilar.
+
+### Archivos
+
+| Archivo | Cambio |
+|---------|--------|
+| `scripts/build-linux-deb.sh` | Script de empaquetado: build, staging, `control`, `.desktop`, ícono, `postinst`/`postrm`, cálculo de glibc y `.deb`. |
+| `.github/workflows/build-linux-deb.yml` | CI: build, validación, artifact y release en tags. |
+| `front/linux/runner/my_application.cc` | Título de ventana "Sigma Academy" e ícono `sigma-academy`. |
+| `.gitignore` | Ignora `/dist/`. |
+| `AGENTS.md` | Documenta el comando de empaquetado y el workflow. |
+| `documentation/docMartinSprint3.md` | Esta sección. |
+
+### Comandos
+
+```bash
+./scripts/build-linux-deb.sh
+SKIP_BUILD=1 ./scripts/build-linux-deb.sh
+VERSION=1.0.1+2 ./scripts/build-linux-deb.sh
+sudo apt install ./dist/sigma-academy_1.0.0+1_amd64.deb
+```
+
+### Verificación
+
+- `flutter build linux --release`: OK.
+- `dpkg-deb --info`, `desktop-file-validate`, `ldd` y `apt-get -s install`: OK.
+- Instalación real con `sudo apt install ./dist/sigma-academy_1.0.0+1_amd64.deb`: OK.
+- `actionlint` y parseo YAML del workflow: OK.
+- Actualización: se generó `VERSION=1.0.1+2` y `dpkg --compare-versions` confirmó que apt lo trata como upgrade.
+- El `.deb` local quedó en `dist/sigma-academy_1.0.0+1_amd64.deb` (12 MB; 35 MB instalados).
+
+### Estado
+
+La rama `feat/Build-.deb-Linux-(CI-+-empaquetado)` tiene el commit de la tarea, pero **no se mergeó a `Development` todavía**. El workflow se ejecutará por primera vez al abrir el PR o mergear; hasta entonces no hay artifact/release generado por CI. El `.deb` local ya fue probado.
+
+### No entra
+
+- Repositorio apt / actualización automática con `apt upgrade`.
+- `arm64` en CI (el script detecta la arquitectura, pero el workflow solo construye `amd64`).
+- Firma GPG del `.deb`.
+- Instalación o despliegue en Kubernetes.
+
 ## 4_5_5 — Microservicio IA: scaffold + API
 
 ### Objetivo
@@ -240,63 +377,11 @@ Integrar el microservicio IA con la API de Google Gemini para convertir archivos
 - Subir el Markdown a Google Drive directamente desde el servicio IA (lo hace Notes al crear la nota).
 - SDK oficial de Google: se usa la API REST directamente con `net/http`.
 
-## 4_5_X — Editar grupo: nombre y descripción (backend + front)
+## 4_5_7 — Tests/CI de escritorio e IA
 
-> **Nota:** Esta tarea pertenecía originalmente al ámbito de Benji (Social) y fue asignada a Martín por intercambio de tareas del sprint.
+**Pendiente.** Se acordó no implementarlo por ahora: Windows lo cubre otra persona, el CI de Linux es otra tarea y el cliente PDF→Markdown ya se validó manualmente. Si se retoma, el alcance restante son los tests de `back/ai` y el workflow `test-ai.yml`.
 
-### Objetivo
-
-Permitir que un administrador de grupo edite el nombre y la descripción de un grupo existente, tanto en el backend (Social) como en el front (Flutter).
-
-### Alcance
-
-| Parte | Qué se hace |
-|-------|-------------|
-| **Backend (Social)** | Endpoint `PATCH /groups/:id` que recibe `{name, description?}` y valida que el solicitante sea admin del grupo. |
-| **Front (Flutter)** | Botón "Editar grupo" en `GroupDetailScreen` (solo visible para admins) que abre un diálogo con campos de texto para nombre y descripción. |
-
-### Archivos creados
-
-Ninguno nuevo (todo es modificación de existentes).
-
-### Archivos modificados
-
-| Archivo | Cambio |
-|---------|--------|
-| `back/social/internal/service/group_service.go` | Agregado `UpdateGroup` a la interfaz `GroupStore` y implementado en `GroupService` (valida UUID, normaliza nombre, llama al store). |
-| `back/social/internal/repository/group_repository.go` | Agregado `UpdateGroup` en `GroupRepository` (UPDATE SQL con `FOR UPDATE`, valida que el usuario es admin vía `requireAdminTx`). |
-| `back/social/internal/service/store_memory.go` | Agregado `UpdateGroup` en `MemoryGroupStore` para tests (valida admin vía `requireAdminLocked`). |
-| `back/social/internal/handler/http/group_handler.go` | Agregado tipo `updateGroupRequest`, handler `EditGroup` y ruta `PATCH /groups/:id` en `RegisterRoutes`. |
-| `front/lib/core/services/social_service.dart` | Agregado método `updateGroup({groupId, name, description})` que llama a `PATCH /groups/:id`. |
-| `front/lib/features/groups/group_detail_screen.dart` | Agregado botón "Editar grupo" (ícono de lápiz) en el AppBar, visible solo cuando el usuario es admin. Abre `AlertDialog` con campos de nombre y descripción. |
-| `documentation/docMartinSprint3.md` | Esta sección. |
-
-### Endpoints de la API
-
-| Método | Ruta | Body | Responde |
-|--------|------|------|----------|
-| `PATCH` | `/groups/:id` | `{name: string, description?: string}` | `200 {id, name, description}` / `403` si no es admin / `404` si no existe / `400` si nombre vacío |
-
-### Cómo interactúa con el resto del proyecto
-
-- Con **4_5_4** (Política solo-admins de Benji): el endpoint respeta el mismo modelo de permisos (solo admin puede editar).
-- Con **front**: el botón solo aparece para administradores del grupo, consistente con otras acciones de administración (regenerar invite, kick, ban, etc.).
-- Con **grupos existentes**: el cambio se refleja inmediatamente en `GET /groups/:id` y `GET /groups/me`.
-
-### Verificación
-
-- `go build ./...` + `go vet ./...` en `back/social`: OK.
-- `go test ./...` en `back/social`: todos los tests pasan.
-- `flutter analyze` en los archivos del front tocados: sin errores nuevos (solo warnings preexistentes).
-- El endpoint reusa la validación de nombre existente (`utils.ValidateName`, `utils.NormalizeName`) y la autorización de admin existente (`requireAdminTx`).
-
-### No entra
-
-- Editar otros campos del grupo (owner, notes_restricted_to_staff, invite_token).
-- Historial de cambios de nombre/descripción.
-- Notificar a miembros cuando el grupo es editado.
-
-## 4_5_Y — Notificación de reunión con datos completos y enlace
+## 4_5_8 — Notificación de reunión con datos completos y enlace
 
 ### Objetivo
 
