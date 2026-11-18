@@ -34,6 +34,10 @@ func (r *MeetingRepository) IsMember(ctx context.Context, groupID, userID pgtype
 	})
 }
 
+func (r *MeetingRepository) GetMemberPermissions(ctx context.Context, groupID, userID pgtype.UUID) (model.MemberPermissions, error) {
+	return getMemberPermissions(ctx, r.pool, groupID, userID)
+}
+
 func (r *MeetingRepository) GetMemberRole(ctx context.Context, groupID, userID pgtype.UUID) (string, error) {
 	return r.queries.GetGroupMemberRole(ctx, sqlc.GetGroupMemberRoleParams{
 		GroupID: groupID,

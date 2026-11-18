@@ -34,6 +34,7 @@ func (h *GroupHandler) RegisterRoutes(r gin.IRoutes) {
 	r.POST("/groups/:id/members/:user_id/kick", h.KickMember)
 	r.POST("/groups/:id/members/:user_id/ban", h.BanMember)
 	r.PATCH("/groups/:id/members/:user_id/role", h.ChangeRole)
+	r.PATCH("/groups/:id/members/:user_id/permissions", h.SetMemberPermissions)
 	r.POST("/groups/:id/transfer-admin", h.TransferAdmin)
 	r.POST("/groups/:id/leave", h.LeaveGroup)
 	r.PATCH("/groups/:id", h.EditGroup)
@@ -318,6 +319,37 @@ func (h *GroupHandler) ChangeRole(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusOK)
+}
+
+// PATCH /groups/{id}/members/{user_id}/permissions
+// Body: {can_share_notes?, can_create_meetings?, can_edit_kanban?} (parcial).
+// Solo admins; el objetivo debe ser un miembro común. 200 con los permisos resultantes.
+type setPermissionsRequest struct {
+	CanShareNotes     *bool `json:"can_share_notes"`
+	CanCreateMeetings *bool `json:"can_create_meetings"`
+	CanEditKanban     *bool `json:"can_edit_kanban"`
+}
+
+func (h *GroupHandler) SetMemberPermissions(c *gin.Context) {
+	adminID, ok := requireUser(c)
+	if !ok {
+		return
+	}
+	var req setPermissionsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Body inválido: se esperan booleanos can_share_notes, can_create_meetings, can_edit_kanban"})
+		return
+	}
+	perms, err := h.svc.SetMemberPermissions(c.Request.Context(), c.Param("id"), adminID, c.Param("user_id"), model.MemberPermissionsUpdate{
+		CanShareNotes:     req.CanShareNotes,
+		CanCreateMeetings: req.CanCreateMeetings,
+		CanEditKanban:     req.CanEditKanban,
+	})
+	if err != nil {
+		respondGroupError(c, err, "Acceso denegado: solo admins pueden delegar permisos")
+		return
+	}
+	c.JSON(http.StatusOK, perms)
 }
 
 type transferAdminRequest struct {

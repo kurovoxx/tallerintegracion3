@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository/sqlc"
 )
 
@@ -18,7 +19,7 @@ var (
 	ErrInvalidSprintStatus   = errors.New("invalid status: must be sin_empezar, en_proceso or listo")
 	ErrSprintTaskNotFound    = errors.New("sprint task not found")
 	ErrSheetNotFound         = errors.New("sheet not found in group")
-	ErrLastSheet              = errors.New("no puedes eliminar el único sprint del grupo")
+	ErrLastSheet             = errors.New("no puedes eliminar el único sprint del grupo")
 	ErrInvalidSprintTaskID   = errors.New("invalid sprint task ID")
 	ErrInvalidSheetID        = errors.New("invalid sheet ID")
 	ErrAssigneeRequired      = errors.New("assigned_to is required")
@@ -52,6 +53,7 @@ type SprintRepo interface {
 	GetGroupByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialGroup, error)
 	IsMember(ctx context.Context, groupID, userID pgtype.UUID) (bool, error)
 	GetMemberRole(ctx context.Context, groupID, userID pgtype.UUID) (string, error)
+	GetMemberPermissions(ctx context.Context, groupID, userID pgtype.UUID) (model.MemberPermissions, error)
 	GetSheetByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialSprintSheet, error)
 	ListSheetsByGroup(ctx context.Context, groupID pgtype.UUID) ([]sqlc.SocialSprintSheet, error)
 	CreateSheet(ctx context.Context, arg sqlc.CreateSheetParams) (sqlc.SocialSprintSheet, error)
@@ -95,8 +97,9 @@ func (s *SprintService) requireMembership(ctx context.Context, gid, uid pgtype.U
 	return nil
 }
 
-// requireAdmin exige que el usuario sea admin del grupo (403 si es miembro
-// común o no pertenece). Política: solo admins modifican el sprint/kanban.
+// requireAdmin exige que el usuario pueda modificar el sprint/kanban (403 si
+// no pertenece o es miembro común sin permiso). Política: modifican los admins
+// y los miembros con el permiso can_edit_kanban delegado por un admin.
 func (s *SprintService) requireAdmin(ctx context.Context, gid, uid pgtype.UUID) error {
 	role, err := s.repo.GetMemberRole(ctx, gid, uid)
 	if err != nil {
@@ -105,7 +108,17 @@ func (s *SprintService) requireAdmin(ctx context.Context, gid, uid pgtype.UUID) 
 		}
 		return err
 	}
-	if role != "admin" {
+	if role == model.RoleAdmin {
+		return nil
+	}
+	perms, err := s.repo.GetMemberPermissions(ctx, gid, uid)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrForbidden
+		}
+		return err
+	}
+	if !perms.CanEditKanban {
 		return ErrForbidden
 	}
 	return nil

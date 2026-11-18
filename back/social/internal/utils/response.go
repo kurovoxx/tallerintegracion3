@@ -36,6 +36,7 @@ const (
 	ErrTokenExpired         = "token_expired"
 	ErrInvalidName          = "invalid_name"
 	ErrInvalidRole          = "invalid_role"
+	ErrInvalidPermissions   = "invalid_permissions"
 	ErrInvalidPhotoURL      = "invalid_photo_url"
 	ErrInvalidPhotoThumbURL = "invalid_photo_thumb_url"
 	ErrAlreadyMember        = "already_member"
@@ -51,6 +52,8 @@ func MessageForCode(code string) string {
 		return "name requerido (1-200 caracteres)"
 	case ErrInvalidRole:
 		return "role debe ser admin o member"
+	case ErrInvalidPermissions:
+		return "envía al menos un permiso booleano: can_share_notes, can_create_meetings o can_edit_kanban"
 	case ErrInvalidPhotoURL:
 		return "photo_url inválida o excede el tamaño permitido"
 	case ErrInvalidPhotoThumbURL:
@@ -80,7 +83,7 @@ func MessageForCode(code string) string {
 
 func StatusForCode(code string) int {
 	switch code {
-	case ErrInvalidName, ErrInvalidRole, ErrInvalidPhotoURL, ErrInvalidPhotoThumbURL, ErrBadRequest, ErrCannotKickAdmin, ErrLastAdmin:
+	case ErrInvalidName, ErrInvalidRole, ErrInvalidPermissions, ErrInvalidPhotoURL, ErrInvalidPhotoThumbURL, ErrBadRequest, ErrCannotKickAdmin, ErrLastAdmin:
 		return http.StatusBadRequest
 	case ErrUnauthorized, ErrInvalidToken, ErrTokenExpired:
 		return http.StatusUnauthorized

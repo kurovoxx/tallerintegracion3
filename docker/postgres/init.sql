@@ -517,6 +517,10 @@ CREATE TABLE social.group_memberships (
     user_id uuid NOT NULL,
     role varchar(20) NOT NULL DEFAULT 'member' CHECK (role IN ('admin', 'member')),
     joined_at timestamptz NOT NULL DEFAULT now(),
+    -- Permisos delegados por un admin a miembros comunes (admins: siempre todos).
+    can_share_notes boolean NOT NULL DEFAULT false,
+    can_create_meetings boolean NOT NULL DEFAULT false,
+    can_edit_kanban boolean NOT NULL DEFAULT false,
     UNIQUE (group_id, user_id)
 );
 

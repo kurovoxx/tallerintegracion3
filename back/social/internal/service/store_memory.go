@@ -223,6 +223,31 @@ func (m *MemoryGroupStore) ChangeMemberRole(_ context.Context, groupID, adminID,
 	return nil
 }
 
+func (m *MemoryGroupStore) SetMemberPermissions(_ context.Context, groupID, adminID, targetUserID string, upd model.MemberPermissionsUpdate) (model.MemberPermissions, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.requireAdminLocked(groupID, adminID); err != nil {
+		return model.MemberPermissions{}, err
+	}
+	if adminID == targetUserID {
+		return model.MemberPermissions{}, errors.New("cannot_modify_self")
+	}
+	if err := m.requireRemovableLocked(groupID, targetUserID); err != nil {
+		return model.MemberPermissions{}, err
+	}
+	ms := m.find(groupID, targetUserID)
+	if upd.CanShareNotes != nil {
+		ms.CanShareNotes = *upd.CanShareNotes
+	}
+	if upd.CanCreateMeetings != nil {
+		ms.CanCreateMeetings = *upd.CanCreateMeetings
+	}
+	if upd.CanEditKanban != nil {
+		ms.CanEditKanban = *upd.CanEditKanban
+	}
+	return ms.MemberPermissions, nil
+}
+
 func (m *MemoryGroupStore) TransferAdmin(_ context.Context, groupID, currentAdminID, newAdminID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

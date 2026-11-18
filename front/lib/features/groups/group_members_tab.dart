@@ -214,6 +214,76 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
     );
   }
 
+  // Diálogo de permisos delegados (PATCH permissions): el admin elige qué
+  // puede hacer el miembro además de leer y chatear.
+  Future<void> _editPermissions(GroupMember m) async {
+    var share = m.canShareNotes;
+    var meetings = m.canCreateMeetings;
+    var kanban = m.canEditKanban;
+    final result = await showNeobrutalistDialog<(bool, bool, bool)>(
+      context: context,
+      dialog: NeobrutalistDialog(
+        title: 'Permisos de ${m.displayLabel}',
+        cancelLabel: 'Cancelar',
+        confirmLabel: 'Guardar',
+        confirmVariant: NeobrutalistButtonVariant.accent,
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop((share, meetings, kanban)),
+        content: StatefulBuilder(
+          builder: (ctx, setDialogState) => Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Los admins pueden todo. Aquí eliges qué más puede hacer este miembro.',
+              ),
+              const SizedBox(height: AppDimens.spaceSm),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text('Enviar notas al grupo'),
+                value: share,
+                onChanged: (v) => setDialogState(() => share = v ?? false),
+              ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text('Crear reuniones'),
+                value: meetings,
+                onChanged: (v) => setDialogState(() => meetings = v ?? false),
+              ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text('Modificar el kanban'),
+                value: kanban,
+                onChanged: (v) => setDialogState(() => kanban = v ?? false),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (result == null || !mounted) return;
+    final (s, mt, k) = result;
+    if (s == m.canShareNotes &&
+        mt == m.canCreateMeetings &&
+        k == m.canEditKanban) {
+      return;
+    }
+    await _perform(
+      m,
+      'Permisos de ${m.displayLabel} actualizados.',
+      () => _service.setMemberPermissions(
+        groupId: _groupId,
+        userId: m.userId,
+        canShareNotes: s,
+        canCreateMeetings: mt,
+        canEditKanban: k,
+      ),
+    );
+  }
+
   // Ascender, degradar o transferir la administración (PATCH role /
   // POST transfer-admin). Tras transferir, el usuario actual pasa a miembro.
   Future<void> _confirmRole(GroupMember m, {required String action}) async {
@@ -433,6 +503,24 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
                               label: 'Tú',
                               tone: NeobrutalistTone.info,
                             ),
+                          if (!isAdmin && m.canShareNotes)
+                            const NeobrutalistBadge(
+                              label: 'Notas',
+                              tone: NeobrutalistTone.neutral,
+                              icon: Icons.note_add_rounded,
+                            ),
+                          if (!isAdmin && m.canCreateMeetings)
+                            const NeobrutalistBadge(
+                              label: 'Reuniones',
+                              tone: NeobrutalistTone.neutral,
+                              icon: Icons.event_rounded,
+                            ),
+                          if (!isAdmin && m.canEditKanban)
+                            const NeobrutalistBadge(
+                              label: 'Kanban',
+                              tone: NeobrutalistTone.neutral,
+                              icon: Icons.view_kanban_rounded,
+                            ),
                         ],
                       ),
                     ],
@@ -461,6 +549,12 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
                     busy ? null : () => _confirmRole(m, action: 'demote'),
                   ),
                 if (_isAdmin && !isMe && !isAdmin) ...[
+                  _action(
+                    'Permisos',
+                    Icons.tune_rounded,
+                    NeobrutalistButtonVariant.accent,
+                    busy ? null : () => _editPermissions(m),
+                  ),
                   _action(
                     'Hacer admin',
                     Icons.add_moderator_rounded,

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository/sqlc"
 )
 
@@ -140,3 +141,89 @@ func TestSprintTimeRemaining(t *testing.T) {
 type notifierFunc func()
 
 func (f notifierFunc) OnMeetingCreated(_ context.Context, _ sqlc.SocialMeeting) { f() }
+
+// Permisos delegados: un miembro con can_create_meetings agenda y uno con
+// can_edit_kanban modifica el sprint; el permiso de uno no vale para el otro.
+func TestMeetingCreate_MiembroConPermisoDelegado(t *testing.T) {
+	gid, admin, member := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	store := NewMemoryMeetingStore()
+	store.AddGroup(gid, admin, member)
+	svc := NewMeetingService(store, NoopMeetingCreatedNotifier{})
+	ctx := context.Background()
+	when := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+
+	store.SetPermissions(gid, member, model.MemberPermissions{CanEditKanban: true})
+	if _, err := svc.CreateMeeting(ctx, gid, member, "Daily", nil, nil, when, nil, nil); err != ErrForbidden {
+		t.Fatalf("can_edit_kanban no habilita reuniones: got %v", err)
+	}
+	store.SetPermissions(gid, member, model.MemberPermissions{CanCreateMeetings: true})
+	if _, err := svc.CreateMeeting(ctx, gid, member, "Daily", nil, nil, when, nil, nil); err != nil {
+		t.Fatalf("miembro con can_create_meetings agenda: %v", err)
+	}
+}
+
+func TestSprint_MiembroConPermisoDelegado(t *testing.T) {
+	gid, admin, member, _, store := sprintSeamSetup()
+	svc := NewSprintService(store)
+	ctx := context.Background()
+
+	store.SetPermissions(gid, member, model.MemberPermissions{CanCreateMeetings: true})
+	if _, err := svc.CreateSprintTask(ctx, gid, member, "", "T", member, "", "", nil); err != ErrForbidden {
+		t.Fatalf("can_create_meetings no habilita el kanban: got %v", err)
+	}
+	store.SetPermissions(gid, member, model.MemberPermissions{CanEditKanban: true})
+	created, err := svc.CreateSprintTask(ctx, gid, member, "", "T", member, "", "", nil)
+	if err != nil {
+		t.Fatalf("miembro con can_edit_kanban crea: %v", err)
+	}
+	title := "Nuevo"
+	if _, err := svc.UpdateSprintTask(ctx, gid, member, uuidStr(created.Task.ID), &title, nil, nil, nil, nil); err != nil {
+		t.Fatalf("edita: %v", err)
+	}
+	if _, err := svc.DeleteSprintTask(ctx, gid, member, uuidStr(created.Task.ID)); err != nil {
+		t.Fatalf("borra: %v", err)
+	}
+	_ = admin
+}
+
+func TestGroupService_SetMemberPermissions(t *testing.T) {
+	ctx := context.Background()
+	svc := NewGroupService(NewMemoryGroupStore(), nil)
+	admin, member, other := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	g, err := svc.Create(ctx, admin, "G", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range []string{member, other} {
+		if err := svc.JoinGroup(ctx, g.ID, g.InviteToken, u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	yes := true
+	upd := model.MemberPermissionsUpdate{CanShareNotes: &yes}
+
+	if _, err := svc.SetMemberPermissions(ctx, g.ID, member, other, upd); err != ErrForbidden {
+		t.Fatalf("un miembro no delega permisos: got %v", err)
+	}
+	if _, err := svc.SetMemberPermissions(ctx, g.ID, admin, admin, upd); err != ErrCannotModifySelf {
+		t.Fatalf("el admin no se auto-asigna: got %v", err)
+	}
+	if _, err := svc.SetMemberPermissions(ctx, g.ID, admin, member, model.MemberPermissionsUpdate{}); err == nil {
+		t.Fatal("sin ningún permiso debe fallar")
+	}
+	got, err := svc.SetMemberPermissions(ctx, g.ID, admin, member, upd)
+	if err != nil || !got.CanShareNotes || got.CanCreateMeetings || got.CanEditKanban {
+		t.Fatalf("got %+v err=%v", got, err)
+	}
+	// Parcial: no pisa lo ya concedido.
+	got, err = svc.SetMemberPermissions(ctx, g.ID, admin, member, model.MemberPermissionsUpdate{CanEditKanban: &yes})
+	if err != nil || !got.CanShareNotes || !got.CanEditKanban {
+		t.Fatalf("parcial: got %+v err=%v", got, err)
+	}
+	members, _ := svc.ListMembers(ctx, g.ID, admin)
+	for _, m := range members {
+		if m.UserID == member && (!m.CanShareNotes || !m.CanEditKanban) {
+			t.Fatalf("ListMembers debe exponer permisos: %+v", m)
+		}
+	}
+}

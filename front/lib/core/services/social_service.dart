@@ -327,6 +327,44 @@ class SocialService {
     if (res.statusCode != 200) throw _toError(res);
   }
 
+  // PATCH /groups/:id/members/:userId/permissions
+  // {can_share_notes?, can_create_meetings?, can_edit_kanban?} -> 200 con los
+  // permisos resultantes. Solo admin; el objetivo debe ser un miembro común.
+  Future<void> setMemberPermissions({
+    required String groupId,
+    required String userId,
+    bool? canShareNotes,
+    bool? canCreateMeetings,
+    bool? canEditKanban,
+  }) async {
+    final gid = groupId.trim();
+    final uid = userId.trim();
+    if (gid.isEmpty || uid.isEmpty) {
+      throw SocialApiException('groupId/userId vacíos.', code: 'invalid_args');
+    }
+    final body = <String, dynamic>{
+      'can_share_notes': ?canShareNotes,
+      'can_create_meetings': ?canCreateMeetings,
+      'can_edit_kanban': ?canEditKanban,
+    };
+    if (body.isEmpty) {
+      throw SocialApiException(
+        'Sin permisos que cambiar.',
+        code: 'invalid_args',
+      );
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .patch(
+            Uri.parse('$baseUrl/groups/$gid/members/$uid/permissions'),
+            headers: _headers(json: true),
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) throw _toError(res);
+  }
+
   // POST /groups/:id/transfer-admin {new_admin_user_id} -> 200. Solo admin.
   // El destino pasa a admin y el solicitante a member en una transacción.
   // Ver back/social/internal/handler/http/group_handler.go:263 TransferAdmin.

@@ -60,6 +60,8 @@ type GroupStore interface {
 	ChangeMemberRole(ctx context.Context, groupID, adminID, targetUserID, newRole string) error
 	TransferAdmin(ctx context.Context, groupID, currentAdminID, newAdminID string) error
 	GetMemberRole(ctx context.Context, groupID, userID string) (string, error)
+	// SetMemberPermissions delega permisos a un miembro común. Solo admins.
+	SetMemberPermissions(ctx context.Context, groupID, adminID, targetUserID string, upd model.MemberPermissionsUpdate) (model.MemberPermissions, error)
 	CountAdmins(ctx context.Context, groupID string) (int, error)
 	RemoveMember(ctx context.Context, groupID, userID string) error
 	DeleteGroup(ctx context.Context, groupID string) error
@@ -617,6 +619,25 @@ func (s *GroupService) ChangeRole(ctx context.Context, groupID, adminID, targetU
 	return s.withTargetAccount(ctx, targetUserID, func() error {
 		return mapStoreErr(s.groups.ChangeMemberRole(ctx, groupID, adminID, targetUserID, newRole))
 	})
+}
+
+// SetMemberPermissions delega (o retira) permisos a un miembro común: compartir
+// apuntes, agendar reuniones y editar el kanban. Solo admins; no aplica a
+// admins (ya pueden todo) ni a uno mismo.
+func (s *GroupService) SetMemberPermissions(ctx context.Context, groupID, adminID, targetUserID string, upd model.MemberPermissionsUpdate) (model.MemberPermissions, error) {
+	if err := checkAdminAction(groupID, adminID, targetUserID); err != nil {
+		return model.MemberPermissions{}, err
+	}
+	if upd.CanShareNotes == nil && upd.CanCreateMeetings == nil && upd.CanEditKanban == nil {
+		return model.MemberPermissions{}, newServiceError(utils.ErrInvalidPermissions)
+	}
+	var out model.MemberPermissions
+	err := s.withTargetAccount(ctx, targetUserID, func() error {
+		perms, err := s.groups.SetMemberPermissions(ctx, groupID, adminID, targetUserID, upd)
+		out = perms
+		return mapStoreErr(err)
+	})
+	return out, err
 }
 
 func (s *GroupService) TransferAdmin(ctx context.Context, groupID, currentAdminID, newAdminID string) error {

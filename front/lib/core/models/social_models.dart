@@ -323,6 +323,9 @@ class GroupMember {
     this.displayName,
     this.email,
     this.photoThumbUrl,
+    this.canShareNotes = false,
+    this.canCreateMeetings = false,
+    this.canEditKanban = false,
   });
 
   final String id;
@@ -330,6 +333,12 @@ class GroupMember {
   final String userId;
   final String role;
   final DateTime? joinedAt;
+
+  /// Permisos que un admin delegó a este miembro común (los admins ya pueden
+  /// todo sin necesitarlos).
+  final bool canShareNotes;
+  final bool canCreateMeetings;
+  final bool canEditKanban;
   final String? displayName;
   final String? email;
   final String? photoThumbUrl;
@@ -369,6 +378,9 @@ class GroupMember {
       displayName: name,
       email: mail,
       photoThumbUrl: photo,
+      canShareNotes: j['can_share_notes'] == true,
+      canCreateMeetings: j['can_create_meetings'] == true,
+      canEditKanban: j['can_edit_kanban'] == true,
     );
   }
 }

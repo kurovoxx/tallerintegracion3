@@ -1141,6 +1141,7 @@ type MemorySocialResolver struct {
 	mu        sync.RWMutex
 	members   map[string]bool // key userID:groupID
 	admins    map[string]bool
+	sharers   map[string]bool // miembros con can_share_notes delegado
 	followers map[string]int
 }
 
@@ -1148,6 +1149,7 @@ func NewMemorySocialResolver() *MemorySocialResolver {
 	return &MemorySocialResolver{
 		members:   make(map[string]bool),
 		admins:    make(map[string]bool),
+		sharers:   make(map[string]bool),
 		followers: make(map[string]int),
 	}
 }
@@ -1161,6 +1163,17 @@ func (r *MemorySocialResolver) AddAdmin(userID, groupID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.admins[userID+":"+groupID] = true
+}
+func (r *MemorySocialResolver) AddSharer(userID, groupID string) {
+	r.AddMember(userID, groupID)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sharers[userID+":"+groupID] = true
+}
+func (r *MemorySocialResolver) CanShareNotes(ctx context.Context, userID, groupID string) (bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.sharers[userID+":"+groupID], nil
 }
 func (r *MemorySocialResolver) SetFollowers(userID string, cnt int) {
 	r.mu.Lock()

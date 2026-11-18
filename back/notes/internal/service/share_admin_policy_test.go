@@ -39,3 +39,30 @@ func TestShare_SoloAdminsDelGrupo(t *testing.T) {
 		t.Fatal("el share de un admin debe marcarse is_admin_note")
 	}
 }
+
+// Un admin puede delegar can_share_notes: ese miembro comparte aunque no sea admin,
+// pero su share no se marca como nota de admin.
+func TestShare_MiembroConPermisoDelegado(t *testing.T) {
+	svc, _, _, _, _, _, _, social := newTestService()
+	ctx := context.Background()
+	sharer, other, group := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	social.AddSharer(sharer, group)
+	social.AddMember(other, group)
+
+	n, err := svc.Create(ctx, sharer, "Con permiso", nil, "private", stringPtr("x"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared, err := svc.Share(ctx, sharer, n.ID, group, "link")
+	if err != nil {
+		t.Fatalf("el miembro con permiso delegado debe poder compartir: %v", err)
+	}
+	if shared.IsAdminNote {
+		t.Fatal("el share de un miembro delegado no es is_admin_note")
+	}
+
+	n2, _ := svc.Create(ctx, other, "Sin permiso", nil, "private", stringPtr("x"), "")
+	if _, err := svc.Share(ctx, other, n2.ID, group, "link"); err == nil {
+		t.Fatal("un miembro sin permiso no debe poder compartir")
+	}
+}

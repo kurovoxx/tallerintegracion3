@@ -35,20 +35,47 @@ type GroupMembership struct {
 	UserID   string    `json:"user_id"`
 	Role     string    `json:"role"`
 	JoinedAt time.Time `json:"joined_at"`
+	MemberPermissions
+}
+
+// MemberPermissions son los permisos extra que un admin delega a un miembro
+// común. Los admins los tienen siempre (ver Effective). Todos parten en false:
+// por defecto solo los admins comparten apuntes, agendan reuniones y editan el
+// kanban del sprint.
+type MemberPermissions struct {
+	CanShareNotes     bool `json:"can_share_notes"`
+	CanCreateMeetings bool `json:"can_create_meetings"`
+	CanEditKanban     bool `json:"can_edit_kanban"`
+}
+
+// MemberPermissionsUpdate es el PATCH de permisos; nil = no tocar ese permiso.
+type MemberPermissionsUpdate struct {
+	CanShareNotes     *bool
+	CanCreateMeetings *bool
+	CanEditKanban     *bool
+}
+
+// Effective devuelve los permisos reales según el rol: un admin puede todo.
+func (p MemberPermissions) Effective(role string) MemberPermissions {
+	if role == RoleAdmin {
+		return MemberPermissions{CanShareNotes: true, CanCreateMeetings: true, CanEditKanban: true}
+	}
+	return p
 }
 
 // MemberView enriquece GroupMembership con datos públicos de Identity.
 // DisplayName/Email se omiten cuando no se pudieron resolver
 // (backward-compatible con clientes que solo esperan IDs+rol).
 type MemberView struct {
-	ID            string    `json:"id"`
-	GroupID       string    `json:"group_id"`
-	UserID        string    `json:"user_id"`
-	Role          string    `json:"role"`
-	JoinedAt      time.Time `json:"joined_at"`
-	DisplayName   *string   `json:"display_name,omitempty"`
-	Email         *string   `json:"email,omitempty"`
-	PhotoThumbURL *string   `json:"photo_thumb_url,omitempty"`
+	ID       string    `json:"id"`
+	GroupID  string    `json:"group_id"`
+	UserID   string    `json:"user_id"`
+	Role     string    `json:"role"`
+	JoinedAt time.Time `json:"joined_at"`
+	MemberPermissions
+	DisplayName   *string `json:"display_name,omitempty"`
+	Email         *string `json:"email,omitempty"`
+	PhotoThumbURL *string `json:"photo_thumb_url,omitempty"`
 }
 
 type MyGroup struct {

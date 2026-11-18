@@ -539,6 +539,13 @@ type SocialResolver interface {
 	GetFollowersCount(ctx context.Context, userID string) (int, error)
 }
 
+// SharePermissionResolver es opcional: lo implementan los resolvers que saben si
+// un miembro común recibió de un admin el permiso para compartir apuntes en el
+// grupo (can_share_notes). Sin él, solo los admins comparten.
+type SharePermissionResolver interface {
+	CanShareNotes(ctx context.Context, userID, groupID string) (bool, error)
+}
+
 // noopSocialResolver es el fallback de construcción cuando no se inyecta un
 // resolver: asume membresía (comportamiento de desarrollo). main.go siempre
 // inyecta el adaptador HTTP real en producción; los tests usan MemorySocialResolver.
@@ -2168,13 +2175,23 @@ func (s *NoteService) shareLocked(ctx context.Context, ownerID string, noteID st
 	if !isMember {
 		return nil, newServiceError(utils.ErrForbidden)
 	}
-	// Política: solo los admins del grupo pueden compartir apuntes en él.
+	// Política: comparten los admins del grupo y los miembros a quienes un
+	// admin delegó el permiso can_share_notes.
 	isAdmin, err := s.social.IsAdmin(ctx, ownerID, groupID)
 	if err != nil {
 		return nil, ErrInternalDatabase
 	}
 	if !isAdmin {
-		return nil, newServiceErrorMsg(utils.ErrForbidden, "solo los administradores del grupo pueden compartir apuntes")
+		allowed := false
+		if pr, ok := s.social.(SharePermissionResolver); ok {
+			allowed, err = pr.CanShareNotes(ctx, ownerID, groupID)
+			if err != nil {
+				return nil, ErrInternalDatabase
+			}
+		}
+		if !allowed {
+			return nil, newServiceErrorMsg(utils.ErrForbidden, "solo los administradores del grupo (o miembros con permiso) pueden compartir apuntes")
+		}
 	}
 	followers, _ := s.social.GetFollowersCount(ctx, ownerID)
 

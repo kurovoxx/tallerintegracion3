@@ -193,6 +193,17 @@ func runServerMemory(driveClient drive.Client, cfg *config.Config) {
 	startServers(svc, cfg, nil)
 }
 
+// socialGRPCWithPermissions completa el adaptador gRPC con la consulta de
+// permisos delegados (CanShareNotes) vía HTTP interno.
+type socialGRPCWithPermissions struct {
+	*service.SocialGRPCAdapter
+	perms *service.SocialHTTPAdapter
+}
+
+func (s *socialGRPCWithPermissions) CanShareNotes(ctx context.Context, userID, groupID string) (bool, error) {
+	return s.perms.CanShareNotes(ctx, userID, groupID)
+}
+
 // newSocialAdapters inyecta los adaptadores de Social: clientes HTTP reales
 // contra SOCIAL_SERVICE_URL con timeout y degradación controlada. No hay
 // adaptadores mock fijos en producción; los resolvers en memoria solo viven en
@@ -204,7 +215,13 @@ func newSocialAdapters(cfg *config.Config) (service.SocialResolver, service.Grou
 			log.Fatalf("notes: SOCIAL_GRPC_ADDR inválida: %v", err)
 		}
 		log.Printf("notes: adaptadores Social gRPC activados (addr=%s timeout=%s)", cfg.SocialGRPCAddr, cfg.SocialTimeout)
-		return adapter, adapter
+		// El permiso delegado can_share_notes no existe en el proto gRPC: se
+		// consulta por el endpoint HTTP interno de Social.
+		withPerms := &socialGRPCWithPermissions{
+			SocialGRPCAdapter: adapter,
+			perms:             service.NewSocialHTTPAdapter(cfg.SocialServiceURL, cfg.SocialTimeout, cfg.InternalAPIKey),
+		}
+		return withPerms, withPerms
 	}
 	adapter := service.NewSocialHTTPAdapter(cfg.SocialServiceURL, cfg.SocialTimeout, cfg.InternalAPIKey)
 	log.Printf("notes: adaptadores Social HTTP activados (base=%s timeout=%s)", cfg.SocialServiceURL, cfg.SocialTimeout)

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/model"
 )
@@ -226,7 +227,8 @@ func (r *GroupRepository) ListMembersLimit(ctx context.Context, groupID string, 
 	}
 
 	query := `
-		SELECT id, group_id, user_id, role, joined_at 
+		SELECT id, group_id, user_id, role, joined_at,
+		       can_share_notes, can_create_meetings, can_edit_kanban
 		FROM social.group_memberships 
 		WHERE group_id = $1 
 		ORDER BY joined_at ASC`
@@ -245,7 +247,8 @@ func (r *GroupRepository) ListMembersLimit(ctx context.Context, groupID string, 
 	var members []*model.GroupMembership
 	for rows.Next() {
 		var m model.GroupMembership
-		if err := rows.Scan(&m.ID, &m.GroupID, &m.UserID, &m.Role, &m.JoinedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.GroupID, &m.UserID, &m.Role, &m.JoinedAt,
+			&m.CanShareNotes, &m.CanCreateMeetings, &m.CanEditKanban); err != nil {
 			return nil, err
 		}
 		members = append(members, &m)
@@ -455,6 +458,56 @@ func (r *GroupRepository) GetMemberRole(ctx context.Context, groupID, userID str
 		return "", err
 	}
 	return role, nil
+}
+
+// SetMemberPermissions cambia los permisos delegados de un miembro común (solo
+// admin). Los admins ya lo pueden todo, así que no se les asignan permisos.
+// Los campos nil del update no se modifican.
+func (r *GroupRepository) SetMemberPermissions(ctx context.Context, groupID, adminID, targetUserID string, upd model.MemberPermissionsUpdate) (model.MemberPermissions, error) {
+	var out model.MemberPermissions
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return out, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := requireAdminTx(ctx, tx, groupID, adminID); err != nil {
+		return out, err
+	}
+	if adminID == targetUserID {
+		return out, errors.New("cannot_modify_self")
+	}
+	if err := requireRemovableTargetTx(ctx, tx, groupID, targetUserID); err != nil {
+		return out, err
+	}
+	err = tx.QueryRow(ctx, `
+		UPDATE social.group_memberships SET
+			can_share_notes     = COALESCE($3, can_share_notes),
+			can_create_meetings = COALESCE($4, can_create_meetings),
+			can_edit_kanban     = COALESCE($5, can_edit_kanban)
+		WHERE group_id = $1 AND user_id = $2
+		RETURNING can_share_notes, can_create_meetings, can_edit_kanban`,
+		groupID, targetUserID, upd.CanShareNotes, upd.CanCreateMeetings, upd.CanEditKanban,
+	).Scan(&out.CanShareNotes, &out.CanCreateMeetings, &out.CanEditKanban)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return out, errors.New("target_not_found")
+		}
+		return out, err
+	}
+	return out, tx.Commit(ctx)
+}
+
+// getMemberPermissions lee los permisos delegados; sin membresía devuelve
+// pgx.ErrNoRows. Compartido por los repositorios de reuniones y sprint.
+func getMemberPermissions(ctx context.Context, pool *pgxpool.Pool, groupID, userID pgtype.UUID) (model.MemberPermissions, error) {
+	var p model.MemberPermissions
+	err := pool.QueryRow(ctx, `
+		SELECT can_share_notes, can_create_meetings, can_edit_kanban
+		FROM social.group_memberships WHERE group_id = $1 AND user_id = $2`,
+		groupID, userID,
+	).Scan(&p.CanShareNotes, &p.CanCreateMeetings, &p.CanEditKanban)
+	return p, err
 }
 
 // CountAdmins cuenta cuántos administradores activos tiene el grupo

@@ -48,15 +48,16 @@ func (h *InternalHandler) Members(c *gin.Context) {
 		return
 	}
 	type member struct {
-		UserID string `json:"user_id"`
-		Role   string `json:"role"`
+		UserID        string `json:"user_id"`
+		Role          string `json:"role"`
+		CanShareNotes bool   `json:"can_share_notes"`
 	}
 	out := make([]member, 0, len(members))
 	for _, m := range members {
 		if m == nil {
 			continue
 		}
-		out = append(out, member{UserID: m.UserID, Role: m.Role})
+		out = append(out, member{UserID: m.UserID, Role: m.Role, CanShareNotes: m.Effective(m.Role).CanShareNotes})
 	}
 	c.JSON(http.StatusOK, out)
 }

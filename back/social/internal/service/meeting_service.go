@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository/sqlc"
 )
 
@@ -75,6 +76,7 @@ type MeetingRepo interface {
 	GetGroupByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialGroup, error)
 	IsMember(ctx context.Context, groupID, userID pgtype.UUID) (bool, error)
 	GetMemberRole(ctx context.Context, groupID, userID pgtype.UUID) (string, error)
+	GetMemberPermissions(ctx context.Context, groupID, userID pgtype.UUID) (model.MemberPermissions, error)
 	CreateMeetingWithNotifications(ctx context.Context, arg sqlc.CreateMeetingParams, attendeeEmails []string) (sqlc.SocialMeeting, error)
 	ListMeetingsByGroup(ctx context.Context, groupID pgtype.UUID) ([]sqlc.SocialMeeting, error)
 }
@@ -225,7 +227,8 @@ func (s *MeetingService) CreateMeeting(ctx context.Context, groupID, userID, tit
 	if err := s.requireMeetingGroup(ctx, gid); err != nil {
 		return sqlc.SocialMeeting{}, err
 	}
-	// Política: solo admins agendan reuniones.
+	// Política: agendan los admins y los miembros a quienes un admin delegó
+	// el permiso can_create_meetings.
 	role, err := s.repo.GetMemberRole(ctx, gid, uid)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -233,8 +236,17 @@ func (s *MeetingService) CreateMeeting(ctx context.Context, groupID, userID, tit
 		}
 		return sqlc.SocialMeeting{}, err
 	}
-	if role != "admin" {
-		return sqlc.SocialMeeting{}, ErrForbidden
+	if role != model.RoleAdmin {
+		perms, err := s.repo.GetMemberPermissions(ctx, gid, uid)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return sqlc.SocialMeeting{}, ErrForbidden
+			}
+			return sqlc.SocialMeeting{}, err
+		}
+		if !perms.CanCreateMeetings {
+			return sqlc.SocialMeeting{}, ErrForbidden
+		}
 	}
 
 	meeting, err := s.repo.CreateMeetingWithNotifications(ctx, sqlc.CreateMeetingParams{

@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository/sqlc"
 )
 
@@ -26,7 +27,8 @@ type MemoryMeetingStore struct {
 	calEvents  map[string]string   // meeting_id -> google_calendar_event_id persistido
 	attendees  map[string][]string // meeting_id -> emails invitados persistidos
 	discordCfg map[string]sqlc.SocialDiscordIntegration
-	streamChan map[string]string // grupo -> channel_id de Stream registrado
+	streamChan map[string]string                             // grupo -> channel_id de Stream registrado
+	perms      map[string]map[string]model.MemberPermissions // grupo -> usuario -> permisos delegados
 }
 
 func NewMemoryMeetingStore() *MemoryMeetingStore {
@@ -217,6 +219,31 @@ func (m *MemoryMeetingStore) GetMemberRole(_ context.Context, groupID, userID pg
 		return "", pgx.ErrNoRows
 	}
 	return role, nil
+}
+
+// SetPermissions fija los permisos delegados de un miembro (helper de tests).
+func (m *MemoryMeetingStore) SetPermissions(groupID, userID string, p model.MemberPermissions) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.perms == nil {
+		m.perms = map[string]map[string]model.MemberPermissions{}
+	}
+	if m.perms[groupID] == nil {
+		m.perms[groupID] = map[string]model.MemberPermissions{}
+	}
+	m.perms[groupID][userID] = p
+}
+
+// GetMemberPermissions responde los permisos delegados o pgx.ErrNoRows si no es miembro.
+func (m *MemoryMeetingStore) GetMemberPermissions(_ context.Context, groupID, userID pgtype.UUID) (model.MemberPermissions, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	gid, err1 := uuid.FromBytes(groupID.Bytes[:])
+	uid, err2 := uuid.FromBytes(userID.Bytes[:])
+	if err1 != nil || err2 != nil || !m.members[gid.String()][uid.String()] {
+		return model.MemberPermissions{}, pgx.ErrNoRows
+	}
+	return m.perms[gid.String()][uid.String()], nil
 }
 
 // UpsertConfig crea o reemplaza la config de Discord del grupo.
