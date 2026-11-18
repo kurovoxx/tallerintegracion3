@@ -127,7 +127,13 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
                   ? '${m.joinedAt!.toLocal()}'.split('.').first
                   : '—',
             ),
-            _field('ID', m.userId, mono: true),
+            // Código público del perfil (el mismo que se usa en «Buscar
+            // perfil»); nunca el identificador interno.
+            _field(
+              'Código de perfil',
+              m.publicId ?? 'No disponible',
+              mono: m.publicId != null,
+            ),
           ],
         ),
       ),
