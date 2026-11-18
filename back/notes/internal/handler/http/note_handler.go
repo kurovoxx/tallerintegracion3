@@ -320,6 +320,10 @@ type publicProfileNoteResponse struct {
 	IsSaved    bool    `json:"is_saved"`
 	CreatedAt  string  `json:"created_at"`
 	UpdatedAt  string  `json:"updated_at"`
+
+	// IsOwn: el solicitante es el autor (buscó su propio código). La app
+	// oculta «Guardar» sin conocer el UUID del autor.
+	IsOwn bool `json:"is_own"`
 }
 
 // GET /public-users/:public_id/notes
@@ -361,6 +365,7 @@ func (h *NoteHandler) ListPublicByPublicID(c *gin.Context) {
 			IsSaved:    n.IsSaved,
 			CreatedAt:  n.CreatedAt.UTC().Format(time.RFC3339),
 			UpdatedAt:  n.UpdatedAt.UTC().Format(time.RFC3339),
+			IsOwn:      n.IsOwn,
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{"notes": out, "next_cursor": next})
