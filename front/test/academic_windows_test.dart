@@ -145,6 +145,19 @@ void main() {
     expect(find.text('VER UNIDADES'), findsOneWidget);
   });
 
+  testWidgets('Calculadora genérica no muestra cursos hardcodeados', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(home: GradeCalculatorScreen(embedded: false)),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('CALCULADORA DE NOTAS'), findsOneWidget);
+    expect(find.byType(DropdownButton<String>), findsNothing);
+    expect(find.text('CÁLCULO III'), findsNothing);
+    expect(find.text('ESTRUCTURAS DE DATOS'), findsNothing);
+  });
+
   testWidgets('Calculadora embebida preselecciona la materia', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(
@@ -159,9 +172,10 @@ void main() {
       ),
     );
     await tester.pump(const Duration(milliseconds: 300));
-    // Materia antepuesta al dropdown y sin header propio (lo da la ventana).
+    // Materia visible sin header propio (lo da la ventana) ni dropdown.
     expect(find.text('REDES DE COMPUTADORES'), findsOneWidget);
     expect(find.text('CALCULADORA DE NOTAS'), findsNothing);
+    expect(find.byType(DropdownButton<String>), findsNothing);
     expect(find.text('CALCULAR PROMEDIO'), findsOneWidget);
   });
 

@@ -49,13 +49,17 @@ void main() {
     expect(find.text('CARGAR NOTAS'), findsNothing);
   });
 
-  testWidgets('Cargar sin sesión: error visible y local intacto, sin crash',
-      (tester) async {
+  testWidgets('Cargar sin sesión: error visible y local intacto, sin crash', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       const MaterialApp(
         home: Scaffold(
           body: SingleChildScrollView(
-            child: GradeCalculatorScreen(embedded: true),
+            child: GradeCalculatorScreen(
+              embedded: true,
+              initialCourse: 'Redes de Computadores',
+            ),
           ),
         ),
       ),
@@ -78,7 +82,8 @@ void main() {
     expect(find.text('CARGAR NOTAS'), findsOneWidget);
     expect(find.text('CALCULAR PROMEDIO'), findsOneWidget);
     // Error visible (patrón existente): línea ERROR o mensaje de sesión.
-    final errorVisible = find.textContaining('ERROR').evaluate().isNotEmpty ||
+    final errorVisible =
+        find.textContaining('ERROR').evaluate().isNotEmpty ||
         find.textContaining('sesión').evaluate().isNotEmpty;
     expect(errorVisible, isTrue);
   });

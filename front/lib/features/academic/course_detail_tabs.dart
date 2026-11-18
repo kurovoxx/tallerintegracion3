@@ -618,8 +618,8 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
             ),
             child: Text(
               hasOfficial
-                  ? 'Promedio oficial guardado${_averageStatusLabel != null ? ' · $_averageStatusLabel' : ''}. Se calcula con las evaluaciones registradas en el backend.'
-                  : 'Aún no hay promedio oficial: registra evaluaciones en el curso para verlo.',
+                  ? 'Promedio oficial guardado${_averageStatusLabel != null ? ' · $_averageStatusLabel' : ''}.'
+                  : 'Aún no hay promedio oficial.',
               style: const TextStyle(
                 fontWeight: FontWeight.w700,
                 fontSize: 12.5,
@@ -642,15 +642,6 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
 
           // C. Calculadora / simulador (separado de lo oficial).
           _sectionHeader('CALCULADORA · SIMULADOR'),
-          const SizedBox(height: AppDimens.spaceSm),
-          const Text(
-            'Simulación local: no modifica ni guarda evaluaciones oficiales.',
-            style: TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 12,
-              color: AppColors.mutedStrong,
-            ),
-          ),
           const SizedBox(height: AppDimens.spaceMd),
           GradeCalculatorScreen(
             embedded: true,
@@ -719,16 +710,6 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
               fontSize: 12,
               letterSpacing: 0.4,
               color: AppColors.text,
-            ),
-          ),
-          SizedBox(height: AppDimens.spaceXs),
-          Text(
-            'Cuando el curso tenga notas en el backend, aparecerán aquí.',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 12,
-              color: AppColors.mutedStrong,
             ),
           ),
         ],
