@@ -18,6 +18,9 @@ type UserPublic struct {
 	Email         string  `json:"email"`
 	DisplayName   *string `json:"display_name,omitempty"`
 	PhotoThumbURL *string `json:"photo_thumb_url,omitempty"`
+	// PublicID es el código público del perfil: lo que la interfaz muestra en
+	// lugar del UUID interno. Ausente si Identity no lo entrega.
+	PublicID *string `json:"public_id,omitempty"`
 }
 
 // UserDirectory resuelve datos públicos de usuarios para enriquecer

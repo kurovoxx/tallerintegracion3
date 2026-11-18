@@ -549,6 +549,9 @@ func (s *GroupService) enrichMembers(ctx context.Context, members []*model.Group
 		if p, ok := names[m.UserID]; ok {
 			v.DisplayName = p.DisplayName
 			v.PhotoThumbURL = p.PhotoThumbURL
+			if p.PublicID != nil && strings.TrimSpace(*p.PublicID) != "" {
+				v.PublicID = p.PublicID
+			}
 			if strings.TrimSpace(p.Email) != "" {
 				v.Email = &p.Email
 			}

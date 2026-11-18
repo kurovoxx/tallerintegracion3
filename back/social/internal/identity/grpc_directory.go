@@ -97,6 +97,7 @@ func (d *GRPCUserDirectory) lookup(ctx context.Context, userIDs []string) (map[s
 				Email:         u.GetEmail(),
 				DisplayName:   u.DisplayName,
 				PhotoThumbURL: u.PhotoThumbUrl,
+				PublicID:      u.PublicId,
 			}
 		}
 	}
