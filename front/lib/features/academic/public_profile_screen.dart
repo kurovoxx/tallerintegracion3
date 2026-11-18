@@ -480,48 +480,53 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
     );
   }
 
-  /// Tarjeta del perfil. Público: nombre, foto, descripción, correo,
-  /// teléfono e institución. Privado: solo nombre y foto, más un aviso; el
-  /// resto de datos ni siquiera llega desde Auth.
+  /// Tarjeta del perfil.
+  ///
+  /// Encabezado: avatar y nombre (elemento principal) y, si es privado, solo
+  /// la etiqueta «Perfil privado». Perfil público: bloques de información en
+  /// una cuadrícula adaptable. La descripción ocupa el ancho completo; correo,
+  /// teléfono y universidad se reparten en 1, 2 o 3 columnas según el ancho
+  /// disponible. Los campos vacíos se omiten (no dejan huecos). Un perfil
+  /// privado ajeno solo trae nombre y foto desde Auth: no hay bloques.
   Widget _buildProfileCard() {
     final profile = _profile!;
     final name = profile.displayName.trim().isEmpty
         ? 'Sin nombre'
         : profile.displayName.trim();
 
-    final details = <Widget>[];
-    if (profile.isPublic) {
-      void add(String key, IconData icon, String label, String? value) {
-        details.add(
-          _ProfileDetail(
-            valueKey: ValueKey('public-profile-$key'),
-            icon: icon,
-            label: label,
-            value: (value == null || value.trim().isEmpty)
-                ? 'No informado'
-                : value.trim(),
-          ),
-        );
-      }
-
-      add(
-        'description',
-        Icons.notes_rounded,
-        'Descripción',
-        profile.description,
-      );
-      add('email', Icons.alternate_email_rounded, 'Correo', profile.email);
-      add('phone', Icons.phone_rounded, 'Teléfono', profile.phone);
-      add(
-        'institution',
-        Icons.apartment_rounded,
-        'Universidad',
-        profile.institution,
-      );
+    String? value(String? v) {
+      final t = v?.trim() ?? '';
+      return t.isEmpty ? null : t;
     }
+
+    final description = profile.isPublic ? value(profile.description) : null;
+    final facts = <_ProfileDetail>[
+      if (profile.isPublic && value(profile.email) != null)
+        _ProfileDetail(
+          valueKey: const ValueKey('public-profile-email'),
+          icon: Icons.alternate_email_rounded,
+          label: 'Correo',
+          value: value(profile.email)!,
+        ),
+      if (profile.isPublic && value(profile.phone) != null)
+        _ProfileDetail(
+          valueKey: const ValueKey('public-profile-phone'),
+          icon: Icons.phone_rounded,
+          label: 'Teléfono',
+          value: value(profile.phone)!,
+        ),
+      if (profile.isPublic && value(profile.institution) != null)
+        _ProfileDetail(
+          valueKey: const ValueKey('public-profile-institution'),
+          icon: Icons.apartment_rounded,
+          label: 'Universidad',
+          value: value(profile.institution)!,
+        ),
+    ];
 
     return NeobrutalistCard(
       key: const ValueKey('public-profile-card'),
+      padding: const EdgeInsets.all(AppDimens.spaceXl),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
@@ -538,7 +543,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
                       name,
                       key: const ValueKey('public-profile-name'),
                       style: const TextStyle(
-                        fontSize: 20,
+                        fontSize: 22,
                         fontWeight: FontWeight.w900,
                         color: AppColors.text,
                         letterSpacing: -0.3,
@@ -558,20 +563,47 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
               ),
             ],
           ),
-          if (profile.isPublic) ...<Widget>[
+          if (description != null || facts.isNotEmpty) ...<Widget>[
             const SizedBox(height: AppDimens.spaceLg),
-            ...details,
-          ] else ...<Widget>[
-            const SizedBox(height: AppDimens.spaceMd),
-            const Text(
-              'Este perfil es privado: solo muestra su nombre y su foto.',
-              key: ValueKey('public-profile-private-note'),
-              style: TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w600,
-                color: AppColors.mutedStrong,
-                height: 1.4,
-              ),
+            const Divider(
+              color: AppColors.border,
+              thickness: AppDimens.borderWidth,
+              height: AppDimens.borderWidth,
+            ),
+            const SizedBox(height: AppDimens.spaceLg),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                const gap = AppDimens.spaceMd;
+                final width = constraints.maxWidth;
+                final columns = width >= 720 ? 3 : (width >= 440 ? 2 : 1);
+                final cols = facts.isEmpty
+                    ? 1
+                    : (facts.length < columns ? facts.length : columns);
+                final tileWidth = (width - gap * (cols - 1)) / cols;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    if (description != null)
+                      _ProfileDetail(
+                        valueKey: const ValueKey('public-profile-description'),
+                        icon: Icons.notes_rounded,
+                        label: 'Descripción',
+                        value: description,
+                      ),
+                    if (description != null && facts.isNotEmpty)
+                      const SizedBox(height: gap),
+                    if (facts.isNotEmpty)
+                      Wrap(
+                        spacing: gap,
+                        runSpacing: gap,
+                        children: <Widget>[
+                          for (final f in facts)
+                            SizedBox(width: tileWidth, child: f),
+                        ],
+                      ),
+                  ],
+                );
+              },
             ),
           ],
         ],
@@ -805,7 +837,10 @@ class _PublicAvatar extends StatelessWidget {
   }
 }
 
-/// Fila de dato del perfil público (ícono, etiqueta y valor seleccionable).
+/// Bloque de dato del perfil público: pieza con borde y sombra dura (estilo
+/// de las tarjetas de Sigma Academy). El ícono va en un recuadro pequeño
+/// amarillo (acento) que acompaña sin dominar; la etiqueta es discreta
+/// (MAYÚSCULAS, gris) y el valor, firme y seleccionable.
 class _ProfileDetail extends StatelessWidget {
   const _ProfileDetail({
     required this.valueKey,
@@ -821,13 +856,35 @@ class _ProfileDetail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: AppDimens.spaceMd),
+    return Container(
+      padding: const EdgeInsets.all(AppDimens.spaceMd),
+      decoration: BoxDecoration(
+        color: AppColors.bg,
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+        boxShadow: AppShadows.badge,
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Icon(icon, size: 16, color: AppColors.text),
-          const SizedBox(width: AppDimens.spaceSm),
+          Container(
+            width: 28,
+            height: 28,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: AppColors.accentYellow,
+              border: Border.all(
+                color: AppColors.border,
+                width: AppDimens.borderWidth,
+              ),
+              borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+            ),
+            child: Icon(icon, size: 15, color: AppColors.text),
+          ),
+          const SizedBox(width: AppDimens.spaceMd),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -835,20 +892,21 @@ class _ProfileDetail extends StatelessWidget {
                 Text(
                   label.toUpperCase(),
                   style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0.5,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.6,
                     color: AppColors.muted,
                   ),
                 ),
-                const SizedBox(height: 2),
+                const SizedBox(height: 3),
                 SelectableText(
                   value,
                   key: valueKey,
                   style: const TextStyle(
-                    fontSize: 13,
+                    fontSize: 14,
                     fontWeight: FontWeight.w700,
-                    color: AppColors.mutedStrong,
+                    color: AppColors.text,
+                    height: 1.35,
                   ),
                 ),
               ],

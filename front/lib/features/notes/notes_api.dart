@@ -797,8 +797,13 @@ class NotesApi {
     if (saved && res.statusCode == 201 && res.body.isNotEmpty) {
       return NoteInteractions.fromJson(_decodeMap(res), noteId);
     }
+    // Solo `already_saved` es idempotente («ya estaba guardado»). Cualquier
+    // otro 409 —p. ej. `cannot_save_own_note`— es un rechazo real: no se
+    // informa «Apunte guardado» y la barra revierte el cambio optimista.
     final ok = saved
-        ? (res.statusCode == 201 || res.statusCode == 409)
+        ? (res.statusCode == 201 ||
+              (res.statusCode == 409 &&
+                  _toError(res, '').code == 'already_saved'))
         : res.statusCode == 204;
     if (!ok) throw _friendly(res, 'No se pudo actualizar el guardado.');
     try {

@@ -745,4 +745,167 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  // Defensa en profundidad: aunque llegara un apunte propio sin is_own (p. ej.
+  // un backend anterior), pulsar Guardar NO muestra «Apunte guardado": muestra
+  // el rechazo y la tarjeta vuelve a su estado real.
+  testWidgets('guardar rechazado (cannot_save_own_note) no muestra «Apunte '
+      'guardado» y revierte', (tester) async {
+    const nid = '99999999-9999-4999-8999-999999999999';
+    final profiles = _profileService();
+    final notes = NotesApi(
+      baseUrl: 'http://notes.test',
+      client: MockClient((request) async {
+        http.Response json(Object body, int status) => http.Response(
+          jsonEncode(body),
+          status,
+          headers: {'content-type': 'application/json'},
+        );
+        if (request.url.path.startsWith('/public-users/')) {
+          return json(<String, dynamic>{
+            'notes': <Map<String, dynamic>>[
+              <String, dynamic>{
+                'id': nid,
+                'title': 'Mi apunte',
+                'visibility': 'public',
+                'likes_count': 0,
+                'saves_count': 0,
+                'is_liked': false,
+                'is_saved': false,
+              },
+            ],
+            'next_cursor': '',
+          }, 200);
+        }
+        if (request.url.path.endsWith('/save')) {
+          return json(<String, dynamic>{
+            'error': {
+              'code': 'cannot_save_own_note',
+              'message': 'No puedes guardar tus propios apuntes',
+            },
+          }, 409);
+        }
+        return json(<String, dynamic>{}, 404);
+      }),
+    );
+    addTearDown(profiles.dispose);
+    addTearDown(notes.dispose);
+
+    await _pump(tester, profiles: profiles, notes: notes);
+    await tester.tap(find.byKey(const Key('save-$nid')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Apunte guardado'), findsNothing);
+    expect(find.text('No puedes guardar tus propios apuntes.'), findsOneWidget);
+    expect(find.text('GUARDAR · 0'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('perfil privado: solo la etiqueta «Perfil privado», sin texto '
+      'explicativo', (tester) async {
+    final profiles = _profileService(
+      body: <String, dynamic>{
+        'public_id': _publicId,
+        'display_name': 'Bea Privada',
+        'photo_url': null,
+        'visibility': 'private',
+      },
+    );
+    final notes = _notesApi();
+    addTearDown(profiles.dispose);
+    addTearDown(notes.dispose);
+
+    await _pump(tester, profiles: profiles, notes: notes);
+
+    expect(find.text('PERFIL PRIVADO'), findsOneWidget);
+    expect(
+      find.textContaining('solo muestra su nombre y su foto'),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('public-profile-private-note')),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('perfil público: los campos vacíos se omiten sin dejar huecos', (
+    tester,
+  ) async {
+    final profiles = _profileService(
+      body: <String, dynamic>{
+        'public_id': _publicId,
+        'display_name': 'Ana Pública',
+        'photo_url': null,
+        'visibility': 'public',
+        'email': 'ana@test.invalid',
+        // description, phone e institution ausentes o en blanco.
+        'phone': '   ',
+      },
+    );
+    final notes = _notesApi();
+    addTearDown(profiles.dispose);
+    addTearDown(notes.dispose);
+
+    await _pump(tester, profiles: profiles, notes: notes);
+
+    expect(find.byKey(const ValueKey('public-profile-email')), findsOneWidget);
+    for (final key in <String>[
+      'public-profile-description',
+      'public-profile-phone',
+      'public-profile-institution',
+    ]) {
+      expect(find.byKey(ValueKey(key)), findsNothing, reason: key);
+    }
+    expect(find.text('No informado'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final width in <double>[360, 700, 1280]) {
+    testWidgets('tarjeta de perfil sin desbordes a ${width.toInt()} px', (
+      tester,
+    ) async {
+      tester.view.physicalSize = Size(width, 1600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final profiles = _profileService();
+      final notes = _notesApi();
+      addTearDown(profiles.dispose);
+      addTearDown(notes.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PublicProfileScreen(
+            publicId: _publicId,
+            profileService: profiles,
+            notesApi: notes,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      for (final key in <String>[
+        'public-profile-description',
+        'public-profile-email',
+        'public-profile-phone',
+        'public-profile-institution',
+      ]) {
+        expect(find.byKey(ValueKey(key)), findsOneWidget, reason: key);
+      }
+      // Correo, teléfono y universidad comparten fila en ventanas anchas.
+      final email = tester.getTopLeft(
+        find.byKey(const ValueKey('public-profile-email')),
+      );
+      final phone = tester.getTopLeft(
+        find.byKey(const ValueKey('public-profile-phone')),
+      );
+      if (width >= 1280) {
+        expect(email.dy, phone.dy, reason: 'misma fila en escritorio');
+      }
+      if (width <= 360) {
+        expect(phone.dy, greaterThan(email.dy), reason: 'una columna en móvil');
+      }
+      expect(tester.takeException(), isNull);
+    });
+  }
 }

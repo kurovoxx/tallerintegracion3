@@ -375,4 +375,50 @@ void main() {
       'No puedes guardar tus propios apuntes.',
     );
   });
+
+  group('setSaved: 409 idempotente solo para already_saved', () {
+    test('already_saved (409) devuelve el estado real sin error', () async {
+      final api = await _api(
+        MockClient((req) async {
+          if (req.method == 'POST') {
+            return _json({
+              'error': {'code': 'already_saved', 'message': 'Nota ya guardada'},
+            }, 409);
+          }
+          return _json(_stats(_a, saves: 2, saved: true), 200);
+        }),
+      );
+      final s = await api.setSaved(_a, true);
+      expect(s!.isSaved, isTrue);
+    });
+
+    test('cannot_save_own_note (409) es un error con mensaje claro', () async {
+      final calls = <String>[];
+      final api = await _api(
+        MockClient((req) async {
+          calls.add('${req.method} ${req.url.path}');
+          return _json({
+            'error': {
+              'code': 'cannot_save_own_note',
+              'message': 'No puedes guardar tus propios apuntes',
+            },
+          }, 409);
+        }),
+      );
+      await expectLater(
+        api.setSaved(_a, true),
+        throwsA(
+          isA<NotesApiException>()
+              .having((e) => e.code, 'code', 'cannot_save_own_note')
+              .having(
+                (e) => e.message,
+                'message',
+                'No puedes guardar tus propios apuntes.',
+              ),
+        ),
+      );
+      // No se relee /stats como si hubiera sido un éxito.
+      expect(calls, ['POST /notes/$_a/save']);
+    });
+  });
 }
