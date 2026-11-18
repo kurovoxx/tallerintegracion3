@@ -608,16 +608,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
     await _restoreDriveStatus();
   }
 
-  /// «Compartir perfil»: copia el enlace `sigma-academy://perfil/<public_id>`
-  /// construido con el identificador público (nunca con el UUID interno ni
-  /// otro dato personal). Solo copia: no registra ni abre deep links.
+  /// «Compartir perfil»: copia SOLO el código público del perfil (nunca un
+  /// enlace, el identificador interno ni otro dato personal). La otra persona
+  /// lo escribe o pega en «Buscar perfil».
   Future<void> _handleShareProfile() async {
-    final link = publicProfileLink(_profile?.publicId ?? '');
-    if (link == null) {
+    final code = normalizePublicId(_profile?.publicId ?? '');
+    if (code == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'No se pudo obtener el enlace de tu perfil. Vuelve a iniciar sesión.',
+            'No se pudo obtener el código de tu perfil. Vuelve a iniciar sesión.',
           ),
           backgroundColor: AppColors.error,
         ),
@@ -626,12 +626,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
 
     try {
-      await Clipboard.setData(ClipboardData(text: link));
+      await Clipboard.setData(ClipboardData(text: code));
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('No se pudo copiar el enlace. Inténtalo nuevamente.'),
+          content: Text('No se pudo copiar el código. Inténtalo nuevamente.'),
           backgroundColor: AppColors.error,
         ),
       );
@@ -640,16 +640,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Enlace del perfil copiado al portapapeles.'),
+      SnackBar(
+        content: Text('Código del perfil copiado: $code'),
         backgroundColor: AppColors.border,
       ),
     );
   }
 
-  /// «Buscar perfil»: interpreta el ID o enlace pegado, comprueba que el
-  /// perfil existe y lo abre en pantalla completa. No busca por nombre,
-  /// correo, teléfono ni UUID, y no abre enlaces externos.
+  /// «Buscar perfil»: interpreta el código escrito, comprueba que el perfil
+  /// existe y lo abre en pantalla completa. No busca por nombre, correo,
+  /// teléfono ni identificador interno, y no acepta enlaces.
   Future<void> _handleSearchProfile() async {
     if (_searchingProfile) return;
     final parsed = parsePublicIdInput(_publicProfileSearchController.text);
@@ -673,7 +673,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         case _ProfileLookup.found:
           break;
         case _ProfileLookup.notFound:
-          _publicProfileSearchError = 'No encontramos un perfil con ese ID.';
+          _publicProfileSearchError =
+              'No encontramos un perfil con ese código.';
         case _ProfileLookup.unavailable:
           _publicProfileSearchError =
               'No pudimos buscar el perfil en este momento. Inténtalo más tarde.';
@@ -684,8 +685,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  /// Un perfil privado responde 404 en Auth pero conserva sus apuntes
-  /// públicos en Notes; solo es «inexistente» si Notes también responde 404.
+  /// Auth responde 200 tanto para perfiles públicos como privados (estos solo
+  /// con nombre y foto). Un 404 de Auth se confirma contra Notes (compatible
+  /// con un Auth anterior que respondía 404 a los privados): solo es
+  /// «inexistente» si Notes también responde 404.
   Future<_ProfileLookup> _lookupPublicProfile(String publicId) async {
     try {
       await _service.getPublicProfile(publicId);
@@ -1038,7 +1041,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Text(
-            'Encuentra el perfil de otra persona utilizando el enlace que te '
+            'Encuentra el perfil de otra persona con el código que te '
             'compartió.',
             style: TextStyle(
               fontSize: 12.5,
@@ -1065,8 +1068,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
               fontSize: 14,
               color: AppColors.text,
             ),
-            decoration: appInputDecoration('Pega aquí el enlace del perfil')
-                .copyWith(
+            decoration:
+                appInputDecoration(
+                  'Ingresa el código del perfil que deseas buscar',
+                ).copyWith(
                   prefixIcon: const Icon(
                     Icons.person_search_rounded,
                     size: 18,

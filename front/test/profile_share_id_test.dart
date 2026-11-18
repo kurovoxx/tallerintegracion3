@@ -153,7 +153,7 @@ void main() {
   }
 
   testWidgets(
-    '«Compartir perfil» copia el enlace con el public_id, nunca el UUID',
+    '«Compartir perfil» copia solo el código público, sin enlace ni UUID',
     (tester) async {
       await SessionManager.saveSession(_tokenWithUserId(sessionUuid), {
         'id': sessionUuid,
@@ -174,10 +174,12 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('profile-share-link')));
       await tester.pumpAndSettle();
 
-      expect(clipboardWrites, ['sigma-academy://perfil/a8kp92mqwx7r']);
+      expect(clipboardWrites, ['a8kp92mqwx7r']);
       expect(clipboardWrites.single, isNot(contains(sessionUuid)));
+      expect(clipboardWrites.single, isNot(contains('://')));
+      expect(clipboardWrites.single, isNot(contains('sigma-academy')));
       expect(
-        find.text('Enlace del perfil copiado al portapapeles.'),
+        find.text('Código del perfil copiado: a8kp92mqwx7r'),
         findsOneWidget,
       );
       expect(tester.takeException(), isNull);
@@ -201,14 +203,14 @@ void main() {
     expect(clipboardWrites, isEmpty);
     expect(
       find.text(
-        'No se pudo obtener el enlace de tu perfil. Vuelve a iniciar sesión.',
+        'No se pudo obtener el código de tu perfil. Vuelve a iniciar sesión.',
       ),
       findsOneWidget,
     );
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('el enlace copiado se pega en «Buscar perfil» y abre el perfil', (
+  testWidgets('el código copiado se pega en «Buscar perfil» y abre el perfil', (
     tester,
   ) async {
     await SessionManager.saveSession(_tokenWithUserId(sessionUuid), {
@@ -221,10 +223,14 @@ void main() {
     await _pumpProfile(tester, service);
     await tester.tap(find.byKey(const ValueKey('profile-share-link')));
     await tester.pumpAndSettle();
-    expect(find.text('Pega aquí el enlace del perfil'), findsOneWidget);
+    expect(
+      find.text('Ingresa el código del perfil que deseas buscar'),
+      findsOneWidget,
+    );
+    expect(find.text('Pega aquí el enlace del perfil'), findsNothing);
     expect(
       find.text(
-        'Encuentra el perfil de otra persona utilizando el enlace que te compartió.',
+        'Encuentra el perfil de otra persona con el código que te compartió.',
       ),
       findsOneWidget,
     );
@@ -235,7 +241,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('buscar con el enlace interno abre el perfil encontrado', (
+  testWidgets('buscar con el código (mayúsculas y espacios) abre el perfil', (
     tester,
   ) async {
     await SessionManager.saveSession(_tokenWithUserId('user-abc-123'), {
@@ -246,9 +252,33 @@ void main() {
 
     await _pumpProfile(tester, service);
     expect(find.text('BUSCAR PERFIL'), findsOneWidget);
-    await _search(tester, 'Mira: SIGMA-ACADEMY://perfil/B8KP92MQWX7R.');
+    await _search(tester, '  B8KP92MQWX7R ');
 
     expect(find.byType(PublicProfileScreen), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('el antiguo enlace sigma-academy://perfil/ ya no se acepta', (
+    tester,
+  ) async {
+    await SessionManager.saveSession(_tokenWithUserId('user-abc-123'), {
+      'id': 'user-abc-123',
+    });
+    final service = _profileService();
+    final requests = <String>[];
+    final notes = _notesApi(requests: requests);
+    addTearDown(service.dispose);
+    addTearDown(notes.dispose);
+
+    await _pumpProfile(tester, service, notesApi: notes);
+    await _search(tester, 'sigma-academy://perfil/b8kp92mqwx7r');
+
+    expect(
+      find.text(publicIdInputMessage(PublicIdInputError.link)),
+      findsOneWidget,
+    );
+    expect(find.byType(PublicProfileScreen), findsNothing);
+    expect(requests, isEmpty);
     expect(tester.takeException(), isNull);
   });
 
@@ -284,7 +314,10 @@ void main() {
     await _pumpProfile(tester, service, notesApi: notes);
     await _search(tester, 'b8kp92mqwx7r');
 
-    expect(find.text('No encontramos un perfil con ese ID.'), findsOneWidget);
+    expect(
+      find.text('No encontramos un perfil con ese código.'),
+      findsOneWidget,
+    );
     expect(find.byType(PublicProfileScreen), findsNothing);
     expect(tester.takeException(), isNull);
   });
@@ -309,7 +342,7 @@ void main() {
     );
     await _search(tester, 'https://sigma.example/perfil/b8kp92mqwx7r');
     expect(
-      find.text(publicIdInputMessage(PublicIdInputError.webLink)),
+      find.text(publicIdInputMessage(PublicIdInputError.link)),
       findsOneWidget,
     );
     expect(find.byType(PublicProfileScreen), findsNothing);
