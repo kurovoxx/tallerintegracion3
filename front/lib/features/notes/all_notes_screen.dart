@@ -3783,7 +3783,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             syncLabel: _syncBadgeFor(note.id),
             onTap: () => _openNoteViewer(note),
             onLike: () => _toggleLike(note),
-            onSave: () => _toggleSave(note),
+            // El autor no puede guardar su propio apunte.
+            onSave: _isMine(note) ? null : () => _toggleSave(note),
             onShare: () => _shareNote(note),
           );
         },
@@ -3811,7 +3812,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
               syncLabel: _syncBadgeFor(note.id),
               onTap: () => _openNoteViewer(note),
               onLike: () => _toggleLike(note),
-              onSave: () => _toggleSave(note),
+              // El autor no puede guardar su propio apunte.
+              onSave: _isMine(note) ? null : () => _toggleSave(note),
               onShare: () => _shareNote(note),
             ),
           ),
@@ -3876,7 +3878,7 @@ class _NoteCard extends StatefulWidget {
     this.syncLabel,
     required this.onTap,
     required this.onLike,
-    required this.onSave,
+    this.onSave,
     required this.onShare,
   });
 
@@ -3889,7 +3891,9 @@ class _NoteCard extends StatefulWidget {
   final String? syncLabel;
   final VoidCallback onTap;
   final VoidCallback onLike;
-  final VoidCallback onSave;
+
+  /// Null oculta «Guardar» (apuntes propios: el autor no puede guardarlos).
+  final VoidCallback? onSave;
   final VoidCallback onShare;
 
   @override
@@ -4102,19 +4106,20 @@ class _NoteCardState extends State<_NoteCard> {
             ],
           ),
         ),
-        _CardAction(
-          onTap: widget.onSave,
-          background: widget.isSaved
-              ? AppColors.accentYellow
-              : AppColors.surface,
-          child: Icon(
-            widget.isSaved
-                ? Icons.bookmark_rounded
-                : Icons.bookmark_border_rounded,
-            size: 13,
-            color: AppColors.text,
+        if (widget.onSave != null)
+          _CardAction(
+            onTap: widget.onSave!,
+            background: widget.isSaved
+                ? AppColors.accentYellow
+                : AppColors.surface,
+            child: Icon(
+              widget.isSaved
+                  ? Icons.bookmark_rounded
+                  : Icons.bookmark_border_rounded,
+              size: 13,
+              color: AppColors.text,
+            ),
           ),
-        ),
         _CardAction(
           onTap: widget.onShare,
           background: AppColors.surface,
@@ -5467,16 +5472,19 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
               widget.onToggleLike();
             },
           ),
-          _ActionButton(
-            icon: Icons.bookmark_rounded,
-            label: 'Guardar',
-            isActive: _saved,
-            activeColor: AppColors.accentYellow,
-            onTap: () {
-              setState(() => _saved = !_saved);
-              widget.onToggleSave();
-            },
-          ),
+          // El autor no puede guardar su propio apunte (el backend también
+          // lo rechaza con cannot_save_own_note).
+          if (!widget.isMine)
+            _ActionButton(
+              icon: Icons.bookmark_rounded,
+              label: 'Guardar',
+              isActive: _saved,
+              activeColor: AppColors.accentYellow,
+              onTap: () {
+                setState(() => _saved = !_saved);
+                widget.onToggleSave();
+              },
+            ),
           _ActionButton(
             icon: Icons.share_rounded,
             label: 'Compartir',

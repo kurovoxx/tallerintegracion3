@@ -145,5 +145,6 @@ func (c *GRPCClient) GetUser(ctx context.Context, id string) (*service.UserPubli
 		Email:         resp.GetEmail(),
 		DisplayName:   resp.DisplayName,
 		PhotoThumbURL: resp.PhotoThumbUrl,
+		PublicID:      resp.PublicId,
 	}, nil
 }

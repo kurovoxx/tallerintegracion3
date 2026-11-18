@@ -3,6 +3,7 @@ package test
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
@@ -129,21 +130,28 @@ func TestSuiteSavedFiltersOverHTTP(t *testing.T) {
 	}
 	save(ana, "Integrales dobles", &math)
 	save(beto, "Redes OSI", nil)
-	save(me, "Mi resumen de integrales", nil)
+
+	// El autor no puede guardar su propio apunte, ni siquiera llamando a la
+	// API directamente (409 cannot_save_own_note).
+	ownBody := map[string]any{"title": "Mi resumen de integrales", "visibility": "public", "content": "x"}
+	ownID := api.must(http.StatusCreated, me, http.MethodPost, "/notes", ownBody)["note_id"].(string)
+	if errCode(api.must(http.StatusConflict, me, http.MethodPost, "/notes/"+ownID+"/save", nil)) != "cannot_save_own_note" {
+		t.Fatal("guardar el propio apunte debía responder cannot_save_own_note")
+	}
 
 	count := func(query string) int {
 		t.Helper()
 		return len(items(api.must(http.StatusOK, me, http.MethodGet, "/notes/saved"+query, nil)))
 	}
 	cases := map[string]int{
-		"":                                 3,
+		"":                                 2,
 		"?scope=others":                    2,
-		"?scope=own":                       1,
-		"?q=INTEGRALES":                    2,
+		"?scope=own":                       0,
+		"?q=INTEGRALES":                    1,
 		"?q=integrales&scope=others":       1,
 		"?subject_id=" + math:              1,
 		"?author_id=" + beto:               1,
-		"?availability=available&limit=50": 3,
+		"?availability=available&limit=50": 2,
 	}
 	for q, want := range cases {
 		if got := count(q); got != want {
@@ -158,9 +166,17 @@ func TestSuiteSavedFiltersOverHTTP(t *testing.T) {
 
 	// Los públicos de otros se listan con su estado de guardado.
 	pub := items(api.must(http.StatusOK, me, http.MethodGet, "/notes/public?q=redes", nil))
-	if len(pub) != 1 || pub[0]["is_saved"] != true || pub[0]["user_id"] != beto {
+	if len(pub) != 1 || pub[0]["is_saved"] != true || pub[0]["title"] != "Redes OSI" {
 		t.Fatalf("GET /notes/public: %v", pub)
 	}
+	// El UUID interno del autor ya no viaja en los listados (ni como clave ni
+	// como valor); el autor se identifica por author_public_id.
+	assertNoAuthorUUID(t, pub, beto)
+	saved := items(api.must(http.StatusOK, me, http.MethodGet, "/notes/saved", nil))
+	if len(saved) != 2 {
+		t.Fatalf("GET /notes/saved: %v", saved)
+	}
+	assertNoAuthorUUID(t, saved, ana, beto)
 }
 
 // --- Copia a apuntes propios ---
@@ -269,4 +285,21 @@ func TestSuiteSearchByID(t *testing.T) {
 		t.Fatalf("privado sin permiso=%v, inexistente=%v", noPerm, missing)
 	}
 	api.must(http.StatusNotFound, bob, http.MethodGet, "/notes/no-es-uuid", nil)
+}
+
+// assertNoAuthorUUID verifica que ningún elemento de un listado expone
+// user_id ni contiene el UUID interno de los autores en ningún campo.
+func assertNoAuthorUUID(t *testing.T, list []map[string]any, uuids ...string) {
+	t.Helper()
+	for _, it := range list {
+		if _, ok := it["user_id"]; ok {
+			t.Fatalf("el listado no debe incluir user_id: %v", it)
+		}
+		dump := fmt.Sprint(it)
+		for _, id := range uuids {
+			if strings.Contains(dump, id) {
+				t.Fatalf("el listado expone el UUID interno %s: %v", id, it)
+			}
+		}
+	}
 }

@@ -38,14 +38,18 @@ type profileResponse struct {
 }
 
 // publicProfileByPublicIDResponse es el DTO de GET /profile/public/:public_id.
-// Expone nombre, institución, foto (solo imagen subida desde la app),
-// public_id y visibility. No incluye user_id, email, phone ni la descripción,
-// que es privada.
+// Perfil público: nombre, foto (solo imagen subida desde la app), descripción,
+// correo, teléfono e institución. Perfil privado consultado por un tercero:
+// solo nombre y foto; los opcionales se omiten del JSON porque el Service ya
+// los descartó. Nunca incluye user_id.
 type publicProfileByPublicIDResponse struct {
 	PublicID    string  `json:"public_id"`
 	DisplayName string  `json:"display_name"`
 	PhotoURL    *string `json:"photo_url"`
-	Institution *string `json:"institution"`
+	Institution *string `json:"institution,omitempty"`
+	Description *string `json:"description,omitempty"`
+	Email       *string `json:"email,omitempty"`
+	Phone       *string `json:"phone,omitempty"`
 	Visibility  string  `json:"visibility"`
 }
 
@@ -161,6 +165,9 @@ func (h *ProfileHandler) GetPublicProfileByPublicID(c *gin.Context) {
 		DisplayName: profile.DisplayName,
 		PhotoURL:    profile.PhotoURL,
 		Institution: profile.Institution,
+		Description: profile.Description,
+		Email:       profile.Email,
+		Phone:       profile.Phone,
 		Visibility:  profile.Visibility,
 	})
 }

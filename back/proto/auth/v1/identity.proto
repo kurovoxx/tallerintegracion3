@@ -85,6 +85,10 @@ message GetUserResponse {
   // Miniatura de la foto de perfil (data URL o URL remota corta). Ausente si
   // el usuario no tiene foto o aún no generó su miniatura.
   optional string photo_thumb_url = 4;
+  // Código público del perfil (identity.users.public_id, 12 caracteres
+  // Crockford Base32). Es el único identificador que los consumidores pueden
+  // mostrar en la interfaz en lugar del UUID interno. Ausente si no existe.
+  optional string public_id = 5;
 }
 
 // Usuario público (model.PublicUser): solo datos no sensibles.
@@ -93,6 +97,8 @@ message User {
   string email = 2;
   optional string display_name = 3;
   optional string photo_thumb_url = 4;
+  // Código público del perfil (ver GetUserResponse.public_id).
+  optional string public_id = 5;
 }
 
 message LookupUsersRequest {

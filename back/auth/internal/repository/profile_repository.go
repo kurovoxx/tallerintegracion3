@@ -44,10 +44,11 @@ func (r *ProfileRepository) GetByUserID(ctx context.Context, userID string) (*mo
 	return &p, nil
 }
 
-// GetPublicByPublicID resuelve un perfil público por identity.users.public_id.
+// GetPublicByPublicID resuelve un perfil por identity.users.public_id.
 // Si el usuario existe pero no tiene fila de perfil, retorna (nil,nil): la
-// vista pública necesita los campos de profiles. No selecciona email, phone ni
-// descripción.
+// vista pública necesita los campos de profiles. Carga también descripción,
+// teléfono y correo; ProfileService los descarta cuando el perfil es privado,
+// de modo que nunca llegan al handler para un tercero.
 func (r *ProfileRepository) GetPublicByPublicID(ctx context.Context, publicID string) (*model.PublicProfile, error) {
 	publicID = strings.TrimSpace(publicID)
 	if publicID == "" {
@@ -55,11 +56,13 @@ func (r *ProfileRepository) GetPublicByPublicID(ctx context.Context, publicID st
 	}
 	var p model.PublicProfile
 	query := `
-		SELECT p.user_id, p.display_name, p.photo_url, p.institution, p.visibility, u.public_id
+		SELECT p.user_id, p.display_name, p.photo_url, p.institution, p.visibility, u.public_id,
+		       p.description, p.phone, NULLIF(btrim(u.email), '')
 		FROM identity.users u
 		JOIN identity.profiles p ON p.user_id = u.id
 		WHERE u.public_id = $1`
-	err := r.pool.QueryRow(ctx, query, publicID).Scan(&p.UserID, &p.DisplayName, &p.PhotoURL, &p.Institution, &p.Visibility, &p.PublicID)
+	err := r.pool.QueryRow(ctx, query, publicID).Scan(&p.UserID, &p.DisplayName, &p.PhotoURL, &p.Institution, &p.Visibility, &p.PublicID,
+		&p.Description, &p.Phone, &p.Email)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil

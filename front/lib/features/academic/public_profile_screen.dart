@@ -69,6 +69,17 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
   bool _loadingMore = false;
   String? _notesError;
 
+  /// Generación de la carga de apuntes: una respuesta de una carga anterior
+  /// (reintento, recarga) se descarta en vez de pisar la lista actual.
+  int _notesGen = 0;
+
+  /// Reloj lógico de los estados confirmados de like/guardado y su último
+  /// valor por apunte. Vive solo en esta pantalla (nunca en una caché
+  /// global), así que no se comparte entre sesiones ni usuarios.
+  int _mutationClock = 0;
+  final Map<String, (int, NoteInteractions)> _confirmed =
+      <String, (int, NoteInteractions)>{};
+
   @override
   void initState() {
     super.initState();
@@ -88,10 +99,11 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
     if (_publicId == null) {
       setState(() {
         _status = _ProfileLoadStatus.notFound;
-        _profileError = 'El ID de perfil no es válido.';
+        _profileError = 'El código de perfil no es válido.';
       });
       return;
     }
+    _notesGen++; // invalida cualquier carga de apuntes en curso
     setState(() {
       _status = _ProfileLoadStatus.loading;
       _profileError = null;
@@ -104,7 +116,8 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
       _loadingMore = false;
     });
     await _loadProfile();
-    // Un perfil privado (404 en Auth) conserva sus apuntes públicos.
+    // Un perfil privado muestra nombre y foto y conserva sus apuntes
+    // públicos; un 404 de Auth se confirma contra Notes.
     if (mounted &&
         (_status == _ProfileLoadStatus.ready ||
             _status == _ProfileLoadStatus.notFound)) {
@@ -126,7 +139,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
       setState(() {
         if (code == 404 || e.code == 'invalid_public_id') {
           _status = _ProfileLoadStatus.notFound;
-          _profileError = 'El ID no existe o el perfil es privado.';
+          _profileError = 'No encontramos un perfil con ese código.';
         } else if (code >= 500) {
           _status = _ProfileLoadStatus.unavailable;
           _profileError =
@@ -148,6 +161,9 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
   Future<void> _loadNotes({bool more = false}) async {
     if (_publicId == null) return;
     final cursor = more ? _cursor : '';
+    final gen = ++_notesGen;
+    final requestedAt = _mutationClock;
+    bool stale() => !mounted || gen != _notesGen;
     setState(() {
       if (more) {
         _loadingMore = true;
@@ -164,13 +180,14 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
         _publicId,
         cursor: cursor.isEmpty ? null : cursor,
       );
-      if (!mounted) return;
+      if (stale()) return;
+      final fresh = _withConfirmed(page.items, requestedAt);
       setState(() {
-        _items = more ? [..._items, ...page.items] : page.items;
+        _items = more ? [..._items, ...fresh] : fresh;
         _cursor = page.nextCursor;
       });
     } on NotesApiException catch (e) {
-      if (!mounted) return;
+      if (stale()) return;
       final code = e.statusCode ?? 0;
       setState(() {
         if (code == 404) {
@@ -184,12 +201,12 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
         }
       });
     } catch (_) {
-      if (!mounted) return;
+      if (stale()) return;
       setState(() {
         _notesError = 'No se pudieron cargar los apuntes del perfil.';
       });
     } finally {
-      if (mounted) {
+      if (!stale()) {
         setState(() {
           _notesLoading = false;
           _loadingMore = false;
@@ -198,15 +215,43 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
     }
   }
 
-  void _updateNote(PublicProfileNote note, NoteInteractions state) {
+  /// Aplica un estado de like/guardado CONFIRMADO por el servidor (desde la
+  /// tarjeta o desde la vista del apunte) y lo recuerda con su marca de
+  /// tiempo lógica para que una página pedida antes no lo sobrescriba.
+  void _updateNote(String noteId, NoteInteractions state) {
+    if (!mounted) return;
+    _mutationClock++;
+    _confirmed[noteId] = (_mutationClock, state);
     setState(() {
       _items = [
         for (final item in _items)
-          if (item.id == note.id) item.copyWith(interactions: state) else item,
+          if (item.id == noteId) item.copyWith(interactions: state) else item,
       ];
     });
   }
 
+  /// Superpone a una página recién recibida los estados confirmados DESPUÉS
+  /// de que esa página se pidiera (la respuesta del servidor ya incluye los
+  /// anteriores).
+  List<PublicProfileNote> _withConfirmed(
+    List<PublicProfileNote> page,
+    int requestedAt,
+  ) {
+    if (_confirmed.isEmpty) return page;
+    return [
+      for (final item in page)
+        switch (_confirmed[item.id]) {
+          (final at, final state) when at > requestedAt => item.copyWith(
+            interactions: state,
+          ),
+          _ => item,
+        },
+    ];
+  }
+
+  /// Abre la vista del apunte. Los likes/guardados confirmados allí se
+  /// aplican a esta lista en cuanto ocurren, así que al volver la tarjeta ya
+  /// muestra el estado real sin pedir de nuevo la página ni salir del perfil.
   Future<void> _openNote(PublicProfileNote note) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -215,6 +260,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
           initialTitle: note.title,
           api: _notes,
           onNoteCopied: widget.onNoteCopied,
+          onInteractionsChanged: (state) => _updateNote(note.id, state),
         ),
       ),
     );
@@ -270,7 +316,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
               ),
               SizedBox(height: 2),
               Text(
-                'Su nombre, su institución y sus apuntes públicos',
+                'Su información y sus apuntes públicos',
                 style: TextStyle(
                   fontSize: 12.5,
                   fontWeight: FontWeight.w700,
@@ -324,7 +370,8 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
             key: const ValueKey('public-profile-not-found'),
             icon: Icons.person_off_rounded,
             title: 'PERFIL NO DISPONIBLE',
-            message: _profileError ?? 'El ID no existe o el perfil es privado.',
+            message:
+                _profileError ?? 'No encontramos un perfil con ese código.',
             action: NeobrutalistButton(
               label: 'VOLVER',
               icon: Icons.arrow_back_rounded,
@@ -433,62 +480,132 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
     );
   }
 
+  /// Tarjeta del perfil.
+  ///
+  /// Encabezado: avatar y nombre (elemento principal) y, si es privado, solo
+  /// la etiqueta «Perfil privado». Perfil público: bloques de información en
+  /// una cuadrícula adaptable. La descripción ocupa el ancho completo; correo,
+  /// teléfono y universidad se reparten en 1, 2 o 3 columnas según el ancho
+  /// disponible. Los campos vacíos se omiten (no dejan huecos). Un perfil
+  /// privado ajeno solo trae nombre y foto desde Auth: no hay bloques.
   Widget _buildProfileCard() {
     final profile = _profile!;
     final name = profile.displayName.trim().isEmpty
         ? 'Sin nombre'
         : profile.displayName.trim();
-    final institution =
-        (profile.institution == null || profile.institution!.trim().isEmpty)
-        ? 'No informada'
-        : profile.institution!.trim();
+
+    String? value(String? v) {
+      final t = v?.trim() ?? '';
+      return t.isEmpty ? null : t;
+    }
+
+    final description = profile.isPublic ? value(profile.description) : null;
+    final facts = <_ProfileDetail>[
+      if (profile.isPublic && value(profile.email) != null)
+        _ProfileDetail(
+          valueKey: const ValueKey('public-profile-email'),
+          icon: Icons.alternate_email_rounded,
+          label: 'Correo',
+          value: value(profile.email)!,
+        ),
+      if (profile.isPublic && value(profile.phone) != null)
+        _ProfileDetail(
+          valueKey: const ValueKey('public-profile-phone'),
+          icon: Icons.phone_rounded,
+          label: 'Teléfono',
+          value: value(profile.phone)!,
+        ),
+      if (profile.isPublic && value(profile.institution) != null)
+        _ProfileDetail(
+          valueKey: const ValueKey('public-profile-institution'),
+          icon: Icons.apartment_rounded,
+          label: 'Universidad',
+          value: value(profile.institution)!,
+        ),
+    ];
 
     return NeobrutalistCard(
       key: const ValueKey('public-profile-card'),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
+      padding: const EdgeInsets.all(AppDimens.spaceXl),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          _PublicAvatar(name: name, photoDataUrl: profile.photoDataUrl),
-          const SizedBox(width: AppDimens.spaceLg),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  name,
-                  key: const ValueKey('public-profile-name'),
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.text,
-                    letterSpacing: -0.3,
-                  ),
-                ),
-                const SizedBox(height: AppDimens.spaceSm),
-                Row(
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: <Widget>[
+              _PublicAvatar(name: name, photoDataUrl: profile.photoDataUrl),
+              const SizedBox(width: AppDimens.spaceLg),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    const Icon(
-                      Icons.apartment_rounded,
-                      size: 16,
-                      color: AppColors.text,
-                    ),
-                    const SizedBox(width: AppDimens.spaceSm),
-                    Expanded(
-                      child: Text(
-                        institution,
-                        key: const ValueKey('public-profile-institution'),
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.mutedStrong,
-                        ),
+                    Text(
+                      name,
+                      key: const ValueKey('public-profile-name'),
+                      style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w900,
+                        color: AppColors.text,
+                        letterSpacing: -0.3,
                       ),
                     ),
+                    if (!profile.isPublic) ...<Widget>[
+                      const SizedBox(height: AppDimens.spaceSm),
+                      const NeobrutalistBadge(
+                        key: ValueKey('public-profile-private-badge'),
+                        label: 'Perfil privado',
+                        icon: Icons.lock_rounded,
+                        compact: true,
+                      ),
+                    ],
                   ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
+          if (description != null || facts.isNotEmpty) ...<Widget>[
+            const SizedBox(height: AppDimens.spaceLg),
+            const Divider(
+              color: AppColors.border,
+              thickness: AppDimens.borderWidth,
+              height: AppDimens.borderWidth,
+            ),
+            const SizedBox(height: AppDimens.spaceLg),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                const gap = AppDimens.spaceMd;
+                final width = constraints.maxWidth;
+                final columns = width >= 720 ? 3 : (width >= 440 ? 2 : 1);
+                final cols = facts.isEmpty
+                    ? 1
+                    : (facts.length < columns ? facts.length : columns);
+                final tileWidth = (width - gap * (cols - 1)) / cols;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    if (description != null)
+                      _ProfileDetail(
+                        valueKey: const ValueKey('public-profile-description'),
+                        icon: Icons.notes_rounded,
+                        label: 'Descripción',
+                        value: description,
+                      ),
+                    if (description != null && facts.isNotEmpty)
+                      const SizedBox(height: gap),
+                    if (facts.isNotEmpty)
+                      Wrap(
+                        spacing: gap,
+                        runSpacing: gap,
+                        children: <Widget>[
+                          for (final f in facts)
+                            SizedBox(width: tileWidth, child: f),
+                        ],
+                      ),
+                  ],
+                );
+              },
+            ),
+          ],
         ],
       ),
     );
@@ -628,7 +745,9 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
                 api: _notes,
                 initial: note.interactions,
                 compact: true,
-                onChanged: (state) => _updateNote(note, state),
+                // Al buscar su propio código, el autor no ve «Guardar».
+                showSave: !note.isOwn,
+                onChanged: (state) => _updateNote(note.id, state),
               ),
               NeobrutalistButton(
                 key: ValueKey('public-profile-open-note-${note.id}'),
@@ -714,6 +833,87 @@ class _PublicAvatar extends StatelessWidget {
               gaplessPlayback: true,
               errorBuilder: (_, _, _) => fallback,
             ),
+    );
+  }
+}
+
+/// Bloque de dato del perfil público: pieza con borde y sombra dura (estilo
+/// de las tarjetas de Sigma Academy). El ícono va en un recuadro pequeño
+/// amarillo (acento) que acompaña sin dominar; la etiqueta es discreta
+/// (MAYÚSCULAS, gris) y el valor, firme y seleccionable.
+class _ProfileDetail extends StatelessWidget {
+  const _ProfileDetail({
+    required this.valueKey,
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final Key valueKey;
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(AppDimens.spaceMd),
+      decoration: BoxDecoration(
+        color: AppColors.bg,
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+        boxShadow: AppShadows.badge,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Container(
+            width: 28,
+            height: 28,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: AppColors.accentYellow,
+              border: Border.all(
+                color: AppColors.border,
+                width: AppDimens.borderWidth,
+              ),
+              borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+            ),
+            child: Icon(icon, size: 15, color: AppColors.text),
+          ),
+          const SizedBox(width: AppDimens.spaceMd),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  label.toUpperCase(),
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.6,
+                    color: AppColors.muted,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                SelectableText(
+                  value,
+                  key: valueKey,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.text,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

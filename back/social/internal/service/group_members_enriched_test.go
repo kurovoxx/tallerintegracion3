@@ -74,6 +74,37 @@ func TestListMembersEnriched_ConNombres(t *testing.T) {
 	}
 }
 
+// La ficha de integrante muestra el código público: el listado lo entrega
+// cuando Identity lo resuelve y lo omite (nunca lo sustituye por el UUID)
+// cuando no.
+func TestListMembersEnriched_PublicID(t *testing.T) {
+	svc, store := newTestSvc()
+	g := newGroup(t, svc, uAdmin)
+	joinAs(t, svc, store, g.ID, uMember)
+	pid := "a8kp92mqwx7r"
+	blank := "   "
+	svc.SetUserDirectory(&fakeUserDirectory{data: map[string]UserPublic{
+		uMember: {UserID: uMember, PublicID: &pid},
+		uAdmin:  {UserID: uAdmin, PublicID: &blank},
+	}})
+	ms, err := svc.ListMembersEnriched(ctx, g.ID, uMember)
+	if err != nil {
+		t.Fatalf("enriquecido: %v", err)
+	}
+	for _, m := range ms {
+		switch m.UserID {
+		case uMember:
+			if m.PublicID == nil || *m.PublicID != pid {
+				t.Fatalf("public_id no enriquecido: %+v", m)
+			}
+		case uAdmin:
+			if m.PublicID != nil {
+				t.Fatalf("public_id vacío debe omitirse: %+v", m)
+			}
+		}
+	}
+}
+
 func TestListMembersEnriched_DirectorioCaido_Degrada(t *testing.T) {
 	svc, _ := newTestSvc()
 	g := newGroup(t, svc, uAdmin)

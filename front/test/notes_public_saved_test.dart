@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taller_integracion_front/core/services/session_manager.dart';
 import 'package:taller_integracion_front/features/notes/notes_api.dart';
 import 'package:taller_integracion_front/features/notes/public_notes_screen.dart';
+import 'package:taller_integracion_front/features/notes/saved_notes_screen.dart';
 
 const _a = '11111111-1111-4111-8111-111111111111';
 const _b = '22222222-2222-4222-8222-222222222222';
@@ -275,6 +276,149 @@ void main() {
       expect(detail.attachments.single['id'], _b);
       // copyWith (like/guardar) no debe perder los adjuntos del visor.
       expect(detail.copyWith(isLiked: true).attachments, hasLength(1));
+    });
+  });
+
+  group('código público del autor (sin UUID)', () {
+    const authorUuid = '99999999-9999-4999-8999-999999999999';
+
+    testWidgets('públicos: muestra «Autor <código>» y no el UUID', (
+      tester,
+    ) async {
+      final api = await _api(
+        MockClient((req) async {
+          if (req.url.path == '/notes/public') {
+            return _json({
+              'items': [
+                {
+                  'id': _a,
+                  'user_id': authorUuid,
+                  'author_public_id': 'A8KP92MQWX7R',
+                  'title': 'Álgebra',
+                  ..._stats(_a),
+                },
+                {
+                  'id': _b,
+                  'user_id': authorUuid,
+                  // Sin código resuelto (Identity caído): solo «Autor».
+                  'title': 'Redes',
+                  ..._stats(_b),
+                },
+              ],
+              'next_cursor': '',
+            }, 200);
+          }
+          return _json({}, 404);
+        }),
+      );
+      await tester.pumpWidget(MaterialApp(home: PublicNotesScreen(api: api)));
+      await tester.pumpAndSettle();
+
+      expect(find.text('AUTOR A8KP92MQWX7R'), findsOneWidget);
+      expect(find.text('AUTOR'), findsOneWidget);
+      expect(find.textContaining(authorUuid.substring(0, 8)), findsNothing);
+      // El código es tocable para ver el perfil y los apuntes del autor.
+      expect(
+        find.byKey(const ValueKey('author-code-a8kp92mqwx7r')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('guardados: muestra «Autor <código>» y no el UUID', (
+      tester,
+    ) async {
+      final api = await _api(
+        MockClient((req) async {
+          if (req.url.path == '/notes/saved') {
+            return _json({
+              'items': [
+                {
+                  'saved_id': 's1',
+                  'note_id': _a,
+                  'title': 'Integrales',
+                  'is_available': true,
+                  'user_id': authorUuid,
+                  'author_public_id': 'b8kp92mqwx7r',
+                  ..._stats(_a, saved: true),
+                },
+              ],
+              'next_cursor': '',
+            }, 200);
+          }
+          return _json({}, 404);
+        }),
+      );
+      await tester.pumpWidget(MaterialApp(home: SavedNotesScreen(api: api)));
+      await tester.pumpAndSettle();
+
+      expect(find.text('AUTOR B8KP92MQWX7R'), findsOneWidget);
+      expect(find.textContaining(authorUuid.substring(0, 8)), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    test('author_public_id con forma de UUID se descarta', () {
+      final item = SavedNoteItem.fromJson(<String, dynamic>{
+        'saved_id': 's1',
+        'note_id': _a,
+        'user_id': authorUuid,
+        'author_public_id': authorUuid,
+      });
+      expect(item.authorPublicId, isNull);
+      expect(authorBadgeLabel(item.authorPublicId), 'Autor');
+    });
+  });
+
+  test('cannot_save_own_note tiene un mensaje comprensible', () {
+    expect(
+      notesFriendlyMessage(409, 'cannot_save_own_note'),
+      'No puedes guardar tus propios apuntes.',
+    );
+  });
+
+  group('setSaved: 409 idempotente solo para already_saved', () {
+    test('already_saved (409) devuelve el estado real sin error', () async {
+      final api = await _api(
+        MockClient((req) async {
+          if (req.method == 'POST') {
+            return _json({
+              'error': {'code': 'already_saved', 'message': 'Nota ya guardada'},
+            }, 409);
+          }
+          return _json(_stats(_a, saves: 2, saved: true), 200);
+        }),
+      );
+      final s = await api.setSaved(_a, true);
+      expect(s!.isSaved, isTrue);
+    });
+
+    test('cannot_save_own_note (409) es un error con mensaje claro', () async {
+      final calls = <String>[];
+      final api = await _api(
+        MockClient((req) async {
+          calls.add('${req.method} ${req.url.path}');
+          return _json({
+            'error': {
+              'code': 'cannot_save_own_note',
+              'message': 'No puedes guardar tus propios apuntes',
+            },
+          }, 409);
+        }),
+      );
+      await expectLater(
+        api.setSaved(_a, true),
+        throwsA(
+          isA<NotesApiException>()
+              .having((e) => e.code, 'code', 'cannot_save_own_note')
+              .having(
+                (e) => e.message,
+                'message',
+                'No puedes guardar tus propios apuntes.',
+              ),
+        ),
+      );
+      // No se relee /stats como si hubiera sido un éxito.
+      expect(calls, ['POST /notes/$_a/save']);
     });
   });
 }

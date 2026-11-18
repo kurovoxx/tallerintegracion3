@@ -9,7 +9,7 @@
 
 ## Res
 
-- OK: users repetidos, vacíos cuando corresponde; cada User incluye user_id, email, display_name opcional y photo_thumb_url opcional. Usuarios inexistentes se omiten; no hay orden garantizado. La foto completa nunca se devuelve.
+- OK: users repetidos, vacíos cuando corresponde; cada User incluye user_id, email, display_name opcional, photo_thumb_url opcional y public_id opcional (código público del perfil, campo 5; lo usan Social para la ficha de integrante y Notes para `author_public_id`). Usuarios inexistentes se omiten; no hay orden garantizado. La foto completa nunca se devuelve.
 - `INVALID_ARGUMENT` por UUID inválido; `INTERNAL` por error de lectura.
 - No devuelve secretos ni hashes.
 

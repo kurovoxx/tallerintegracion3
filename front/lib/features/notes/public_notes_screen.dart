@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/common_widgets.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import 'author_code_badge.dart';
 import 'note_id_search_screen.dart';
 import 'notes_filter_chips.dart';
 import 'note_interaction_bar.dart';
@@ -100,7 +101,7 @@ class _PublicNotesScreenState extends State<PublicNotesScreen> {
           if (it.id == item.id)
             PublicNoteSummary(
               id: it.id,
-              userId: it.userId,
+              authorPublicId: it.authorPublicId,
               title: it.title,
               subjectId: it.subjectId,
               updatedAt: it.updatedAt,
@@ -311,9 +312,6 @@ class PublicNoteCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final author = note.userId.length >= 8
-        ? note.userId.substring(0, 8)
-        : note.userId;
     final date = note.updatedAt;
     return NeobrutalistCard(
       child: Column(
@@ -339,11 +337,7 @@ class PublicNoteCard extends StatelessWidget {
                 tone: NeobrutalistTone.success,
                 compact: true,
               ),
-              NeobrutalistBadge(
-                label: 'Autor $author',
-                icon: Icons.person_rounded,
-                compact: true,
-              ),
+              AuthorCodeBadge(authorPublicId: note.authorPublicId),
               if (date != null)
                 NeobrutalistBadge(
                   label:

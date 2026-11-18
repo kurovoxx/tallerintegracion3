@@ -365,6 +365,14 @@ func (s *NoteService) ListSaved(ctx context.Context, userID string, filter Saved
 		}
 		out = append(out, view)
 	}
+	authors := make([]string, 0, len(out))
+	for _, v := range out {
+		authors = append(authors, v.AuthorID)
+	}
+	codes := s.resolveAuthorPublicIDs(ctx, authors)
+	for _, v := range out {
+		v.AuthorPublicID = codes[v.AuthorID]
+	}
 	return out, next, nil
 }
 
@@ -404,11 +412,17 @@ func (s *NoteService) ListPublic(ctx context.Context, requesterID, query, subjec
 	if err != nil {
 		return nil, "", err
 	}
+	authors := make([]string, 0, len(notes))
+	for _, n := range notes {
+		authors = append(authors, n.UserID)
+	}
+	codes := s.resolveAuthorPublicIDs(ctx, authors)
 	out := make([]*model.PublicNoteView, 0, len(notes))
 	for _, n := range notes {
 		st := stats[n.ID]
 		out = append(out, &model.PublicNoteView{
-			ID: n.ID, UserID: n.UserID, Title: n.Title, SubjectID: n.SubjectID,
+			ID: n.ID, UserID: n.UserID, AuthorPublicID: codes[n.UserID],
+			Title: n.Title, SubjectID: n.SubjectID,
 			Visibility: n.Visibility, LikesCount: st.LikesCount,
 			SavesCount: st.SavesCount, IsLiked: st.IsLiked, IsSaved: st.IsSaved,
 			CreatedAt: n.CreatedAt, UpdatedAt: n.UpdatedAt,

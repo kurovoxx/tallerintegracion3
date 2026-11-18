@@ -124,8 +124,9 @@ func serveFakeIdentityGRPC(t *testing.T, fake *fakeIdentityGRPC) *GRPCClient {
 
 func testUsers() map[string]*identityv1.User {
 	ada := "Ada"
+	adaPublicID := "a8kp92mqwx7r"
 	return map[string]*identityv1.User{
-		"u-ada":  {UserId: "u-ada", Email: "ada@test.invalid", DisplayName: &ada},
+		"u-ada":  {UserId: "u-ada", Email: "ada@test.invalid", DisplayName: &ada, PublicId: &adaPublicID},
 		"u-solo": {UserId: "u-solo", Email: "solo@test.invalid"},
 	}
 }

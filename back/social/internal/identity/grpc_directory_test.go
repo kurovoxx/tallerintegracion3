@@ -19,6 +19,13 @@ func TestGRPCDirectory_LookupUsers(t *testing.T) {
 	if err != nil || len(m) != 2 || m["u-ada"].Email != "ada@test.invalid" {
 		t.Fatalf("LookupUsers = %v, %v", m, err)
 	}
+	// El código público viaja desde Identity; si falta queda nil (nunca el UUID).
+	if p := m["u-ada"].PublicID; p == nil || *p != "a8kp92mqwx7r" {
+		t.Fatalf("public_id de u-ada = %v", p)
+	}
+	if m["u-solo"].PublicID != nil {
+		t.Fatalf("u-solo sin public_id debe quedar nil: %v", *m["u-solo"].PublicID)
+	}
 	if got, err := d.LookupUsers(ctx, nil); err != nil || len(got) != 0 {
 		t.Fatalf("nil debe dar mapa vacío sin error: %v, %v", got, err)
 	}

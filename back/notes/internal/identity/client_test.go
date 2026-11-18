@@ -72,3 +72,50 @@ func TestPublicProfileClient_MapeaErroresGRPC(t *testing.T) {
 		})
 	}
 }
+
+// fakeLookupClient implementa LookupUsers para LookupPublicIDs.
+type fakeLookupClient struct {
+	identityv1.IdentityServiceClient
+	users  []*identityv1.User
+	err    error
+	gotReq *identityv1.LookupUsersRequest
+	gotMD  metadata.MD
+}
+
+func (f *fakeLookupClient) LookupUsers(ctx context.Context, in *identityv1.LookupUsersRequest, _ ...grpc.CallOption) (*identityv1.LookupUsersResponse, error) {
+	f.gotReq = in
+	f.gotMD, _ = metadata.FromOutgoingContext(ctx)
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &identityv1.LookupUsersResponse{Users: f.users}, nil
+}
+
+func TestPublicProfileClient_LookupPublicIDs(t *testing.T) {
+	code := "a8kp92mqwx7r"
+	fake := &fakeLookupClient{users: []*identityv1.User{
+		{UserId: "u-1", Email: "no-debe-salir@test.invalid", PublicId: &code},
+		{UserId: "u-2", Email: "sin-codigo@test.invalid"},
+	}}
+	client := NewPublicProfileClient(fake, "clave-interna", time.Second)
+	got, err := client.LookupPublicIDs(context.Background(), []string{"u-1", "u-2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got["u-1"] != code {
+		t.Fatalf("solo debe mapear códigos presentes: %v", got)
+	}
+	if values := fake.gotMD.Get(metadataInternalKey); len(values) != 1 || values[0] != "clave-interna" {
+		t.Fatalf("metadata %s = %v", metadataInternalKey, values)
+	}
+
+	empty := &fakeLookupClient{}
+	if got, err := NewPublicProfileClient(empty, "k", time.Second).LookupPublicIDs(context.Background(), nil); err != nil || len(got) != 0 || empty.gotReq != nil {
+		t.Fatalf("sin ids no debe llamar a Identity: %v %v", got, err)
+	}
+
+	down := NewPublicProfileClient(&fakeLookupClient{err: status.Error(codes.Unavailable, "x")}, "k", time.Second)
+	if _, err := down.LookupPublicIDs(context.Background(), []string{"u-1"}); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+}

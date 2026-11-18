@@ -261,7 +261,8 @@ func (r *UserRepository) GetPublicByIDs(ctx context.Context, userIDs []string) (
 		               WHEN p.photo_url IS NOT NULL AND length(p.photo_url) <= 500
 		               THEN p.photo_url
 		           END
-		       ) AS photo_thumb_url
+		       ) AS photo_thumb_url,
+		       NULLIF(u.public_id, '') AS public_id
 		FROM identity.users u
 		LEFT JOIN identity.profiles p ON p.user_id = u.id
 		WHERE u.id = ANY($1::uuid[])`, clean)
@@ -272,7 +273,7 @@ func (r *UserRepository) GetPublicByIDs(ctx context.Context, userIDs []string) (
 	out := make([]model.PublicUser, 0, len(clean))
 	for rows.Next() {
 		var pu model.PublicUser
-		if err := rows.Scan(&pu.UserID, &pu.Email, &pu.DisplayName, &pu.PhotoThumbURL); err != nil {
+		if err := rows.Scan(&pu.UserID, &pu.Email, &pu.DisplayName, &pu.PhotoThumbURL, &pu.PublicID); err != nil {
 			return nil, fmt.Errorf("get public by ids: %w", err)
 		}
 		out = append(out, pu)

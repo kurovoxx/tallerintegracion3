@@ -91,6 +91,7 @@ _FakeMembersApi _seed() => _FakeMembersApi(<Map<String, dynamic>>[
     'role': 'admin',
     'display_name': 'Ana Admin',
     'email': 'ana@example.com',
+    'public_id': 'a8kp92mqwx7r',
     'joined_at': '2026-01-01T00:00:00Z',
   },
   {
@@ -167,6 +168,39 @@ void main() {
     expect(find.text('FICHA DE INTEGRANTE'), findsOneWidget);
     expect(find.text('CORREO'), findsOneWidget);
     expect(find.text('ROL'), findsOneWidget);
+  });
+
+  testWidgets('la ficha muestra el código público y nunca el UUID interno', (
+    tester,
+  ) async {
+    SessionManager.saveSession(_jwtFor(_memberId), {'id': 'x'});
+    final api = _seed();
+    final service = SocialService(client: MockClient(api.handle));
+    addTearDown(service.dispose);
+
+    await _pump(tester, service);
+    // Ana (ordenada primero) trae public_id.
+    await tester.tap(find.text('VER').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('CÓDIGO DE PERFIL'), findsOneWidget);
+    expect(find.text('a8kp92mqwx7r'), findsOneWidget);
+    expect(find.text('ID'), findsNothing);
+    expect(find.textContaining(_adminId), findsNothing);
+    expect(find.textContaining(_adminId.substring(0, 8)), findsNothing);
+    // Se mantiene el resto de la ficha.
+    expect(find.text('Ana Admin'), findsWidgets);
+    expect(find.text('ana@example.com'), findsWidgets);
+    await tester.tap(find.text('CERRAR'));
+    await tester.pumpAndSettle();
+
+    // Beto no tiene public_id resuelto: «No disponible», nunca su UUID.
+    await tester.tap(find.text('VER').last);
+    await tester.pumpAndSettle();
+    expect(find.text('No disponible'), findsOneWidget);
+    expect(find.textContaining(_memberId), findsNothing);
+    expect(find.textContaining(_memberId.substring(0, 8)), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('expulsar con limpieza (por defecto) envía cleanup=true', (

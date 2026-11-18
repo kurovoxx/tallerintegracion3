@@ -211,4 +211,23 @@ void main() {
     expect(find.text('Apunte no disponible'), findsOneWidget);
     expect(find.byKey(const Key('note-preview-copy')), findsNothing);
   });
+
+  testWidgets('el autor no ve «Guardar» en su propio apunte', (tester) async {
+    await _pump(
+      tester,
+      MockClient(
+        (_) async => _json(_note(content: 'Propio', isOwn: true), 200),
+      ),
+    );
+    expect(find.byKey(const Key('like-$_id')), findsOneWidget);
+    expect(find.byKey(const Key('save-$_id')), findsNothing);
+  });
+
+  testWidgets('un tercero sí ve «Guardar»', (tester) async {
+    await _pump(
+      tester,
+      MockClient((_) async => _json(_note(content: 'Ajeno'), 200)),
+    );
+    expect(find.byKey(const Key('save-$_id')), findsOneWidget);
+  });
 }

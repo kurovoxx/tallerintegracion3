@@ -41,12 +41,68 @@ class _NoteLikeSaveBarState extends State<NoteLikeSaveBar> {
   bool _likeBusy = false;
   bool _saveBusy = false;
 
+  /// El padre entregó un estado confirmado nuevo (p. ej. desde la vista del
+  /// apunte) mientras había una petición propia en vuelo. La respuesta de esa
+  /// petición es entonces una foto del servidor posiblemente ANTERIOR, así
+  /// que no se aplica tal cual: se reconcilia con [_reconcile].
+  bool _parentUpdatedWhileBusy = false;
+
+  bool get _busy => _likeBusy || _saveBusy;
+
   @override
   void didUpdateWidget(covariant NoteLikeSaveBar oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.initial.noteId != widget.initial.noteId) {
       _state = widget.initial;
+      _parentUpdatedWhileBusy = false;
+      return;
     }
+    if (sameNoteInteractions(oldWidget.initial, widget.initial)) return;
+    // El padre actualizó el estado (p. ej. al volver de la vista del apunte,
+    // donde se dio like o se guardó). Sin peticiones propias se adopta ya;
+    // con una en vuelo se marca para reconciliar cuando responda.
+    if (_busy) {
+      _parentUpdatedWhileBusy = true;
+    } else {
+      _state = widget.initial;
+    }
+  }
+
+  /// Decide qué estado aplicar cuando responde una petición propia. Si el
+  /// padre no cambió durante el vuelo, la respuesta es la verdad más reciente.
+  /// Si cambió, se relee `GET /notes/{id}/stats` (una sola petición, solo en
+  /// esta carrera) para no pisar el estado confirmado más nuevo con una foto
+  /// antigua. Si esa lectura falla, se combina: el campo que tocó esta
+  /// petición sale de su respuesta y el resto del estado más reciente del
+  /// padre.
+  Future<NoteInteractions> _reconcile(
+    NoteInteractions confirmed, {
+    required bool like,
+  }) async {
+    if (!_parentUpdatedWhileBusy) return confirmed;
+    try {
+      return await widget.api.stats(confirmed.noteId);
+    } catch (_) {
+      final latest = widget.initial;
+      return like
+          ? latest.copyWith(
+              isLiked: confirmed.isLiked,
+              likesCount: confirmed.likesCount,
+            )
+          : latest.copyWith(
+              isSaved: confirmed.isSaved,
+              savesCount: confirmed.savesCount,
+            );
+    }
+  }
+
+  /// Estado al que volver si una petición falla: el del padre si cambió
+  /// durante el vuelo (más reciente que el previo a la petición).
+  NoteInteractions _rollbackTo(NoteInteractions before) =>
+      _parentUpdatedWhileBusy ? widget.initial : before;
+
+  void _endRequest() {
+    if (!_busy) _parentUpdatedWhileBusy = false;
   }
 
   void _error(Object e) {
@@ -80,16 +136,18 @@ class _NoteLikeSaveBarState extends State<NoteLikeSaveBar> {
       );
     });
     try {
-      final confirmed = await widget.api.setLiked(before.noteId, liked);
+      final response = await widget.api.setLiked(before.noteId, liked);
+      final confirmed = await _reconcile(response, like: true);
       if (!mounted) return;
       setState(() => _state = confirmed);
       widget.onChanged?.call(confirmed);
     } catch (e) {
       if (!mounted) return;
-      setState(() => _state = before);
+      setState(() => _state = _rollbackTo(before));
       _error(e);
     } finally {
       if (mounted) setState(() => _likeBusy = false);
+      _endRequest();
     }
   }
 
@@ -105,7 +163,10 @@ class _NoteLikeSaveBarState extends State<NoteLikeSaveBar> {
       );
     });
     try {
-      final confirmed = await widget.api.setSaved(before.noteId, saved);
+      final response = await widget.api.setSaved(before.noteId, saved);
+      final confirmed = response == null
+          ? null
+          : await _reconcile(response, like: false);
       if (!mounted) return;
       final next = confirmed ?? _state;
       setState(() => _state = next);
@@ -125,10 +186,11 @@ class _NoteLikeSaveBarState extends State<NoteLikeSaveBar> {
       );
     } catch (e) {
       if (!mounted) return;
-      setState(() => _state = before);
+      setState(() => _state = _rollbackTo(before));
       _error(e);
     } finally {
       if (mounted) setState(() => _saveBusy = false);
+      _endRequest();
     }
   }
 

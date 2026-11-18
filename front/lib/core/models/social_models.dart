@@ -7,6 +7,8 @@
 // - GET /groups/:id/sprint-sheet -> sprintTaskToJSON
 // No inventa campos que el backend no entregue (ej. subject, avatares).
 
+import 'profile_models.dart' show normalizePublicId;
+
 class SocialApiException implements Exception {
   SocialApiException(this.message, {this.statusCode, this.code});
 
@@ -311,8 +313,9 @@ class SprintTask {
 }
 
 // GET /groups/:id/members -> lista directa de GroupMembership,
-// enriquecida con display_name/email cuando Identity los resuelve
-// (campos omitidos si no).
+// enriquecida con display_name/email/public_id cuando Identity los resuelve
+// (campos omitidos si no). public_id es el código público del perfil: es lo
+// que se muestra en la ficha; user_id es interno y solo se usa en la lógica.
 class GroupMember {
   GroupMember({
     required this.id,
@@ -323,6 +326,7 @@ class GroupMember {
     this.displayName,
     this.email,
     this.photoThumbUrl,
+    this.publicId,
   });
 
   final String id;
@@ -333,6 +337,9 @@ class GroupMember {
   final String? displayName;
   final String? email;
   final String? photoThumbUrl;
+
+  /// Código público del perfil (12 caracteres) o null si no se resolvió.
+  final String? publicId;
 
   /// Nombre humano sin inventar: display_name, email o id corto.
   /// Nunca es un UUID desnudo como etiqueta principal.
@@ -346,6 +353,8 @@ class GroupMember {
 
   /// Etiqueta mínima cuando no hay nombre ni correo.
   String get shortLabel {
+    final code = publicId;
+    if (code != null) return '$code · $role';
     final short = userId.length > 8 ? '${userId.substring(0, 8)}…' : userId;
     return '$short · $role';
   }
@@ -369,6 +378,8 @@ class GroupMember {
       displayName: name,
       email: mail,
       photoThumbUrl: photo,
+      // Solo se acepta con formato de código público: nunca un UUID.
+      publicId: normalizePublicId((j['public_id'] as String?) ?? ''),
     );
   }
 }
