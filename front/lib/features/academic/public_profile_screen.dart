@@ -69,6 +69,17 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
   bool _loadingMore = false;
   String? _notesError;
 
+  /// Generación de la carga de apuntes: una respuesta de una carga anterior
+  /// (reintento, recarga) se descarta en vez de pisar la lista actual.
+  int _notesGen = 0;
+
+  /// Reloj lógico de los estados confirmados de like/guardado y su último
+  /// valor por apunte. Vive solo en esta pantalla (nunca en una caché
+  /// global), así que no se comparte entre sesiones ni usuarios.
+  int _mutationClock = 0;
+  final Map<String, (int, NoteInteractions)> _confirmed =
+      <String, (int, NoteInteractions)>{};
+
   @override
   void initState() {
     super.initState();
@@ -88,10 +99,11 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
     if (_publicId == null) {
       setState(() {
         _status = _ProfileLoadStatus.notFound;
-        _profileError = 'El ID de perfil no es válido.';
+        _profileError = 'El código de perfil no es válido.';
       });
       return;
     }
+    _notesGen++; // invalida cualquier carga de apuntes en curso
     setState(() {
       _status = _ProfileLoadStatus.loading;
       _profileError = null;
@@ -104,7 +116,8 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
       _loadingMore = false;
     });
     await _loadProfile();
-    // Un perfil privado (404 en Auth) conserva sus apuntes públicos.
+    // Un perfil privado muestra nombre y foto y conserva sus apuntes
+    // públicos; un 404 de Auth se confirma contra Notes.
     if (mounted &&
         (_status == _ProfileLoadStatus.ready ||
             _status == _ProfileLoadStatus.notFound)) {
@@ -126,7 +139,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
       setState(() {
         if (code == 404 || e.code == 'invalid_public_id') {
           _status = _ProfileLoadStatus.notFound;
-          _profileError = 'El ID no existe o el perfil es privado.';
+          _profileError = 'No encontramos un perfil con ese código.';
         } else if (code >= 500) {
           _status = _ProfileLoadStatus.unavailable;
           _profileError =
@@ -148,6 +161,9 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
   Future<void> _loadNotes({bool more = false}) async {
     if (_publicId == null) return;
     final cursor = more ? _cursor : '';
+    final gen = ++_notesGen;
+    final requestedAt = _mutationClock;
+    bool stale() => !mounted || gen != _notesGen;
     setState(() {
       if (more) {
         _loadingMore = true;
@@ -164,13 +180,14 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
         _publicId,
         cursor: cursor.isEmpty ? null : cursor,
       );
-      if (!mounted) return;
+      if (stale()) return;
+      final fresh = _withConfirmed(page.items, requestedAt);
       setState(() {
-        _items = more ? [..._items, ...page.items] : page.items;
+        _items = more ? [..._items, ...fresh] : fresh;
         _cursor = page.nextCursor;
       });
     } on NotesApiException catch (e) {
-      if (!mounted) return;
+      if (stale()) return;
       final code = e.statusCode ?? 0;
       setState(() {
         if (code == 404) {
@@ -184,12 +201,12 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
         }
       });
     } catch (_) {
-      if (!mounted) return;
+      if (stale()) return;
       setState(() {
         _notesError = 'No se pudieron cargar los apuntes del perfil.';
       });
     } finally {
-      if (mounted) {
+      if (!stale()) {
         setState(() {
           _notesLoading = false;
           _loadingMore = false;
@@ -198,15 +215,43 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
     }
   }
 
-  void _updateNote(PublicProfileNote note, NoteInteractions state) {
+  /// Aplica un estado de like/guardado CONFIRMADO por el servidor (desde la
+  /// tarjeta o desde la vista del apunte) y lo recuerda con su marca de
+  /// tiempo lógica para que una página pedida antes no lo sobrescriba.
+  void _updateNote(String noteId, NoteInteractions state) {
+    if (!mounted) return;
+    _mutationClock++;
+    _confirmed[noteId] = (_mutationClock, state);
     setState(() {
       _items = [
         for (final item in _items)
-          if (item.id == note.id) item.copyWith(interactions: state) else item,
+          if (item.id == noteId) item.copyWith(interactions: state) else item,
       ];
     });
   }
 
+  /// Superpone a una página recién recibida los estados confirmados DESPUÉS
+  /// de que esa página se pidiera (la respuesta del servidor ya incluye los
+  /// anteriores).
+  List<PublicProfileNote> _withConfirmed(
+    List<PublicProfileNote> page,
+    int requestedAt,
+  ) {
+    if (_confirmed.isEmpty) return page;
+    return [
+      for (final item in page)
+        switch (_confirmed[item.id]) {
+          (final at, final state) when at > requestedAt => item.copyWith(
+            interactions: state,
+          ),
+          _ => item,
+        },
+    ];
+  }
+
+  /// Abre la vista del apunte. Los likes/guardados confirmados allí se
+  /// aplican a esta lista en cuanto ocurren, así que al volver la tarjeta ya
+  /// muestra el estado real sin pedir de nuevo la página ni salir del perfil.
   Future<void> _openNote(PublicProfileNote note) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -215,6 +260,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
           initialTitle: note.title,
           api: _notes,
           onNoteCopied: widget.onNoteCopied,
+          onInteractionsChanged: (state) => _updateNote(note.id, state),
         ),
       ),
     );
@@ -270,7 +316,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
               ),
               SizedBox(height: 2),
               Text(
-                'Su nombre, su institución y sus apuntes públicos',
+                'Su información y sus apuntes públicos',
                 style: TextStyle(
                   fontSize: 12.5,
                   fontWeight: FontWeight.w700,
@@ -324,7 +370,8 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
             key: const ValueKey('public-profile-not-found'),
             icon: Icons.person_off_rounded,
             title: 'PERFIL NO DISPONIBLE',
-            message: _profileError ?? 'El ID no existe o el perfil es privado.',
+            message:
+                _profileError ?? 'No encontramos un perfil con ese código.',
             action: NeobrutalistButton(
               label: 'VOLVER',
               icon: Icons.arrow_back_rounded,
@@ -433,62 +480,100 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
     );
   }
 
+  /// Tarjeta del perfil. Público: nombre, foto, descripción, correo,
+  /// teléfono e institución. Privado: solo nombre y foto, más un aviso; el
+  /// resto de datos ni siquiera llega desde Auth.
   Widget _buildProfileCard() {
     final profile = _profile!;
     final name = profile.displayName.trim().isEmpty
         ? 'Sin nombre'
         : profile.displayName.trim();
-    final institution =
-        (profile.institution == null || profile.institution!.trim().isEmpty)
-        ? 'No informada'
-        : profile.institution!.trim();
+
+    final details = <Widget>[];
+    if (profile.isPublic) {
+      void add(String key, IconData icon, String label, String? value) {
+        details.add(
+          _ProfileDetail(
+            valueKey: ValueKey('public-profile-$key'),
+            icon: icon,
+            label: label,
+            value: (value == null || value.trim().isEmpty)
+                ? 'No informado'
+                : value.trim(),
+          ),
+        );
+      }
+
+      add(
+        'description',
+        Icons.notes_rounded,
+        'Descripción',
+        profile.description,
+      );
+      add('email', Icons.alternate_email_rounded, 'Correo', profile.email);
+      add('phone', Icons.phone_rounded, 'Teléfono', profile.phone);
+      add(
+        'institution',
+        Icons.apartment_rounded,
+        'Universidad',
+        profile.institution,
+      );
+    }
 
     return NeobrutalistCard(
       key: const ValueKey('public-profile-card'),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          _PublicAvatar(name: name, photoDataUrl: profile.photoDataUrl),
-          const SizedBox(width: AppDimens.spaceLg),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  name,
-                  key: const ValueKey('public-profile-name'),
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.text,
-                    letterSpacing: -0.3,
-                  ),
-                ),
-                const SizedBox(height: AppDimens.spaceSm),
-                Row(
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: <Widget>[
+              _PublicAvatar(name: name, photoDataUrl: profile.photoDataUrl),
+              const SizedBox(width: AppDimens.spaceLg),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    const Icon(
-                      Icons.apartment_rounded,
-                      size: 16,
-                      color: AppColors.text,
-                    ),
-                    const SizedBox(width: AppDimens.spaceSm),
-                    Expanded(
-                      child: Text(
-                        institution,
-                        key: const ValueKey('public-profile-institution'),
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.mutedStrong,
-                        ),
+                    Text(
+                      name,
+                      key: const ValueKey('public-profile-name'),
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w900,
+                        color: AppColors.text,
+                        letterSpacing: -0.3,
                       ),
                     ),
+                    if (!profile.isPublic) ...<Widget>[
+                      const SizedBox(height: AppDimens.spaceSm),
+                      const NeobrutalistBadge(
+                        key: ValueKey('public-profile-private-badge'),
+                        label: 'Perfil privado',
+                        icon: Icons.lock_rounded,
+                        compact: true,
+                      ),
+                    ],
                   ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
+          if (profile.isPublic) ...<Widget>[
+            const SizedBox(height: AppDimens.spaceLg),
+            ...details,
+          ] else ...<Widget>[
+            const SizedBox(height: AppDimens.spaceMd),
+            const Text(
+              'Este perfil es privado: solo muestra su nombre y su foto.',
+              key: ValueKey('public-profile-private-note'),
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+                color: AppColors.mutedStrong,
+                height: 1.4,
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -628,7 +713,9 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
                 api: _notes,
                 initial: note.interactions,
                 compact: true,
-                onChanged: (state) => _updateNote(note, state),
+                // Al buscar su propio código, el autor no ve «Guardar».
+                showSave: !note.isOwn,
+                onChanged: (state) => _updateNote(note.id, state),
               ),
               NeobrutalistButton(
                 key: ValueKey('public-profile-open-note-${note.id}'),
@@ -714,6 +801,61 @@ class _PublicAvatar extends StatelessWidget {
               gaplessPlayback: true,
               errorBuilder: (_, _, _) => fallback,
             ),
+    );
+  }
+}
+
+/// Fila de dato del perfil público (ícono, etiqueta y valor seleccionable).
+class _ProfileDetail extends StatelessWidget {
+  const _ProfileDetail({
+    required this.valueKey,
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final Key valueKey;
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppDimens.spaceMd),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Icon(icon, size: 16, color: AppColors.text),
+          const SizedBox(width: AppDimens.spaceSm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  label.toUpperCase(),
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.5,
+                    color: AppColors.muted,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                SelectableText(
+                  value,
+                  key: valueKey,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.mutedStrong,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

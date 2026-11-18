@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taller_integracion_front/core/services/session_manager.dart';
 import 'package:taller_integracion_front/features/notes/notes_api.dart';
 import 'package:taller_integracion_front/features/notes/public_notes_screen.dart';
+import 'package:taller_integracion_front/features/notes/saved_notes_screen.dart';
 
 const _a = '11111111-1111-4111-8111-111111111111';
 const _b = '22222222-2222-4222-8222-222222222222';
@@ -276,5 +277,102 @@ void main() {
       // copyWith (like/guardar) no debe perder los adjuntos del visor.
       expect(detail.copyWith(isLiked: true).attachments, hasLength(1));
     });
+  });
+
+  group('código público del autor (sin UUID)', () {
+    const authorUuid = '99999999-9999-4999-8999-999999999999';
+
+    testWidgets('públicos: muestra «Autor <código>» y no el UUID', (
+      tester,
+    ) async {
+      final api = await _api(
+        MockClient((req) async {
+          if (req.url.path == '/notes/public') {
+            return _json({
+              'items': [
+                {
+                  'id': _a,
+                  'user_id': authorUuid,
+                  'author_public_id': 'A8KP92MQWX7R',
+                  'title': 'Álgebra',
+                  ..._stats(_a),
+                },
+                {
+                  'id': _b,
+                  'user_id': authorUuid,
+                  // Sin código resuelto (Identity caído): solo «Autor».
+                  'title': 'Redes',
+                  ..._stats(_b),
+                },
+              ],
+              'next_cursor': '',
+            }, 200);
+          }
+          return _json({}, 404);
+        }),
+      );
+      await tester.pumpWidget(MaterialApp(home: PublicNotesScreen(api: api)));
+      await tester.pumpAndSettle();
+
+      expect(find.text('AUTOR A8KP92MQWX7R'), findsOneWidget);
+      expect(find.text('AUTOR'), findsOneWidget);
+      expect(find.textContaining(authorUuid.substring(0, 8)), findsNothing);
+      // El código es tocable para ver el perfil y los apuntes del autor.
+      expect(
+        find.byKey(const ValueKey('author-code-a8kp92mqwx7r')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('guardados: muestra «Autor <código>» y no el UUID', (
+      tester,
+    ) async {
+      final api = await _api(
+        MockClient((req) async {
+          if (req.url.path == '/notes/saved') {
+            return _json({
+              'items': [
+                {
+                  'saved_id': 's1',
+                  'note_id': _a,
+                  'title': 'Integrales',
+                  'is_available': true,
+                  'user_id': authorUuid,
+                  'author_public_id': 'b8kp92mqwx7r',
+                  ..._stats(_a, saved: true),
+                },
+              ],
+              'next_cursor': '',
+            }, 200);
+          }
+          return _json({}, 404);
+        }),
+      );
+      await tester.pumpWidget(MaterialApp(home: SavedNotesScreen(api: api)));
+      await tester.pumpAndSettle();
+
+      expect(find.text('AUTOR B8KP92MQWX7R'), findsOneWidget);
+      expect(find.textContaining(authorUuid.substring(0, 8)), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    test('author_public_id con forma de UUID se descarta', () {
+      final item = SavedNoteItem.fromJson(<String, dynamic>{
+        'saved_id': 's1',
+        'note_id': _a,
+        'user_id': authorUuid,
+        'author_public_id': authorUuid,
+      });
+      expect(item.authorPublicId, isNull);
+      expect(authorBadgeLabel(item.authorPublicId), 'Autor');
+    });
+  });
+
+  test('cannot_save_own_note tiene un mensaje comprensible', () {
+    expect(
+      notesFriendlyMessage(409, 'cannot_save_own_note'),
+      'No puedes guardar tus propios apuntes.',
+    );
   });
 }

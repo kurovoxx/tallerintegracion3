@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/common_widgets.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import 'author_code_badge.dart';
 import 'note_id_search_screen.dart';
 import 'note_interaction_bar.dart';
 import 'notes_api.dart';
@@ -187,7 +188,7 @@ class _SavedNotesScreenState extends State<SavedNotesScreen> {
               title: it.title,
               isAvailable: it.isAvailable,
               unavailableReason: it.unavailableReason,
-              authorId: it.authorId,
+              authorPublicId: it.authorPublicId,
               subjectId: it.subjectId,
               isOwn: it.isOwn,
               savedAt: it.savedAt,
@@ -442,9 +443,6 @@ class SavedNoteCard extends StatelessWidget {
   );
 
   Widget _available() {
-    final author = (item.authorId ?? '').length >= 8
-        ? item.authorId!.substring(0, 8)
-        : (item.authorId ?? '—');
     return NeobrutalistCard(
       semanticLabel: 'Apunte guardado ${item.title}',
       child: Column(
@@ -472,11 +470,7 @@ class SavedNoteCard extends StatelessWidget {
                   compact: true,
                 )
               else
-                NeobrutalistBadge(
-                  label: 'Autor $author',
-                  icon: Icons.person_rounded,
-                  compact: true,
-                ),
+                AuthorCodeBadge(authorPublicId: item.authorPublicId),
               if (item.savedAt != null)
                 NeobrutalistBadge(
                   label: 'Guardado ${_fmt(item.savedAt!)}',

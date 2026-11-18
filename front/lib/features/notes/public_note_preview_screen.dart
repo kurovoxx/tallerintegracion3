@@ -30,6 +30,7 @@ class PublicNotePreviewScreen extends StatefulWidget {
     this.imageClient,
     this.openResource,
     this.onNoteCopied,
+    this.onInteractionsChanged,
   });
 
   final String noteId;
@@ -48,6 +49,10 @@ class PublicNotePreviewScreen extends StatefulWidget {
 
   /// Se llama tras copiar con éxito (p. ej. para refrescar «Mis apuntes»).
   final VoidCallback? onNoteCopied;
+
+  /// Se llama con cada estado de like/guardado CONFIRMADO por el servidor,
+  /// para que la lista de origen lo refleje al volver sin recargar.
+  final ValueChanged<NoteInteractions>? onInteractionsChanged;
 
   @override
   State<PublicNotePreviewScreen> createState() =>
@@ -275,14 +280,20 @@ class _PublicNotePreviewScreenState extends State<PublicNotePreviewScreen> {
                 isLiked: note.isLiked,
                 isSaved: note.isSaved,
               ),
-              onChanged: (s) => setState(
-                () => _note = note.copyWith(
-                  likesCount: s.likesCount,
-                  savesCount: s.savesCount,
-                  isLiked: s.isLiked,
-                  isSaved: s.isSaved,
-                ),
-              ),
+              // El autor no puede guardar su propio apunte (el backend
+              // también lo rechaza).
+              showSave: !note.isOwn,
+              onChanged: (s) {
+                setState(
+                  () => _note = note.copyWith(
+                    likesCount: s.likesCount,
+                    savesCount: s.savesCount,
+                    isLiked: s.isLiked,
+                    isSaved: s.isSaved,
+                  ),
+                );
+                widget.onInteractionsChanged?.call(s);
+              },
             ),
             if (!note.isOwn)
               NeobrutalistButton(
