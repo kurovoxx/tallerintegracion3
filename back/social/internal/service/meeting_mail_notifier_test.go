@@ -18,7 +18,7 @@ type fakeMailSender struct {
 	err   error
 }
 
-func (f *fakeMailSender) SendMeetingInvite(_ context.Context, to []string, _, title string, _ time.Time, _ bool, _, link string) error {
+func (f *fakeMailSender) SendMeetingInvite(_ context.Context, to []string, _, title string, _ time.Time, _ *time.Location, _ bool, _, link string) error {
 	f.calls++
 	f.to = append([]string{}, to...)
 	f.title = title

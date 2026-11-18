@@ -32,7 +32,7 @@ type MeetingMessage struct {
 
 // BuildMeetingMessage compone asunto, texto plano y HTML del aviso.
 // groupName vacío = asunto sin grupo. link puede ser una URL o una sala.
-func BuildMeetingMessage(groupName, title string, scheduled time.Time, hasSchedule bool, description, link string) MeetingMessage {
+func BuildMeetingMessage(groupName, title string, scheduled time.Time, loc *time.Location, hasSchedule bool, description, link string) MeetingMessage {
 	title = cleanLine(title)
 	if title == "" {
 		title = "Reunión"
@@ -48,6 +48,9 @@ func BuildMeetingMessage(groupName, title string, scheduled time.Time, hasSchedu
 
 	when := ""
 	if hasSchedule {
+		if loc != nil {
+			scheduled = scheduled.In(loc)
+		}
 		when = scheduled.Format("2006-01-02 15:04 MST")
 	}
 
@@ -171,7 +174,7 @@ func safeHref(link string) string {
 }
 
 // SendMeetingInvite envía el aviso a todos los destinatarios en una sesión.
-func (m *MeetingMailer) SendMeetingInvite(ctx context.Context, to []string, groupName, title string, scheduled time.Time, hasSchedule bool, description, link string) error {
+func (m *MeetingMailer) SendMeetingInvite(ctx context.Context, to []string, groupName, title string, scheduled time.Time, loc *time.Location, hasSchedule bool, description, link string) error {
 	addrs := make([]string, 0, len(to))
 	for _, r := range to {
 		r = strings.TrimSpace(r)
@@ -192,7 +195,7 @@ func (m *MeetingMailer) SendMeetingInvite(ctx context.Context, to []string, grou
 	if strings.ContainsAny(m.Username, "\r\n") {
 		return fmt.Errorf("invalid address")
 	}
-	msg := BuildMeetingMessage(groupName, title, scheduled, hasSchedule, description, link)
+	msg := BuildMeetingMessage(groupName, title, scheduled, loc, hasSchedule, description, link)
 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
