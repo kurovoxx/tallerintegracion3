@@ -282,15 +282,28 @@ func (h *NoteHandler) ListMy(c *gin.Context) {
 		handleServiceError(c, err)
 		return
 	}
+	// is_liked en lote (una consulta por página): la lista "Mis notas" refleja
+	// likes dados desde otros lugares (p. ej. la pestaña de notas del grupo)
+	// sin tener que abrir cada nota para leer /stats.
+	stats, err := h.svc.InteractionsForNotes(c.Request.Context(), userID, notes)
+	if err != nil {
+		handleServiceError(c, err)
+		return
+	}
 	// mapear a array de objetos minimal
 	out := make([]gin.H, 0, len(notes))
 	for _, n := range notes {
+		isLiked := false
+		if st := stats[n.ID]; st != nil {
+			isLiked = st.IsLiked
+		}
 		item := gin.H{
 			"id":          n.ID,
 			"user_id":     n.UserID,
 			"title":       n.Title,
 			"visibility":  n.Visibility,
 			"likes_count": n.LikesCount,
+			"is_liked":    isLiked,
 			"version":     n.Version,
 			"created_at":  n.CreatedAt.UTC().Format(time.RFC3339),
 			"updated_at":  n.UpdatedAt.UTC().Format(time.RFC3339),
@@ -1067,11 +1080,23 @@ func (h *NoteHandler) ListGroupNotes(c *gin.Context) {
 		handleServiceError(c, err)
 		return
 	}
+	// is_liked por nota en una consulta por página (no N+1): la pestaña de
+	// notas del grupo muestra el corazón propio sin pedir /stats por nota.
+	stats, err := h.svc.InteractionsForNotes(c.Request.Context(), userID, notes)
+	if err != nil {
+		handleServiceError(c, err)
+		return
+	}
 	out := make([]gin.H, 0, len(notes))
 	for _, n := range notes {
+		isLiked := false
+		if st := stats[n.ID]; st != nil {
+			isLiked = st.IsLiked
+		}
 		item := gin.H{
 			"id": n.ID, "user_id": n.UserID, "title": n.Title,
 			"visibility": n.Visibility, "likes_count": n.LikesCount,
+			"is_liked":   isLiked,
 			"version":    n.Version,
 			"created_at": n.CreatedAt.UTC().Format(time.RFC3339), "updated_at": n.UpdatedAt.UTC().Format(time.RFC3339),
 		}

@@ -1229,3 +1229,119 @@ func TestHandlerReconcileDriveDeletions(t *testing.T) {
 		t.Fatalf("resumen nota: %+v", two)
 	}
 }
+
+// Likes desde la pestaña de notas del grupo: un miembro (no autor) puede dar
+// like a una nota compartida en modo restricted, y GET /groups/:id/notes
+// refleja is_liked solo para quien dio like, con el contador exacto.
+func TestGroupNotesLikeFromMember(t *testing.T) {
+	r, _, _, social := setupRouter()
+	author := uuid.NewString()
+	member := uuid.NewString()
+	other := uuid.NewString()
+	groupID := uuid.NewString()
+	social.AddAdmin(author, groupID)
+	social.AddMember(member, groupID)
+	social.AddMember(other, groupID)
+	authorTok := genToken(author, "student")
+	memberTok := genToken(member, "student")
+	otherTok := genToken(other, "student")
+
+	do := func(method, path, tok, body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(method, path, bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+tok)
+		r.ServeHTTP(w, req)
+		return w
+	}
+	w := do(http.MethodPost, "/notes", authorTok, `{"title":"Nota del grupo","visibility":"private"}`)
+	var cre map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &cre)
+	noteID := cre["note_id"]
+	if w = do(http.MethodPost, "/notes/"+noteID+"/share", authorTok,
+		fmt.Sprintf(`{"group_id":"%s","access_mode":"restricted"}`, groupID)); w.Code != http.StatusCreated {
+		t.Fatalf("share: %d %s", w.Code, w.Body.String())
+	}
+
+	listItem := func(tok string) map[string]interface{} {
+		t.Helper()
+		w := do(http.MethodGet, "/groups/"+groupID+"/notes", tok, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("list: %d %s", w.Code, w.Body.String())
+		}
+		var resp struct {
+			Notes []map[string]interface{} `json:"notes"`
+		}
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		if len(resp.Notes) != 1 {
+			t.Fatalf("esperaba 1 nota, got %v", resp.Notes)
+		}
+		return resp.Notes[0]
+	}
+
+	if it := listItem(memberTok); it["is_liked"] != false || it["likes_count"].(float64) != 0 {
+		t.Fatalf("estado inicial: %v", it)
+	}
+	if w = do(http.MethodPost, "/notes/"+noteID+"/like", memberTok, ""); w.Code != http.StatusCreated {
+		t.Fatalf("like miembro: %d %s", w.Code, w.Body.String())
+	}
+	if it := listItem(memberTok); it["is_liked"] != true || it["likes_count"].(float64) != 1 {
+		t.Fatalf("tras like (miembro): %v", it)
+	}
+	// Otro miembro ve el contador, pero no el corazón de otro.
+	if it := listItem(otherTok); it["is_liked"] != false || it["likes_count"].(float64) != 1 {
+		t.Fatalf("tras like (otro miembro): %v", it)
+	}
+	if w = do(http.MethodDelete, "/notes/"+noteID+"/like", memberTok, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("unlike: %d %s", w.Code, w.Body.String())
+	}
+	if it := listItem(memberTok); it["is_liked"] != false || it["likes_count"].(float64) != 0 {
+		t.Fatalf("tras unlike: %v", it)
+	}
+	// Un externo al grupo no puede dar like a la nota restricted.
+	outsider := genToken(uuid.NewString(), "student")
+	if w = do(http.MethodPost, "/notes/"+noteID+"/like", outsider, ""); w.Code != http.StatusNotFound {
+		t.Fatalf("like externo esperaba 404, got %d %s", w.Code, w.Body.String())
+	}
+}
+
+// GET /notes/me trae likes_count e is_liked reales: un like dado desde otro
+// lugar (p. ej. la pestaña de notas del grupo) se ve en "Mis notas" sin abrir
+// la nota.
+func TestListMyIncludesIsLiked(t *testing.T) {
+	r, svc, _, _ := setupRouter()
+	author := uuid.NewString()
+	tok := genToken(author, "student")
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/notes", bytes.NewBufferString(`{"title":"Mi nota","visibility":"private"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tok)
+	r.ServeHTTP(w, req)
+	var cre map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &cre)
+	noteID := cre["note_id"]
+	if err := svc.Like(context.Background(), author, noteID); err != nil {
+		t.Fatalf("like propio: %v", err)
+	}
+	if err := svc.Like(context.Background(), uuid.NewString(), noteID); err == nil {
+		t.Fatal("un extraño no debería poder dar like a una nota privada")
+	}
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/notes/me", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list my: %d %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Notes []map[string]interface{} `json:"notes"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if len(resp.Notes) != 1 {
+		t.Fatalf("esperaba 1 nota, got %v", resp.Notes)
+	}
+	if resp.Notes[0]["is_liked"] != true || resp.Notes[0]["likes_count"].(float64) != 1 {
+		t.Fatalf("esperaba is_liked=true y likes_count=1, got %v", resp.Notes[0])
+	}
+}

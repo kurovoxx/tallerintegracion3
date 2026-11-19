@@ -668,6 +668,17 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             // No resucitar una nota borrada localmente (tombstone §P3): el
             // backend puede seguir devolviéndola hasta confirmar el DELETE.
             if (await _isTombstoned(remoteId)) continue;
+            // Likes: el servidor es la única fuente (pueden llegar desde la
+            // pestaña de notas de un grupo, un perfil público u otro usuario).
+            // Se adoptan aunque el contenido local sea más nuevo; antes la
+            // lista quedaba en 0 hasta abrir la nota y leer /stats.
+            _likesCount[remoteId] =
+                (n['likes_count'] as num?)?.toInt() ??
+                _likesCount[remoteId] ??
+                0;
+            if (n.containsKey('is_liked')) {
+              _isLiked[remoteId] = n['is_liked'] == true;
+            }
             // El listado se pidió antes de resolver creaciones/ediciones. Una
             // respuesta antigua no puede rebajar una versión ya confirmada.
             final remoteVersion = (n['version'] as num?)?.toInt();
@@ -699,6 +710,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             );
           } catch (_) {}
         }
+        // Repintar con los likes recién adoptados del servidor.
+        if (mounted) setState(() {});
         // Convergencia de tombstones: si el servidor ya no devuelve una nota
         // cuyo DELETE se confirmó, el tombstone dejó de ser necesario. Solo
         // con el listado COMPLETO, y nunca para una nota temporal cuyo CREATE

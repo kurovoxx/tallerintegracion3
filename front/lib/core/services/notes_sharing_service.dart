@@ -28,6 +28,7 @@ class SharedGroupNote {
     required this.likesCount,
     required this.version,
     this.ownerUserId,
+    this.isLiked = false,
   });
 
   final String noteId;
@@ -37,6 +38,22 @@ class SharedGroupNote {
   final int version;
   final String? ownerUserId;
 
+  /// true si el usuario actual ya dio like (backend: `is_liked`, resuelto en
+  /// lote para toda la página).
+  final bool isLiked;
+
+  /// Copia con el estado de like confirmado por el servidor.
+  SharedGroupNote copyWith({int? likesCount, bool? isLiked}) =>
+      SharedGroupNote(
+        noteId: noteId,
+        title: title,
+        visibility: visibility,
+        likesCount: likesCount ?? this.likesCount,
+        version: version,
+        ownerUserId: ownerUserId,
+        isLiked: isLiked ?? this.isLiked,
+      );
+
   factory SharedGroupNote.fromJson(Map<String, dynamic> json) {
     return SharedGroupNote(
       noteId: (json['id'] ?? '').toString(),
@@ -45,6 +62,7 @@ class SharedGroupNote {
       likesCount: (json['likes_count'] as num?)?.toInt() ?? 0,
       version: (json['version'] as num?)?.toInt() ?? 1,
       ownerUserId: json['user_id']?.toString(),
+      isLiked: json['is_liked'] == true,
     );
   }
 }

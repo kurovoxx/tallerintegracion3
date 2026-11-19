@@ -171,6 +171,18 @@ func (s *NoteService) interactionsFor(ctx context.Context, requesterID string, n
 	return got[note.ID], nil
 }
 
+// InteractionsForNotes resuelve en lote likes_count/is_liked (y guardados) de
+// una página de apuntes que el llamador YA autorizó, p. ej. el listado de un
+// grupo (ListGroupNotes verifica la membresía). Así la lista del grupo puede
+// pintar el "me gusta" propio sin una petición por nota.
+func (s *NoteService) InteractionsForNotes(ctx context.Context, requesterID string, notes []*model.Note) (map[string]*model.NoteInteractions, error) {
+	targets := make([]interactionTarget, 0, len(notes))
+	for _, n := range notes {
+		targets = append(targets, interactionTarget{id: n.ID, likesCount: n.LikesCount})
+	}
+	return s.interactionsForTargets(ctx, requesterID, targets)
+}
+
 // Interactions devuelve likes_count, saves_count, is_liked e is_saved de un
 // apunte legible por el solicitante (GET /notes/{id}/stats). No toca Drive.
 func (s *NoteService) Interactions(ctx context.Context, requesterID, noteID string) (*model.NoteInteractions, error) {
