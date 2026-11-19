@@ -1,3 +1,5 @@
+import 'package:flutter/services.dart';
+
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -825,6 +827,20 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
     }
   }
 
+  /// Copia el enlace de invitación de Discord al portapapeles.
+  Future<void> _copyInvite() async {
+    final url = _config?.inviteUrl.trim() ?? '';
+    if (url.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: url));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Enlace de Discord copiado al portapapeles.'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
   // Extrae el código de invitación de una URL de Discord.
   // Soporta https://discord.com/invite/XXXX y https://discord.gg/XXXX.
   String? _extractDiscordInviteCode(String url) {
@@ -1044,44 +1060,72 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
                       ),
                       const SizedBox(height: 20),
                       if (hasInvite)
-                        InkWell(
-                          onTap: _openInvite,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 20,
-                              vertical: 12,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              border: Border.all(color: Colors.black, width: 2),
-                              boxShadow: const [
-                                BoxShadow(
-                                  color: Colors.black,
-                                  offset: Offset(3, 3),
-                                  blurRadius: 0,
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            InkWell(
+                              onTap: _openInvite,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 20,
+                                  vertical: 12,
                                 ),
-                              ],
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  border: Border.all(color: Colors.black, width: 2),
+                                  boxShadow: const [
+                                    BoxShadow(
+                                      color: Colors.black,
+                                      offset: Offset(3, 3),
+                                      blurRadius: 0,
+                                    ),
+                                  ],
+                                ),
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.forum_rounded,
+                                      size: 18,
+                                      color: Color(0xFF5865F2),
+                                    ),
+                                    SizedBox(width: 8),
+                                    Text(
+                                      'ABRIR DISCORD',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w900,
+                                        fontSize: 12,
+                                        color: Color(0xFF5865F2),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
                             ),
-                            child: const Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.forum_rounded,
+                            const SizedBox(width: 12),
+                            InkWell(
+                              onTap: _copyInvite,
+                              child: Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  border: Border.all(color: Colors.black, width: 2),
+                                  boxShadow: const [
+                                    BoxShadow(
+                                      color: Colors.black,
+                                      offset: Offset(3, 3),
+                                      blurRadius: 0,
+                                    ),
+                                  ],
+                                ),
+                                child: const Icon(
+                                  Icons.copy_rounded,
                                   size: 18,
                                   color: Color(0xFF5865F2),
                                 ),
-                                SizedBox(width: 8),
-                                Text(
-                                  'ABRIR DISCORD',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w900,
-                                    fontSize: 12,
-                                    color: Color(0xFF5865F2),
-                                  ),
-                                ),
-                              ],
+                              ),
                             ),
-                          ),
+                          ],
                         ),
                       // Solo admin: acción secundaria que abre el formulario.
                       if (_isAdmin) ...[

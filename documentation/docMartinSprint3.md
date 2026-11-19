@@ -476,3 +476,37 @@ Al agendar una reunión (`POST /groups/:id/meetings`), el creador puede elegir a
 
 - Botón "Seleccionar ninguno" / "Limpiar todos" (se puede agregar como mejora futura).
 - Validar que el creador no se auto-invite (ya no se auto-notifica por regla 4.8, pero el aviso por correo sí se enviaría si se selecciona al creador; opcional excluirlo).
+
+## 4_5_10 — Botón de copiar enlace de Discord
+
+### Objetivo
+
+En la pestaña de Discord del grupo (`GroupDiscordTab`), agregar un botón con el símbolo de copiar (`Icons.copy_rounded`) junto al botón "ABRIR DISCORD" para que el usuario pueda copiar el enlace de invitación al portapapeles con un solo toque, sin tener que abrir el enlace ni seleccionar el texto manualmente.
+
+### Alcance
+
+| Aspecto | Valor |
+|---------|-------|
+| Pantalla | `group_detail_screen.dart` (pestaña de Discord del grupo) |
+| Botón | Ícono de copiar (`Icons.copy_rounded`) junto al botón "ABRIR DISCORD" |
+| Comportamiento | Al tocarlo, copia `inviteUrl` al portapapeles (`Clipboard.setData`) y muestra un snackbar de confirmación |
+| Visibilidad | Solo se muestra cuando hay un enlace de invitación configurado (`hasInvite`) |
+| Backend | No se requieren cambios: ya existe `GET /groups/:id/discord-config` que devuelve `invite_url` |
+
+### Archivos
+
+| Archivo | Cambio |
+|---------|--------|
+| `front/lib/features/groups/group_detail_screen.dart` | Import de `package:flutter/services.dart`, método `_copyInvite()` y botón de copiar junto a "ABRIR DISCORD" |
+| `documentation/docMartinSprint3.md` | Esta sección |
+
+### Verificación
+
+- `flutter analyze` en `group_detail_screen.dart`: sin errores nuevos
+- `flutter test`: todos los tests pasan (609)
+- Prueba manual: al tocar el botón de copiar, aparece snackbar "Enlace de Discord copiado al portapapeles." y el enlace queda disponible para pegar en cualquier app
+
+### No entra
+
+- Botón de copiar en el diálogo de "Configurar Discord" (se puede agregar como mejora futura).
+- Notificación visual alternativa al copiar (solo snackbar).
