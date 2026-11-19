@@ -16,6 +16,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    # Sin esto, al reiniciar el PC Docker levanta los servicios (unless-stopped)
+    # pero no la base: quedan sin DB y nginx devuelve HTML en vez de JSON.
+    restart: unless-stopped
     networks:
       - ti3-net
 
