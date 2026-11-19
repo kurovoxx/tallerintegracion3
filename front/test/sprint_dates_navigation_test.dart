@@ -7,6 +7,7 @@ import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taller_integracion_front/core/services/session_manager.dart';
 import 'package:taller_integracion_front/core/services/social_service.dart';
+import 'package:taller_integracion_front/core/widgets/neobrutalism.dart';
 import 'package:taller_integracion_front/features/workspace/sprint_sheet_screen.dart';
 
 void main() {
@@ -92,8 +93,18 @@ void main() {
       expect(find.byKey(const ValueKey('sprint-date-scrollbar')), findsNothing);
       await t.tap(find.text('EDITAR SPRINT'));
       await t.pumpAndSettle();
-      expect(find.textContaining('Fecha inicio:'), findsOneWidget);
-      expect(find.textContaining('Fecha fin:'), findsOneWidget);
+      expect(find.text('FECHA INICIO'), findsOneWidget);
+      expect(find.text('FECHA FIN'), findsOneWidget);
+      // Las fechas usan cajas neobrutalistas, no TextButton Material.
+      expect(find.byKey(const Key('sprint-start-date')), findsOneWidget);
+      expect(find.byKey(const Key('sprint-end-date')), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(NeobrutalistDialog),
+          matching: find.byType(TextButton),
+        ),
+        findsNothing,
+      );
       await t.tap(find.text('GUARDAR CAMBIOS'));
       await t.pumpAndSettle();
       expect(patches, 1);

@@ -219,22 +219,30 @@ class _KanbanScreenState extends State<KanbanScreen> {
               const SizedBox(height: 8),
               const AppFieldLabel('Responsable (opcional)'),
               const SizedBox(height: 4),
-              DropdownButton<GroupMember?>(
-                value: selected,
-                hint: const Text('Sin asignar'),
-                isExpanded: true,
-                items: [
-                  const DropdownMenuItem<GroupMember?>(
+              NeobrutalistSelectField<String?>(
+                // userId estable (no el objeto) para comparar la selección.
+                value: selected?.userId,
+                hint: 'Sin asignar',
+                dialogTitle: 'Responsable',
+                icon: Icons.person_outline_rounded,
+                options: [
+                  const NeobrutalistSelectOption<String?>(
                     value: null,
-                    child: Text('Sin asignar'),
+                    label: 'Sin asignar',
+                    icon: Icons.person_off_outlined,
                   ),
                   for (final m in members)
-                    DropdownMenuItem<GroupMember?>(
-                      value: m,
-                      child: Text(m.displayLabel),
+                    NeobrutalistSelectOption<String?>(
+                      value: m.userId,
+                      label: m.displayLabel,
                     ),
                 ],
-                onChanged: (v) => setDialogState(() => selected = v),
+                onChanged: (id) => setDialogState(() {
+                  selected = null;
+                  for (final m in members) {
+                    if (m.userId == id) selected = m;
+                  }
+                }),
               ),
             ],
           ),
@@ -304,22 +312,20 @@ class _KanbanScreenState extends State<KanbanScreen> {
               const SizedBox(height: 8),
               const AppFieldLabel('Estado'),
               const SizedBox(height: 4),
-              DropdownButton<String>(
+              NeobrutalistSelectField<String>(
                 value: const ['todo', 'in_progress', 'done'].contains(next)
                     ? next
                     : 'todo',
-                isExpanded: true,
-                items: const [
-                  DropdownMenuItem(value: 'todo', child: Text('Por hacer')),
-                  DropdownMenuItem(
+                dialogTitle: 'Estado',
+                options: const [
+                  NeobrutalistSelectOption(value: 'todo', label: 'Por hacer'),
+                  NeobrutalistSelectOption(
                     value: 'in_progress',
-                    child: Text('En progreso'),
+                    label: 'En progreso',
                   ),
-                  DropdownMenuItem(value: 'done', child: Text('Finalizada')),
+                  NeobrutalistSelectOption(value: 'done', label: 'Finalizada'),
                 ],
-                onChanged: (v) {
-                  if (v != null) setDialogState(() => next = v);
-                },
+                onChanged: (v) => setDialogState(() => next = v),
               ),
             ],
           ),
@@ -1843,50 +1849,34 @@ class _NewTaskSheetState extends State<_NewTaskSheet> {
                 Row(
                   children: [
                     Expanded(
-                      child: DropdownButtonFormField<_TaskPriority>(
-                        initialValue: _priority,
-                        isExpanded: true,
-                        dropdownColor: AppColors.surface,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w900,
-                          fontSize: 12.5,
-                          color: AppColors.text,
-                        ),
-                        decoration: appInputDecoration('Prioridad'),
-                        items: [
+                      child: NeobrutalistSelectField<_TaskPriority>(
+                        value: _priority,
+                        hint: 'Prioridad',
+                        dialogTitle: 'Prioridad',
+                        options: [
                           for (final priority in _TaskPriority.values)
-                            DropdownMenuItem(
+                            NeobrutalistSelectOption(
                               value: priority,
-                              child: Text(priority.label.toUpperCase()),
+                              label: priority.label.toUpperCase(),
                             ),
                         ],
-                        onChanged: (value) => setState(
-                          () => _priority = value ?? _TaskPriority.media,
-                        ),
+                        onChanged: (value) => setState(() => _priority = value),
                       ),
                     ),
                     const SizedBox(width: AppDimens.spaceMd),
                     Expanded(
-                      child: DropdownButtonFormField<String>(
-                        initialValue: _assignee,
-                        isExpanded: true,
-                        dropdownColor: AppColors.surface,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w900,
-                          fontSize: 12.5,
-                          color: AppColors.text,
-                        ),
-                        decoration: appInputDecoration('Responsable'),
-                        items: [
+                      child: NeobrutalistSelectField<String>(
+                        value: _assignee,
+                        hint: 'Responsable',
+                        dialogTitle: 'Responsable',
+                        options: [
                           for (final assignee in _kAssignees)
-                            DropdownMenuItem(
+                            NeobrutalistSelectOption(
                               value: assignee,
-                              child: Text(assignee),
+                              label: assignee,
                             ),
                         ],
-                        onChanged: (value) => setState(
-                          () => _assignee = value ?? _kAssignees.first,
-                        ),
+                        onChanged: (value) => setState(() => _assignee = value),
                       ),
                     ),
                   ],

@@ -6,6 +6,8 @@ import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 import '../notes/attachment_resources.dart';
 import '../notes/authenticated_attachment_image.dart';
+import '../notes/latex_support.dart';
+import '../notes/note_markdown_body.dart';
 
 /// Pestaña "NOTAS" de la vista de grupo: lista y abre las notas compartidas
 /// con el grupo, permite compartir una nota propia eligiendo modo
@@ -447,23 +449,51 @@ class _NoteViewer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Misma sanitización que el editor personal: neutraliza comandos LaTeX
+    // bloqueados (\href, \html*, \new*...) aunque la nota venga de otro
+    // cliente que no la haya saneado al guardar.
+    final markdown = sanitizeNoteMarkdown(content.content);
     final real = attachmentResources(content.noteId, content.attachments);
-    final fromMarkdown = resourcesFromMarkdown(content.content);
+    final fromMarkdown = resourcesFromMarkdown(markdown);
     final resources = mergeAttachmentResources(real, fromMarkdown);
+    // Las imágenes referenciadas en el cuerpo ya se pintan en línea; abajo
+    // solo se listan PDFs/documentos y las imágenes que el texto no cita.
+    final listed = resources
+        .where((r) {
+          if (r['type'] != 'image') return true;
+          final id = r['attachment_id'] as String? ?? '';
+          final url = r['url'] as String? ?? '';
+          final inBody =
+              (id.isNotEmpty && markdown.contains(id)) ||
+              (url.isNotEmpty && markdown.contains(url));
+          return !inBody;
+        })
+        .toList(growable: false);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SelectableText(
-          content.content.isEmpty ? '(sin contenido)' : content.content,
-          style: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: AppColors.text,
-            height: 1.4,
+        if (markdown.trim().isEmpty)
+          const Text(
+            '(sin contenido)',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: AppColors.mutedStrong,
+            ),
+          )
+        else
+          // Motor compartido con el visor personal y la vista pública:
+          // Markdown (#, listas, código...) + LaTeX ($...$, $$...$$) + imágenes
+          // por el endpoint autenticado de adjuntos.
+          NoteMarkdownBody(
+            key: const Key('group-note-markdown'),
+            content: markdown,
+            resources: resources,
+            imageBaseUrl: NotesSharingService.baseUrl,
+            onOpenResource: (r) => _openDrive(r['url'] as String? ?? ''),
           ),
-        ),
-        if (resources.isNotEmpty) ...[
+        if (listed.isNotEmpty) ...[
           const SizedBox(height: AppDimens.spaceLg),
           const Divider(
             color: AppColors.border,
@@ -480,7 +510,7 @@ class _NoteViewer extends StatelessWidget {
             ),
           ),
           const SizedBox(height: AppDimens.spaceSm),
-          ...resources.map(_resourceTile),
+          ...listed.map(_resourceTile),
         ],
       ],
     );

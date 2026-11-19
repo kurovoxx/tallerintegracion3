@@ -476,15 +476,16 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                   children: [
                     const AppFieldLabel('Responsable (requerido)'),
                     const SizedBox(height: 4),
-                    DropdownButton<String>(
+                    NeobrutalistSelectField<String?>(
                       value: selectedUserId,
-                      hint: const Text('Elige un miembro'),
-                      isExpanded: true,
-                      items: [
+                      hint: 'Elige un miembro',
+                      dialogTitle: 'Responsable',
+                      icon: Icons.person_outline_rounded,
+                      options: [
                         for (final m in members)
-                          DropdownMenuItem<String>(
+                          NeobrutalistSelectOption<String?>(
                             value: m.userId,
-                            child: Text(m.displayLabel),
+                            label: m.displayLabel,
                           ),
                       ],
                       onChanged: (v) =>
@@ -620,15 +621,16 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                   children: [
                     const AppFieldLabel('Responsable (requerido)'),
                     const SizedBox(height: 4),
-                    DropdownButton<String>(
+                    NeobrutalistSelectField<String?>(
                       value: selectedUserId,
-                      hint: const Text('Elige un miembro'),
-                      isExpanded: true,
-                      items: [
+                      hint: 'Elige un miembro',
+                      dialogTitle: 'Responsable',
+                      icon: Icons.person_outline_rounded,
+                      options: [
                         for (final m in members)
-                          DropdownMenuItem<String>(
+                          NeobrutalistSelectOption<String?>(
                             value: m.userId,
-                            child: Text(m.displayLabel),
+                            label: m.displayLabel,
                           ),
                       ],
                       onChanged: (v) =>
@@ -991,7 +993,10 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
 
     await showNeobrutalistDialog<void>(
       context: context,
-      dialog: _NewSprintDialog(nameController: nameCtrl, goalController: goalCtrl),
+      dialog: _NewSprintDialog(
+        nameController: nameCtrl,
+        goalController: goalCtrl,
+      ),
     );
 
     if (!mounted) return;
@@ -1422,9 +1427,9 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
       await _loadReal(selectId: neighborId);
     } on SocialApiException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1979,10 +1984,7 @@ class _SprintChip extends StatelessWidget {
                       padding: const EdgeInsets.all(2),
                       decoration: BoxDecoration(
                         color: AppColors.surface,
-                        border: Border.all(
-                          color: AppColors.border,
-                          width: 1.5,
-                        ),
+                        border: Border.all(color: AppColors.border, width: 1.5),
                         borderRadius: BorderRadius.circular(
                           AppDimens.radiusChip,
                         ),
@@ -2088,40 +2090,19 @@ class _NewTaskDialogState extends State<_NewTaskDialog> {
           children: [
             const AppFieldLabel('INTEGRANTE'),
             const SizedBox(height: 4),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-              decoration: BoxDecoration(
-                color: AppColors.bg,
-                border: Border.all(color: AppColors.border, width: 2),
-                borderRadius: BorderRadius.circular(AppDimens.radius),
-              ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  value: _selectedMember,
-                  isExpanded: true,
-                  isDense: true,
-                  icon: const Icon(Icons.expand_more_rounded),
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 12,
-                    color: AppColors.text,
+            NeobrutalistSelectField<String>(
+              value: _selectedMember,
+              hint: 'Elige un integrante',
+              dialogTitle: 'Integrante',
+              icon: Icons.person_outline_rounded,
+              options: [
+                for (final member in widget.members)
+                  NeobrutalistSelectOption<String>(
+                    value: member,
+                    label: member,
                   ),
-                  items: widget.members
-                      .map(
-                        (member) => DropdownMenuItem<String>(
-                          value: member,
-                          child: Text(member, overflow: TextOverflow.ellipsis),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (value) {
-                    if (value != null) {
-                      setState(() => _selectedMember = value);
-                    }
-                  },
-                ),
-              ),
+              ],
+              onChanged: (value) => setState(() => _selectedMember = value),
             ),
             const SizedBox(height: 12),
             const AppFieldLabel('TÍTULO'),

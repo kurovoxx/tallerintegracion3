@@ -22,8 +22,13 @@ const _noteId = '22222222-2222-4222-8222-222222222222';
 class _FakeNotesApi {
   bool shared;
   bool failList;
+  String content;
 
-  _FakeNotesApi({this.shared = false, this.failList = false});
+  _FakeNotesApi({
+    this.shared = false,
+    this.failList = false,
+    this.content = 'cuerpo markdown',
+  });
 
   http.Response _json(int code, Object body) => http.Response(
     jsonEncode(body),
@@ -73,7 +78,7 @@ class _FakeNotesApi {
       return _json(200, {
         'id': _noteId,
         'title': 'Nota compartida',
-        'content': 'cuerpo markdown',
+        'content': content,
         'visibility': 'private',
       });
     }
@@ -98,6 +103,41 @@ void main() {
     SessionManager.saveSession('jwt-test', {'id': 'u'});
   });
   tearDown(SessionManager.clear);
+
+  testWidgets(
+    'nota compartida con Markdown y LaTeX se ve renderizada, no en crudo',
+    (tester) async {
+      // Sesión vía setUp(), igual que el resto de pruebas del archivo.
+      tester.view.physicalSize = const Size(1280, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final api = _FakeNotesApi(
+        shared: true,
+        content:
+            '# Resumen de grafos\n\nTexto con **negrita** y \$x^2\$.\n\n'
+            '\$\$\\frac{a}{b}\$\$\n\n- punto uno',
+      );
+      final service = NotesSharingService(client: MockClient(api.handle));
+      addTearDown(service.dispose);
+
+      await _pumpTab(tester, service);
+      await tester.tap(find.text('ABRIR'));
+      await tester.pumpAndSettle();
+
+      // Pasa por el mismo motor que el visor personal (NoteMarkdownBody).
+      expect(find.byKey(const Key('group-note-markdown')), findsOneWidget);
+      // Los símbolos de sintaxis no se muestran como texto plano.
+      expect(find.textContaining('# Resumen'), findsNothing);
+      expect(find.textContaining('**negrita**'), findsNothing);
+      expect(find.textContaining(r'$$'), findsNothing);
+      expect(
+        find.textContaining('Resumen de grafos', findRichText: true),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   for (final size in [
     const Size(360, 640),
