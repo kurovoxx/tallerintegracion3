@@ -14,6 +14,8 @@ import 'package:taller_integracion_front/core/services/notes_sharing_service.dar
 import 'package:taller_integracion_front/core/services/session_manager.dart';
 import 'package:taller_integracion_front/core/widgets/neobrutalism.dart';
 import 'package:taller_integracion_front/features/groups/group_notes_tab.dart';
+import 'package:taller_integracion_front/features/notes/notes_api.dart'
+    show NotesApi;
 
 const _gid = '11111111-1111-1111-1111-111111111111';
 const _noteId = '22222222-2222-4222-8222-222222222222';
@@ -23,6 +25,21 @@ class _FakeNotesApi {
   bool shared;
   bool failList;
   String content;
+
+  /// Estado de like real del backend falso (contador + corazón propio).
+  int likes = 3;
+  bool liked = false;
+
+  /// true = POST/DELETE /like responde 500 (para probar la reversión).
+  bool failLike = false;
+
+  Map<String, Object> _stats() => {
+    'note_id': _noteId,
+    'likes_count': likes,
+    'saves_count': 0,
+    'is_liked': liked,
+    'is_saved': false,
+  };
 
   _FakeNotesApi({
     this.shared = false,
@@ -50,7 +67,8 @@ class _FakeNotesApi {
                 'id': _noteId,
                 'title': 'Nota compartida',
                 'visibility': 'private',
-                'likes_count': 3,
+                'likes_count': likes,
+                'is_liked': liked,
                 'version': 1,
                 'user_id': 'u',
               },
@@ -65,6 +83,33 @@ class _FakeNotesApi {
         ],
         'next_cursor': '',
       });
+    }
+    if (p.endsWith('/notes/$_noteId/like')) {
+      if (failLike) {
+        return _json(500, {
+          'error': {'code': 'internal_error', 'message': 'Error interno'},
+        });
+      }
+      if (req.method == 'POST') {
+        if (liked) {
+          return _json(409, {
+            'error': {'code': 'already_liked', 'message': 'ya'},
+          });
+        }
+        liked = true;
+        likes++;
+        return _json(201, _stats());
+      }
+      if (req.method == 'DELETE') {
+        if (liked) {
+          liked = false;
+          likes--;
+        }
+        return http.Response('', 204);
+      }
+    }
+    if (req.method == 'GET' && p.endsWith('/notes/$_noteId/stats')) {
+      return _json(200, _stats());
     }
     if (req.method == 'POST' && p.endsWith('/notes/$_noteId/share')) {
       shared = true;
@@ -98,6 +143,167 @@ Future<void> _pumpTab(WidgetTester tester, NotesSharingService service) async {
 }
 
 void main() {
+  group('likes en notas del grupo', () {
+    Future<_FakeNotesApi> pumpWithLikes(
+      WidgetTester tester, {
+      bool liked = false,
+    }) async {
+      tester.view.physicalSize = const Size(1280, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final api = _FakeNotesApi(shared: true)..liked = liked;
+      final client = MockClient(api.handle);
+      final service = NotesSharingService(client: client);
+      final notesApi = NotesApi(client: client);
+      addTearDown(service.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: GroupNotesTab(
+              groupId: _gid,
+              service: service,
+              notesApi: notesApi,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      return api;
+    }
+
+    final likeKey = find.byKey(const Key('like-$_noteId'));
+
+    testWidgets('la tarjeta muestra el like propio que trae el listado', (
+      tester,
+    ) async {
+      await pumpWithLikes(tester, liked: true);
+      expect(likeKey, findsOneWidget);
+      expect(
+        find.descendant(of: likeKey, matching: find.text('3')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: likeKey,
+          matching: find.byIcon(Icons.favorite_rounded),
+        ),
+        findsOneWidget,
+      );
+      // El badge estático "N likes" ya no existe.
+      expect(find.textContaining('LIKES'), findsNothing);
+    });
+
+    testWidgets('dar y quitar like desde la tarjeta usa el backend real', (
+      tester,
+    ) async {
+      final api = await pumpWithLikes(tester);
+      expect(
+        find.descendant(
+          of: likeKey,
+          matching: find.byIcon(Icons.favorite_border_rounded),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(likeKey);
+      await tester.pumpAndSettle();
+      expect(api.liked, isTrue);
+      expect(find.descendant(of: likeKey, matching: find.text('4')), findsOne);
+      expect(
+        find.descendant(
+          of: likeKey,
+          matching: find.byIcon(Icons.favorite_rounded),
+        ),
+        findsOneWidget,
+      );
+
+      await tester.tap(likeKey);
+      await tester.pumpAndSettle();
+      expect(api.liked, isFalse);
+      expect(find.descendant(of: likeKey, matching: find.text('3')), findsOne);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('like en el visor se refleja en la tarjeta al cerrar', (
+      tester,
+    ) async {
+      final api = await pumpWithLikes(tester);
+      await tester.tap(find.text('ABRIR'));
+      await tester.pumpAndSettle();
+      // Tarjeta (detrás) + visor: el del visor es el último.
+      expect(likeKey, findsNWidgets(2));
+      await tester.tap(likeKey.last);
+      await tester.pumpAndSettle();
+      expect(api.liked, isTrue);
+      await tester.tap(find.widgetWithText(NeobrutalistButton, 'CERRAR').last);
+      await tester.pumpAndSettle();
+      expect(likeKey, findsOneWidget);
+      expect(find.descendant(of: likeKey, matching: find.text('4')), findsOne);
+    });
+
+    testWidgets('si el like falla se revierte y se avisa', (tester) async {
+      final api = await pumpWithLikes(tester);
+      api.failLike = true;
+      await tester.tap(likeKey);
+      await tester.pumpAndSettle();
+      expect(api.liked, isFalse);
+      expect(find.descendant(of: likeKey, matching: find.text('3')), findsOne);
+      expect(find.byType(SnackBar), findsOneWidget);
+    });
+
+    testWidgets('el like sigue visible al cambiar de pestaña y volver', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(1280, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final api = _FakeNotesApi(shared: true);
+      final client = MockClient(api.handle);
+      final service = NotesSharingService(client: client);
+      addTearDown(service.dispose);
+      final controller = TabController(length: 2, vsync: tester);
+      addTearDown(controller.dispose);
+      // Igual que GroupDetailScreen: TabBarView destruye la pestaña al salir.
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TabBarView(
+              controller: controller,
+              children: [
+                GroupNotesTab(
+                  groupId: _gid,
+                  service: service,
+                  notesApi: NotesApi(client: client),
+                ),
+                const Center(child: Text('OTRA PESTAÑA')),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(likeKey);
+      await tester.pumpAndSettle();
+      expect(api.liked, isTrue);
+
+      controller.animateTo(1);
+      await tester.pumpAndSettle();
+      expect(find.text('OTRA PESTAÑA'), findsOneWidget);
+      controller.animateTo(0);
+      await tester.pumpAndSettle();
+
+      expect(find.descendant(of: likeKey, matching: find.text('4')), findsOne);
+      expect(
+        find.descendant(
+          of: likeKey,
+          matching: find.byIcon(Icons.favorite_rounded),
+        ),
+        findsOneWidget,
+      );
+    });
+  });
+
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     SessionManager.saveSession('jwt-test', {'id': 'u'});

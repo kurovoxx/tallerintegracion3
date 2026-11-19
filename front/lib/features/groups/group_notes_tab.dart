@@ -7,18 +7,28 @@ import '../../core/widgets/neobrutalism.dart';
 import '../notes/attachment_resources.dart';
 import '../notes/authenticated_attachment_image.dart';
 import '../notes/latex_support.dart';
+import '../notes/note_interaction_bar.dart';
 import '../notes/note_markdown_body.dart';
+import '../notes/notes_api.dart' show NoteInteractions, NotesApi;
 
 /// Pestaña "NOTAS" de la vista de grupo: lista y abre las notas compartidas
 /// con el grupo, permite compartir una nota propia eligiendo modo
 /// (link/restricted) y dejar de compartir. Diseño Neo-Brutalism y estados de
 /// carga/error/vacío explícitos con refresco tras cada mutación.
 class GroupNotesTab extends StatefulWidget {
-  const GroupNotesTab({super.key, this.groupId, NotesSharingService? service})
-    : _serviceOverride = service;
+  const GroupNotesTab({
+    super.key,
+    this.groupId,
+    NotesSharingService? service,
+    NotesApi? notesApi,
+  }) : _serviceOverride = service,
+       _notesApiOverride = notesApi;
 
   final String? groupId;
   final NotesSharingService? _serviceOverride;
+
+  /// Cliente de likes (`POST/DELETE /notes/:id/like`); inyectable en pruebas.
+  final NotesApi? _notesApiOverride;
 
   @override
   State<GroupNotesTab> createState() => _GroupNotesTabState();
@@ -26,6 +36,7 @@ class GroupNotesTab extends StatefulWidget {
 
 class _GroupNotesTabState extends State<GroupNotesTab> {
   late final NotesSharingService _service;
+  late final NotesApi _notesApi;
 
   bool _loading = false;
   String? _error;
@@ -42,16 +53,50 @@ class _GroupNotesTabState extends State<GroupNotesTab> {
   void initState() {
     super.initState();
     _service = widget._serviceOverride ?? NotesSharingService();
+    _notesApi = widget._notesApiOverride ?? NotesApi();
     _load();
   }
 
   @override
   void dispose() {
     if (widget._serviceOverride == null) _service.dispose();
+    if (widget._notesApiOverride == null) _notesApi.dispose();
     super.dispose();
   }
 
   String get _groupId => widget.groupId?.trim() ?? '';
+
+  NoteInteractions _likeStateOf(SharedGroupNote note) => NoteInteractions(
+    noteId: note.noteId,
+    likesCount: note.likesCount,
+    isLiked: note.isLiked,
+  );
+
+  /// Adopta el like confirmado por el servidor en la nota de la lista, para
+  /// que tarjeta y visor muestren siempre el mismo contador y corazón.
+  void _applyLike(NoteInteractions confirmed) {
+    if (!mounted) return;
+    setState(() {
+      _notes = [
+        for (final n in _notes)
+          n.noteId == confirmed.noteId
+              ? n.copyWith(
+                  likesCount: confirmed.likesCount,
+                  isLiked: confirmed.isLiked,
+                )
+              : n,
+      ];
+    });
+  }
+
+  /// Botón de like (sin guardar: en el grupo solo se pide reaccionar).
+  Widget _likeButton(SharedGroupNote note) => NoteLikeSaveBar(
+    api: _notesApi,
+    initial: _likeStateOf(note),
+    compact: true,
+    showSave: false,
+    onChanged: _applyLike,
+  );
 
   void _snack(String message, {bool error = false}) {
     if (!mounted) return;
@@ -121,7 +166,15 @@ class _GroupNotesTabState extends State<GroupNotesTab> {
         title: content.title,
         cancelLabel: 'Cerrar',
         maxWidth: 760,
-        content: _NoteViewer(content: content),
+        content: _NoteViewer(
+          content: content,
+          likeButton: _likeButton(
+            _notes.firstWhere(
+              (n) => n.noteId == note.noteId,
+              orElse: () => note,
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -390,18 +443,16 @@ class _GroupNotesTabState extends State<GroupNotesTab> {
                       ? NeobrutalistTone.info
                       : NeobrutalistTone.neutral,
                 ),
-                NeobrutalistBadge(
-                  label: '${note.likesCount} likes',
-                  tone: NeobrutalistTone.accent,
-                  icon: Icons.favorite_rounded,
-                ),
               ],
             ),
             const SizedBox(height: AppDimens.spaceMd),
             Wrap(
               spacing: AppDimens.spaceSm,
               runSpacing: AppDimens.spaceSm,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
+                // Like real (antes un badge estático "N likes").
+                _likeButton(note),
                 NeobrutalistButton(
                   label: 'Abrir',
                   icon: Icons.open_in_new_rounded,
@@ -435,9 +486,12 @@ class _GroupNotesTabState extends State<GroupNotesTab> {
 /// Visor neobrutalista del contenido de una nota compartida + sus recursos
 /// adjuntos (`attachment:<id>` resueltos con los adjuntos reales).
 class _NoteViewer extends StatelessWidget {
-  const _NoteViewer({required this.content});
+  const _NoteViewer({required this.content, this.likeButton});
 
   final SharedNoteContent content;
+
+  /// Botón de like de la nota (mismo estado que la tarjeta de la lista).
+  final Widget? likeButton;
 
   Future<void> _openDrive(String url) async {
     final uri = Uri.tryParse(url.trim());
@@ -473,6 +527,10 @@ class _NoteViewer extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (likeButton != null) ...[
+          Align(alignment: Alignment.centerLeft, child: likeButton),
+          const SizedBox(height: AppDimens.spaceMd),
+        ],
         if (markdown.trim().isEmpty)
           const Text(
             '(sin contenido)',

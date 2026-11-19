@@ -133,13 +133,21 @@ class _KanbanScreenState extends State<KanbanScreen> {
   }
 
   // Lectura: GET /groups/:id/workspace.kanban (todo/in_progress/done).
-  Future<void> _loadReal() async {
+  //
+  // silent=true (tras crear/editar/mover/eliminar): el tablero se queda en
+  // pantalla y solo se reemplazan los datos. Antes cada acción ponía el
+  // spinner, el tablero se destruía y se perdía scroll y columna visible
+  // ("se reinicia todo el kanban").
+  Future<void> _loadReal({bool silent = false}) async {
     if (!_isRealGroup) return;
     if (!mounted) return;
-    setState(() {
-      _loadingReal = true;
-      _realError = null;
-    });
+    final keepBoard = silent && _realError == null;
+    if (!keepBoard) {
+      setState(() {
+        _loadingReal = true;
+        _realError = null;
+      });
+    }
     try {
       final ws = await _social.getWorkspace(widget.groupId!.trim());
       if (!mounted) return;
@@ -157,18 +165,56 @@ class _KanbanScreenState extends State<KanbanScreen> {
           _memberById = {for (final m in members) m.userId: m};
         });
       } catch (_) {}
-    } on SocialApiException catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _realError = 'No se pudo cargar el tablero.';
-        _loadingReal = false;
-      });
     } catch (_) {
       if (!mounted) return;
+      if (keepBoard) {
+        // Refresco en segundo plano: se conserva el tablero ya visible.
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No se pudo actualizar el tablero.'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+        return;
+      }
       setState(() {
         _realError = 'No se pudo cargar el tablero.';
         _loadingReal = false;
       });
+    }
+  }
+
+  /// Copia de la tarea con otro estado (el modelo es inmutable).
+  TodoTask _withStatus(TodoTask t, String status) => TodoTask(
+    id: t.id,
+    groupId: t.groupId,
+    boardId: t.boardId,
+    boardName: t.boardName,
+    title: t.title,
+    status: status,
+    assignedTo: t.assignedTo,
+    dueDate: t.dueDate,
+    createdAt: t.createdAt,
+    updatedAt: t.updatedAt,
+  );
+
+  /// Mueve la tarea entre columnas solo en memoria (cambio optimista).
+  void _moveLocally(String taskId, String status) {
+    final all = [..._realTodo, ..._realDoing, ..._realDone];
+    final idx = all.indexWhere((t) => t.id == taskId);
+    if (idx < 0) return;
+    final updated = _withStatus(all[idx], status);
+    bool keep(TodoTask t) => t.id != taskId;
+    _realTodo = _realTodo.where(keep).toList();
+    _realDoing = _realDoing.where(keep).toList();
+    _realDone = _realDone.where(keep).toList();
+    switch (status) {
+      case 'in_progress':
+        _realDoing = [..._realDoing, updated];
+      case 'done':
+        _realDone = [..._realDone, updated];
+      default:
+        _realTodo = [..._realTodo, updated];
     }
   }
 
@@ -268,7 +314,7 @@ class _KanbanScreenState extends State<KanbanScreen> {
           backgroundColor: AppColors.border,
         ),
       );
-      await _loadReal();
+      await _loadReal(silent: true);
     } on SocialApiException catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -350,7 +396,7 @@ class _KanbanScreenState extends State<KanbanScreen> {
           backgroundColor: AppColors.border,
         ),
       );
-      await _loadReal();
+      await _loadReal(silent: true);
     } on SocialApiException catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -389,7 +435,7 @@ class _KanbanScreenState extends State<KanbanScreen> {
           backgroundColor: AppColors.border,
         ),
       );
-      await _loadReal();
+      await _loadReal(silent: true);
     } on SocialApiException catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -408,6 +454,9 @@ class _KanbanScreenState extends State<KanbanScreen> {
   }) async {
     if (!_isRealGroup) return;
     if (currentStatus == status) return;
+    // Optimista: la ficha cambia de columna al instante; si falla se revierte.
+    final before = (_realTodo, _realDoing, _realDone);
+    setState(() => _moveLocally(taskId, status));
     try {
       await _social.updateTodo(
         groupId: widget.groupId!.trim(),
@@ -415,16 +464,21 @@ class _KanbanScreenState extends State<KanbanScreen> {
         status: status,
       );
       if (!mounted) return;
-      await _loadReal();
+      await _loadReal(silent: true);
     } on SocialApiException catch (_) {
       if (!mounted) return;
+      setState(() {
+        _realTodo = before.$1;
+        _realDoing = before.$2;
+        _realDone = before.$3;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('No se pudo mover la tarea.'),
           backgroundColor: AppColors.error,
         ),
       );
-      await _loadReal();
+      await _loadReal(silent: true);
     }
   }
 
