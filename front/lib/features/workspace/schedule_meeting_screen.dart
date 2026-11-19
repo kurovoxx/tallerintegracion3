@@ -129,6 +129,26 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
     }
   }
 
+  /// Selecciona a todos los integrantes del grupo que tengan correo disponible
+  /// y los agrega a los invitados de la reunión. Los ya seleccionados no se
+  /// duplican.
+  void _selectAllMembers() {
+    final added = <String>[];
+    for (final member in _members) {
+      final email = member.email?.trim().toLowerCase() ?? '';
+      if (email.isEmpty) continue;
+      if (!_guests.containsKey(email)) {
+        _guests[email] = member.displayLabel;
+        added.add(email);
+      }
+    }
+    if (added.isNotEmpty) {
+      setState(() {
+        _guestError = null;
+      });
+    }
+  }
+
   static String _formatWhen(DateTime when) {
     final local = when.toLocal();
     final date =
@@ -403,6 +423,18 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                                 ),
                             ],
                           ),
+                          const SizedBox(height: AppDimens.spaceMd),
+                          if (_members.isNotEmpty)
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: NeobrutalistButton(
+                                key: const Key('guest-select-all-button'),
+                                label: 'Todos',
+                                icon: Icons.check_circle_rounded,
+                                variant: NeobrutalistButtonVariant.info,
+                                onPressed: _selectAllMembers,
+                              ),
+                            ),
                           const SizedBox(height: AppDimens.spaceXl),
                           const AppFieldLabel('INVITAR POR CORREO (EXTERNO)'),
                           const Text(

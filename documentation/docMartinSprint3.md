@@ -441,3 +441,38 @@ Antes solo se veía el título y la hora de creación de la notificación; el en
 - Recordatorios antes de la reunión (solo se notifica al agendar).
 - Editar el enlace de una reunión ya creada.
 - Reenviar notificaciones si cambia la reunión.
+
+## 4_5_9 — Botón "Seleccionar todos" en invitados de reunión
+
+### Objetivo
+
+Al agendar una reunión (`POST /groups/:id/meetings`), el creador puede elegir a qué integrantes del grupo enviar el aviso. Actualmente se seleccionan uno a uno tocando su chip; esta tarea agrega un botón **"Todos"** que selecciona automáticamente a todos los integrantes del grupo que tengan correo disponible, para no tener que tocarlos individualmente.
+
+### Alcance
+
+| Aspecto | Valor |
+|---------|-------|
+| Pantalla | `schedule_meeting_screen.dart` (Agendar reunión) |
+| Botón | "Seleccionar todos" / "Todos" junto a la lista de integrantes del grupo |
+| Comportamiento | Al tocarlo, se agregan a `_guests` todos los miembros del grupo que tengan `email` válido (email -> nombre/label) |
+| Deselección | Los integrantes ya seleccionados no se duplican; el botón solo añade los que faltan |
+| Backend | No se requieren cambios: ya existe `GET /groups/:id/members` y `POST /groups/:id/meetings` con `attendees` |
+| Front | `listMembers()` ya carga los integrantes con email; solo se consume en la UI |
+
+### Archivos
+
+| Archivo | Cambio |
+|---------|--------|
+| `front/lib/features/workspace/schedule_meeting_screen.dart` | Botón "Todos" que recorre `_members` y agrega todos con email a `_guests` |
+| `documentation/docMartinSprint3.md` | Esta sección |
+
+### Verificación
+
+- `flutter analyze` en `schedule_meeting_screen.dart`: sin errores nuevos
+- `flutter test` en `schedule_meeting_screen_test.dart`: tests existentes pasan
+- Prueba manual: al tocar "Todos", todos los integrantes con correo aparecen en "INVITADOS (N)"; al tocar de nuevo un chip individual, se quita normalmente.
+
+### No entra
+
+- Botón "Seleccionar ninguno" / "Limpiar todos" (se puede agregar como mejora futura).
+- Validar que el creador no se auto-invite (ya no se auto-notifica por regla 4.8, pero el aviso por correo sí se enviaría si se selecciona al creador; opcional excluirlo).
