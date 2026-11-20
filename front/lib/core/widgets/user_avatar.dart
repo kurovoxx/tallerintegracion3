@@ -38,7 +38,7 @@ ImageProvider<Object>? userAvatarProvider(String? rawUrl) {
 
 /// Avatar compartido para integrantes de grupos: foto/miniatura con fallback a
 /// iniciales. Mantiene el estilo neobrutalista del resto de la app.
-class UserAvatar extends StatelessWidget {
+class UserAvatar extends StatefulWidget {
   const UserAvatar({
     super.key,
     required this.name,
@@ -63,29 +63,49 @@ class UserAvatar extends StatelessWidget {
   final double? fontSize;
 
   @override
+  State<UserAvatar> createState() => _UserAvatarState();
+}
+
+class _UserAvatarState extends State<UserAvatar> {
+  late ImageProvider<Object>? _provider;
+
+  @override
+  void initState() {
+    super.initState();
+    _provider = userAvatarProvider(widget.photoUrl);
+  }
+
+  @override
+  void didUpdateWidget(UserAvatar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.photoUrl != oldWidget.photoUrl) {
+      _provider = userAvatarProvider(widget.photoUrl);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final provider = userAvatarProvider(photoUrl);
     return Container(
-      width: size,
-      height: size,
+      width: widget.size,
+      height: widget.size,
       clipBehavior: Clip.hardEdge,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: backgroundColor,
+        color: widget.backgroundColor,
         border:
-            border ??
+            widget.border ??
             Border.all(color: AppColors.border, width: AppDimens.borderWidth),
         borderRadius:
-            borderRadius ?? BorderRadius.circular(AppDimens.radiusChip),
-        boxShadow: boxShadow,
+            widget.borderRadius ?? BorderRadius.circular(AppDimens.radiusChip),
+        boxShadow: widget.boxShadow,
       ),
-      child: provider == null
+      child: _provider == null
           ? _fallback()
           : Image(
-              image: provider,
+              image: _provider!,
               fit: BoxFit.cover,
-              width: size,
-              height: size,
+              width: widget.size,
+              height: widget.size,
               errorBuilder: (_, _, _) => _fallback(),
             ),
     );
@@ -94,14 +114,14 @@ class UserAvatar extends StatelessWidget {
   Widget _fallback() {
     return Center(
       child: Text(
-        userInitials(name),
+        userInitials(widget.name),
         maxLines: 1,
         textAlign: TextAlign.center,
         style: TextStyle(
-          fontSize: fontSize ?? size * 0.34,
+          fontSize: widget.fontSize ?? widget.size * 0.34,
           fontWeight: FontWeight.w900,
           letterSpacing: 0.2,
-          color: foregroundColor,
+          color: widget.foregroundColor,
         ),
       ),
     );
