@@ -365,6 +365,65 @@ class SocialService {
     if (res.statusCode != 200) throw _toError(res);
   }
 
+  // GET /groups/:id/permissions -> permisos habilitados para todos los miembros.
+  Future<GroupMemberDefaults> getGroupPermissions(String groupId) async {
+    final gid = groupId.trim();
+    if (gid.isEmpty) {
+      throw SocialApiException('groupId vacío.', code: 'invalid_args');
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .get(
+            Uri.parse('$baseUrl/groups/$gid/permissions'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) throw _toError(res);
+    return GroupMemberDefaults.fromJson(
+      jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>,
+    );
+  }
+
+  // PATCH /groups/:id/permissions {can_share_notes?, can_create_meetings?,
+  // can_edit_kanban?} -> 200 con los permisos resultantes. Solo admin: habilita
+  // o retira el permiso para TODOS los miembros del grupo.
+  Future<GroupMemberDefaults> setGroupPermissions({
+    required String groupId,
+    bool? canShareNotes,
+    bool? canCreateMeetings,
+    bool? canEditKanban,
+  }) async {
+    final gid = groupId.trim();
+    if (gid.isEmpty) {
+      throw SocialApiException('groupId vacío.', code: 'invalid_args');
+    }
+    final body = <String, dynamic>{
+      'can_share_notes': ?canShareNotes,
+      'can_create_meetings': ?canCreateMeetings,
+      'can_edit_kanban': ?canEditKanban,
+    };
+    if (body.isEmpty) {
+      throw SocialApiException(
+        'Sin permisos que cambiar.',
+        code: 'invalid_args',
+      );
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .patch(
+            Uri.parse('$baseUrl/groups/$gid/permissions'),
+            headers: _headers(json: true),
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) throw _toError(res);
+    return GroupMemberDefaults.fromJson(
+      jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>,
+    );
+  }
+
   // POST /groups/:id/transfer-admin {new_admin_user_id} -> 200. Solo admin.
   // El destino pasa a admin y el solicitante a member en una transacción.
   // Ver back/social/internal/handler/http/group_handler.go:263 TransferAdmin.

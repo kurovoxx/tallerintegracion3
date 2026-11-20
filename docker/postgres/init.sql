@@ -507,6 +507,10 @@ CREATE TABLE social.groups (
     photo_thumb_url text,
     owner_user_id uuid NOT NULL,
     notes_restricted_to_staff boolean NOT NULL DEFAULT false,
+    -- Permisos habilitados para TODOS los miembros (los activa un admin).
+    members_can_share_notes boolean NOT NULL DEFAULT false,
+    members_can_create_meetings boolean NOT NULL DEFAULT false,
+    members_can_edit_kanban boolean NOT NULL DEFAULT false,
     invite_token uuid NOT NULL DEFAULT gen_random_uuid() UNIQUE,
     created_at timestamptz NOT NULL DEFAULT now()
 );

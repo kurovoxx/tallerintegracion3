@@ -11,6 +11,7 @@ import '../../core/models/social_models.dart';
 import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import '../groups/group_permission_switch.dart';
 
 const List<String> _kAssignees = ['Tú', 'Sofía', 'Matías', 'Ana'];
 
@@ -1020,6 +1021,16 @@ class _KanbanScreenState extends State<KanbanScreen> {
         ),
         if (_isRealGroup) ...[
           const SizedBox(width: AppDimens.spaceMd),
+          // Solo admins: habilita a todos los miembros a modificar el kanban.
+          Flexible(
+            child: GroupPermissionSwitch(
+              groupId: widget.groupId,
+              permission: GroupPermission.editKanban,
+              label: 'TODOS PUEDEN MODIFICAR',
+              service: widget._serviceOverride,
+            ),
+          ),
+          const SizedBox(width: AppDimens.spaceSm),
           _buildReloadButton(),
         ],
       ],

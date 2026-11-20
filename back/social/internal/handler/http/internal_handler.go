@@ -47,6 +47,12 @@ func (h *InternalHandler) Members(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
+	// Permiso habilitado para todo el grupo: se suma al delegado por miembro.
+	defaults, err := h.groups.GetMemberDefaultsInternal(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
 	type member struct {
 		UserID        string `json:"user_id"`
 		Role          string `json:"role"`
@@ -57,7 +63,8 @@ func (h *InternalHandler) Members(c *gin.Context) {
 		if m == nil {
 			continue
 		}
-		out = append(out, member{UserID: m.UserID, Role: m.Role, CanShareNotes: m.Effective(m.Role).CanShareNotes})
+		canShare := m.Effective(m.Role).CanShareNotes || defaults.CanShareNotes
+		out = append(out, member{UserID: m.UserID, Role: m.Role, CanShareNotes: canShare})
 	}
 	c.JSON(http.StatusOK, out)
 }

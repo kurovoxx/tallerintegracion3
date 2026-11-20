@@ -24,6 +24,8 @@ type MemoryGroupStore struct {
 	order  []string                            // ids de grupos en orden de creación
 	member map[string][]*model.GroupMembership // por grupo, en orden de ingreso
 	bans   map[string]map[string]string        // grupo -> usuario baneado -> quién baneó
+	// defaults: permisos habilitados para todos los miembros, por grupo.
+	defaults map[string]model.MemberPermissions
 }
 
 // NewMemoryGroupStore crea el store. El reloj interno avanza un segundo por
@@ -38,6 +40,8 @@ func NewMemoryGroupStore() *MemoryGroupStore {
 		groups: map[string]*model.Group{},
 		member: map[string][]*model.GroupMembership{},
 		bans:   map[string]map[string]string{},
+
+		defaults: map[string]model.MemberPermissions{},
 	}
 }
 
@@ -246,6 +250,35 @@ func (m *MemoryGroupStore) SetMemberPermissions(_ context.Context, groupID, admi
 		ms.CanEditKanban = *upd.CanEditKanban
 	}
 	return ms.MemberPermissions, nil
+}
+
+func (m *MemoryGroupStore) GetMemberDefaults(_ context.Context, groupID string) (model.MemberPermissions, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.groups[groupID]; !ok {
+		return model.MemberPermissions{}, errors.New("group_not_found")
+	}
+	return m.defaults[groupID], nil
+}
+
+func (m *MemoryGroupStore) SetMemberDefaults(_ context.Context, groupID, adminID string, upd model.MemberPermissionsUpdate) (model.MemberPermissions, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.requireAdminLocked(groupID, adminID); err != nil {
+		return model.MemberPermissions{}, err
+	}
+	d := m.defaults[groupID]
+	if upd.CanShareNotes != nil {
+		d.CanShareNotes = *upd.CanShareNotes
+	}
+	if upd.CanCreateMeetings != nil {
+		d.CanCreateMeetings = *upd.CanCreateMeetings
+	}
+	if upd.CanEditKanban != nil {
+		d.CanEditKanban = *upd.CanEditKanban
+	}
+	m.defaults[groupID] = d
+	return d, nil
 }
 
 func (m *MemoryGroupStore) TransferAdmin(_ context.Context, groupID, currentAdminID, newAdminID string) error {

@@ -13,6 +13,7 @@ import '../../core/models/social_models.dart';
 import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import '../groups/group_permission_switch.dart';
 
 class ScheduleMeetingScreen extends StatefulWidget {
   const ScheduleMeetingScreen({super.key, this.groupId, SocialService? service})
@@ -698,7 +699,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
   }
 
   Widget _buildHeader(bool isDesktop) {
-    return Column(
+    final titles = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
@@ -717,6 +718,24 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
             fontSize: 12.5,
             fontWeight: FontWeight.w700,
             color: AppColors.mutedStrong,
+          ),
+        ),
+      ],
+    );
+    final groupId = widget.groupId?.trim() ?? '';
+    if (groupId.isEmpty) return titles;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(child: titles),
+        const SizedBox(width: AppDimens.spaceSm),
+        // Solo admins: habilita a todos los miembros a agendar reuniones.
+        Flexible(
+          child: GroupPermissionSwitch(
+            groupId: groupId,
+            permission: GroupPermission.createMeetings,
+            label: 'TODOS PUEDEN AGENDAR',
+            service: widget._serviceOverride,
           ),
         ),
       ],

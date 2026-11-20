@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/services/notes_sharing_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import 'group_permission_switch.dart';
 import '../notes/attachment_resources.dart';
 import '../notes/authenticated_attachment_image.dart';
 import '../notes/latex_support.dart';
@@ -313,6 +314,17 @@ class _GroupNotesTabState extends State<GroupNotesTab> {
                     fontSize: 12,
                     letterSpacing: 0.5,
                   ),
+                ),
+              ),
+              const SizedBox(width: AppDimens.spaceSm),
+              // Solo admins: habilita a todos los miembros a compartir notas.
+              Flexible(
+                child: GroupPermissionSwitch(
+                  groupId: _groupId,
+                  permission: GroupPermission.shareNotes,
+                  label: compact
+                      ? 'TODOS COMPARTEN'
+                      : 'TODOS PUEDEN COMPARTIR NOTAS',
                 ),
               ),
               const SizedBox(width: AppDimens.spaceSm),

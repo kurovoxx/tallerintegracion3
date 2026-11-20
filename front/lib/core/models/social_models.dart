@@ -396,6 +396,27 @@ class GroupMember {
   }
 }
 
+// GET|PATCH /groups/:id/permissions -> permisos habilitados para TODOS los
+// miembros del grupo (los cambia un admin; se suman a los de cada miembro).
+class GroupMemberDefaults {
+  const GroupMemberDefaults({
+    this.canShareNotes = false,
+    this.canCreateMeetings = false,
+    this.canEditKanban = false,
+  });
+
+  final bool canShareNotes;
+  final bool canCreateMeetings;
+  final bool canEditKanban;
+
+  factory GroupMemberDefaults.fromJson(Map<String, dynamic> j) =>
+      GroupMemberDefaults(
+        canShareNotes: j['can_share_notes'] == true,
+        canCreateMeetings: j['can_create_meetings'] == true,
+        canEditKanban: j['can_edit_kanban'] == true,
+      );
+}
+
 // GET /groups/:id/stream-token -> 200 {token, channel_id, api_key?}.
 // api_key es pública por diseño de Stream; el secret jamás sale del backend.
 class StreamToken {

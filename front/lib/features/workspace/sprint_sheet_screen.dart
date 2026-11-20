@@ -8,6 +8,7 @@ import '../../core/models/social_models.dart';
 import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import '../groups/group_permission_switch.dart';
 import 'sprint_editor_dialog.dart';
 
 // ---------------------------------------------------------------------------
@@ -1307,6 +1308,16 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
               ),
             ),
           ),
+          // Solo admins: habilita a todos los miembros a modificar el sprint.
+          Flexible(
+            child: GroupPermissionSwitch(
+              groupId: widget.groupId,
+              permission: GroupPermission.editKanban,
+              label: 'TODOS PUEDEN MODIFICAR',
+              service: widget._serviceOverride,
+            ),
+          ),
+          const SizedBox(width: 8),
           NeobrutalistButton(
             label: _creatingReal ? 'Creando...' : 'Nueva tarea',
             icon: Icons.add_rounded,

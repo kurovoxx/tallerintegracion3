@@ -227,3 +227,48 @@ func TestGroupService_SetMemberPermissions(t *testing.T) {
 		}
 	}
 }
+
+// Permisos "para todo el grupo": solo un admin los cambia, cualquier miembro
+// los consulta, las actualizaciones parciales no pisan lo ya habilitado y un
+// no miembro no puede ni verlos.
+func TestGroupService_MemberDefaults(t *testing.T) {
+	ctx := context.Background()
+	svc := NewGroupService(NewMemoryGroupStore(), nil)
+	admin, member, outsider := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	g, err := svc.Create(ctx, admin, "G", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.JoinGroup(ctx, g.ID, g.InviteToken, member); err != nil {
+		t.Fatal(err)
+	}
+	yes, no := true, false
+
+	if got, err := svc.GetMemberDefaults(ctx, g.ID, member); err != nil || got != (model.MemberPermissions{}) {
+		t.Fatalf("por defecto todo apagado: got %+v err=%v", got, err)
+	}
+	if _, err := svc.SetMemberDefaults(ctx, g.ID, member, model.MemberPermissionsUpdate{CanCreateMeetings: &yes}); err != ErrForbidden {
+		t.Fatalf("un miembro no cambia permisos del grupo: got %v", err)
+	}
+	if _, err := svc.SetMemberDefaults(ctx, g.ID, admin, model.MemberPermissionsUpdate{}); err == nil {
+		t.Fatal("sin ningún permiso debe fallar")
+	}
+	got, err := svc.SetMemberDefaults(ctx, g.ID, admin, model.MemberPermissionsUpdate{CanCreateMeetings: &yes})
+	if err != nil || !got.CanCreateMeetings || got.CanShareNotes || got.CanEditKanban {
+		t.Fatalf("got %+v err=%v", got, err)
+	}
+	got, err = svc.SetMemberDefaults(ctx, g.ID, admin, model.MemberPermissionsUpdate{CanShareNotes: &yes})
+	if err != nil || !got.CanCreateMeetings || !got.CanShareNotes {
+		t.Fatalf("parcial no debe pisar lo anterior: got %+v err=%v", got, err)
+	}
+	got, err = svc.SetMemberDefaults(ctx, g.ID, admin, model.MemberPermissionsUpdate{CanCreateMeetings: &no})
+	if err != nil || got.CanCreateMeetings || !got.CanShareNotes {
+		t.Fatalf("retirar uno: got %+v err=%v", got, err)
+	}
+	if got, err := svc.GetMemberDefaults(ctx, g.ID, member); err != nil || !got.CanShareNotes {
+		t.Fatalf("el miembro ve el estado: got %+v err=%v", got, err)
+	}
+	if _, err := svc.GetMemberDefaults(ctx, g.ID, outsider); err != ErrForbidden {
+		t.Fatalf("un no miembro no consulta: got %v", err)
+	}
+}

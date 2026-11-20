@@ -35,6 +35,8 @@ func (h *GroupHandler) RegisterRoutes(r gin.IRoutes) {
 	r.POST("/groups/:id/members/:user_id/ban", h.BanMember)
 	r.PATCH("/groups/:id/members/:user_id/role", h.ChangeRole)
 	r.PATCH("/groups/:id/members/:user_id/permissions", h.SetMemberPermissions)
+	r.GET("/groups/:id/permissions", h.GetMemberDefaults)
+	r.PATCH("/groups/:id/permissions", h.SetMemberDefaults)
 	r.POST("/groups/:id/transfer-admin", h.TransferAdmin)
 	r.POST("/groups/:id/leave", h.LeaveGroup)
 	r.PATCH("/groups/:id", h.EditGroup)
@@ -347,6 +349,45 @@ func (h *GroupHandler) SetMemberPermissions(c *gin.Context) {
 	})
 	if err != nil {
 		respondGroupError(c, err, "Acceso denegado: solo admins pueden delegar permisos")
+		return
+	}
+	c.JSON(http.StatusOK, perms)
+}
+
+// GET /groups/{id}/permissions — permisos habilitados para todos los miembros
+// (cualquier miembro puede consultarlos). 200 {can_share_notes, can_create_meetings, can_edit_kanban}.
+func (h *GroupHandler) GetMemberDefaults(c *gin.Context) {
+	userID, ok := requireUser(c)
+	if !ok {
+		return
+	}
+	perms, err := h.svc.GetMemberDefaults(c.Request.Context(), c.Param("id"), userID)
+	if err != nil {
+		respondGroupError(c, err, "Acceso denegado: no perteneces a este grupo")
+		return
+	}
+	c.JSON(http.StatusOK, perms)
+}
+
+// PATCH /groups/{id}/permissions — solo admins. Body parcial igual que el de
+// permisos por miembro; habilita/retira el permiso para TODOS los miembros.
+func (h *GroupHandler) SetMemberDefaults(c *gin.Context) {
+	adminID, ok := requireUser(c)
+	if !ok {
+		return
+	}
+	var req setPermissionsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Body inválido: se esperan booleanos can_share_notes, can_create_meetings, can_edit_kanban"})
+		return
+	}
+	perms, err := h.svc.SetMemberDefaults(c.Request.Context(), c.Param("id"), adminID, model.MemberPermissionsUpdate{
+		CanShareNotes:     req.CanShareNotes,
+		CanCreateMeetings: req.CanCreateMeetings,
+		CanEditKanban:     req.CanEditKanban,
+	})
+	if err != nil {
+		respondGroupError(c, err, "Acceso denegado: solo admins pueden cambiar los permisos del grupo")
 		return
 	}
 	c.JSON(http.StatusOK, perms)

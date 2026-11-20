@@ -62,6 +62,10 @@ type GroupStore interface {
 	GetMemberRole(ctx context.Context, groupID, userID string) (string, error)
 	// SetMemberPermissions delega permisos a un miembro común. Solo admins.
 	SetMemberPermissions(ctx context.Context, groupID, adminID, targetUserID string, upd model.MemberPermissionsUpdate) (model.MemberPermissions, error)
+	// GetMemberDefaults / SetMemberDefaults manejan los permisos habilitados
+	// para todos los miembros del grupo (set: solo admins).
+	GetMemberDefaults(ctx context.Context, groupID string) (model.MemberPermissions, error)
+	SetMemberDefaults(ctx context.Context, groupID, adminID string, upd model.MemberPermissionsUpdate) (model.MemberPermissions, error)
 	CountAdmins(ctx context.Context, groupID string) (int, error)
 	RemoveMember(ctx context.Context, groupID, userID string) error
 	DeleteGroup(ctx context.Context, groupID string) error
@@ -641,6 +645,49 @@ func (s *GroupService) SetMemberPermissions(ctx context.Context, groupID, adminI
 		return mapStoreErr(err)
 	})
 	return out, err
+}
+
+// GetMemberDefaults devuelve los permisos habilitados para todos los miembros.
+// Lo puede consultar cualquier miembro del grupo.
+func (s *GroupService) GetMemberDefaults(ctx context.Context, groupID, userID string) (model.MemberPermissions, error) {
+	if userID == "" {
+		return model.MemberPermissions{}, ErrUnauthorized
+	}
+	if !utils.ValidateUUID(groupID) {
+		return model.MemberPermissions{}, ErrNotFound
+	}
+	if _, err := s.groups.GetMemberRole(ctx, groupID, userID); err != nil {
+		return model.MemberPermissions{}, mapStoreErr(err)
+	}
+	perms, err := s.groups.GetMemberDefaults(ctx, groupID)
+	return perms, mapStoreErr(err)
+}
+
+// GetMemberDefaultsInternal es la versión servicio-a-servicio (sin membresía
+// del solicitante): la usa el endpoint interno que consume Notes.
+func (s *GroupService) GetMemberDefaultsInternal(ctx context.Context, groupID string) (model.MemberPermissions, error) {
+	if !utils.ValidateUUID(groupID) {
+		return model.MemberPermissions{}, ErrNotFound
+	}
+	perms, err := s.groups.GetMemberDefaults(ctx, groupID)
+	return perms, mapStoreErr(err)
+}
+
+// SetMemberDefaults habilita o retira, para TODOS los miembros del grupo, los
+// permisos de compartir apuntes, agendar reuniones y editar el kanban. Solo
+// admins. Los campos nil no se modifican.
+func (s *GroupService) SetMemberDefaults(ctx context.Context, groupID, adminID string, upd model.MemberPermissionsUpdate) (model.MemberPermissions, error) {
+	if adminID == "" {
+		return model.MemberPermissions{}, ErrUnauthorized
+	}
+	if !utils.ValidateUUID(groupID) {
+		return model.MemberPermissions{}, ErrNotFound
+	}
+	if upd.CanShareNotes == nil && upd.CanCreateMeetings == nil && upd.CanEditKanban == nil {
+		return model.MemberPermissions{}, newServiceError(utils.ErrInvalidPermissions)
+	}
+	perms, err := s.groups.SetMemberDefaults(ctx, groupID, adminID, upd)
+	return perms, mapStoreErr(err)
 }
 
 func (s *GroupService) TransferAdmin(ctx context.Context, groupID, currentAdminID, newAdminID string) error {

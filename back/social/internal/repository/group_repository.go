@@ -498,13 +498,63 @@ func (r *GroupRepository) SetMemberPermissions(ctx context.Context, groupID, adm
 	return out, tx.Commit(ctx)
 }
 
-// getMemberPermissions lee los permisos delegados; sin membresía devuelve
+// GetMemberDefaults lee los permisos habilitados para todos los miembros del
+// grupo. Grupo inexistente => "group_not_found".
+func (r *GroupRepository) GetMemberDefaults(ctx context.Context, groupID string) (model.MemberPermissions, error) {
+	var p model.MemberPermissions
+	err := r.pool.QueryRow(ctx, `
+		SELECT members_can_share_notes, members_can_create_meetings, members_can_edit_kanban
+		FROM social.groups WHERE id = $1`, groupID,
+	).Scan(&p.CanShareNotes, &p.CanCreateMeetings, &p.CanEditKanban)
+	if err == pgx.ErrNoRows {
+		return p, errors.New("group_not_found")
+	}
+	return p, err
+}
+
+// SetMemberDefaults cambia los permisos de todo el grupo (solo admin). Los
+// campos nil del update no se modifican.
+func (r *GroupRepository) SetMemberDefaults(ctx context.Context, groupID, adminID string, upd model.MemberPermissionsUpdate) (model.MemberPermissions, error) {
+	var out model.MemberPermissions
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return out, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := requireAdminTx(ctx, tx, groupID, adminID); err != nil {
+		return out, err
+	}
+	err = tx.QueryRow(ctx, `
+		UPDATE social.groups SET
+			members_can_share_notes     = COALESCE($2, members_can_share_notes),
+			members_can_create_meetings = COALESCE($3, members_can_create_meetings),
+			members_can_edit_kanban     = COALESCE($4, members_can_edit_kanban)
+		WHERE id = $1
+		RETURNING members_can_share_notes, members_can_create_meetings, members_can_edit_kanban`,
+		groupID, upd.CanShareNotes, upd.CanCreateMeetings, upd.CanEditKanban,
+	).Scan(&out.CanShareNotes, &out.CanCreateMeetings, &out.CanEditKanban)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return out, errors.New("group_not_found")
+		}
+		return out, err
+	}
+	return out, tx.Commit(ctx)
+}
+
+// getMemberPermissions lee los permisos efectivos de un miembro (permiso propio
+// OR permiso habilitado para todo el grupo); sin membresía devuelve
 // pgx.ErrNoRows. Compartido por los repositorios de reuniones y sprint.
 func getMemberPermissions(ctx context.Context, pool *pgxpool.Pool, groupID, userID pgtype.UUID) (model.MemberPermissions, error) {
 	var p model.MemberPermissions
 	err := pool.QueryRow(ctx, `
-		SELECT can_share_notes, can_create_meetings, can_edit_kanban
-		FROM social.group_memberships WHERE group_id = $1 AND user_id = $2`,
+		SELECT m.can_share_notes     OR g.members_can_share_notes,
+		       m.can_create_meetings OR g.members_can_create_meetings,
+		       m.can_edit_kanban     OR g.members_can_edit_kanban
+		FROM social.group_memberships m
+		JOIN social.groups g ON g.id = m.group_id
+		WHERE m.group_id = $1 AND m.user_id = $2`,
 		groupID, userID,
 	).Scan(&p.CanShareNotes, &p.CanCreateMeetings, &p.CanEditKanban)
 	return p, err
