@@ -31,6 +31,9 @@ class _FakeMembersApi {
   bool? lastKickCleanup;
   bool? lastBanCleanup;
 
+  /// Permisos habilitados para todo el grupo (GET /groups/:id/permissions).
+  Map<String, bool> groupDefaults = <String, bool>{};
+
   http.Response _json(int code, Object body) => http.Response(
     jsonEncode(body),
     code,
@@ -50,6 +53,9 @@ class _FakeMembersApi {
     final p = req.url.servicePath;
     if (req.method == 'GET' && p.endsWith('/groups/$_gid/members')) {
       return _json(200, members);
+    }
+    if (req.method == 'GET' && p.endsWith('/groups/$_gid/permissions')) {
+      return _json(200, groupDefaults);
     }
     if (req.method == 'POST' && p.endsWith('/kick')) {
       actions.add('kick');
@@ -317,4 +323,37 @@ void main() {
     expect(find.text('EXPULSAR'), findsNothing);
     expect(find.text('HACER ADMIN'), findsNothing);
   });
+
+  testWidgets(
+    'permiso de todo el grupo: chip efectivo y checkbox marcado y bloqueado',
+    (tester) async {
+      SessionManager.saveSession(_jwtFor(_adminId), {'id': 'x'});
+      final api = _seed()..groupDefaults = {'can_create_meetings': true};
+      final service = SocialService(client: MockClient(api.handle));
+      addTearDown(service.dispose);
+
+      await _pump(tester, service);
+
+      // El miembro no tiene permiso propio, pero el grupo lo habilita.
+      expect(find.text('REUNIONES'), findsOneWidget);
+      expect(find.text('NOTAS'), findsNothing);
+
+      await tester.tap(find.text('PERMISOS'));
+      await tester.pumpAndSettle();
+      // Aviso de debug preexistente: ListTile sobre el fondo del diálogo.
+      while (tester.takeException() != null) {}
+
+      expect(find.text('Habilitado para todo el grupo'), findsOneWidget);
+      final meetings = tester.widget<CheckboxListTile>(
+        find.widgetWithText(CheckboxListTile, 'Crear reuniones'),
+      );
+      expect(meetings.value, isTrue);
+      expect(meetings.onChanged, isNull);
+      final notes = tester.widget<CheckboxListTile>(
+        find.widgetWithText(CheckboxListTile, 'Enviar notas al grupo'),
+      );
+      expect(notes.value, isFalse);
+      expect(notes.onChanged, isNotNull);
+    },
+  );
 }

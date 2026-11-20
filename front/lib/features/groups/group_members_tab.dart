@@ -31,6 +31,10 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
   List<GroupMember> _members = const [];
   String? _busyUserId;
 
+  /// Permisos habilitados para TODO el grupo (switch de admin en cada pestaña).
+  /// Se suman al permiso propio de cada miembro: efectivo = propio OR grupo.
+  GroupMemberDefaults _groupDefaults = const GroupMemberDefaults();
+
   @override
   void initState() {
     super.initState();
@@ -78,7 +82,11 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
       _error = null;
     });
     try {
-      final members = await _service.listMembers(gid);
+      final results = await Future.wait<Object>([
+        _service.listMembers(gid),
+        _fetchGroupDefaults(gid),
+      ]);
+      final members = results[0] as List<GroupMember>;
       members.sort((a, b) {
         if (a.role != b.role) return a.role == 'admin' ? -1 : 1;
         return a.displayLabel.toLowerCase().compareTo(
@@ -88,6 +96,7 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
       if (!mounted) return;
       setState(() {
         _members = members;
+        _groupDefaults = results[1] as GroupMemberDefaults;
         _loading = false;
       });
     } on SocialApiException catch (e) {
@@ -102,6 +111,16 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
         _loading = false;
         _error = 'No se pudieron cargar los integrantes.';
       });
+    }
+  }
+
+  /// Permisos del grupo, best-effort: si falla (p. ej. Social sin actualizar)
+  /// se asume que no hay nada habilitado para todos.
+  Future<GroupMemberDefaults> _fetchGroupDefaults(String gid) async {
+    try {
+      return await _service.getGroupPermissions(gid);
+    } catch (_) {
+      return const GroupMemberDefaults();
     }
   }
 
@@ -220,12 +239,25 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
     );
   }
 
+  static const Widget _inheritedNote = Text(
+    'Habilitado para todo el grupo',
+    style: TextStyle(
+      fontSize: 11,
+      fontWeight: FontWeight.w700,
+      color: AppColors.mutedStrong,
+    ),
+  );
+
   // Diálogo de permisos delegados (PATCH permissions): el admin elige qué
   // puede hacer el miembro además de leer y chatear.
   Future<void> _editPermissions(GroupMember m) async {
     var share = m.canShareNotes;
     var meetings = m.canCreateMeetings;
     var kanban = m.canEditKanban;
+    // El admin pudo cambiar un switch de grupo desde otra pestaña: refrescar.
+    final inherited = await _fetchGroupDefaults(_groupId);
+    if (!mounted) return;
+    setState(() => _groupDefaults = inherited);
     final result = await showNeobrutalistDialog<(bool, bool, bool)>(
       context: context,
       dialog: NeobrutalistDialog(
@@ -244,26 +276,37 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
                 'Los admins pueden todo. Aquí eliges qué más puede hacer este miembro.',
               ),
               const SizedBox(height: AppDimens.spaceSm),
+              // Lo habilitado para todo el grupo se ve marcado y bloqueado: no
+              // se puede quitar a un solo miembro sin apagar el switch del grupo.
               CheckboxListTile(
                 contentPadding: EdgeInsets.zero,
                 controlAffinity: ListTileControlAffinity.leading,
                 title: const Text('Enviar notas al grupo'),
-                value: share,
-                onChanged: (v) => setDialogState(() => share = v ?? false),
+                subtitle: inherited.canShareNotes ? _inheritedNote : null,
+                value: share || inherited.canShareNotes,
+                onChanged: inherited.canShareNotes
+                    ? null
+                    : (v) => setDialogState(() => share = v ?? false),
               ),
               CheckboxListTile(
                 contentPadding: EdgeInsets.zero,
                 controlAffinity: ListTileControlAffinity.leading,
                 title: const Text('Crear reuniones'),
-                value: meetings,
-                onChanged: (v) => setDialogState(() => meetings = v ?? false),
+                subtitle: inherited.canCreateMeetings ? _inheritedNote : null,
+                value: meetings || inherited.canCreateMeetings,
+                onChanged: inherited.canCreateMeetings
+                    ? null
+                    : (v) => setDialogState(() => meetings = v ?? false),
               ),
               CheckboxListTile(
                 contentPadding: EdgeInsets.zero,
                 controlAffinity: ListTileControlAffinity.leading,
                 title: const Text('Modificar el kanban'),
-                value: kanban,
-                onChanged: (v) => setDialogState(() => kanban = v ?? false),
+                subtitle: inherited.canEditKanban ? _inheritedNote : null,
+                value: kanban || inherited.canEditKanban,
+                onChanged: inherited.canEditKanban
+                    ? null
+                    : (v) => setDialogState(() => kanban = v ?? false),
               ),
             ],
           ),
@@ -509,19 +552,23 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
                               label: 'Tú',
                               tone: NeobrutalistTone.info,
                             ),
-                          if (!isAdmin && m.canShareNotes)
+                          if (!isAdmin &&
+                              (m.canShareNotes || _groupDefaults.canShareNotes))
                             const NeobrutalistBadge(
                               label: 'Notas',
                               tone: NeobrutalistTone.neutral,
                               icon: Icons.note_add_rounded,
                             ),
-                          if (!isAdmin && m.canCreateMeetings)
+                          if (!isAdmin &&
+                              (m.canCreateMeetings ||
+                                  _groupDefaults.canCreateMeetings))
                             const NeobrutalistBadge(
                               label: 'Reuniones',
                               tone: NeobrutalistTone.neutral,
                               icon: Icons.event_rounded,
                             ),
-                          if (!isAdmin && m.canEditKanban)
+                          if (!isAdmin &&
+                              (m.canEditKanban || _groupDefaults.canEditKanban))
                             const NeobrutalistBadge(
                               label: 'Kanban',
                               tone: NeobrutalistTone.neutral,
