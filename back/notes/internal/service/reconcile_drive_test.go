@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/drive"
+	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/utils"
 )
 
 // Reconciliación Drive→App: solo el missing CONFIRMADO (404 o papelera)
@@ -182,8 +184,11 @@ func TestReconcileRevokedOAuthNeverDeletes(t *testing.T) {
 	}
 	mock.Disconnect(owner)
 	_, err = svc.ReconcileDriveDeletions(ctx, owner)
-	if !drive.IsOAuthError(err) {
-		t.Fatalf("OAuth revocado debe abortar con OAuthError: %v", err)
+	// Sin Drive conectado se aborta con drive_not_connected (la app no lo
+	// cuenta como «apunte con error»).
+	var se *ServiceError
+	if !errors.As(err, &se) || se.Code != utils.ErrDriveNotConnected {
+		t.Fatalf("OAuth revocado debe abortar con drive_not_connected: %v", err)
 	}
 	if got, _ := notes.GetByID(ctx, note.ID); got == nil {
 		t.Fatal("OAuth revocado no debe borrar la nota")

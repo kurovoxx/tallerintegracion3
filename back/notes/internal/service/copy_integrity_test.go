@@ -95,14 +95,16 @@ func TestCopyConcurrentSameUserCreatesSingleClone(t *testing.T) {
 			success++
 			continue
 		}
-		if serviceCode(t, err) == utils.ErrAlreadyCopied {
+		// Las perdedoras ven la copia terminada (already_copied) o todavía en
+		// curso (copy_in_progress); nunca crean un segundo clon.
+		if code := serviceCode(t, err); code == utils.ErrAlreadyCopied || code == utils.ErrCopyInProgress {
 			duplicated++
 			continue
 		}
 		t.Fatalf("error inesperado en copia concurrente: %v", err)
 	}
 	if success != 1 || duplicated != attempts-1 {
-		t.Fatalf("esperaba 1 éxito y %d already_copied, got %d/%d", attempts-1, success, duplicated)
+		t.Fatalf("esperaba 1 éxito y %d already_copied/copy_in_progress, got %d/%d", attempts-1, success, duplicated)
 	}
 	if got := countNotes(noteStore); got != 2 {
 		t.Fatalf("debe haber origen + un solo clon, got %d notas", got)

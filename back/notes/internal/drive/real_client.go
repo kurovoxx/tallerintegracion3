@@ -32,6 +32,16 @@ func NewRealDriveClient(tokens TokenProvider) *RealDriveClient {
 	}
 }
 
+var _ AccessChecker = (*RealDriveClient)(nil)
+
+// CheckAccess pide a Identity un access token vigente del usuario (sin llamar
+// a la API de Drive). Sin conexión o con credencial revocada devuelve
+// *OAuthError; un fallo de Identity/red devuelve *DriveError 500.
+func (r *RealDriveClient) CheckAccess(ctx context.Context, userID string) error {
+	_, err := r.tokens.GetValidAccessToken(ctx, userID)
+	return err
+}
+
 func defaultDriveService(ctx context.Context, accessToken string) (*drive.Service, error) {
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: accessToken})
 	hc := oauth2.NewClient(ctx, ts)
