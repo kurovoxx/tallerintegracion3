@@ -214,6 +214,8 @@ func TestSMTPMailer_VerificationEmailOverSTARTTLS(t *testing.T) {
 		"From: \"Sigma Academy Pruebas\" <no-reply@example.com>", "To: student@example.com",
 		"Subject: Confirma tu correo en Sigma Academy", "Content-Type: text/plain; charset=UTF-8",
 		link, "\n" + token + "\n", "24 horas", "solo puede usarse una vez",
+		"Content-Type: multipart/alternative; boundary=", "Content-Type: text/html; charset=UTF-8",
+		"Confirma tu cuenta", "CÓDIGO DE CONFIRMACIÓN:",
 	} {
 		if !strings.Contains(strings.ReplaceAll(data, "\r\n", "\n"), want) {
 			t.Fatalf("falta %q en el mensaje:\n%s", want, data)
@@ -233,6 +235,14 @@ func TestSMTPMailer_ImplicitTLSAndResetCode(t *testing.T) {
 	if !strings.Contains(data, "From: \"Sigma Academy\" <sender@example.com>") || !strings.Contains(data, "12345678") ||
 		!strings.Contains(data, "Subject: Recupera tu acceso a Sigma Academy") {
 		t.Fatalf("el correo de recuperación debe conservarse:\n%s", data)
+	}
+	for _, want := range []string{
+		"Content-Type: multipart/alternative; boundary=", "Content-Type: text/plain; charset=UTF-8",
+		"Content-Type: text/html; charset=UTF-8", "Recupera tu contraseña", "15 minutos",
+	} {
+		if !strings.Contains(data, want) {
+			t.Fatalf("falta %q en el mensaje:\n%s", want, data)
+		}
 	}
 }
 
