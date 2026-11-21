@@ -174,6 +174,11 @@ func main() {
 	internalUsersH := httpHandler.NewInternalUsersHandler(usersSvc)
 	internalAuthH := httpHandler.NewInternalAuthHandler(jwtSvc)
 
+	// Follow (seguir/dejar de seguir usuarios) — Sprint 4_5_11
+	followRepo := repository.NewFollowRepository(pool)
+	followSvc := service.NewFollowService(followRepo)
+	followH := httpHandler.NewFollowHandler(followSvc)
+
 	// Estado del gRPC para /health/db: si Serve muere, HTTP no debe verse
 	// saludable sin señal (ver serveGRPC).
 	grpcStatus := &grpcHealth{}
@@ -227,6 +232,7 @@ func main() {
 		})
 		protected.GET("/profile/me", profileH.GetProfile)
 		protected.PATCH("/profile/me", profileH.PatchProfile)
+		followH.RegisterRoutes(protected)
 	}
 
 	r.GET("/health", func(c *gin.Context) {

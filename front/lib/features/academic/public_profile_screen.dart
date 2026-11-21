@@ -62,6 +62,13 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
   PublicProfile? _profile;
   String? _profileError;
 
+  /// Estado de seguir respecto a este perfil (null = sin cargar).
+  FollowStatus? _followStatus;
+  bool _isFollowingAction = false;
+
+  /// Si es el perfil del usuario autenticado, no se muestra el botón seguir.
+  bool _isOwnProfile = false;
+
   List<PublicProfileNote> _items = const [];
   String _cursor = '';
   bool _notesNotFound = false;
@@ -129,10 +136,17 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
     try {
       final profile = await _profiles.getPublicProfile(_publicId!);
       if (!mounted) return;
+      // No ofrecer "Seguir" si es el propio perfil.
+      final ownId = ProfileService.current.value?.publicId;
       setState(() {
         _profile = profile;
+        _isOwnProfile = ownId != null && ownId.isNotEmpty && ownId == profile.publicId;
         _status = _ProfileLoadStatus.ready;
       });
+      // Cargar si el usuario autenticado ya sigue a este perfil (solo si no es propio).
+      if (!_isOwnProfile) {
+        await _loadFollowStatus();
+      }
     } on ProfileApiException catch (e) {
       if (!mounted) return;
       final code = e.statusCode ?? 0;
@@ -155,6 +169,45 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
         _status = _ProfileLoadStatus.failed;
         _profileError = 'No se pudo cargar el perfil. Revisa tu conexión.';
       });
+    }
+  }
+
+  /// Carga si el usuario autenticado ya sigue a este perfil.
+  Future<void> _loadFollowStatus() async {
+    try {
+      final status = await _profiles.getFollowStatus(_publicId!);
+      if (!mounted) return;
+      setState(() => _followStatus = status);
+    } catch (_) {
+      // El estado de follow no bloquea la visualización del perfil.
+    }
+  }
+
+  /// Alterna seguir/dejar de seguir a este perfil.
+  Future<void> _toggleFollow() async {
+    if (_isFollowingAction || _followStatus == null) return;
+    setState(() => _isFollowingAction = true);
+    try {
+      if (_followStatus!.following) {
+        await _profiles.unfollowUser(_publicId!);
+        if (!mounted) return;
+        setState(() => _followStatus = FollowStatus(publicId: _publicId!, following: false));
+      } else {
+        await _profiles.followUser(_publicId!);
+        if (!mounted) return;
+        setState(() => _followStatus = FollowStatus(publicId: _publicId!, following: true));
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo actualizar el seguimiento. Inténtalo de nuevo.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    } finally {
+      if (!mounted) return;
+      setState(() => _isFollowingAction = false);
     }
   }
 
@@ -558,6 +611,14 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
                         compact: true,
                       ),
                     ],
+                    const SizedBox(height: AppDimens.spaceMd),
+                    if (!_isOwnProfile)
+                      _FollowButton(
+                        publicId: _publicId!,
+                        following: _followStatus?.following ?? false,
+                        isLoading: _isFollowingAction,
+                        onToggle: _toggleFollow,
+                      ),
                   ],
                 ),
               ),
@@ -914,6 +975,44 @@ class _ProfileDetail extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Botón "Seguir" / "Siguiendo" para un perfil público.
+/// Usa el estilo neobrutalista (borde negro, sombra dura) y cambia de color
+/// según el estado: accent (no seguido) o secondary (ya seguido).
+class _FollowButton extends StatelessWidget {
+  const _FollowButton({
+    required this.publicId,
+    required this.following,
+    required this.isLoading,
+    required this.onToggle,
+  });
+
+  final String publicId;
+  final bool following;
+  final bool isLoading;
+  final VoidCallback onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = following ? 'Siguiendo' : 'Seguir';
+    final icon = following ? Icons.person_remove_rounded : Icons.person_add_rounded;
+    final variant = following
+        ? NeobrutalistButtonVariant.secondary
+        : NeobrutalistButtonVariant.info;
+
+    return NeobrutalistButton(
+      key: key,
+      label: isLoading ? 'Siguiendo…' : label,
+      icon: icon,
+      variant: variant,
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppDimens.spaceMd,
+        vertical: AppDimens.spaceSm,
+      ),
+      onPressed: isLoading ? null : onToggle,
     );
   }
 }

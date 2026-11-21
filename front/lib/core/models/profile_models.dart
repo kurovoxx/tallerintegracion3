@@ -208,3 +208,45 @@ class ProfileApiException implements Exception {
     return '[$c:$s] $message';
   }
 }
+
+/// Estado de "seguir" respecto a un perfil público.
+class FollowStatus {
+  const FollowStatus({
+    required this.publicId,
+    required this.following,
+  });
+
+  final String publicId;
+  final bool following;
+}
+
+/// Usuario seguido (viene de GET /profile/following/:public_id).
+/// Datos mínimos públicos para mostrar en la lista de seguidos.
+class FollowedUser {
+  const FollowedUser({
+    required this.userId,
+    required this.publicId,
+    required this.displayName,
+    this.photoThumbUrl,
+    required this.followedAt,
+  });
+
+  final String userId;
+  final String publicId;
+  final String displayName;
+  final String? photoThumbUrl;
+  final DateTime followedAt;
+
+  factory FollowedUser.fromJson(Map<String, dynamic> j) {
+    DateTime? followed;
+    final raw = j['followed_at'];
+    if (raw is String) followed = DateTime.tryParse(raw);
+    return FollowedUser(
+      userId: (j['user_id'] as String?) ?? '',
+      publicId: (j['public_id'] as String?) ?? '',
+      displayName: (j['display_name'] as String?) ?? 'Sin nombre',
+      photoThumbUrl: j['photo_thumb_url'] as String?,
+      followedAt: followed ?? DateTime.now(),
+    );
+  }
+}
