@@ -1004,9 +1004,35 @@ class SocialService {
     notifyGroupsChanged();
   }
 
-  // POST /groups/:id/join {invite_token} -> 201. Requiere groupId + token.
-  // Sin resolver token->grupo no hay UX "solo código" (se reporta).
-  // Ver back/social/internal/handler/http/group_handler.go:151 Join.
+  // POST /groups/join {invite_token} -> 201 (nuevo) / 200 (ya miembro) con
+  // {group_id, name, already_member}. Solo el código: el backend resuelve el
+  // grupo (invite_token es UNIQUE). Ver group_handler.go JoinByCode.
+  Future<JoinGroupResult> joinGroupByCode(String inviteCode) async {
+    final token = inviteCode.trim();
+    if (token.isEmpty) {
+      throw SocialApiException('invite_token requerido.', code: 'invalid_body');
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .post(
+            Uri.parse('$baseUrl/groups/join'),
+            headers: _headers(json: true),
+            body: jsonEncode(<String, dynamic>{'invite_token': token}),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 201 && res.statusCode != 200) throw _toError(res);
+    final decoded = jsonDecode(utf8.decode(res.bodyBytes));
+    final result = decoded is Map<String, dynamic>
+        ? JoinGroupResult.fromJson(decoded)
+        : const JoinGroupResult(groupId: '', name: 'Grupo');
+    notifyGroupsChanged();
+    return result;
+  }
+
+  // POST /groups/:id/join {invite_token} -> 201. Formato antiguo (id +
+  // código); se conserva por compatibilidad. La app usa joinGroupByCode.
+  // Ver back/social/internal/handler/http/group_handler.go Join.
   Future<void> joinGroup({
     required String groupId,
     required String inviteToken,
