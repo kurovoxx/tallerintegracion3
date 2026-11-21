@@ -3,14 +3,21 @@ package service
 import (
 	"context"
 	"log"
+	"sync/atomic"
 	"time"
 )
 
-// bestEffortTimeout es el presupuesto máximo por integración externa
-// (Calendar, Discord, Stream). Acota goroutines colgadas: pasado el plazo,
-// el contexto se cancela y el runner termina aunque el cliente siga bloqueado.
-// Variable (no const) para acortarla en tests.
-var bestEffortTimeout = 30 * time.Second
+// bestEffortTimeoutNanos guarda el presupuesto máximo por integración externa
+// (Calendar, Discord, Stream), en nanosegundos. Es atómico porque las
+// goroutines best-effort lo leen en background: un test puede acortarlo sin
+// provocar carreras. Acota goroutines colgadas: pasado el plazo, el contexto
+// se cancela y el runner termina aunque el cliente siga bloqueado.
+var bestEffortTimeoutNanos atomic.Int64
+
+func init() { bestEffortTimeoutNanos.Store(int64(30 * time.Second)) }
+
+// bestEffortTimeout devuelve el presupuesto vigente.
+func bestEffortTimeout() time.Duration { return time.Duration(bestEffortTimeoutNanos.Load()) }
 
 // GoBestEffort ejecuta fn en background con tres garantías:
 //  1. No bloqueante: corre en su propia goroutine, el llamador sigue de inmediato.
@@ -25,7 +32,7 @@ func GoBestEffort(name string, fn func(ctx context.Context)) {
 				log.Printf("best-effort %s: panic recuperado: %v", name, r)
 			}
 		}()
-		ctx, cancel := context.WithTimeout(context.Background(), bestEffortTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), bestEffortTimeout())
 		defer cancel()
 		fn(ctx)
 	}()
@@ -41,7 +48,7 @@ func RunBestEffortChild(name string, ctx context.Context, fn func(ctx context.Co
 			finished = false
 		}
 	}()
-	childCtx, cancel := context.WithTimeout(ctx, bestEffortTimeout)
+	childCtx, cancel := context.WithTimeout(ctx, bestEffortTimeout())
 	defer cancel()
 	fn(childCtx)
 	return true

@@ -157,8 +157,10 @@ func TestMeetings_List_Unit(t *testing.T) {
 	gid := uuid.NewString()
 	mStore.AddGroup(gid, admin, member)
 
+	// Fecha relativa (no fija) para que el test no caduque con el tiempo.
+	futura := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)
 	w := doMartinReq(e.router, http.MethodPost, "/groups/"+gid+"/meetings", admin, map[string]any{
-		"title": "Futura", "scheduled_at": "2026-11-20T15:00:00Z",
+		"title": "Futura", "scheduled_at": futura,
 	})
 	expect(t, w, http.StatusCreated)
 	w = doMartinReq(e.router, http.MethodPost, "/groups/"+gid+"/meetings", admin, map[string]any{
