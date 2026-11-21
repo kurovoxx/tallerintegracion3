@@ -30,6 +30,7 @@ class _FakeMembersApi {
   final List<String> actions = <String>[];
   bool? lastKickCleanup;
   bool? lastBanCleanup;
+  Map<String, dynamic>? lastPermissions;
 
   /// Permisos habilitados para todo el grupo (GET /groups/:id/permissions).
   Map<String, bool> groupDefaults = <String, bool>{};
@@ -68,6 +69,23 @@ class _FakeMembersApi {
       lastBanCleanup = _cleanupOf(req);
       members.removeWhere((m) => p.contains(m['user_id'].toString()));
       return http.Response('', 204);
+    }
+    if (req.method == 'PATCH' && p.endsWith('/permissions')) {
+      final body = jsonDecode(req.body) as Map<String, dynamic>;
+      lastPermissions = body;
+      actions.add('permissions');
+      // Mismo criterio que el backend: false desmarca el permiso propio y, si el
+      // grupo lo habilita para todos, lo deniega para este integrante.
+      for (final m in members) {
+        if (!p.contains(m['user_id'].toString())) continue;
+        body.forEach((key, value) {
+          if (value is! bool) return;
+          m[key] = value;
+          m['deny_${key.substring('can_'.length)}'] =
+              !value && groupDefaults[key] == true;
+        });
+      }
+      return _json(200, body);
     }
     if (req.method == 'PATCH' && p.endsWith('/role')) {
       final role = (jsonDecode(req.body) as Map)['role'];
@@ -325,7 +343,7 @@ void main() {
   });
 
   testWidgets(
-    'permiso de todo el grupo: chip efectivo y checkbox marcado y bloqueado',
+    'permiso de todo el grupo: chip efectivo y checkbox editable',
     (tester) async {
       SessionManager.saveSession(_jwtFor(_adminId), {'id': 'x'});
       final api = _seed()..groupDefaults = {'can_create_meetings': true};
@@ -343,17 +361,56 @@ void main() {
       // Aviso de debug preexistente: ListTile sobre el fondo del diálogo.
       while (tester.takeException() != null) {}
 
-      expect(find.text('Habilitado para todo el grupo'), findsOneWidget);
+      expect(
+        find.text(
+          'Habilitado para todo el grupo (puedes quitarlo a este integrante)',
+        ),
+        findsOneWidget,
+      );
       final meetings = tester.widget<CheckboxListTile>(
         find.widgetWithText(CheckboxListTile, 'Crear reuniones'),
       );
       expect(meetings.value, isTrue);
-      expect(meetings.onChanged, isNull);
+      // Habilitado por el grupo, pero se puede retirar a este integrante.
+      expect(meetings.onChanged, isNotNull);
       final notes = tester.widget<CheckboxListTile>(
         find.widgetWithText(CheckboxListTile, 'Enviar notas al grupo'),
       );
       expect(notes.value, isFalse);
       expect(notes.onChanged, isNotNull);
+    },
+  );
+
+  testWidgets(
+    'permiso de grupo: quitarlo a un integrante envía false y quita el chip',
+    (tester) async {
+      SessionManager.saveSession(_jwtFor(_adminId), {'id': 'x'});
+      final api = _seed()..groupDefaults = {'can_create_meetings': true};
+      final service = SocialService(client: MockClient(api.handle));
+      addTearDown(service.dispose);
+
+      await _pump(tester, service);
+      expect(find.text('REUNIONES'), findsOneWidget);
+
+      await tester.tap(find.text('PERMISOS'));
+      await tester.pumpAndSettle();
+      while (tester.takeException() != null) {}
+
+      // Desmarcar el permiso heredado y guardar.
+      await tester.tap(find.widgetWithText(CheckboxListTile, 'Crear reuniones'));
+      await tester.pumpAndSettle();
+      while (tester.takeException() != null) {}
+      await tester.tap(find.text('GUARDAR'));
+      await tester.pumpAndSettle();
+      while (tester.takeException() != null) {}
+
+      expect(api.actions, contains('permissions'));
+      expect(api.lastPermissions?['can_create_meetings'], isFalse);
+      // Solo se envía lo que cambió: notas y kanban siguen como estaban.
+      expect(api.lastPermissions?.containsKey('can_share_notes'), isFalse);
+      expect(api.lastPermissions?.containsKey('can_edit_kanban'), isFalse);
+      // El permiso ya no aplica a este integrante.
+      expect(find.text('REUNIONES'), findsNothing);
     },
   );
 }

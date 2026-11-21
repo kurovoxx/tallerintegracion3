@@ -329,6 +329,9 @@ class GroupMember {
     this.canShareNotes = false,
     this.canCreateMeetings = false,
     this.canEditKanban = false,
+    this.denyShareNotes = false,
+    this.denyCreateMeetings = false,
+    this.denyEditKanban = false,
     this.publicId,
   });
 
@@ -343,6 +346,12 @@ class GroupMember {
   final bool canShareNotes;
   final bool canCreateMeetings;
   final bool canEditKanban;
+
+  /// Retiro explícito de un permiso a este miembro aunque el grupo lo tenga
+  /// habilitado para todos (lo decide un admin desde «Permisos»).
+  final bool denyShareNotes;
+  final bool denyCreateMeetings;
+  final bool denyEditKanban;
   final String? displayName;
   final String? email;
   final String? photoThumbUrl;
@@ -368,6 +377,18 @@ class GroupMember {
     return '$short · $role';
   }
 
+  /// Permiso real de un miembro común: (propio OR grupo) salvo retiro
+  /// individual. Los admins pueden todo, pero esta vista solo se usa para
+  /// miembros comunes.
+  bool sharesNotesWith(GroupMemberDefaults defaults) =>
+      (canShareNotes || defaults.canShareNotes) && !denyShareNotes;
+
+  bool createsMeetingsWith(GroupMemberDefaults defaults) =>
+      (canCreateMeetings || defaults.canCreateMeetings) && !denyCreateMeetings;
+
+  bool editsKanbanWith(GroupMemberDefaults defaults) =>
+      (canEditKanban || defaults.canEditKanban) && !denyEditKanban;
+
   factory GroupMember.fromJson(Map<String, dynamic> j) {
     DateTime? joined;
     final raw = j['joined_at'];
@@ -390,6 +411,9 @@ class GroupMember {
       canShareNotes: j['can_share_notes'] == true,
       canCreateMeetings: j['can_create_meetings'] == true,
       canEditKanban: j['can_edit_kanban'] == true,
+      denyShareNotes: j['deny_share_notes'] == true,
+      denyCreateMeetings: j['deny_create_meetings'] == true,
+      denyEditKanban: j['deny_edit_kanban'] == true,
       // Solo se acepta con formato de código público: nunca un UUID.
       publicId: normalizePublicId((j['public_id'] as String?) ?? ''),
     );

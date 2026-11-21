@@ -329,7 +329,9 @@ class SocialService {
 
   // PATCH /groups/:id/members/:userId/permissions
   // {can_share_notes?, can_create_meetings?, can_edit_kanban?} -> 200 con los
-  // permisos resultantes. Solo admin; el objetivo debe ser un miembro común.
+  // permisos efectivos resultantes. Solo admin; el objetivo debe ser un miembro
+  // común. Un false retira el permiso a ese miembro aunque el grupo lo tenga
+  // habilitado para todos (el backend lo marca como denegado).
   Future<void> setMemberPermissions({
     required String groupId,
     required String userId,

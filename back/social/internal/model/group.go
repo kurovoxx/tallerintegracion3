@@ -36,6 +36,7 @@ type GroupMembership struct {
 	Role     string    `json:"role"`
 	JoinedAt time.Time `json:"joined_at"`
 	MemberPermissions
+	MemberPermissionDenials
 }
 
 // MemberPermissions son los permisos extra que un admin delega a un miembro
@@ -48,7 +49,17 @@ type MemberPermissions struct {
 	CanEditKanban     bool `json:"can_edit_kanban"`
 }
 
+// MemberPermissionDenials marca los permisos que un admin retiró a un miembro
+// concreto aunque el grupo los tenga habilitados para todos.
+type MemberPermissionDenials struct {
+	DenyShareNotes     bool `json:"deny_share_notes"`
+	DenyCreateMeetings bool `json:"deny_create_meetings"`
+	DenyEditKanban     bool `json:"deny_edit_kanban"`
+}
+
 // MemberPermissionsUpdate es el PATCH de permisos; nil = no tocar ese permiso.
+// Cada valor es el permiso efectivo deseado para el miembro: el repositorio
+// deduce si debe quedar denegado respecto del permiso del grupo.
 type MemberPermissionsUpdate struct {
 	CanShareNotes     *bool
 	CanCreateMeetings *bool
@@ -63,6 +74,20 @@ func (p MemberPermissions) Effective(role string) MemberPermissions {
 	return p
 }
 
+// EffectiveMemberPermissions calcula el permiso real de un miembro: un admin
+// puede todo; el resto tiene (permiso propio OR permiso del grupo) salvo lo que
+// un admin le haya retirado explícitamente.
+func EffectiveMemberPermissions(role string, own, groupDefaults MemberPermissions, denials MemberPermissionDenials) MemberPermissions {
+	if role == RoleAdmin {
+		return own.Effective(role)
+	}
+	return MemberPermissions{
+		CanShareNotes:     (own.CanShareNotes || groupDefaults.CanShareNotes) && !denials.DenyShareNotes,
+		CanCreateMeetings: (own.CanCreateMeetings || groupDefaults.CanCreateMeetings) && !denials.DenyCreateMeetings,
+		CanEditKanban:     (own.CanEditKanban || groupDefaults.CanEditKanban) && !denials.DenyEditKanban,
+	}
+}
+
 // MemberView enriquece GroupMembership con datos públicos de Identity.
 // DisplayName/Email/PublicID se omiten cuando no se pudieron resolver
 // (backward-compatible con clientes que solo esperan IDs+rol). PublicID es el
@@ -74,6 +99,7 @@ type MemberView struct {
 	Role     string    `json:"role"`
 	JoinedAt time.Time `json:"joined_at"`
 	MemberPermissions
+	MemberPermissionDenials
 	DisplayName   *string `json:"display_name,omitempty"`
 	Email         *string `json:"email,omitempty"`
 	PhotoThumbURL *string `json:"photo_thumb_url,omitempty"`

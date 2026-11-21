@@ -228,7 +228,8 @@ func (r *GroupRepository) ListMembersLimit(ctx context.Context, groupID string, 
 
 	query := `
 		SELECT id, group_id, user_id, role, joined_at,
-		       can_share_notes, can_create_meetings, can_edit_kanban
+		       can_share_notes, can_create_meetings, can_edit_kanban,
+		       deny_share_notes, deny_create_meetings, deny_edit_kanban
 		FROM social.group_memberships 
 		WHERE group_id = $1 
 		ORDER BY joined_at ASC`
@@ -248,7 +249,8 @@ func (r *GroupRepository) ListMembersLimit(ctx context.Context, groupID string, 
 	for rows.Next() {
 		var m model.GroupMembership
 		if err := rows.Scan(&m.ID, &m.GroupID, &m.UserID, &m.Role, &m.JoinedAt,
-			&m.CanShareNotes, &m.CanCreateMeetings, &m.CanEditKanban); err != nil {
+			&m.CanShareNotes, &m.CanCreateMeetings, &m.CanEditKanban,
+			&m.DenyShareNotes, &m.DenyCreateMeetings, &m.DenyEditKanban); err != nil {
 			return nil, err
 		}
 		members = append(members, &m)
@@ -462,7 +464,9 @@ func (r *GroupRepository) GetMemberRole(ctx context.Context, groupID, userID str
 
 // SetMemberPermissions cambia los permisos delegados de un miembro común (solo
 // admin). Los admins ya lo pueden todo, así que no se les asignan permisos.
-// Los campos nil del update no se modifican.
+// Cada campo no nulo es el permiso efectivo deseado: si se retira y el grupo lo
+// tiene habilitado para todos, se marca como denegado para este miembro.
+// Los campos nil del update no se modifican. Devuelve los permisos efectivos.
 func (r *GroupRepository) SetMemberPermissions(ctx context.Context, groupID, adminID, targetUserID string, upd model.MemberPermissionsUpdate) (model.MemberPermissions, error) {
 	var out model.MemberPermissions
 	tx, err := r.pool.Begin(ctx)
@@ -481,12 +485,21 @@ func (r *GroupRepository) SetMemberPermissions(ctx context.Context, groupID, adm
 		return out, err
 	}
 	err = tx.QueryRow(ctx, `
-		UPDATE social.group_memberships SET
-			can_share_notes     = COALESCE($3, can_share_notes),
-			can_create_meetings = COALESCE($4, can_create_meetings),
-			can_edit_kanban     = COALESCE($5, can_edit_kanban)
-		WHERE group_id = $1 AND user_id = $2
-		RETURNING can_share_notes, can_create_meetings, can_edit_kanban`,
+		UPDATE social.group_memberships m SET
+			can_share_notes      = COALESCE($3, m.can_share_notes),
+			deny_share_notes     = CASE WHEN $3::boolean IS NULL THEN m.deny_share_notes
+			                            ELSE NOT $3::boolean AND g.members_can_share_notes END,
+			can_create_meetings  = COALESCE($4, m.can_create_meetings),
+			deny_create_meetings = CASE WHEN $4::boolean IS NULL THEN m.deny_create_meetings
+			                            ELSE NOT $4::boolean AND g.members_can_create_meetings END,
+			can_edit_kanban      = COALESCE($5, m.can_edit_kanban),
+			deny_edit_kanban     = CASE WHEN $5::boolean IS NULL THEN m.deny_edit_kanban
+			                            ELSE NOT $5::boolean AND g.members_can_edit_kanban END
+		FROM social.groups g
+		WHERE m.group_id = $1 AND m.user_id = $2 AND g.id = m.group_id
+		RETURNING (m.can_share_notes OR g.members_can_share_notes) AND NOT m.deny_share_notes,
+		          (m.can_create_meetings OR g.members_can_create_meetings) AND NOT m.deny_create_meetings,
+		          (m.can_edit_kanban OR g.members_can_edit_kanban) AND NOT m.deny_edit_kanban`,
 		groupID, targetUserID, upd.CanShareNotes, upd.CanCreateMeetings, upd.CanEditKanban,
 	).Scan(&out.CanShareNotes, &out.CanCreateMeetings, &out.CanEditKanban)
 	if err != nil {
@@ -544,14 +557,15 @@ func (r *GroupRepository) SetMemberDefaults(ctx context.Context, groupID, adminI
 }
 
 // getMemberPermissions lee los permisos efectivos de un miembro (permiso propio
-// OR permiso habilitado para todo el grupo); sin membresía devuelve
-// pgx.ErrNoRows. Compartido por los repositorios de reuniones y sprint.
+// OR permiso habilitado para todo el grupo, salvo lo denegado a este miembro);
+// sin membresía devuelve pgx.ErrNoRows. Compartido por los repositorios de
+// reuniones y sprint.
 func getMemberPermissions(ctx context.Context, pool *pgxpool.Pool, groupID, userID pgtype.UUID) (model.MemberPermissions, error) {
 	var p model.MemberPermissions
 	err := pool.QueryRow(ctx, `
-		SELECT m.can_share_notes     OR g.members_can_share_notes,
-		       m.can_create_meetings OR g.members_can_create_meetings,
-		       m.can_edit_kanban     OR g.members_can_edit_kanban
+		SELECT (m.can_share_notes     OR g.members_can_share_notes)     AND NOT m.deny_share_notes,
+		       (m.can_create_meetings OR g.members_can_create_meetings) AND NOT m.deny_create_meetings,
+		       (m.can_edit_kanban     OR g.members_can_edit_kanban)     AND NOT m.deny_edit_kanban
 		FROM social.group_memberships m
 		JOIN social.groups g ON g.id = m.group_id
 		WHERE m.group_id = $1 AND m.user_id = $2`,

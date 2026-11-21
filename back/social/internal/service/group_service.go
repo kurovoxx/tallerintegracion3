@@ -546,11 +546,13 @@ func (s *GroupService) enrichMembers(ctx context.Context, members []*model.Group
 			continue
 		}
 		v := model.MemberView{
-			ID:       m.ID,
-			GroupID:  m.GroupID,
-			UserID:   m.UserID,
-			Role:     m.Role,
-			JoinedAt: m.JoinedAt,
+			ID:                      m.ID,
+			GroupID:                 m.GroupID,
+			UserID:                  m.UserID,
+			Role:                    m.Role,
+			JoinedAt:                m.JoinedAt,
+			MemberPermissions:       m.MemberPermissions,
+			MemberPermissionDenials: m.MemberPermissionDenials,
 		}
 		if p, ok := names[m.UserID]; ok {
 			v.DisplayName = p.DisplayName

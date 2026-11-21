@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/service"
 )
 
@@ -63,7 +64,7 @@ func (h *InternalHandler) Members(c *gin.Context) {
 		if m == nil {
 			continue
 		}
-		canShare := m.Effective(m.Role).CanShareNotes || defaults.CanShareNotes
+		canShare := model.EffectiveMemberPermissions(m.Role, m.MemberPermissions, defaults, m.MemberPermissionDenials).CanShareNotes
 		out = append(out, member{UserID: m.UserID, Role: m.Role, CanShareNotes: canShare})
 	}
 	c.JSON(http.StatusOK, out)

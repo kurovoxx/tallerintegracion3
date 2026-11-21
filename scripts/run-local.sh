@@ -72,6 +72,14 @@ for migration in 007_email_verification.sql 008_email_verification_backfill.sql;
     -f - < "$PROJECT_ROOT/back/auth/db/migrations/$migration"
 done
 
+# Permisos delegados y switch "para todo el grupo" (Social). Idempotentes.
+echo ">> Aplicando migraciones de permisos de grupos (Social 006/007/008)..."
+for migration in 006_member_permissions.sql 007_group_member_defaults.sql 008_member_permission_denials.sql; do
+  echo "   $migration"
+  $COMPOSE exec -T postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -q \
+    -f - < "$PROJECT_ROOT/back/social/db/migrations/$migration"
+done
+
 echo ">> Levanta postgres + auth + notes + social + infacadem + ai + front..."
 $COMPOSE up -d
 

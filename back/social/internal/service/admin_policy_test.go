@@ -272,3 +272,49 @@ func TestGroupService_MemberDefaults(t *testing.T) {
 		t.Fatalf("un no miembro no consulta: got %v", err)
 	}
 }
+
+// Un admin puede quitarle a un miembro concreto un permiso que el grupo tiene
+// habilitado para todos, sin apagar el switch del grupo.
+func TestGroupService_SetMemberPermissions_RevocaPermisoDeGrupo(t *testing.T) {
+	ctx := context.Background()
+	svc := NewGroupService(NewMemoryGroupStore(), nil)
+	admin, member := uuid.NewString(), uuid.NewString()
+	g, err := svc.Create(ctx, admin, "G", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.JoinGroup(ctx, g.ID, g.InviteToken, member); err != nil {
+		t.Fatal(err)
+	}
+	yes, no := true, false
+	if _, err := svc.SetMemberDefaults(ctx, g.ID, admin, model.MemberPermissionsUpdate{CanShareNotes: &yes}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Retirar el permiso (efectivo) solo a este miembro queda marcado como denegado.
+	got, err := svc.SetMemberPermissions(ctx, g.ID, admin, member, model.MemberPermissionsUpdate{CanShareNotes: &no})
+	if err != nil || got.CanShareNotes {
+		t.Fatalf("el permiso sigue activo: got %+v err=%v", got, err)
+	}
+	members, err := svc.ListMembers(ctx, g.ID, admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range members {
+		if m.UserID == member && !m.DenyShareNotes {
+			t.Fatalf("ListMembers debe exponer el retiro individual: %+v", m)
+		}
+	}
+
+	// Volver a dárselo lo quita de la lista de denegados.
+	got, err = svc.SetMemberPermissions(ctx, g.ID, admin, member, model.MemberPermissionsUpdate{CanShareNotes: &yes})
+	if err != nil || !got.CanShareNotes {
+		t.Fatalf("debe poder devolverse el permiso: got %+v err=%v", got, err)
+	}
+	members, _ = svc.ListMembers(ctx, g.ID, admin)
+	for _, m := range members {
+		if m.UserID == member && m.DenyShareNotes {
+			t.Fatalf("el retiro individual debe limpiarse: %+v", m)
+		}
+	}
+}

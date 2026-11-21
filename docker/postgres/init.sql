@@ -525,6 +525,11 @@ CREATE TABLE social.group_memberships (
     can_share_notes boolean NOT NULL DEFAULT false,
     can_create_meetings boolean NOT NULL DEFAULT false,
     can_edit_kanban boolean NOT NULL DEFAULT false,
+    -- Retiro explícito de un permiso a este miembro aunque el grupo lo tenga
+    -- habilitado para todos (el admin puede excluir a alguien en concreto).
+    deny_share_notes boolean NOT NULL DEFAULT false,
+    deny_create_meetings boolean NOT NULL DEFAULT false,
+    deny_edit_kanban boolean NOT NULL DEFAULT false,
     UNIQUE (group_id, user_id)
 );
 

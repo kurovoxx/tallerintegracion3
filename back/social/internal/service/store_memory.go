@@ -240,16 +240,25 @@ func (m *MemoryGroupStore) SetMemberPermissions(_ context.Context, groupID, admi
 		return model.MemberPermissions{}, err
 	}
 	ms := m.find(groupID, targetUserID)
+	if ms == nil {
+		return model.MemberPermissions{}, errors.New("target_not_found")
+	}
+	defaults := m.defaults[groupID]
+	// Mismo criterio que el repositorio Postgres: el valor enviado es el permiso
+	// efectivo deseado; si se retira y el grupo lo habilita, queda denegado.
 	if upd.CanShareNotes != nil {
 		ms.CanShareNotes = *upd.CanShareNotes
+		ms.DenyShareNotes = !*upd.CanShareNotes && defaults.CanShareNotes
 	}
 	if upd.CanCreateMeetings != nil {
 		ms.CanCreateMeetings = *upd.CanCreateMeetings
+		ms.DenyCreateMeetings = !*upd.CanCreateMeetings && defaults.CanCreateMeetings
 	}
 	if upd.CanEditKanban != nil {
 		ms.CanEditKanban = *upd.CanEditKanban
+		ms.DenyEditKanban = !*upd.CanEditKanban && defaults.CanEditKanban
 	}
-	return ms.MemberPermissions, nil
+	return model.EffectiveMemberPermissions(ms.Role, ms.MemberPermissions, defaults, ms.MemberPermissionDenials), nil
 }
 
 func (m *MemoryGroupStore) GetMemberDefaults(_ context.Context, groupID string) (model.MemberPermissions, error) {

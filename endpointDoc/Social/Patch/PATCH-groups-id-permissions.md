@@ -1,6 +1,6 @@
 # GET | PATCH /groups/{id}/permissions
 
-Permisos "para todo el grupo": un admin habilita (switch) que **todos** los miembros puedan compartir notas, agendar reuniones o modificar el kanban/sprint. El permiso efectivo de un miembro es `permiso propio (PATCH /members/{user_id}/permissions) OR permiso del grupo`. Los admins pueden todo siempre; por defecto todo está apagado y los miembros nuevos heredan el estado del grupo.
+Permisos "para todo el grupo": un admin habilita (switch) que **todos** los miembros puedan compartir notas, agendar reuniones o modificar el kanban/sprint. El permiso efectivo de un miembro es `(permiso propio (PATCH /members/{user_id}/permissions) OR permiso del grupo) AND NOT retiro individual (deny_*)`, de modo que el admin puede excluir a alguien en concreto sin apagar el switch. Los admins pueden todo siempre; por defecto todo está apagado y los miembros nuevos heredan el estado del grupo.
 
 | Permiso | Habilita |
 |---|---|

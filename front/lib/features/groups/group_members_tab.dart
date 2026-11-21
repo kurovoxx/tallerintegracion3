@@ -240,7 +240,7 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
   }
 
   static const Widget _inheritedNote = Text(
-    'Habilitado para todo el grupo',
+    'Habilitado para todo el grupo (puedes quitarlo a este integrante)',
     style: TextStyle(
       fontSize: 11,
       fontWeight: FontWeight.w700,
@@ -251,13 +251,17 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
   // Diálogo de permisos delegados (PATCH permissions): el admin elige qué
   // puede hacer el miembro además de leer y chatear.
   Future<void> _editPermissions(GroupMember m) async {
-    var share = m.canShareNotes;
-    var meetings = m.canCreateMeetings;
-    var kanban = m.canEditKanban;
     // El admin pudo cambiar un switch de grupo desde otra pestaña: refrescar.
     final inherited = await _fetchGroupDefaults(_groupId);
     if (!mounted) return;
     setState(() => _groupDefaults = inherited);
+    // Permiso efectivo de partida: propio OR grupo, salvo retiro individual.
+    final initialShare = m.sharesNotesWith(inherited);
+    final initialMeetings = m.createsMeetingsWith(inherited);
+    final initialKanban = m.editsKanbanWith(inherited);
+    var share = initialShare;
+    var meetings = initialMeetings;
+    var kanban = initialKanban;
     final result = await showNeobrutalistDialog<(bool, bool, bool)>(
       context: context,
       dialog: NeobrutalistDialog(
@@ -276,37 +280,31 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
                 'Los admins pueden todo. Aquí eliges qué más puede hacer este miembro.',
               ),
               const SizedBox(height: AppDimens.spaceSm),
-              // Lo habilitado para todo el grupo se ve marcado y bloqueado: no
-              // se puede quitar a un solo miembro sin apagar el switch del grupo.
+              // Lo habilitado para todo el grupo aparece marcado, pero sigue
+              // siendo editable: desmarcarlo lo retira solo a este miembro.
               CheckboxListTile(
                 contentPadding: EdgeInsets.zero,
                 controlAffinity: ListTileControlAffinity.leading,
                 title: const Text('Enviar notas al grupo'),
                 subtitle: inherited.canShareNotes ? _inheritedNote : null,
-                value: share || inherited.canShareNotes,
-                onChanged: inherited.canShareNotes
-                    ? null
-                    : (v) => setDialogState(() => share = v ?? false),
+                value: share,
+                onChanged: (v) => setDialogState(() => share = v ?? false),
               ),
               CheckboxListTile(
                 contentPadding: EdgeInsets.zero,
                 controlAffinity: ListTileControlAffinity.leading,
                 title: const Text('Crear reuniones'),
                 subtitle: inherited.canCreateMeetings ? _inheritedNote : null,
-                value: meetings || inherited.canCreateMeetings,
-                onChanged: inherited.canCreateMeetings
-                    ? null
-                    : (v) => setDialogState(() => meetings = v ?? false),
+                value: meetings,
+                onChanged: (v) => setDialogState(() => meetings = v ?? false),
               ),
               CheckboxListTile(
                 contentPadding: EdgeInsets.zero,
                 controlAffinity: ListTileControlAffinity.leading,
                 title: const Text('Modificar el kanban'),
                 subtitle: inherited.canEditKanban ? _inheritedNote : null,
-                value: kanban || inherited.canEditKanban,
-                onChanged: inherited.canEditKanban
-                    ? null
-                    : (v) => setDialogState(() => kanban = v ?? false),
+                value: kanban,
+                onChanged: (v) => setDialogState(() => kanban = v ?? false),
               ),
             ],
           ),
@@ -315,20 +313,20 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
     );
     if (result == null || !mounted) return;
     final (s, mt, k) = result;
-    if (s == m.canShareNotes &&
-        mt == m.canCreateMeetings &&
-        k == m.canEditKanban) {
+    if (s == initialShare && mt == initialMeetings && k == initialKanban) {
       return;
     }
+    // Solo se envían los permisos que cambiaron: el backend deduce si hay que
+    // denegarlos a este miembro o basta con retirar el permiso propio.
     await _perform(
       m,
       'Permisos de ${m.displayLabel} actualizados.',
       () => _service.setMemberPermissions(
         groupId: _groupId,
         userId: m.userId,
-        canShareNotes: s,
-        canCreateMeetings: mt,
-        canEditKanban: k,
+        canShareNotes: s == initialShare ? null : s,
+        canCreateMeetings: mt == initialMeetings ? null : mt,
+        canEditKanban: k == initialKanban ? null : k,
       ),
     );
   }
@@ -552,23 +550,20 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
                               label: 'Tú',
                               tone: NeobrutalistTone.info,
                             ),
-                          if (!isAdmin &&
-                              (m.canShareNotes || _groupDefaults.canShareNotes))
+                          if (!isAdmin && m.sharesNotesWith(_groupDefaults))
                             const NeobrutalistBadge(
                               label: 'Notas',
                               tone: NeobrutalistTone.neutral,
                               icon: Icons.note_add_rounded,
                             ),
                           if (!isAdmin &&
-                              (m.canCreateMeetings ||
-                                  _groupDefaults.canCreateMeetings))
+                              m.createsMeetingsWith(_groupDefaults))
                             const NeobrutalistBadge(
                               label: 'Reuniones',
                               tone: NeobrutalistTone.neutral,
                               icon: Icons.event_rounded,
                             ),
-                          if (!isAdmin &&
-                              (m.canEditKanban || _groupDefaults.canEditKanban))
+                          if (!isAdmin && m.editsKanbanWith(_groupDefaults))
                             const NeobrutalistBadge(
                               label: 'Kanban',
                               tone: NeobrutalistTone.neutral,
