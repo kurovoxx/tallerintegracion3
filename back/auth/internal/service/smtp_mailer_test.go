@@ -212,14 +212,22 @@ func TestSMTPMailer_VerificationEmailOverSTARTTLS(t *testing.T) {
 	}
 	for _, want := range []string{
 		"From: \"Sigma Academy Pruebas\" <no-reply@example.com>", "To: student@example.com",
-		"Subject: Confirma tu correo en Sigma Academy", "Content-Type: text/plain; charset=UTF-8",
-		link, "\n" + token + "\n", "24 horas", "solo puede usarse una vez",
-		"Content-Type: multipart/alternative; boundary=", "Content-Type: text/html; charset=UTF-8",
-		"Confirma tu cuenta", "CÓDIGO DE CONFIRMACIÓN:",
+		"Subject: Confirma tu correo en Sigma Academy",
+		"Content-Type: multipart/alternative; boundary=",
 	} {
-		if !strings.Contains(strings.ReplaceAll(data, "\r\n", "\n"), want) {
-			t.Fatalf("falta %q en el mensaje:\n%s", want, data)
+		if !strings.Contains(data, want) {
+			t.Fatalf("falta %q en las cabeceras:\n%s", want, data)
 		}
+	}
+	// El contenido viaja en quoted-printable: se verifica ya decodificado.
+	msg := decodeSentMail(t, data)
+	for _, want := range []string{link, "\n" + token + "\n", "24 horas", "solo puede usarse una vez", "CÓDIGO DE CONFIRMACIÓN:"} {
+		if !strings.Contains(msg.text, want) {
+			t.Fatalf("falta %q en el texto plano decodificado:\n%s", want, msg.text)
+		}
+	}
+	if !strings.Contains(msg.html, "Confirma tu cuenta") || !strings.Contains(msg.html, ">"+token+"</div>") {
+		t.Fatal("el HTML decodificado debe tener el título y el código completo")
 	}
 }
 
@@ -232,17 +240,17 @@ func TestSMTPMailer_ImplicitTLSAndResetCode(t *testing.T) {
 	if !authTLS[0] || from != "MAIL FROM:<sender@example.com>" {
 		t.Fatal("TLS implícito: AUTH cifrado y remitente por defecto = SMTP_USERNAME")
 	}
-	if !strings.Contains(data, "From: \"Sigma Academy\" <sender@example.com>") || !strings.Contains(data, "12345678") ||
-		!strings.Contains(data, "Subject: Recupera tu acceso a Sigma Academy") {
+	if !strings.Contains(data, "From: \"Sigma Academy\" <sender@example.com>") ||
+		!strings.Contains(data, "Subject: Recupera tu acceso a Sigma Academy") ||
+		!strings.Contains(data, "Content-Type: multipart/alternative; boundary=") {
 		t.Fatalf("el correo de recuperación debe conservarse:\n%s", data)
 	}
-	for _, want := range []string{
-		"Content-Type: multipart/alternative; boundary=", "Content-Type: text/plain; charset=UTF-8",
-		"Content-Type: text/html; charset=UTF-8", "Recupera tu contraseña", "15 minutos",
-	} {
-		if !strings.Contains(data, want) {
-			t.Fatalf("falta %q en el mensaje:\n%s", want, data)
-		}
+	msg := decodeSentMail(t, data)
+	if !strings.Contains(msg.text, "12345678") || !strings.Contains(msg.text, "15 minutos") {
+		t.Fatalf("texto plano decodificado incompleto:\n%s", msg.text)
+	}
+	if !strings.Contains(msg.html, "Recupera tu contraseña") || !strings.Contains(msg.html, ">12345678</div>") {
+		t.Fatal("el HTML decodificado debe tener el título y el código completo")
 	}
 }
 

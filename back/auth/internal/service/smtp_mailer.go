@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"mime"
+	"mime/quotedprintable"
 	"net"
 	"net/mail"
 	"net/smtp"
@@ -225,8 +226,12 @@ func (m *SMTPMailer) send(ctx context.Context, recipient, subject, textBody, htm
 	return nil
 }
 
-// mimeBody arma Content-Type y cuerpo. Las líneas usan CRLF y 8bit (UTF-8 sin
-// codificar), igual que el correo de reuniones de Social.
+// mimeBody arma Content-Type y cuerpo. Sin HTML es text/plain 8bit (líneas
+// cortas). Con HTML es multipart/alternative y ambas partes van en
+// quoted-printable (RFC 2045): el HTML de las plantillas tiene líneas de miles
+// de caracteres y RFC 5322 limita cada línea a 998; quoted-printable las parte
+// en líneas de 76 como máximo (saltos suaves «=») y codifica UTF-8 de forma
+// segura. El cliente decodifica y recupera exactamente el mismo contenido.
 func mimeBody(textBody, htmlBody string) string {
 	if htmlBody == "" {
 		return "Content-Type: text/plain; charset=UTF-8\r\n" +
@@ -236,16 +241,21 @@ func mimeBody(textBody, htmlBody string) string {
 	return "Content-Type: multipart/alternative; boundary=\"" + boundary + "\"\r\n\r\n" +
 		"--" + boundary + "\r\n" +
 		"Content-Type: text/plain; charset=UTF-8\r\n" +
-		"Content-Transfer-Encoding: 8bit\r\n\r\n" +
-		toCRLF(textBody) + "\r\n" +
+		"Content-Transfer-Encoding: quoted-printable\r\n\r\n" +
+		quotedPrintable(textBody) + "\r\n" +
 		"--" + boundary + "\r\n" +
 		"Content-Type: text/html; charset=UTF-8\r\n" +
-		"Content-Transfer-Encoding: 8bit\r\n\r\n" +
-		toCRLF(htmlBody) + "\r\n" +
+		"Content-Transfer-Encoding: quoted-printable\r\n\r\n" +
+		quotedPrintable(htmlBody) + "\r\n" +
 		"--" + boundary + "--\r\n"
 }
 
-// toCRLF normaliza los saltos de línea a CRLF, como exige SMTP.
-func toCRLF(s string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\n", "\r\n")
+// quotedPrintable codifica s en quoted-printable con saltos de línea CRLF.
+func quotedPrintable(s string) string {
+	var b strings.Builder
+	w := quotedprintable.NewWriter(&b)
+	// Modo texto: los saltos de línea del contenido se emiten como CRLF.
+	_, _ = w.Write([]byte(strings.ReplaceAll(s, "\r\n", "\n")))
+	_ = w.Close()
+	return b.String()
 }
