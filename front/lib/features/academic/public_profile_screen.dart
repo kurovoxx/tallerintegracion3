@@ -66,6 +66,9 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
   FollowStatus? _followStatus;
   bool _isFollowingAction = false;
 
+  /// Si es el perfil del usuario autenticado, no se muestra el botón seguir.
+  bool _isOwnProfile = false;
+
   List<PublicProfileNote> _items = const [];
   String _cursor = '';
   bool _notesNotFound = false;
@@ -133,12 +136,17 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
     try {
       final profile = await _profiles.getPublicProfile(_publicId!);
       if (!mounted) return;
+      // No ofrecer "Seguir" si es el propio perfil.
+      final ownId = ProfileService.current.value?.publicId;
       setState(() {
         _profile = profile;
+        _isOwnProfile = ownId != null && ownId.isNotEmpty && ownId == profile.publicId;
         _status = _ProfileLoadStatus.ready;
       });
-      // Cargar si el usuario autenticado ya sigue a este perfil.
-      await _loadFollowStatus();
+      // Cargar si el usuario autenticado ya sigue a este perfil (solo si no es propio).
+      if (!_isOwnProfile) {
+        await _loadFollowStatus();
+      }
     } on ProfileApiException catch (e) {
       if (!mounted) return;
       final code = e.statusCode ?? 0;
@@ -604,12 +612,13 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
                       ),
                     ],
                     const SizedBox(height: AppDimens.spaceMd),
-                    _FollowButton(
-                      publicId: _publicId!,
-                      following: _followStatus?.following ?? false,
-                      isLoading: _isFollowingAction,
-                      onToggle: _toggleFollow,
-                    ),
+                    if (!_isOwnProfile)
+                      _FollowButton(
+                        publicId: _publicId!,
+                        following: _followStatus?.following ?? false,
+                        isLoading: _isFollowingAction,
+                        onToggle: _toggleFollow,
+                      ),
                   ],
                 ),
               ),
