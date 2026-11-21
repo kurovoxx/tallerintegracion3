@@ -510,3 +510,63 @@ En la pestaña de Discord del grupo (`GroupDiscordTab`), agregar un botón con e
 
 - Botón de copiar en el diálogo de "Configurar Discord" (se puede agregar como mejora futura).
 - Notificación visual alternativa al copiar (solo snackbar).
+
+## 4_5_11 — Seguir/dejar de seguir usuarios (en grupos y buscador)
+
+### Objetivo
+
+Permitir que un usuario siga a otro para tener un vínculo directo con su perfil público. La funcionalidad se expone en dos lugares:
+
+1. **Buscador de perfiles** (`PublicProfileScreen`): al abrir el perfil público de otra persona desde «Buscar perfil», aparece un botón «Seguir» / «Siguiendo» para seguirla o dejar de seguirla.
+2. **Miembros de grupo** (`GroupMembersTab`): en la tarjeta de cada integrante aparece un botón «Seguir» / «Siguiendo» (salvo para uno mismo), para seguir a ese miembro directamente desde la lista del grupo.
+
+### Alcance
+
+| Aspecto | Valor |
+|---------|-------|
+| Backend | `back/auth` — nueva tabla `identity.user_follows`, endpoints `POST/DELETE /profile/follow/:public_id`, `GET /profile/follow-status/:public_id`, `GET /profile/followers/:public_id`, `GET /profile/following/:public_id` |
+| Front — Perfil público | Botón «Seguir» / «Siguiendo» en `PublicProfileScreen` (perfil abierto desde buscador) |
+| Front — Miembros de grupo | Botón «Seguir» / «Siguiendo» en cada tarjeta de integrante de `GroupMembersTab` |
+| Migración | `009_user_follows.sql` — tabla `identity.user_follows` con FK a `identity.users(id)` |
+| Reglas | Un usuario no puede seguirse a sí mismo (400). El estado se resuelve por `public_id` (código público de 12 chars), nunca por UUID interno. |
+
+### Endpoints de la API
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| `POST` | `/profile/follow/:public_id` | Seguir al usuario con ese código público. 200 si se creó, 400 si ya se seguía o es uno mismo, 404 si no existe. |
+| `DELETE` | `/profile/follow/:public_id` | Dejar de seguir. 200 si se eliminó, 400 si no se seguía, 404 si no existe. |
+| `GET` | `/profile/follow-status/:public_id` | Devuelve si el usuario autenticado sigue a ese perfil. |
+| `GET` | `/profile/followers/:public_id` | Lista quiénes siguen al usuario (público). |
+| `GET` | `/profile/following/:public_id` | Lista a quién sigue el usuario (público). |
+
+### Archivos
+
+| Archivo | Cambio |
+|---------|--------|
+| `back/auth/db/migrations/009_user_follows.sql` | Nueva tabla `identity.user_follows` |
+| `back/auth/internal/model/follow.go` | Modelos `UserFollow`, `FollowStatus`, `FollowedUser` |
+| `back/auth/internal/repository/follow_repository.go` | SQL para follow/unfollow/is_following/list_followers/list_following |
+| `back/auth/internal/service/follow_service.go` | Lógica de negocio: validar no auto-seguir, resolver public_id |
+| `back/auth/internal/handler/http/follow_handler.go` | Handlers HTTP de los 5 endpoints |
+| `back/auth/cmd/server/main.go` | Registro de `FollowService` y rutas protegidas |
+| `front/lib/core/models/profile_models.dart` | Modelo `FollowStatus` |
+| `front/lib/core/services/profile_service.dart` | Métodos `followUser`, `unfollowUser`, `getFollowStatus` |
+| `front/lib/features/academic/public_profile_screen.dart` | Botón «Seguir» / «Siguiendo» en el perfil público |
+| `front/lib/features/groups/group_members_tab.dart` | Botón «Seguir» / «Siguiendo» en cada tarjeta de integrante |
+| `documentation/docMartinSprint3.md` | Esta sección |
+
+### Verificación
+
+- `go build ./...` + `go vet ./...` en `back/auth`: OK.
+- `go test ./internal/service/ ./internal/handler/http/` en `back/auth`: todos pasan.
+- `flutter analyze` en archivos tocados: sin errores nuevos.
+- `flutter test`: 612 tests pasando.
+- Prueba manual: al tocar «Seguir» en un perfil público o miembro de grupo, el botón cambia a «Siguiendo» y el backend registra la relación.
+
+### No entra
+
+- Lista de seguidores/seguidos visible en el perfil (endpoints existen pero sin UI propia).
+- Notificaciones cuando alguien te sigue.
+- «Seguir a todos» desde la lista de miembros (sigue siendo uno por uno).
+- Dejar de seguirse a uno mismo (el backend lo rechaza con 400).

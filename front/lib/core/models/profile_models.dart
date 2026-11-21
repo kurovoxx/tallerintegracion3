@@ -208,3 +208,14 @@ class ProfileApiException implements Exception {
     return '[$c:$s] $message';
   }
 }
+
+/// Estado de "seguir" respecto a un perfil público.
+class FollowStatus {
+  const FollowStatus({
+    required this.publicId,
+    required this.following,
+  });
+
+  final String publicId;
+  final bool following;
+}
