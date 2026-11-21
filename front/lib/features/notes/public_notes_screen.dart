@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 import '../../core/common_widgets.dart';
 import '../../core/theme/app_theme.dart';
@@ -17,10 +18,18 @@ enum PublicSavedFilter { all, saved, notSaved }
 /// "Explorar apuntes públicos" de otros usuarios (GET /notes/public), con
 /// like y guardar en cada tarjeta y filtro por guardados.
 class PublicNotesScreen extends StatefulWidget {
-  const PublicNotesScreen({super.key, this.api, this.onNoteCopied});
+  const PublicNotesScreen({
+    super.key,
+    this.api,
+    this.onNoteCopied,
+    this.imageClient,
+  });
 
   final NotesApi? api;
   final VoidCallback? onNoteCopied;
+
+  /// Cliente HTTP inyectable (pruebas) para las imágenes del apunte abierto.
+  final http.Client? imageClient;
 
   @override
   State<PublicNotesScreen> createState() => _PublicNotesScreenState();
@@ -131,6 +140,7 @@ class _PublicNotesScreenState extends State<PublicNotesScreen> {
           api: _api,
           initialQuery: note.id,
           onNoteCopied: widget.onNoteCopied,
+          imageClient: widget.imageClient,
         ),
       ),
     );

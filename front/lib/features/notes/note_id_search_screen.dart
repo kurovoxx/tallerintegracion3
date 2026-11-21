@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 
 import '../../core/common_widgets.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import 'all_notes_screen.dart' show showNoteResourceViewer;
+import 'note_content_view.dart';
 import 'note_interaction_bar.dart';
 import 'notes_api.dart';
 
@@ -12,12 +15,18 @@ import 'notes_api.dart';
 /// Acepta el UUID solo o un enlace `.../notes/<id>`. Muestra el apunte si el
 /// usuario puede leerlo (propio, público o compartido con él), o un aviso
 /// claro si no existe / no tiene permiso (404) o si el autor lo eliminó (410).
+///
+/// También es el destino de «Ver» en Guardados y «Ver apunte» en Públicos: el
+/// contenido se renderiza como Markdown con [NoteContentView], el mismo
+/// renderizado de la vista previa del buscador de perfiles.
 class NoteIdSearchScreen extends StatefulWidget {
   const NoteIdSearchScreen({
     super.key,
     this.api,
     this.initialQuery,
     this.onNoteCopied,
+    this.imageClient,
+    this.openResource,
   });
 
   /// Cliente inyectable (tests / base URL de Android). Por defecto NotesApi().
@@ -29,6 +38,12 @@ class NoteIdSearchScreen extends StatefulWidget {
 
   /// Se invoca tras copiar el apunte a los propios, para refrescar la lista.
   final VoidCallback? onNoteCopied;
+
+  /// Cliente HTTP inyectable para las imágenes autenticadas en pruebas.
+  final http.Client? imageClient;
+
+  /// Abridor de recursos inyectable; por defecto [showNoteResourceViewer].
+  final NoteResourceOpener? openResource;
 
   @override
   State<NoteIdSearchScreen> createState() => _NoteIdSearchScreenState();
@@ -269,6 +284,9 @@ class _NoteIdSearchScreenState extends State<NoteIdSearchScreen> {
       return NoteSearchResultCard(
         note: note,
         copying: _copying,
+        imageBaseUrl: _api.baseUrl,
+        imageClient: widget.imageClient,
+        openResource: widget.openResource,
         actions: <Widget>[
           NoteLikeSaveBar(
             api: _api,
@@ -307,7 +325,9 @@ class _NoteIdSearchScreenState extends State<NoteIdSearchScreen> {
   }
 }
 
-/// Tarjeta del apunte encontrado: título, estado, contadores y vista previa.
+/// Tarjeta del apunte encontrado: título, estado, contadores y contenido
+/// completo renderizado como Markdown (imágenes incluidas) con
+/// [NoteContentView], más los PDF/documentos adjuntos.
 class NoteSearchResultCard extends StatelessWidget {
   const NoteSearchResultCard({
     super.key,
@@ -316,6 +336,9 @@ class NoteSearchResultCard extends StatelessWidget {
     this.onCopyId,
     this.copying = false,
     this.actions = const <Widget>[],
+    this.imageBaseUrl,
+    this.imageClient,
+    this.openResource,
   });
 
   final NoteDetail note;
@@ -326,13 +349,22 @@ class NoteSearchResultCard extends StatelessWidget {
   /// Acciones extra (like / guardar) que añade quien la usa.
   final List<Widget> actions;
 
-  static const int _previewChars = 1200;
+  /// Base del microservicio de notas (endpoint autenticado de adjuntos).
+  final String? imageBaseUrl;
+
+  /// Cliente HTTP inyectable para las imágenes autenticadas en pruebas.
+  final http.Client? imageClient;
+
+  /// Abridor de recursos; por defecto [showNoteResourceViewer].
+  final NoteResourceOpener? openResource;
 
   @override
   Widget build(BuildContext context) {
-    final preview = note.content.length > _previewChars
-        ? '${note.content.substring(0, _previewChars)}…'
-        : note.content;
+    // Contenido completo: truncarlo podía cortar una imagen o un bloque
+    // Markdown a la mitad.
+    void open(Map<String, dynamic> resource) =>
+        (openResource ?? showNoteResourceViewer)(context, resource);
+    final documents = noteDocumentResources(noteDetailResources(note));
     return NeobrutalistCard(
       key: const Key('note-search-result'),
       child: Column(
@@ -387,16 +419,28 @@ class NoteSearchResultCard extends StatelessWidget {
               ),
               borderRadius: BorderRadius.circular(AppDimens.radius),
             ),
-            child: SelectableText(
-              preview.isEmpty ? '(Apunte sin contenido)' : preview,
-              style: const TextStyle(
-                fontSize: 13,
-                height: 1.45,
-                fontWeight: FontWeight.w600,
-                color: AppColors.text,
-              ),
+            child: NoteContentView(
+              key: const Key('note-search-content'),
+              note: note,
+              imageBaseUrl: imageBaseUrl,
+              imageClient: imageClient,
+              onOpenResource: open,
             ),
           ),
+          if (documents.isNotEmpty) ...<Widget>[
+            const SizedBox(height: AppDimens.spaceMd),
+            const Text(
+              'ADJUNTOS',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 0.4,
+                color: AppColors.mutedStrong,
+              ),
+            ),
+            const SizedBox(height: AppDimens.spaceXs),
+            NoteDocumentList(documents: documents, onOpen: open),
+          ],
           const SizedBox(height: AppDimens.spaceMd),
           Wrap(
             spacing: AppDimens.spaceSm,

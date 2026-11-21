@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 import '../../core/common_widgets.dart';
 import '../../core/theme/app_theme.dart';
@@ -23,10 +24,18 @@ String savedUnavailableLabel(SavedNoteItem item) => item.isDeleted
 /// apuntes. Un guardado cuyo original fue borrado o dejó de compartirse se
 /// muestra deshabilitado y solo permite quitarlo.
 class SavedNotesScreen extends StatefulWidget {
-  const SavedNotesScreen({super.key, this.api, this.onNoteCopied});
+  const SavedNotesScreen({
+    super.key,
+    this.api,
+    this.onNoteCopied,
+    this.imageClient,
+  });
 
   final NotesApi? api;
   final VoidCallback? onNoteCopied;
+
+  /// Cliente HTTP inyectable (pruebas) para las imágenes del apunte abierto.
+  final http.Client? imageClient;
 
   @override
   State<SavedNotesScreen> createState() => _SavedNotesScreenState();
@@ -171,6 +180,7 @@ class _SavedNotesScreenState extends State<SavedNotesScreen> {
           api: _api,
           initialQuery: item.noteId,
           onNoteCopied: widget.onNoteCopied,
+          imageClient: widget.imageClient,
         ),
       ),
     );
