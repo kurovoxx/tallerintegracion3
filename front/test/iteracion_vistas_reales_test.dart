@@ -3,6 +3,7 @@ import 'support/service_uri.dart';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -18,6 +19,7 @@ import 'package:taller_integracion_front/features/workspace/schedule_meeting_scr
 import 'package:taller_integracion_front/features/workspace/sprint_sheet_screen.dart';
 
 const _gid = '11111111-1111-1111-1111-111111111111';
+const _tok = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 const _memberId = 'bbbbbbbb-0000-4000-8000-000000000001';
 
 class _FakeChatSession implements ChatSession {
@@ -630,7 +632,7 @@ void main() {
               'owner_user_id': 'u',
               'notes_restricted_to_staff': false,
               'role': 'admin',
-              'invite_token': 'tok-123',
+              'invite_token': _tok,
             });
           }
           return _ok({}, 404);
@@ -652,28 +654,46 @@ void main() {
       expect(find.text('CÓDIGO DE INVITACIÓN'), findsNothing);
       await tester.tap(find.text('CERRAR'));
       await tester.pumpAndSettle();
-      // INVITAR muestra identificador + código, ambos copiables.
+      // INVITAR muestra un único código copiable (sin identificador).
+      String? copied;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied = (call.arguments as Map)['text'] as String?;
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
       await tester.tap(find.text('INVITAR'));
       await tester.pumpAndSettle();
-      expect(find.text('IDENTIFICADOR DEL GRUPO'), findsOneWidget);
+      expect(find.text('IDENTIFICADOR DEL GRUPO'), findsNothing);
       expect(find.text('CÓDIGO DE INVITACIÓN'), findsOneWidget);
-      // Ambos valores son SelectableText (seleccionables/copiables).
       expect(
         find.byWidgetPredicate((w) => w is SelectableText && w.data == _gid),
-        findsOneWidget,
+        findsNothing,
       );
       expect(
-        find.byWidgetPredicate(
-          (w) => w is SelectableText && w.data == 'tok-123',
-        ),
+        find.byWidgetPredicate((w) => w is SelectableText && w.data == _tok),
         findsOneWidget,
       );
       expect(find.text('GENERAR NUEVO CÓDIGO'), findsOneWidget);
-      expect(find.text('COPIAR DATOS DE INVITACIÓN'), findsOneWidget);
+      expect(find.text('COPIAR DATOS DE INVITACIÓN'), findsNothing);
+      await tester.tap(find.text('COPIAR CÓDIGO'));
+      await tester.pumpAndSettle();
+      // Se copia solo el código, no el id del grupo.
+      expect(copied, _tok);
+      expect(find.text('Código de invitación copiado.'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('invite y join son 1:1 (mismos campos)', (tester) async {
+    testWidgets('join pide un único código', (tester) async {
       SessionManager.saveSession('jwt-test', {'id': 'u'});
       addTearDown(SessionManager.clear);
       final service = SocialService(
@@ -691,15 +711,17 @@ void main() {
         const Size(1440, 900),
       );
 
-      // Join pide exactamente lo que Invite muestra.
       await tester.tap(find.text('UNIRSE A GRUPO').first);
       await tester.pumpAndSettle();
-      expect(find.text('Identificador del grupo'), findsOneWidget);
-      expect(find.text('Código de invitación'), findsOneWidget);
+      expect(find.text('CÓDIGO DE INVITACIÓN'), findsOneWidget);
+      expect(find.text('IDENTIFICADOR DEL GRUPO'), findsNothing);
+      expect(find.byType(TextField), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('unirse llama POST join y refresca', (tester) async {
+    testWidgets('unirse llama POST /groups/join solo con el código', (
+      tester,
+    ) async {
       SessionManager.saveSession('jwt-test', {'id': 'u'});
       addTearDown(SessionManager.clear);
       var groups = [
@@ -722,9 +744,9 @@ void main() {
           }
           if (request.url.servicePath.endsWith('/members')) return _ok([]);
           if (request.method == 'POST' &&
-              request.url.servicePath == '/groups/$_gid/join') {
+              request.url.servicePath == '/groups/join') {
             final body = jsonDecode(request.body) as Map<String, dynamic>;
-            expect(body['invite_token'], 'codigo-1');
+            expect(body['invite_token'], _tok);
             joined = true;
             groups = [
               ...groups,
@@ -737,7 +759,11 @@ void main() {
                 'joined_at': '2026-09-29T12:00:00Z',
               },
             ];
-            return http.Response('', 201);
+            return _ok({
+              'group_id': '22222222-2222-2222-2222-222222222222',
+              'name': 'Grupo Nuevo',
+              'already_member': false,
+            }, 201);
           }
           return _ok({}, 404);
         }),
@@ -751,16 +777,111 @@ void main() {
 
       await tester.tap(find.text('UNIRSE A GRUPO').first);
       await tester.pumpAndSettle();
-      expect(find.text('UNIRSE A GRUPO'), findsWidgets);
-      await tester.enterText(find.byType(TextField).at(0), _gid);
-      await tester.enterText(find.byType(TextField).at(1), 'codigo-1');
+      // Con espacios y mayúsculas, como puede llegar al pegarlo.
+      await tester.enterText(
+        find.byType(TextField),
+        '  ${_tok.toUpperCase()} ',
+      );
       await tester.tap(find.text('UNIRSE').last);
       await tester.pumpAndSettle();
 
       expect(joined, isTrue);
-      expect(find.text('Te uniste al grupo.'), findsOneWidget);
+      expect(find.text('Te uniste a «Grupo Nuevo».'), findsOneWidget);
       expect(find.text('Grupo Nuevo'), findsOneWidget);
       expect(SocialService.groupsChanged.value, before + 1);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('formato antiguo «id código» sigue sirviendo', (tester) async {
+      SessionManager.saveSession('jwt-test', {'id': 'u'});
+      addTearDown(SessionManager.clear);
+      String? sent;
+      final service = SocialService(
+        client: MockClient((request) async {
+          if (request.url.servicePath == '/me/overview') {
+            return _ok(_overview([]));
+          }
+          if (request.method == 'POST' &&
+              request.url.servicePath == '/groups/join') {
+            sent = (jsonDecode(request.body) as Map)['invite_token'] as String?;
+            return _ok({
+              'group_id': _gid,
+              'name': 'Grupo Real',
+              'already_member': true,
+            });
+          }
+          return _ok({}, 404);
+        }),
+      );
+      addTearDown(service.dispose);
+      await _pump(
+        tester,
+        GroupsScreen(service: service),
+        const Size(1440, 900),
+      );
+
+      await tester.tap(find.text('UNIRSE A GRUPO').first);
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), '$_gid $_tok');
+      await tester.tap(find.text('UNIRSE').last);
+      await tester.pumpAndSettle();
+      expect(sent, _tok);
+      expect(find.text('Ya eres integrante de «Grupo Real».'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('código rechazado (404) y texto sin código', (tester) async {
+      SessionManager.saveSession('jwt-test', {'id': 'u'});
+      addTearDown(SessionManager.clear);
+      var posts = 0;
+      final service = SocialService(
+        client: MockClient((request) async {
+          if (request.url.servicePath == '/me/overview') {
+            return _ok(_overview([]));
+          }
+          if (request.method == 'POST' &&
+              request.url.servicePath == '/groups/join') {
+            posts++;
+            return _ok({
+              'error': 'Token de invitación inválido o grupo inexistente',
+            }, 404);
+          }
+          return _ok({}, 404);
+        }),
+      );
+      addTearDown(service.dispose);
+      await _pump(
+        tester,
+        GroupsScreen(service: service),
+        const Size(1440, 900),
+      );
+
+      await tester.tap(find.text('UNIRSE A GRUPO').first);
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), _tok);
+      await tester.tap(find.text('UNIRSE').last);
+      await tester.pumpAndSettle();
+      expect(posts, 1);
+      expect(
+        find.textContaining('El código no es válido o fue reemplazado'),
+        findsOneWidget,
+      );
+      ScaffoldMessenger.of(
+        tester.element(find.byType(GroupsScreen)),
+      ).clearSnackBars();
+      await tester.pumpAndSettle();
+
+      // Texto sin código: no llega al backend.
+      await tester.tap(find.text('UNIRSE A GRUPO').first);
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'hola, únete a mi grupo');
+      await tester.tap(find.text('UNIRSE').last);
+      await tester.pumpAndSettle();
+      expect(posts, 1);
+      expect(
+        find.textContaining('no contiene un código de invitación válido'),
+        findsOneWidget,
+      );
       expect(tester.takeException(), isNull);
     });
 
@@ -782,10 +903,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('UNIRSE').last);
       await tester.pumpAndSettle();
-      expect(
-        find.text('Completa el identificador y el código.'),
-        findsOneWidget,
-      );
+      expect(find.text('Pega el código de invitación.'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 

@@ -134,6 +134,15 @@ type GroupView struct {
 	MemberCount            int       `json:"member_count"`
 }
 
+// JoinResult es la respuesta de POST /groups/join (unión con un solo código).
+// AlreadyMember indica que quien usó el código ya pertenecía al grupo: la
+// operación es idempotente y no crea una segunda membresía.
+type JoinResult struct {
+	GroupID       string `json:"group_id"`
+	Name          string `json:"name"`
+	AlreadyMember bool   `json:"already_member"`
+}
+
 // SuccessionResult describe qué ocurrió con un grupo al eliminar la cuenta de
 // uno de sus miembros (sucesión automática de admin).
 type SuccessionResult struct {

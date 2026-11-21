@@ -27,6 +27,7 @@ func NewGroupHandler(svc *service.GroupService) *GroupHandler {
 func (h *GroupHandler) RegisterRoutes(r gin.IRoutes) {
 	r.POST("/groups", h.Create)
 	r.GET("/groups/me", h.ListMy)
+	r.POST("/groups/join", h.JoinByCode)
 	r.GET("/groups/:id", h.Get)
 	r.POST("/groups/:id/join", h.Join)
 	r.POST("/groups/:id/invite/regenerate", h.RegenerateInvite)
@@ -218,6 +219,34 @@ func (h *GroupHandler) Join(c *gin.Context) {
 	}
 	// Contrato: 201 Created
 	c.Status(http.StatusCreated)
+}
+
+// JoinByCode maneja POST /groups/join {invite_token}: unión con un solo
+// código, sin pedir el id del grupo. 201 si se creó la membresía y 200 si
+// el usuario ya era miembro; ambos con {group_id, name, already_member}.
+// Errores iguales a /groups/:id/join: 400 sin código, 404 código inválido o
+// reemplazado, 403 usuario baneado. POST /groups/:id/join se mantiene para
+// clientes anteriores.
+func (h *GroupHandler) JoinByCode(c *gin.Context) {
+	userID, ok := requireUser(c)
+	if !ok {
+		return
+	}
+	var req joinGroupRequest
+	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.InviteToken) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invite_token requerido"})
+		return
+	}
+	res, err := h.svc.JoinByInviteCode(c.Request.Context(), req.InviteToken, userID)
+	if err != nil {
+		respondGroupError(c, err, "Acceso denegado")
+		return
+	}
+	status := http.StatusCreated
+	if res.AlreadyMember {
+		status = http.StatusOK
+	}
+	c.JSON(status, res)
 }
 
 // RegenerateInvite maneja POST /groups/{id}/invite/regenerate

@@ -1,5 +1,7 @@
 # `POST /groups/:id/join`
 
+> Formato antiguo (id del grupo + código). La app usa ahora `POST /groups/join` (solo el código; ver `POST-groups-join.md`). Este endpoint se conserva por compatibilidad.
+
 
 ## Req
 
@@ -28,7 +30,7 @@
 
 ## Front
 - Cliente: `SocialService.joinGroup` (`front/lib/core/services/social_service.dart:850`); envía `{invite_token}`; acepta `200` o `201` y no lee el body.
-- Pantalla: `_GroupsScreenState._openJoinDialog` (`front/lib/features/groups/groups_screen.dart:233`), diálogo UNIRSE A GRUPO con dos campos: identificador del grupo (`:id` de la ruta) y código de invitación (`invite_token`). No hay flujo de solo código.
+- Desde la tarea «mejoras de invitaciones» la pantalla ya no usa este endpoint: el diálogo UNIRSE A GRUPO pide un solo código y llama a `SocialService.joinGroupByCode` (`POST /groups/join`). `SocialService.joinGroup` se mantiene para compatibilidad.
 - Efecto: `notifyGroupsChanged()` → recarga lista y sidebar. Snackbar `Te uniste al grupo.`; en error muestra el mensaje del backend.
 
 ## Tests

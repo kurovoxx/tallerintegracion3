@@ -49,6 +49,12 @@ const (
 	ErrAlreadyShared = "already_shared"
 	// ErrAlreadyCopied: el usuario ya tiene un clon vivo de ese apunte (409).
 	ErrAlreadyCopied = "already_copied"
+	// ErrDriveNotConnected: la operación necesita el Google Drive propio y la
+	// cuenta no lo tiene conectado (o la conexión ya no es válida) (403).
+	ErrDriveNotConnected = "drive_not_connected"
+	// ErrCopyInProgress: ya hay una copia de ese apunte en curso para el
+	// usuario (409); no es una copia terminada.
+	ErrCopyInProgress = "copy_in_progress"
 	// ErrCannotSaveOwn: el autor intenta guardar su propio apunte (409). Sus
 	// apuntes ya están en «Mis apuntes»; guardarlos no tiene sentido.
 	ErrCannotSaveOwn     = "cannot_save_own_note"
@@ -93,6 +99,10 @@ func MessageForCode(code string) string {
 		return "Este apunte ya está compartido en este grupo"
 	case ErrAlreadyCopied:
 		return "Ya copiaste este apunte a tus apuntes"
+	case ErrDriveNotConnected:
+		return "Para copiar apuntes de otros usuarios necesitas conectar tu Google Drive"
+	case ErrCopyInProgress:
+		return "Ya estamos copiando este apunte; aparecerá en tus apuntes al terminar"
 	case ErrCannotSaveOwn:
 		return "No puedes guardar tus propios apuntes"
 	case ErrFileTooLarge:
@@ -114,11 +124,11 @@ func StatusForCode(code string) int {
 		return http.StatusBadRequest
 	case ErrUnauthorized, ErrInvalidToken, ErrTokenExpired:
 		return http.StatusUnauthorized
-	case ErrForbidden:
+	case ErrForbidden, ErrDriveNotConnected:
 		return http.StatusForbidden
 	case ErrNotFound, ErrNoteUnavailable:
 		return http.StatusNotFound
-	case ErrConflict, ErrAlreadySaved, ErrAlreadyLiked, ErrAlreadyShared, ErrAlreadyCopied, ErrCannotSaveOwn:
+	case ErrConflict, ErrAlreadySaved, ErrAlreadyLiked, ErrAlreadyShared, ErrAlreadyCopied, ErrCannotSaveOwn, ErrCopyInProgress:
 		return http.StatusConflict
 	case ErrNoteDeleted:
 		return http.StatusGone

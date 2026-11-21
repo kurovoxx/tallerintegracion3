@@ -334,23 +334,11 @@ func (s *EmailVerificationService) Confirm(ctx context.Context, token string) (r
 	return outcome, nil
 }
 
-// SendVerificationEmail compone el correo de confirmación. Incluye el enlace
-// si EMAIL_VERIFICATION_URL está configurada y siempre el token, para poder
-// pegarlo en la app.
+// SendVerificationEmail envía el correo de confirmación (buildVerificationEmail):
+// HTML y texto plano con el código para pegarlo en la app y, si
+// EMAIL_VERIFICATION_URL está configurada, también el enlace.
 func (m *SMTPMailer) SendVerificationEmail(ctx context.Context, email VerificationEmail) error {
-	var body strings.Builder
-	body.WriteString("¡Hola! Gracias por registrarte en Sigma Academy.\r\n\r\n")
-	if email.Link != "" {
-		body.WriteString("Para confirmar tu correo, abre este enlace:\r\n" + email.Link + "\r\n\r\n")
-		body.WriteString("Si el enlace no funciona, usa este código de confirmación:\r\n")
-	} else {
-		body.WriteString("Para confirmar tu correo, ingresa este código en Sigma Academy:\r\n")
-	}
-	body.WriteString(email.Token + "\r\n\r\n")
-	body.WriteString("Es válido durante " + humanDuration(email.ExpiresIn) + " y solo puede usarse una vez. ")
-	body.WriteString("Si pides otro correo, este deja de servir.\r\n")
-	body.WriteString("Si no creaste una cuenta en Sigma Academy, ignora este mensaje.\r\n")
-	return m.send(ctx, email.Recipient, "Confirma tu correo en Sigma Academy", body.String())
+	return m.sendMessage(ctx, email.Recipient, buildVerificationEmail(email))
 }
 
 func humanDuration(d time.Duration) string {

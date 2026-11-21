@@ -160,7 +160,6 @@ class _GroupsScreenState extends State<GroupsScreen> {
   bool _isJoining = false;
 
   Future<void> _openJoinDialog() async {
-    final idCtrl = TextEditingController();
     final codeCtrl = TextEditingController();
     final ok = await showNeobrutalistDialog<bool>(
       context: context,
@@ -175,36 +174,47 @@ class _GroupsScreenState extends State<GroupsScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text(
-              'Pide al administrador el identificador del grupo y el código de invitación.',
+              'Pega el código de invitación que te compartió un administrador '
+              'del grupo.',
               style: TextStyle(fontSize: 12),
             ),
             const SizedBox(height: 12),
-            const AppFieldLabel('IDENTIFICADOR DEL GRUPO'),
-            const SizedBox(height: 4),
-            TextField(
-              controller: idCtrl,
-              decoration: appInputDecoration('Identificador del grupo'),
-            ),
-            const SizedBox(height: 8),
             const AppFieldLabel('CÓDIGO DE INVITACIÓN'),
             const SizedBox(height: 4),
             TextField(
+              key: const ValueKey('join-invite-code'),
               controller: codeCtrl,
-              decoration: appInputDecoration('Código de invitación'),
+              autofocus: true,
+              decoration: appInputDecoration(
+                'Ej.: 3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f',
+              ),
+              onSubmitted: (_) => Navigator.of(context).pop(true),
             ),
           ],
         ),
       ),
     );
-    final groupId = idCtrl.text.trim();
-    final code = codeCtrl.text.trim();
+    final raw = codeCtrl.text;
     // Sin dispose manual: el diálogo aún anima su salida y sus TextField
     // pueden reconstruirse un frame más (dispose rompería el pump).
     if (ok != true || !mounted) return;
-    if (groupId.isEmpty || code.isEmpty) {
+    if (raw.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Completa el identificador y el código.'),
+          content: Text('Pega el código de invitación.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+    final code = extractInviteCode(raw);
+    if (code == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Ese texto no contiene un código de invitación válido. '
+            'Cópialo de nuevo desde «Invitar».',
+          ),
           backgroundColor: AppColors.error,
         ),
       );
@@ -212,12 +222,16 @@ class _GroupsScreenState extends State<GroupsScreen> {
     }
     setState(() => _isJoining = true);
     try {
-      // POST /groups/:id/join real. Refresca lista + sidebar vía notifier.
-      await _service.joinGroup(groupId: groupId, inviteToken: code);
+      // POST /groups/join real. Refresca lista + sidebar vía notifier.
+      final result = await _service.joinGroupByCode(code);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Te uniste al grupo.'),
+        SnackBar(
+          content: Text(
+            result.alreadyMember
+                ? 'Ya eres integrante de «${result.name}».'
+                : 'Te uniste a «${result.name}».',
+          ),
           backgroundColor: AppColors.border,
         ),
       );
@@ -226,12 +240,13 @@ class _GroupsScreenState extends State<GroupsScreen> {
       if (!mounted) return;
       final s = e.statusCode;
       final msg = s == 404
-          ? 'No se encontró el grupo o el código es inválido.'
+          ? 'El código no es válido o fue reemplazado por uno nuevo. '
+                'Pide al administrador el código actual.'
           : s == 403
-          ? 'No tienes permiso para unirte a este grupo.'
+          ? 'No puedes unirte a este grupo.'
           : s == 401
           ? 'Tu sesión venció. Vuelve a iniciar sesión.'
-          : 'No se pudo unir al grupo. Revisa los datos.';
+          : 'No se pudo unir al grupo. Inténtalo de nuevo.';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(msg), backgroundColor: AppColors.error),
       );
@@ -745,7 +760,7 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
 }
 
 // ---------------------------------------------------------------------------
-// Diálogo INVITAR (solo admin): ver código, regenerar y compartir.
+// Diálogo INVITAR (solo admin): un único código para compartir y regenerar.
 // El token solo lo entrega GET /groups/:id a admins.
 // ---------------------------------------------------------------------------
 
@@ -832,11 +847,9 @@ class _InviteDialogState extends State<_InviteDialog> {
     );
   }
 
-  Future<void> _copyAll() {
-    final id = widget.group.groupId;
-    final token = _inviteToken?.trim() ?? '';
-    return _copy('Datos de invitación', '$id $token');
-  }
+  // Solo el código: el backend identifica el grupo con él (POST /groups/join).
+  Future<void> _copyCode() =>
+      _copy('Código de invitación', _inviteToken?.trim() ?? '');
 
   Widget _copyableField({required String label, required String value}) {
     return Column(
@@ -906,17 +919,13 @@ class _InviteDialogState extends State<_InviteDialog> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text(
-              'Comparte estos datos con la persona que quieras invitar.',
+              'Comparte este código con la persona que quieras invitar. '
+              'Debe abrir «Unirse a grupo» y pegarlo.',
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
                 color: AppColors.mutedStrong,
               ),
-            ),
-            const SizedBox(height: AppDimens.spaceMd),
-            _copyableField(
-              label: 'Identificador del grupo',
-              value: widget.group.groupId,
             ),
             const SizedBox(height: AppDimens.spaceMd),
             if (_loading)
@@ -947,6 +956,14 @@ class _InviteDialogState extends State<_InviteDialog> {
                 ),
               const SizedBox(height: AppDimens.spaceMd),
               NeobrutalistButton(
+                label: 'Copiar código',
+                icon: Icons.copy_rounded,
+                variant: NeobrutalistButtonVariant.accent,
+                expand: true,
+                onPressed: hasToken ? _copyCode : null,
+              ),
+              const SizedBox(height: AppDimens.spaceLg),
+              NeobrutalistButton(
                 label: _regenerating ? 'Actualizando…' : 'Generar nuevo código',
                 icon: Icons.autorenew_rounded,
                 variant: NeobrutalistButtonVariant.secondary,
@@ -954,20 +971,13 @@ class _InviteDialogState extends State<_InviteDialog> {
               ),
               const SizedBox(height: AppDimens.spaceXs),
               const Text(
-                'El código anterior dejará de funcionar.',
+                'El código no vence. Si generas uno nuevo, el anterior deja '
+                'de funcionar (útil si se compartió por error).',
                 style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w700,
                   color: AppColors.mutedStrong,
                 ),
-              ),
-              const SizedBox(height: AppDimens.spaceMd),
-              NeobrutalistButton(
-                label: 'Copiar datos de invitación',
-                icon: Icons.copy_all_rounded,
-                variant: NeobrutalistButtonVariant.accent,
-                expand: true,
-                onPressed: hasToken ? _copyAll : null,
               ),
             ],
           ],

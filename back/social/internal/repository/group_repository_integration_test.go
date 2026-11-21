@@ -337,3 +337,36 @@ func TestIntegrationLeaveOldestMembership(t *testing.T) {
 		t.Fatal("wrong owner")
 	}
 }
+
+func TestIntegrationFindByInviteToken(t *testing.T) {
+	r, _ := testRepo(t)
+	ctx := context.Background()
+	g := newTestGroup(t, r, uuid.NewString())
+
+	got, err := r.FindByInviteToken(ctx, g.InviteToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.ID != g.ID || got.InviteToken != g.InviteToken {
+		t.Fatalf("debe resolver el grupo por su código: %+v", got)
+	}
+
+	// Un código inexistente o el id del grupo no resuelven nada.
+	for _, code := range []string{uuid.NewString(), g.ID} {
+		if got, err := r.FindByInviteToken(ctx, code); err != nil || got != nil {
+			t.Fatalf("código %s: got=%+v err=%v", code, got, err)
+		}
+	}
+
+	// Tras regenerar, el código anterior deja de resolver.
+	nuevo, err := r.RegenerateInviteToken(ctx, g.ID, g.OwnerUserID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.FindByInviteToken(ctx, g.InviteToken); got != nil {
+		t.Fatal("el código anterior no debe resolver tras regenerar")
+	}
+	if got, _ := r.FindByInviteToken(ctx, nuevo); got == nil || got.ID != g.ID {
+		t.Fatal("el código nuevo debe resolver el grupo")
+	}
+}

@@ -52,6 +52,15 @@ func IsForbidden(err error) bool {
 	return false
 }
 
+// AccessChecker lo implementan los clientes que pueden confirmar, sin tocar
+// la API de Drive, que el usuario tiene una conexión de Google Drive usable
+// (token OAuth vigente vía Identity). Devuelve *OAuthError si no la tiene.
+// El MockClient lo implementa con su simulación de OAuth (todos conectados
+// salvo Disconnect), así que el modo mock local no cambia.
+type AccessChecker interface {
+	CheckAccess(ctx context.Context, userID string) error
+}
+
 // Client abstrae Google Drive del usuario autenticado.
 // En producción delega a google.golang.org/api/drive/v3 con token OAuth desde identity.oauth_connections.
 // En tests se usa MockClient.
@@ -243,6 +252,13 @@ func (m *MockClient) checkOAuth(userID string) error {
 		return &OAuthError{Message: "Conecte o renueve su Google Drive"}
 	}
 	return nil
+}
+
+var _ AccessChecker = (*MockClient)(nil)
+
+// CheckAccess usa la misma simulación de OAuth que el resto del mock.
+func (m *MockClient) CheckAccess(_ context.Context, userID string) error {
+	return m.checkOAuth(userID)
 }
 
 // Disconnect marca a un usuario sin OAuth (simula fila ausente/revocada en

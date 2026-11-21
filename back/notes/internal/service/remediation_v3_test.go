@@ -255,14 +255,14 @@ func TestCopySourceAccessDeniedDistinctFromDstOAuth(t *testing.T) {
 		t.Fatalf("el fallo de origen no debe filtrarse en el error: %v", err)
 	}
 
-	// (b) Cuenta del clonador sin OAuth: 403 forbidden con mensaje de
-	// reconexión, distinto del fallo de origen.
+	// (b) Cuenta del clonador sin OAuth: 403 drive_not_connected con mensaje
+	// de conexión, distinto del fallo de origen.
 	driveMock.Disconnect(copier)
 	defer driveMock.Reconnect(copier)
 	_, err = svc.Copy(ctx, copier, note.ID, "")
 	se, ok = err.(*ServiceError)
-	if !ok || se.Code != "forbidden" {
-		t.Fatalf("esperaba forbidden por OAuth del clonador, got %v", err)
+	if !ok || se.Code != "drive_not_connected" {
+		t.Fatalf("esperaba drive_not_connected por OAuth del clonador, got %v", err)
 	}
 	if !strings.Contains(se.Message, "Google Drive") {
 		t.Fatalf("mensaje debe pedir reconectar el Drive del clonador, got %q", se.Message)

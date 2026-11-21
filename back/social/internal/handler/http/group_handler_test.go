@@ -202,6 +202,42 @@ func TestJoinContract(t *testing.T) {
 	expect(t, e.do(http.MethodPost, "/groups/"+gid+"/join", hMember, map[string]string{"invite_token": tok}), http.StatusForbidden)
 }
 
+func TestJoinByCodeContract(t *testing.T) {
+	e := newEnv()
+	gid := e.createGroup(t, hAdmin)
+	tok := e.inviteToken(t, gid)
+
+	// Solo el código: 201 con el grupo identificado.
+	w := e.do(http.MethodPost, "/groups/join", hMember, map[string]string{"invite_token": tok})
+	expect(t, w, http.StatusCreated)
+	body := decode(t, w)
+	if body["group_id"] != gid || body["name"] != "Grupo" || body["already_member"] != false {
+		t.Fatalf("contrato {group_id,name,already_member} incumplido: %s", w.Body)
+	}
+	// Repetir: 200 y already_member=true, sin duplicar.
+	w = e.do(http.MethodPost, "/groups/join", hMember, map[string]string{"invite_token": " " + strings.ToUpper(tok) + " "})
+	expect(t, w, http.StatusOK)
+	if decode(t, w)["already_member"] != true {
+		t.Fatalf("debe informar already_member: %s", w.Body)
+	}
+	// El id del grupo, códigos inexistentes y mal formados -> 404 (nunca 500).
+	expect(t, e.do(http.MethodPost, "/groups/join", hOther, map[string]string{"invite_token": gid}), http.StatusNotFound)
+	expect(t, e.do(http.MethodPost, "/groups/join", hOther, map[string]string{"invite_token": "dddddddd-0000-4000-8000-000000000001"}), http.StatusNotFound)
+	expect(t, e.do(http.MethodPost, "/groups/join", hOther, map[string]string{"invite_token": "basura"}), http.StatusNotFound)
+	// Sin body o código vacío -> 400.
+	expect(t, e.do(http.MethodPost, "/groups/join", hOther, nil), http.StatusBadRequest)
+	expect(t, e.do(http.MethodPost, "/groups/join", hOther, map[string]string{"invite_token": "  "}), http.StatusBadRequest)
+	// Sin JWT -> 401.
+	expect(t, e.do(http.MethodPost, "/groups/join", "", map[string]string{"invite_token": tok}), http.StatusUnauthorized)
+	// Baneado -> 403.
+	expect(t, e.do(http.MethodPost, "/groups/"+gid+"/members/"+hMember+"/ban", hAdmin, nil), http.StatusNoContent)
+	expect(t, e.do(http.MethodPost, "/groups/join", hMember, map[string]string{"invite_token": tok}), http.StatusForbidden)
+	// La ruta no choca con /groups/:id: GET /groups/join no es un grupo.
+	expect(t, e.do(http.MethodGet, "/groups/join", hAdmin, nil), http.StatusNotFound)
+	// Compatibilidad: el formato antiguo (id + código) sigue funcionando.
+	expect(t, e.do(http.MethodPost, "/groups/"+gid+"/join", hOther, map[string]string{"invite_token": tok}), http.StatusCreated)
+}
+
 func TestRegenerateInviteContract(t *testing.T) {
 	e := newEnv()
 	gid := e.createGroup(t, hAdmin)

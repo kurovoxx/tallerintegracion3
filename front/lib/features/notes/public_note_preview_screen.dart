@@ -4,21 +4,18 @@ import 'package:http/http.dart' as http;
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 import 'all_notes_screen.dart' show showNoteResourceViewer;
-import 'attachment_resources.dart';
+import 'note_content_view.dart';
+import 'note_copy_runner.dart';
 import 'note_interaction_bar.dart';
-import 'note_markdown_body.dart';
 import 'notes_api.dart';
 
-/// Abre un recurso (imagen o PDF) en el visor autenticado. Inyectable en
-/// pruebas para no abrir diálogos ni visores reales.
-typedef NoteResourceOpener =
-    Future<void> Function(BuildContext context, Map<String, dynamic> resource);
+export 'note_content_view.dart' show NoteResourceOpener;
 
 /// Vista previa de un apunte de otro perfil («Ver apunte»).
 ///
 /// Es una pantalla distinta de la lista: carga el apunte completo con
 /// `GET /notes/{id}` (el backend aplica los permisos), renderiza el Markdown
-/// con [NoteMarkdownBody] —imágenes por el endpoint autenticado de adjuntos—,
+/// con `NoteContentView` (`NoteMarkdownBody`) —imágenes por el endpoint autenticado de adjuntos—,
 /// lista los PDF y documentos adjuntos para verlos en el visor y permite
 /// copiar el apunte a «Mis apuntes» con sus adjuntos.
 class PublicNotePreviewScreen extends StatefulWidget {
@@ -77,10 +74,21 @@ class _PublicNotePreviewScreenState extends State<PublicNotePreviewScreen> {
   void initState() {
     super.initState();
     _load();
+    // Si una copia de este apunte sigue en curso (p. ej. se volvió atrás y
+    // se abrió de nuevo), se muestra su progreso en vez de permitir otra.
+    final running = NoteCopyRunner.pending(widget.noteId);
+    if (running != null) {
+      _copying = true;
+      NoteCopyRunner.attach(widget.noteId);
+      _awaitCopy(running);
+    }
   }
 
   @override
   void dispose() {
+    // Volver atrás NO cancela la copia: sigue en curso y su resultado real se
+    // informa con el aviso global. NotesApi difiere su cierre hasta terminar.
+    if (_copying) NoteCopyRunner.detach(widget.noteId);
     if (widget.api == null) _api.dispose();
     super.dispose();
   }
@@ -115,25 +123,12 @@ class _PublicNotePreviewScreenState extends State<PublicNotePreviewScreen> {
   List<Map<String, dynamic>> get _resources {
     final note = _note;
     if (note == null) return const [];
-    return attachmentResources(note.id, note.attachments);
-  }
-
-  /// Resuelve el recurso tocado en el Markdown contra los adjuntos reales para
-  /// que el visor use siempre el endpoint autenticado (note_id + attachment_id).
-  Map<String, dynamic> _resolve(Map<String, dynamic> resource) {
-    if ((resource['attachment_id'] as String?)?.isNotEmpty ?? false) {
-      return resource;
-    }
-    final url = (resource['url'] as String?) ?? '';
-    for (final r in _resources) {
-      if (urlMatchesAttachment(r, url)) return r;
-    }
-    return resource;
+    return noteDetailResources(note);
   }
 
   Future<void> _open(Map<String, dynamic> resource) {
     final opener = widget.openResource ?? showNoteResourceViewer;
-    return opener(context, _resolve(resource));
+    return opener(context, resolveNoteResource(_resources, resource));
   }
 
   void _snack(String message, {bool error = false}) {
@@ -155,16 +150,27 @@ class _PublicNotePreviewScreenState extends State<PublicNotePreviewScreen> {
   Future<void> _copy(NoteDetail note) async {
     if (_copying || _copied) return;
     setState(() => _copying = true);
+    await _awaitCopy(
+      NoteCopyRunner.start(_api, note.id, idempotencyKey: _copyKey),
+    );
+  }
+
+  /// Espera la copia (propia o ya en curso) e informa su resultado real.
+  Future<void> _awaitCopy(Future<NoteCopyResult> copy) async {
     try {
-      await _api.copyNote(note.id, idempotencyKey: _copyKey);
+      await copy;
       if (!mounted) return;
       setState(() => _copied = true);
       widget.onNoteCopied?.call();
       _snack('Copia guardada en tus apuntes y en tu Drive.');
     } on NotesApiException catch (e) {
       if (!mounted) return;
+      // Solo una copia terminada cuenta como copiada; una en curso no.
       if (e.code == 'already_copied') setState(() => _copied = true);
-      _snack(e.message, error: e.code != 'already_copied');
+      _snack(
+        e.message,
+        error: e.code != 'already_copied' && e.code != 'copy_in_progress',
+      );
     } catch (_) {
       _snack(notesFriendlyMessage(-1, null), error: true);
     } finally {
@@ -227,42 +233,24 @@ class _PublicNotePreviewScreenState extends State<PublicNotePreviewScreen> {
     final error = _error;
     if (error != null) return _buildError(error);
     final note = _note!;
-    final resources = _resources;
-    final documents = resources
-        .where((r) => r['type'] != 'image')
-        .toList(growable: false);
+    final documents = noteDocumentResources(_resources);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         NeobrutalistCard(
           key: const Key('note-preview-content'),
-          child: note.content.trim().isEmpty
-              ? const Text(
-                  '(Apunte sin contenido)',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.muted,
-                  ),
-                )
-              : NoteMarkdownBody(
-                  content: note.content,
-                  resources: resources,
-                  imageBaseUrl: _api.baseUrl,
-                  imageClient: widget.imageClient,
-                  onOpenResource: _open,
-                ),
+          child: NoteContentView(
+            note: note,
+            imageBaseUrl: _api.baseUrl,
+            imageClient: widget.imageClient,
+            onOpenResource: _open,
+          ),
         ),
         if (documents.isNotEmpty) ...<Widget>[
           const SizedBox(height: AppDimens.spaceLg),
           NeobrutalistCard(
             title: 'Adjuntos',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                for (final doc in documents) _buildDocumentTile(doc),
-              ],
-            ),
+            child: NoteDocumentList(documents: documents, onOpen: _open),
           ),
         ],
         const SizedBox(height: AppDimens.spaceLg),
@@ -310,23 +298,6 @@ class _PublicNotePreviewScreenState extends State<PublicNotePreviewScreen> {
           ],
         ),
       ],
-    );
-  }
-
-  Widget _buildDocumentTile(Map<String, dynamic> doc) {
-    final isPdf = doc['type'] == 'pdf';
-    final name = (doc['name'] as String?) ?? 'Adjunto';
-    return Padding(
-      padding: const EdgeInsets.only(bottom: AppDimens.spaceSm),
-      child: NeobrutalistButton(
-        key: Key('note-preview-attachment-${doc['attachment_id']}'),
-        label: name,
-        icon: isPdf ? Icons.picture_as_pdf_rounded : Icons.description_rounded,
-        variant: NeobrutalistButtonVariant.secondary,
-        expand: true,
-        semanticLabel: isPdf ? 'Ver PDF $name' : 'Abrir $name',
-        onPressed: () => _open(doc),
-      ),
     );
   }
 
