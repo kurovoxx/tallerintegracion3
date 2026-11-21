@@ -228,4 +228,31 @@ class ProfileService {
     final following = (body['following'] as bool?) ?? false;
     return FollowStatus(publicId: pid, following: following);
   }
+
+  /// GET /profile/following/:public_id -> 200 {data: [FollowedUser, ...]}
+  /// Devuelve a quién sigue el usuario con ese código público.
+  Future<List<FollowedUser>> listFollowing(String publicId) async {
+    final pid = publicId.trim();
+    if (pid.isEmpty) {
+      throw ProfileApiException('public_id vacío.', code: 'invalid_public_id');
+    }
+    final revision = SessionManager.revision.value;
+    final res = await AuthedHttp.run(
+      () => _client
+          .get(
+            Uri.parse('$baseUrl/profile/following/$pid'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    _checkSession(revision);
+    if (res.statusCode != 200) throw _toError(res);
+    final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    final raw = body['data'];
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map<String, dynamic>>()
+        .map((e) => FollowedUser.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
 }

@@ -12,11 +12,13 @@ import '../../features/groups/groups_screen.dart';
 import '../../features/notifications/notification_inbox.dart';
 import '../../features/notes/all_notes_screen.dart';
 import '../models/social_models.dart';
+import '../models/profile_models.dart';
 import '../services/profile_service.dart';
 import '../services/social_service.dart';
 import '../theme/app_theme.dart';
 import 'neobrutalism.dart';
 import 'user_avatar.dart';
+import '../../features/academic/public_profile_screen.dart';
 
 /// Shell global neobrutalista y responsivo:
 /// - expandido (> 1024 dp): sidebar 280/72 dp + canvas centrado.
@@ -66,6 +68,9 @@ class _MainShellState extends State<MainShell> {
   int _unreadNotifications = 0;
   bool _loadingUnread = false;
   Timer? _unreadTimer;
+  // Seguidos: gente que el usuario sigue (para el panel de la sidebar).
+  List<FollowedUser> _following = const [];
+  bool _loadingFollowing = false;
 
   @override
   void initState() {
@@ -140,8 +145,31 @@ class _MainShellState extends State<MainShell> {
     try {
       await _profiles.getProfile();
       // El servicio publica en ProfileService.current; el listener repinta.
+      if (!mounted) return;
+      await _loadFollowed();
     } catch (_) {
       // Silencioso: el perfil tiene su propia pantalla con reintento.
+    }
+  }
+
+  /// Carga a quién sigue el usuario autenticado para el panel de seguidos.
+  Future<void> _loadFollowed() async {
+    if (_loadingFollowing) return;
+    final profile = ProfileService.current.value;
+    if (profile == null || profile.publicId.isEmpty) return;
+    _loadingFollowing = true;
+    try {
+      final list = await _profiles.listFollowing(profile.publicId);
+      if (!mounted) return;
+      setState(() {
+        _following = list;
+        _loadingFollowing = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loadingFollowing = false;
+      });
     }
   }
 
@@ -458,8 +486,140 @@ class _MainShellState extends State<MainShell> {
           thickness: AppDimens.borderWidth,
           height: 1,
         ),
+        _buildFollowedSection(isCollapsed: isCollapsed),
         _buildProfileFooter(isCollapsed: isCollapsed),
       ],
+    );
+  }
+
+  /// Sección de seguidos en la sidebar: muestra la gente que el usuario sigue.
+  /// Al tocar un seguido se abre su perfil público.
+  Widget _buildFollowedSection({required bool isCollapsed}) {
+    if (_following.isEmpty) return const SizedBox.shrink();
+
+    final maxShown = isCollapsed ? 6 : 8;
+    final shown = _following.take(maxShown).toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppDimens.spaceLg,
+            AppDimens.spaceMd,
+            AppDimens.spaceLg,
+            6,
+          ),
+          child: Row(
+            children: <Widget>[
+              const Text(
+                'SIGUIENDO',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                  color: AppColors.muted,
+                  letterSpacing: 0.8,
+                ),
+              ),
+              const SizedBox(width: AppDimens.spaceSm),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 6,
+                  vertical: 2,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.accentYellow.withValues(alpha: 0.15),
+                  border: Border.all(
+                    color: AppColors.border,
+                    width: AppDimens.borderWidth,
+                  ),
+                  borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+                ),
+                child: Text(
+                  '${_following.length}',
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                    color: AppColors.accentYellow,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: AppDimens.spaceSm),
+        SizedBox(
+          height: isCollapsed ? 44 : 72,
+          child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            itemCount: shown.length,
+            itemBuilder: (_, i) {
+              final followed = shown[i];
+              return _followedChip(followed, isCollapsed: isCollapsed);
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Chip de un seguido: avatar + nombre (cuando hay espacio) y al tocar se
+  /// abre su perfil público.
+  Widget _followedChip(FollowedUser followed, {required bool isCollapsed}) {
+    return GestureDetector(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => PublicProfileScreen(publicId: followed.publicId),
+          ),
+        );
+      },
+      child: Container(
+        width: isCollapsed ? 40 : 76,
+        margin: const EdgeInsets.only(
+          left: AppDimens.spaceSm,
+          right: AppDimens.spaceXs,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: <Widget>[
+            CircleAvatar(
+              radius: isCollapsed ? 14 : 20,
+              backgroundImage: followed.photoThumbUrl != null &&
+                      followed.photoThumbUrl!.isNotEmpty
+                  ? NetworkImage(followed.photoThumbUrl!)
+                  : null,
+              child: followed.photoThumbUrl == null ||
+                      followed.photoThumbUrl!.isEmpty
+                  ? Text(
+                      followed.displayName.isNotEmpty
+                          ? followed.displayName[0].toUpperCase()
+                          : '?',
+                      style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    )
+                  : null,
+            ),
+            if (!isCollapsed) ...<Widget>[
+              const SizedBox(height: AppDimens.spaceXs),
+              Text(
+                followed.displayName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.text,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 
