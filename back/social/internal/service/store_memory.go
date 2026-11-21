@@ -123,6 +123,18 @@ func (m *MemoryGroupStore) JoinWithInviteToken(_ context.Context, groupID, invit
 	return nil
 }
 
+func (m *MemoryGroupStore) FindByInviteToken(_ context.Context, inviteToken string) (*model.Group, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, g := range m.groups {
+		if g.InviteToken == inviteToken {
+			cp := *g
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *MemoryGroupStore) RegenerateInviteToken(_ context.Context, groupID, userID string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -164,6 +164,26 @@ func (r *GroupRepository) JoinWithInviteToken(ctx context.Context, groupID strin
 	return tx.Commit(ctx)
 }
 
+// FindByInviteToken busca el grupo cuyo invite_token vigente coincide.
+// Devuelve (nil, nil) si no existe. No toma locks: JoinWithInviteToken vuelve
+// a validar el token con el grupo bloqueado antes de insertar la membresía.
+func (r *GroupRepository) FindByInviteToken(ctx context.Context, inviteToken string) (*model.Group, error) {
+	var g model.Group
+	err := r.pool.QueryRow(ctx, `
+		SELECT id, name, description, photo_url, photo_thumb_url, owner_user_id, notes_restricted_to_staff, invite_token, created_at
+		FROM social.groups
+		WHERE invite_token = $1`, inviteToken).Scan(
+		&g.ID, &g.Name, &g.Description, &g.PhotoURL, &g.PhotoThumbURL, &g.OwnerUserID, &g.NotesRestrictedToStaff, &g.InviteToken, &g.CreatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &g, nil
+}
+
 // RegenerateInviteToken valida que el usuario sea admin y genera un nuevo invite_token
 func (r *GroupRepository) RegenerateInviteToken(ctx context.Context, groupID string, userID string) (string, error) {
 	tx, err := r.pool.Begin(ctx)
