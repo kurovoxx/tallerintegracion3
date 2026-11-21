@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 import 'all_notes_screen.dart' show showNoteResourceViewer;
@@ -74,18 +75,31 @@ class _PublicNotePreviewScreenState extends State<PublicNotePreviewScreen> {
   void initState() {
     super.initState();
     _load();
-    // Si una copia de este apunte sigue en curso (p. ej. se volvió atrás y
-    // se abrió de nuevo), se muestra su progreso en vez de permitir otra.
+    SessionManager.revision.addListener(_onSessionChanged);
+    // Si una copia de este apunte de ESTA sesión sigue en curso (p. ej. se
+    // volvió atrás y se abrió de nuevo), se muestra su progreso en vez de
+    // permitir otra. Las copias de otra sesión no se ven aquí.
     final running = NoteCopyRunner.pending(widget.noteId);
     if (running != null) {
       _copying = true;
       NoteCopyRunner.attach(widget.noteId);
-      _awaitCopy(running);
+      _awaitCopy(running, NoteCopyRunner.sessionKey());
     }
+  }
+
+  /// Cerrar sesión o cambiar de cuenta invalida el estado visual de la copia
+  /// de la sesión anterior (la petición sigue en segundo plano).
+  void _onSessionChanged() {
+    if (!mounted || (!_copying && !_copied)) return;
+    setState(() {
+      _copying = false;
+      _copied = false;
+    });
   }
 
   @override
   void dispose() {
+    SessionManager.revision.removeListener(_onSessionChanged);
     // Volver atrás NO cancela la copia: sigue en curso y su resultado real se
     // informa con el aviso global. NotesApi difiere su cierre hasta terminar.
     if (_copying) NoteCopyRunner.detach(widget.noteId);
@@ -150,21 +164,25 @@ class _PublicNotePreviewScreenState extends State<PublicNotePreviewScreen> {
   Future<void> _copy(NoteDetail note) async {
     if (_copying || _copied) return;
     setState(() => _copying = true);
+    final session = NoteCopyRunner.sessionKey();
     await _awaitCopy(
       NoteCopyRunner.start(_api, note.id, idempotencyKey: _copyKey),
+      session,
     );
   }
 
-  /// Espera la copia (propia o ya en curso) e informa su resultado real.
-  Future<void> _awaitCopy(Future<NoteCopyResult> copy) async {
+  /// Espera la copia (propia o ya en curso) e informa su resultado real, solo
+  /// si la sesión que la inició sigue siendo la actual.
+  Future<void> _awaitCopy(Future<NoteCopyResult> copy, String? session) async {
+    bool sameSession() => mounted && NoteCopyRunner.isCurrentSession(session);
     try {
       await copy;
-      if (!mounted) return;
+      if (!sameSession()) return;
       setState(() => _copied = true);
       widget.onNoteCopied?.call();
       _snack('Copia guardada en tus apuntes y en tu Drive.');
     } on NotesApiException catch (e) {
-      if (!mounted) return;
+      if (!sameSession()) return;
       // Solo una copia terminada cuenta como copiada; una en curso no.
       if (e.code == 'already_copied') setState(() => _copied = true);
       _snack(
@@ -172,9 +190,10 @@ class _PublicNotePreviewScreenState extends State<PublicNotePreviewScreen> {
         error: e.code != 'already_copied' && e.code != 'copy_in_progress',
       );
     } catch (_) {
+      if (!sameSession()) return;
       _snack(notesFriendlyMessage(-1, null), error: true);
     } finally {
-      if (mounted) setState(() => _copying = false);
+      if (sameSession()) setState(() => _copying = false);
     }
   }
 

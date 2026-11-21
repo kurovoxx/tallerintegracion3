@@ -152,6 +152,9 @@ class _NoteIdSearchScreenState extends State<NoteIdSearchScreen> {
       _copying = true;
       _copyingNoteId = note.id;
     });
+    // El resultado solo se muestra a la sesión que inició la copia.
+    final session = NoteCopyRunner.sessionKey();
+    bool sameSession() => mounted && NoteCopyRunner.isCurrentSession(session);
     try {
       await NoteCopyRunner.start(
         _api,
@@ -159,12 +162,14 @@ class _NoteIdSearchScreenState extends State<NoteIdSearchScreen> {
         idempotencyKey:
             'copy-${note.id}-${DateTime.now().microsecondsSinceEpoch}',
       );
-      if (!mounted) return;
+      if (!sameSession()) return;
       widget.onNoteCopied?.call();
       _snack('Copia guardada en tus apuntes y en tu Drive.');
     } on NotesApiException catch (e) {
+      if (!sameSession()) return;
       _snack(e.message, error: e.code != 'copy_in_progress');
     } catch (_) {
+      if (!sameSession()) return;
       _snack(notesFriendlyMessage(-1, null), error: true);
     } finally {
       _copyingNoteId = null;
