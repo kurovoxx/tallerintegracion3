@@ -7,6 +7,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 import 'all_notes_screen.dart' show showNoteResourceViewer;
 import 'note_content_view.dart';
+import 'note_copy_runner.dart';
 import 'note_interaction_bar.dart';
 import 'notes_api.dart';
 
@@ -71,10 +72,16 @@ class _NoteIdSearchScreenState extends State<NoteIdSearchScreen> {
 
   @override
   void dispose() {
+    // Volver atrás NO cancela la copia (ver NoteCopyRunner).
+    final copyingId = _copyingNoteId;
+    if (copyingId != null) NoteCopyRunner.detach(copyingId);
     if (widget.api == null) _api.dispose();
     _controller.dispose();
     super.dispose();
   }
+
+  /// Apunte cuya copia sigue en curso desde esta pantalla.
+  String? _copyingNoteId;
 
   Future<void> _search() async {
     final id = extractNoteId(_controller.text);
@@ -141,20 +148,26 @@ class _NoteIdSearchScreenState extends State<NoteIdSearchScreen> {
   }
 
   Future<void> _copyToMine(NoteDetail note) async {
-    setState(() => _copying = true);
+    setState(() {
+      _copying = true;
+      _copyingNoteId = note.id;
+    });
     try {
-      await _api.copyNote(
+      await NoteCopyRunner.start(
+        _api,
         note.id,
         idempotencyKey:
             'copy-${note.id}-${DateTime.now().microsecondsSinceEpoch}',
       );
+      if (!mounted) return;
       widget.onNoteCopied?.call();
       _snack('Copia guardada en tus apuntes y en tu Drive.');
     } on NotesApiException catch (e) {
-      _snack(e.message, error: true);
+      _snack(e.message, error: e.code != 'copy_in_progress');
     } catch (_) {
       _snack(notesFriendlyMessage(-1, null), error: true);
     } finally {
+      _copyingNoteId = null;
       if (mounted) setState(() => _copying = false);
     }
   }

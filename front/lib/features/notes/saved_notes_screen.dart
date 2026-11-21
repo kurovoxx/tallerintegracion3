@@ -7,6 +7,7 @@ import '../../core/common_widgets.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 import 'author_code_badge.dart';
+import 'note_copy_runner.dart';
 import 'note_id_search_screen.dart';
 import 'note_interaction_bar.dart';
 import 'notes_api.dart';
@@ -65,6 +66,8 @@ class _SavedNotesScreenState extends State<SavedNotesScreen> {
   void dispose() {
     _debounce?.cancel();
     _search.dispose();
+    // Volver atrás NO cancela las copias en curso (ver NoteCopyRunner).
+    _copyingNoteIds.forEach(NoteCopyRunner.detach);
     if (widget.api == null) _api.dispose();
     super.dispose();
   }
@@ -152,23 +155,30 @@ class _SavedNotesScreenState extends State<SavedNotesScreen> {
     }
   }
 
+  /// Apuntes cuya copia sigue en curso desde esta pantalla.
+  final Set<String> _copyingNoteIds = <String>{};
+
   Future<void> _copy(SavedNoteItem item) async {
     setState(() => _busy.add(item.savedId));
+    _copyingNoteIds.add(item.noteId);
     try {
-      await _api.copyNote(
+      await NoteCopyRunner.start(
+        _api,
         item.noteId,
         idempotencyKey:
             'copy-${item.noteId}-${DateTime.now().microsecondsSinceEpoch}',
       );
+      if (!mounted) return;
       widget.onNoteCopied?.call();
       _snack('Copia guardada en tus apuntes y en tu Drive.');
     } on NotesApiException catch (e) {
-      _snack(e.message, error: true);
+      _snack(e.message, error: e.code != 'copy_in_progress');
       // Si el autor lo borró mientras tanto, se refleja en la lista.
       if (e.statusCode == 410) unawaited(_load());
     } catch (_) {
       _snack(notesFriendlyMessage(-1, null), error: true);
     } finally {
+      _copyingNoteIds.remove(item.noteId);
       if (mounted) setState(() => _busy.remove(item.savedId));
     }
   }

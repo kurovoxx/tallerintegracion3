@@ -28,6 +28,7 @@ import 'attachment_bytes_opener.dart';
 import 'attachment_content.dart';
 import 'attachment_resources.dart';
 import 'drive_connect_suggestion.dart';
+import 'note_copy_runner.dart';
 import 'note_file_picker.dart';
 import 'note_id_search_screen.dart';
 import 'notes_api.dart';
@@ -377,6 +378,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         ? widget.initialSubjectId!.trim()
         : null;
     _notesFuture = AppDatabaseManager.instance.guard(_initAndLoad);
+    NoteCopyRunner.completed.addListener(_onNoteCopyCompleted);
     if (widget.autoOpenCreate) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
@@ -676,6 +678,18 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             final remoteId = n['id'] as String?;
             if (remoteId == null || remoteId.isEmpty) continue;
             remoteIds.add(remoteId);
+            // Copia de otro apunte que nunca llegó a Drive (p. ej. intentada
+            // sin Drive conectado): no se muestra como apunte copiado. Si ya
+            // estaba en la caché local se retira solo esa fila (sin tombstone
+            // ni cambios en el servidor), salvo que tenga ediciones locales.
+            if (isIncompleteNoteCopy(n)) {
+              final ghost = cached[remoteId];
+              if (ghost != null && !ghost.needsSync) {
+                await _repo!.deleteNote(remoteId);
+              }
+              _ownedNoteIds.remove(remoteId);
+              continue;
+            }
             // No resucitar una nota borrada localmente (tombstone §P3): el
             // backend puede seguir devolviéndola hasta confirmar el DELETE.
             if (await _isTombstoned(remoteId)) continue;
@@ -1079,9 +1093,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     // Google Drive (1 request; el backend confirma cada ausencia).
     int removedNotes = 0;
     int removedAttachments = 0;
+    var driveNotConnected = false;
     final reconcile = await _reconcileDriveDeletions();
     if (reconcile == null) {
       failed++;
+    } else if (reconcile[_kDriveNotConnected] == true) {
+      driveNotConnected = true;
     } else {
       removedNotes = (reconcile['removed_notes'] as num?)?.toInt() ?? 0;
       removedAttachments =
@@ -1105,7 +1122,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         removedNotes == 0 &&
         removedAttachments == 0 &&
         tombstonesCleared == 0) {
-      _notifySnack('Tus notas están sincronizadas.');
+      _notifySnack(
+        driveNotConnected
+            ? 'Tus apuntes de este equipo están al día. Conecta Google Drive '
+                  'desde tu perfil para guardarlos en la nube.'
+            : 'Tus notas están sincronizadas.',
+      );
       return;
     }
     final parts = <String>[];
@@ -1155,6 +1177,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       if (res.statusCode == 200) {
         final data = jsonDecode(utf8.decode(res.bodyBytes));
         if (data is Map<String, dynamic>) return data;
+      }
+      // Sin Google Drive conectado no hay nada que reconciliar en Drive: no
+      // es un apunte con error (antes se contaba como «1 con error»).
+      final code = _parseBackendError(utf8.decode(res.bodyBytes))['code'];
+      if (res.statusCode == 403 && code == _kDriveNotConnected) {
+        return const <String, dynamic>{_kDriveNotConnected: true};
       }
     } catch (e) {
       debugPrint('[Notes] reconcile Drive falló: $e');
@@ -2057,7 +2085,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     final realId = _remoteIds[note.id] ?? note.id;
     try {
       final copy = await _withNotesClient(
-        (client) => NotesApi(client: client, baseUrl: notesBaseUrl).copyNote(
+        (client) => NoteCopyRunner.start(
+          NotesApi(client: client, baseUrl: notesBaseUrl),
           realId,
           idempotencyKey:
               'copy-$realId-${DateTime.now().microsecondsSinceEpoch}',
@@ -2822,8 +2851,17 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     );
   }
 
+  /// Una copia terminó (quizá iniciada en otra pantalla): se trae a la lista.
+  void _onNoteCopyCompleted() {
+    if (!mounted || _useMemoryFallback || _repo == null) return;
+    _syncFromBackend().then((_) {
+      if (mounted) _applySearch(_currentQuery);
+    });
+  }
+
   @override
   void dispose() {
+    NoteCopyRunner.completed.removeListener(_onNoteCopyCompleted);
     _debounce?.cancel();
     _searchController.dispose();
     _aiService.dispose();
@@ -5899,6 +5937,10 @@ void _removeAttachmentUrl(TextEditingController controller, String url) {
 }
 
 /// Extrae {code, message} del envelope de error del backend: {"error": {...}}.
+/// Marca en el resultado de [_reconcileDriveDeletions]: la cuenta no tiene
+/// Google Drive conectado (403 drive_not_connected), no hubo error.
+const String _kDriveNotConnected = 'drive_not_connected';
+
 Map<String, String?> _parseBackendError(String body) {
   try {
     final decoded = jsonDecode(body);

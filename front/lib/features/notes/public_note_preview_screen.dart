@@ -5,6 +5,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 import 'all_notes_screen.dart' show showNoteResourceViewer;
 import 'note_content_view.dart';
+import 'note_copy_runner.dart';
 import 'note_interaction_bar.dart';
 import 'notes_api.dart';
 
@@ -73,10 +74,21 @@ class _PublicNotePreviewScreenState extends State<PublicNotePreviewScreen> {
   void initState() {
     super.initState();
     _load();
+    // Si una copia de este apunte sigue en curso (p. ej. se volvió atrás y
+    // se abrió de nuevo), se muestra su progreso en vez de permitir otra.
+    final running = NoteCopyRunner.pending(widget.noteId);
+    if (running != null) {
+      _copying = true;
+      NoteCopyRunner.attach(widget.noteId);
+      _awaitCopy(running);
+    }
   }
 
   @override
   void dispose() {
+    // Volver atrás NO cancela la copia: sigue en curso y su resultado real se
+    // informa con el aviso global. NotesApi difiere su cierre hasta terminar.
+    if (_copying) NoteCopyRunner.detach(widget.noteId);
     if (widget.api == null) _api.dispose();
     super.dispose();
   }
@@ -138,16 +150,27 @@ class _PublicNotePreviewScreenState extends State<PublicNotePreviewScreen> {
   Future<void> _copy(NoteDetail note) async {
     if (_copying || _copied) return;
     setState(() => _copying = true);
+    await _awaitCopy(
+      NoteCopyRunner.start(_api, note.id, idempotencyKey: _copyKey),
+    );
+  }
+
+  /// Espera la copia (propia o ya en curso) e informa su resultado real.
+  Future<void> _awaitCopy(Future<NoteCopyResult> copy) async {
     try {
-      await _api.copyNote(note.id, idempotencyKey: _copyKey);
+      await copy;
       if (!mounted) return;
       setState(() => _copied = true);
       widget.onNoteCopied?.call();
       _snack('Copia guardada en tus apuntes y en tu Drive.');
     } on NotesApiException catch (e) {
       if (!mounted) return;
+      // Solo una copia terminada cuenta como copiada; una en curso no.
       if (e.code == 'already_copied') setState(() => _copied = true);
-      _snack(e.message, error: e.code != 'already_copied');
+      _snack(
+        e.message,
+        error: e.code != 'already_copied' && e.code != 'copy_in_progress',
+      );
     } catch (_) {
       _snack(notesFriendlyMessage(-1, null), error: true);
     } finally {
