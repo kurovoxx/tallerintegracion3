@@ -27,6 +27,7 @@ import '../academic/academic_mappers.dart';
 import 'attachment_bytes_opener.dart';
 import 'attachment_content.dart';
 import 'attachment_resources.dart';
+import 'drive_connect_suggestion.dart';
 import 'note_file_picker.dart';
 import 'note_id_search_screen.dart';
 import 'notes_api.dart';
@@ -136,6 +137,8 @@ class AllNotesScreen extends StatefulWidget {
     this.initialSubjectName,
     this.autoOpenCreate = false,
     this.showBackButton = false,
+    this.onOpenProfile,
+    this.driveStatusChecker,
   });
   final AppDatabase? database;
 
@@ -155,6 +158,14 @@ class AllNotesScreen extends StatefulWidget {
   /// Muestra back en el header (UX consolidar: volver a Materiales al
   /// navegar desde academic; en el shell va false).
   final bool showBackButton;
+
+  /// Lleva a la tarjeta «Google Drive» del perfil. Si se entrega (shell
+  /// principal), se muestra la sugerencia de conectar Drive cuando la cuenta
+  /// no lo tiene conectado; sin ella (p. ej. desde una materia) no se muestra.
+  final VoidCallback? onOpenProfile;
+
+  /// Consulta del estado de Drive inyectable (pruebas / shell).
+  final DriveStatusChecker? driveStatusChecker;
 
   @override
   State<AllNotesScreen> createState() => AllNotesScreenState();
@@ -2915,6 +2926,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                     _buildIdSearchHint(),
                   ],
                   const SizedBox(height: 12),
+                  if (widget.onOpenProfile != null)
+                    DriveConnectSuggestion(
+                      checkStatus: widget.driveStatusChecker,
+                      onOpenProfile: widget.onOpenProfile,
+                    ),
                   _buildCommunityActions(),
                   const SizedBox(height: 12),
                   _buildFilterChips(),
