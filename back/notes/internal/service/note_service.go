@@ -2067,11 +2067,6 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 		})
 		cancelCopy()
 		if err != nil {
-			// (a) OAuth de la cuenta del clonador ausente/revocado: el archivo
-			//     NO se creó. Si el clon nació en esta petición se elimina la
-			//     fila (como en Create) para no dejar un apunte sin contenido;
-			//     sin fila, la clave de idempotencia se libera. Un clon heredado
-			//     de un intento anterior se conserva (reintentable).
 			// Rechazo definitivo (OAuth ausente/revocado, 4xx): el archivo NO
 			// se creó. Si el clon nació en esta petición se elimina la fila
 			// (como en Create) para no dejar un apunte sin contenido; sin fila
