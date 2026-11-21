@@ -11,7 +11,7 @@
 
 - `200 OK`: `{"removed_notes":0,"removed_attachments":0,"pending":0,"removed_note_ids":[]}`; los valores son sintéticos. `removed_note_ids` puede ser `null` si no se eliminó ninguna nota.
 - `401 Unauthorized`: JWT ausente/inválido/expirado; error `unauthorized`.
-- `403 Forbidden`: OAuth Drive ausente/revocado; `forbidden` con `Conecte o renueve su Google Drive`.
+- `403 Forbidden`: la cuenta no tiene Google Drive conectado o la conexión ya no es válida (OAuth ausente/revocado, al listar o durante el recorrido); `drive_not_connected` con el mensaje genérico del código (`utils.MessageForCode`). La reconciliación se aborta **sin borrar nada** (`back/notes/internal/service/reconcile_drive.go:31-36,49-55`).
 - `502 Bad Gateway`: Drive no disponible al listar o confirmar; `internal_error` con `Servicio de almacenamiento no disponible`.
 - `500 Internal Server Error`: PostgreSQL u otro fallo interno; `internal_error` con `Error interno`.
 - Errores por elemento que no permiten confirmar el borrado incrementan `pending` y la respuesta sigue siendo `200`; no se borra metadata ante una ausencia no confirmada.
@@ -21,6 +21,7 @@
 
 - `AllNotesScreen._syncFromBackendImpl` dispara la reconciliación durante la sincronización (`front/lib/features/notes/all_notes_screen.dart:994`); `_reconcileDriveDeletions` arma y envía el POST (`front/lib/features/notes/all_notes_screen.dart:1054-1060`).
 - La misma función procesa `removed_note_ids` para actualizar almacenamiento local (`front/lib/features/notes/all_notes_screen.dart:1061-1092`). No se encontró otro consumidor de producción.
+- Un `403 drive_not_connected` no se cuenta como apunte con error: si no hubo otros cambios, el botón REFRESCAR / SINCRONIZAR DRIVE muestra «Tus apuntes de este equipo están al día. Conecta Google Drive desde tu perfil para guardarlos en la nube.». Cualquier otro fallo de la reconciliación sí se informa como error.
 
 ## Flujo
 
@@ -33,5 +34,7 @@
 ## Tests
 
 - `back/notes/internal/handler/http/note_handler_test.go:1151`, `TestHandlerReconcileDriveDeletions`.
-- `back/notes/internal/service/reconcile_drive_test.go:15`, `conservar` notas existentes; :35 y :140, eliminar solo ante ausencia confirmada; :148, timeout no borra; :175, OAuth revocado no borra.
+- `back/notes/internal/service/reconcile_drive_test.go:15`, `conservar` notas existentes; :35 y :140, eliminar solo ante ausencia confirmada; :148, timeout no borra; `TestReconcileRevokedOAuthNeverDeletes`, OAuth revocado aborta con `drive_not_connected` y no borra.
+- `back/notes/internal/handler/http/copy_contract_test.go`, `TestReconcileWithoutDriveIsDriveNotConnected`: 403 `drive_not_connected` por HTTP.
 - `front/test/notes_reconcile_test.dart` cubre el refresco local con respuestas simuladas; no sustituye las pruebas backend.
+- `front/test/notes_copy_requires_drive_test.dart`: sin Drive el refresco no informa error; un 500 real sí.
