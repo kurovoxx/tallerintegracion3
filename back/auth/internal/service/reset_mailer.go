@@ -1,12 +1,19 @@
 package service
 
-import "context"
+import (
+	"context"
+	"time"
+)
+
+// passwordResetCodeValidity es la vigencia del código de recuperación. Debe
+// coincidir con el intervalo de PasswordResetRepository.Issue
+// (now() + interval '15 minutes'); solo se usa para el texto del correo.
+const passwordResetCodeValidity = 15 * time.Minute
 
 // SendResetCode envía el código de recuperación de contraseña
-// (POST /auth/forgot-password) mediante la configuración SMTP común.
+// (POST /auth/forgot-password) mediante la configuración SMTP común, con
+// versión HTML (buildResetEmail) y de texto plano.
 func (m *SMTPMailer) SendResetCode(ctx context.Context, recipient, code string) error {
-	return m.send(ctx, recipient, "Recupera tu acceso a Sigma Academy",
-		"Tu código para restablecer la contraseña es: "+code+"\r\n\r\n"+
-			"Ingresa este código en Sigma Academy. Es válido durante 15 minutos y solo puede usarse una vez.\r\n"+
-			"Si no solicitaste este cambio, ignora este correo. Tu contraseña seguirá siendo la misma.\r\n")
+	msg := buildResetEmail(code, passwordResetCodeValidity)
+	return m.sendMessage(ctx, recipient, msg)
 }

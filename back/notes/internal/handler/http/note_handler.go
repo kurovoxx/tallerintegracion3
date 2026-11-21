@@ -314,6 +314,14 @@ func (h *NoteHandler) ListMy(c *gin.Context) {
 		if n.ExternalFileID != nil {
 			item["external_file_id"] = *n.ExternalFileID
 		}
+		// Aditivos: permiten a la app reconocer una copia que todavía no
+		// llegó a Drive (en curso o fallida) y no mostrarla como apunte.
+		if n.ForkedFromNoteID != nil {
+			item["forked_from_note_id"] = *n.ForkedFromNoteID
+		}
+		if n.SyncStatus != "" {
+			item["sync_status"] = n.SyncStatus
+		}
 		out = append(out, item)
 	}
 	c.JSON(http.StatusOK, gin.H{"notes": out, "next_cursor": next})

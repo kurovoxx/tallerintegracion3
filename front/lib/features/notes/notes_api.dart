@@ -45,6 +45,30 @@ class RemoteNote {
   }
 }
 
+/// Mensaje cuando una copia no puede hacerse porque la cuenta no tiene Google
+/// Drive conectado (403 drive_not_connected de Notes).
+const String kDriveRequiredToCopyMessage =
+    'Para copiar apuntes de otros usuarios necesitas conectar tu Google '
+    'Drive. Conéctalo desde tu perfil, en la sección «Google Drive».';
+
+/// true si una fila de `GET /notes/me` es una copia de otro apunte que nunca
+/// llegó a Drive (`forked_from_note_id` sin `external_file_id`): una copia que
+/// falló o sigue en curso. No es un apunte usable (no tiene contenido), así que
+/// no debe mostrarse como copiado. Al reintentar la copia con Drive conectado,
+/// el backend la completa y aparece normalmente.
+bool isIncompleteNoteCopy(Map<String, dynamic> note) {
+  final forkedFrom = (note['forked_from_note_id'] as String?)?.trim() ?? '';
+  if (forkedFrom.isEmpty) return false;
+  final fileId = (note['external_file_id'] as String?)?.trim() ?? '';
+  return fileId.isEmpty;
+}
+
+/// Mensaje cuando ya hay una copia de ese apunte en curso (409
+/// copy_in_progress): no es un error ni una copia terminada.
+const String kCopyInProgressMessage =
+    'Ya estamos copiando este apunte. Aparecerá en tus apuntes en cuanto '
+    'termine.';
+
 /// Mensaje claro para el usuario según el status/código del backend de notas.
 /// Centraliza los casos de guardados, likes, copia y búsqueda por ID para que
 /// todas las pantallas digan lo mismo.
@@ -62,6 +86,10 @@ String notesFriendlyMessage(int? status, String? code, {String? fallback}) {
       return 'Ya le diste like a este apunte.';
     case 'already_copied':
       return 'Ya copiaste este apunte a tus apuntes.';
+    case 'drive_not_connected':
+      return kDriveRequiredToCopyMessage;
+    case 'copy_in_progress':
+      return kCopyInProgressMessage;
     case 'cannot_save_own_note':
       return 'No puedes guardar tus propios apuntes.';
     case 'rate_limited':
@@ -490,7 +518,19 @@ class NotesApi {
   /// Base efectiva del servicio de notas (inyectable en tests/Android).
   String get baseUrl => _baseUrl;
 
-  void dispose() => _client.close();
+  /// Copias en curso con este cliente: cerrarlo las abortaría (volver atrás
+  /// durante una copia la dejaba incompleta). dispose() las espera.
+  int _activeCopies = 0;
+  bool _disposeRequested = false;
+
+  /// Cierra el cliente; si hay una copia en curso, lo cierra al terminar.
+  void dispose() {
+    if (_activeCopies > 0) {
+      _disposeRequested = true;
+      return;
+    }
+    _client.close();
+  }
 
   Map<String, String> _headers({bool json = false}) {
     final token = SessionManager.token;
@@ -650,6 +690,19 @@ class NotesApi {
   /// [idempotencyKey] hace seguro el reintento: el backend devuelve el mismo
   /// clon en vez de duplicarlo.
   Future<NoteCopyResult> copyNote(
+    String noteId, {
+    String? idempotencyKey,
+  }) async {
+    _activeCopies++;
+    try {
+      return await _copyNote(noteId, idempotencyKey: idempotencyKey);
+    } finally {
+      _activeCopies--;
+      if (_disposeRequested && _activeCopies == 0) _client.close();
+    }
+  }
+
+  Future<NoteCopyResult> _copyNote(
     String noteId, {
     String? idempotencyKey,
   }) async {

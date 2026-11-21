@@ -32,7 +32,8 @@ Lista paginada de los apuntes propios del usuario autenticado (solo metadata). E
       "created_at": "2026-10-22T12:00:00Z",
       "updated_at": "2026-10-23T09:30:00Z",
       "subject_id": "6b0c1f0e-2f4a-4c1e-9d7a-3a1b2c3d4e5f",
-      "external_file_id": "1AbCdriveFileId"
+      "external_file_id": "1AbCdriveFileId",
+      "sync_status": "synced"
     }
   ],
   "next_cursor": "11111111-1111-4111-8111-111111111111"
@@ -40,7 +41,9 @@ Lista paginada de los apuntes propios del usuario autenticado (solo metadata). E
 ```
 
 - `notes`: siempre lista (vacía si no hay notas, `note_service.go:1028-1030`). Orden `created_at DESC, id DESC` (`note_repository.go:98-106`).
-- Cada elemento: `id`, `user_id`, `title`, `visibility`, `likes_count`, `version`, `created_at`, `updated_at` (RFC3339 UTC); `subject_id` y `external_file_id` solo si existen. **No** incluye `content`, `attachments`, `drive_url`, `sync_status` ni `forked_from_note_id`.
+- Cada elemento: `id`, `user_id`, `title`, `visibility`, `likes_count`, `is_liked`, `version`, `created_at`, `updated_at` (RFC3339 UTC); `subject_id`, `external_file_id` y `forked_from_note_id` solo si existen; `sync_status` (`synced` | `pending_drive` | `failed_sync`) cuando la fila lo tiene (`note_handler.go:300-324`). **No** incluye `content`, `attachments` ni `drive_url`.
+- `forked_from_note_id`: presente solo en copias de otro apunte (id del original).
+- **Copias incompletas:** una fila con `forked_from_note_id` y **sin** `external_file_id` es una copia que todavía no llegó a Drive: en curso (`pending_drive`) o fallida (`failed_sync`). No tiene contenido legible; el front no la muestra como apunte (`isIncompleteNoteCopy`, `front/lib/features/notes/notes_api.dart`) y aparece al completarse, reintentando la copia (ver [POST /notes/{id}/copy](../Post/POST-notes-id-copy.md)).
 - `next_cursor`: `""` cuando no hay más páginas. El repositorio pide `limit+1` filas para saber si hay otra página (`note_repository.go:100,106,124-127`).
 
 **Errores**
@@ -83,6 +86,8 @@ Finalmente devuelve `200 {notes, next_cursor}`, y la pantalla `AllNotesScreen` u
 | --- | --- | --- | --- |
 | `back/notes/internal/handler/http/note_handler_test.go:480` | `TestHandlerListMyPagination` | Paginación por cursor | Unitaria |
 | `access_contract_test.go:57,234` | `TestNoteListsEmptyArrays`, `TestNoteListsUTCRFC3339` | Lista vacía como `[]` y fechas UTC | Unitaria |
+| `back/notes/internal/handler/http/copy_contract_test.go:15` | `TestListMyExposesCopyStateFields` | Copia fallida: `forked_from_note_id` + `sync_status=failed_sync` sin `external_file_id`; tras reintentar, `synced` con archivo | Unitaria |
+| `front/test/notes_copy_requires_drive_test.dart` | `sincronización con una copia incompleta` | El front no muestra copias incompletas y las retira de la caché local | Widget |
 | `back/notes/internal/service/note_service_test.go:279` | `TestListMyPagination` | Paginación en el servicio | Unitaria |
 | `back/notes/internal/handler/grpc/list_my_contract_test.go:9` | `TestListMyNotesPaginationAndIsolation` | Paginación y aislamiento entre usuarios vía gRPC (bufconn) | Unitaria gRPC |
 | `front/test/notes_sync_duplicates_regression_test.dart:354` | `cursor cíclico se detiene sin repetir cuarenta solicitudes` | Corte ante cursor repetido | Widget (HTTP falso) |

@@ -1,11 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 import '../../core/common_widgets.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
 import 'author_code_badge.dart';
+import 'note_copy_runner.dart';
 import 'note_id_search_screen.dart';
 import 'note_interaction_bar.dart';
 import 'notes_api.dart';
@@ -23,10 +25,18 @@ String savedUnavailableLabel(SavedNoteItem item) => item.isDeleted
 /// apuntes. Un guardado cuyo original fue borrado o dejó de compartirse se
 /// muestra deshabilitado y solo permite quitarlo.
 class SavedNotesScreen extends StatefulWidget {
-  const SavedNotesScreen({super.key, this.api, this.onNoteCopied});
+  const SavedNotesScreen({
+    super.key,
+    this.api,
+    this.onNoteCopied,
+    this.imageClient,
+  });
 
   final NotesApi? api;
   final VoidCallback? onNoteCopied;
+
+  /// Cliente HTTP inyectable (pruebas) para las imágenes del apunte abierto.
+  final http.Client? imageClient;
 
   @override
   State<SavedNotesScreen> createState() => _SavedNotesScreenState();
@@ -56,6 +66,8 @@ class _SavedNotesScreenState extends State<SavedNotesScreen> {
   void dispose() {
     _debounce?.cancel();
     _search.dispose();
+    // Volver atrás NO cancela las copias en curso (ver NoteCopyRunner).
+    _copyingNoteIds.forEach(NoteCopyRunner.detach);
     if (widget.api == null) _api.dispose();
     super.dispose();
   }
@@ -143,23 +155,35 @@ class _SavedNotesScreenState extends State<SavedNotesScreen> {
     }
   }
 
+  /// Apuntes cuya copia sigue en curso desde esta pantalla.
+  final Set<String> _copyingNoteIds = <String>{};
+
   Future<void> _copy(SavedNoteItem item) async {
     setState(() => _busy.add(item.savedId));
+    _copyingNoteIds.add(item.noteId);
+    // El resultado solo se muestra a la sesión que inició la copia.
+    final session = NoteCopyRunner.sessionKey();
+    bool sameSession() => mounted && NoteCopyRunner.isCurrentSession(session);
     try {
-      await _api.copyNote(
+      await NoteCopyRunner.start(
+        _api,
         item.noteId,
         idempotencyKey:
             'copy-${item.noteId}-${DateTime.now().microsecondsSinceEpoch}',
       );
+      if (!sameSession()) return;
       widget.onNoteCopied?.call();
       _snack('Copia guardada en tus apuntes y en tu Drive.');
     } on NotesApiException catch (e) {
-      _snack(e.message, error: true);
+      if (!sameSession()) return;
+      _snack(e.message, error: e.code != 'copy_in_progress');
       // Si el autor lo borró mientras tanto, se refleja en la lista.
       if (e.statusCode == 410) unawaited(_load());
     } catch (_) {
+      if (!sameSession()) return;
       _snack(notesFriendlyMessage(-1, null), error: true);
     } finally {
+      _copyingNoteIds.remove(item.noteId);
       if (mounted) setState(() => _busy.remove(item.savedId));
     }
   }
@@ -171,6 +195,7 @@ class _SavedNotesScreenState extends State<SavedNotesScreen> {
           api: _api,
           initialQuery: item.noteId,
           onNoteCopied: widget.onNoteCopied,
+          imageClient: widget.imageClient,
         ),
       ),
     );

@@ -371,6 +371,42 @@ func isRetryableDriveError(err error) bool {
 // llamada, 5xx, 429 y errores no tipados de red son AMBIGUOS (el archivo pudo
 // haberse creado) y NO se limpian; la fila se conserva para la reconciliación
 // idempotente (FindFileByNoteID / cola de reconciliación).
+// copyWorkTimeout acota el trabajo de una copia una vez iniciada (Drive con
+// reintentos + adjuntos + PostgreSQL), independiente de la petición HTTP.
+// copyStaleAfter es el plazo tras el cual un clon que sigue 'pending_drive'
+// se considera interrumpido y puede retomarse.
+const (
+	copyWorkTimeout = 2 * time.Minute
+	copyStaleAfter  = copyWorkTimeout + time.Minute
+)
+
+// copyIsStale: clon 'pending_drive' cuyo intento ya no puede seguir vivo.
+func copyIsStale(n *model.Note) bool {
+	if n == nil || n.SyncStatus != "pending_drive" {
+		return false
+	}
+	return time.Since(n.UpdatedAt) > copyStaleAfter
+}
+
+// requireDriveAccess confirma que el usuario tiene Google Drive conectado
+// cuando el cliente puede comprobarlo sin tocar la API de Drive (cliente real
+// vía Identity). Sin conexión: 403 drive_not_connected. Identity caído: 503,
+// nunca un falso «no conectado». El cliente mock no exige Drive.
+func (s *NoteService) requireDriveAccess(ctx context.Context, userID string) error {
+	checker, ok := s.drive.(drive.AccessChecker)
+	if !ok {
+		return nil
+	}
+	if err := checker.CheckAccess(ctx, userID); err != nil {
+		if drive.IsOAuthError(err) {
+			return newServiceError(utils.ErrDriveNotConnected)
+		}
+		log.Printf("notes: no se pudo comprobar la conexión de Drive del usuario %s: %v", userID, err)
+		return ErrDriveUnavailable
+	}
+	return nil
+}
+
 func driveFailureIsDefinitive(err error) bool {
 	if err == nil {
 		return false
@@ -1879,6 +1915,25 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 		return nil, notFoundNote()
 	}
 
+	// 0.0 La copia vive en el Drive de quien copia: sin una conexión de Drive
+	// usable no se puede completar. Se comprueba ANTES de reclamar la clave de
+	// idempotencia o insertar el clon, para no dejar una fila 'failed_sync'
+	// sin archivo (apunte «copiado» pero ilegible). Va después de los
+	// controles de existencia y permisos, que conservan su zero-knowledge.
+	if err := s.requireDriveAccess(ctx, userID); err != nil {
+		return nil, err
+	}
+
+	// 0.0.1 A partir de aquí la copia ya no depende de que el cliente siga
+	// esperando: si la app cierra la pantalla o la conexión, el contexto de la
+	// petición se cancelaba a mitad de CopyFile y también fallaba marcar el
+	// clon como 'failed_sync', dejándolo en 'pending_drive' para siempre (y
+	// bloqueado como «ya copiado»). Se conservan los valores del contexto
+	// (trazas) y se acota el trabajo con copyWorkTimeout.
+	var cancelWork context.CancelFunc
+	ctx, cancelWork = context.WithTimeout(context.WithoutCancel(ctx), copyWorkTimeout)
+	defer cancelWork()
+
 	// 0. Reclamar la clave de idempotencia durable antes de crear fila/archivo:
 	// misma clave + mismo origen => replay del clon ya creado; misma clave +
 	// origen distinto => 409 Conflict. El id del clon se preasigna al claim.
@@ -1927,13 +1982,21 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 		return nil, ErrInternalDatabase
 	}
 	if existing != nil && existing.ID != newNoteID {
-		if existing.SyncStatus == "failed_sync" {
-			// El intento anterior dejó la fila (y quizá el .md huérfano):
-			// reutilizarla permite retomar la copia sin duplicar el apunte.
+		switch {
+		case existing.SyncStatus == "failed_sync", copyIsStale(existing):
+			// El intento anterior dejó la fila (y quizá el .md huérfano), o
+			// quedó 'pending_drive' más allá de lo que puede durar una copia
+			// (proceso interrumpido): reutilizarla permite retomarla sin
+			// duplicar el apunte (findOrphanDriveFile evita el archivo doble).
 			newNoteID = existing.ID
 			recoveredFromCrash = true
 			pgInserted = true
-		} else {
+		case existing.SyncStatus == "pending_drive":
+			// Otra petición la está copiando ahora: no se duplica ni se
+			// informa como copiada todavía.
+			log.Printf("notes: copy nota %s: usuario %s ya tiene una copia en curso (%s)", noteID, userID, existing.ID)
+			return nil, newServiceError(utils.ErrCopyInProgress)
+		default:
 			log.Printf("notes: copy nota %s: usuario %s ya tiene el clon %s (%s)", noteID, userID, existing.ID, existing.SyncStatus)
 			return nil, newServiceError(utils.ErrAlreadyCopied)
 		}
@@ -1989,7 +2052,7 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 			_ = s.observedNotesUpdateSyncStatus(ctx, newNote.ID, "failed_sync")
 			log.Printf("notes: copy retry clon %s: no se pudo verificar el huérfano en Drive: %v", newNote.ID, findErr)
 			if drive.IsOAuthError(findErr) {
-				return nil, newServiceErrorMsg(utils.ErrForbidden, "Conecte o renueve su Google Drive")
+				return nil, newServiceError(utils.ErrDriveNotConnected)
 			}
 			return nil, ErrDriveUnavailable
 		}
@@ -2004,13 +2067,24 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 		})
 		cancelCopy()
 		if err != nil {
-			// Drive falló: marcar nota como failed_sync para reconciliación
-			_ = s.observedNotesUpdateSyncStatus(ctx, newNote.ID, "failed_sync")
-			// (a) OAuth de la cuenta del clonador ausente/revocado: 403 genérico,
-			//     el problema está en su propio Drive, no en el origen.
+			// Rechazo definitivo (OAuth ausente/revocado, 4xx): el archivo NO
+			// se creó. Si el clon nació en esta petición se elimina la fila
+			// (como en Create) para no dejar un apunte sin contenido; sin fila
+			// la clave de idempotencia se libera. Fallo ambiguo (red, timeout,
+			// 5xx) o clon heredado: queda 'failed_sync', reintentable.
+			if driveFailureIsDefinitive(err) && !recoveredFromCrash {
+				if delErr := s.notes.Delete(ctx, newNote.ID); delErr == nil {
+					pgInserted = false
+				} else {
+					log.Printf("notes: copy nota %s: no se pudo limpiar el clon %s sin archivo: %v", noteID, newNote.ID, delErr)
+					_ = s.observedNotesUpdateSyncStatus(ctx, newNote.ID, "failed_sync")
+				}
+			} else {
+				_ = s.observedNotesUpdateSyncStatus(ctx, newNote.ID, "failed_sync")
+			}
 			if drive.IsOAuthError(err) {
 				log.Printf("notes: copy nota %s: cuenta del clonador sin OAuth vigente: %v", noteID, err)
-				return nil, newServiceErrorMsg(utils.ErrForbidden, "Conecte o renueve su Google Drive")
+				return nil, newServiceError(utils.ErrDriveNotConnected)
 			}
 			// (b) El archivo origen no es legible (borrado o permisos revocados):
 			//     zero-knowledge absoluto, mismo notFoundNote que una nota
@@ -2047,7 +2121,7 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 		_ = s.observedNotesUpdateSyncStatus(ctx, newNote.ID, "failed_sync")
 		if drive.IsOAuthError(err) {
 			log.Printf("notes: copy nota %s: adjuntos sin OAuth vigente del clonador: %v", noteID, err)
-			return nil, newServiceErrorMsg(utils.ErrForbidden, "Conecte o renueve su Google Drive")
+			return nil, newServiceError(utils.ErrDriveNotConnected)
 		}
 		log.Printf("notes: copy nota %s: fallo al copiar adjuntos del clon %s: %v", noteID, newNote.ID, err)
 		return nil, ErrDriveUnavailable

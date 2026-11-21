@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/utils"
 )
@@ -49,6 +50,9 @@ type GroupStore interface {
 	ListMyGroups(ctx context.Context, userID string) ([]*model.MyGroup, error)
 	ListMyGroupsDetailed(ctx context.Context, userID string) ([]*model.GroupCard, error)
 	JoinWithInviteToken(ctx context.Context, groupID string, inviteToken string, userID string) error
+	// FindByInviteToken devuelve el grupo cuyo invite_token vigente es el
+	// indicado, o nil si ninguno lo tiene (invite_token es UNIQUE).
+	FindByInviteToken(ctx context.Context, inviteToken string) (*model.Group, error)
 	RegenerateInviteToken(ctx context.Context, groupID string, userID string) (string, error)
 	IsMember(ctx context.Context, groupID string, userID string) (bool, error)
 	ListMembers(ctx context.Context, groupID string) ([]*model.GroupMembership, error)
@@ -403,6 +407,40 @@ func (s *GroupService) JoinGroup(ctx context.Context, groupID string, inviteToke
 		return ErrInvalidInviteToken
 	}
 	return mapStoreErr(s.groups.JoinWithInviteToken(ctx, groupID, inviteToken, userID))
+}
+
+// JoinByInviteCode une al usuario a un grupo usando solo el código de
+// invitación. El invite_token es un UUID aleatorio y UNIQUE en social.groups,
+// así que identifica al grupo sin pedir además su id. Tras resolver el grupo
+// se delega en JoinWithInviteToken, que vuelve a validar el token bajo el lock
+// del grupo (rotación concurrente) y aplica el baneo: las reglas son las
+// mismas que las de POST /groups/:id/join.
+func (s *GroupService) JoinByInviteCode(ctx context.Context, code string, userID string) (*model.JoinResult, error) {
+	if userID == "" {
+		return nil, ErrUnauthorized
+	}
+	parsed, err := uuid.Parse(strings.TrimSpace(code))
+	if err != nil {
+		return nil, ErrInvalidInviteToken
+	}
+	token := parsed.String() // forma canónica en minúsculas
+	group, err := s.groups.FindByInviteToken(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	if group == nil {
+		return nil, ErrInvalidInviteToken
+	}
+	// Solo informativo (mensaje en la app); la inserción sigue siendo
+	// idempotente aunque otra petición se adelante.
+	wasMember, err := s.groups.IsMember(ctx, group.ID, userID)
+	if err != nil {
+		return nil, mapStoreErr(err)
+	}
+	if err := s.groups.JoinWithInviteToken(ctx, group.ID, token, userID); err != nil {
+		return nil, mapStoreErr(err)
+	}
+	return &model.JoinResult{GroupID: group.ID, Name: group.Name, AlreadyMember: wasMember}, nil
 }
 
 func (s *GroupService) ListMembers(ctx context.Context, groupID string, userID string) ([]*model.GroupMembership, error) {

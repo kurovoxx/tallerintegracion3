@@ -30,7 +30,9 @@ func (s *NoteService) ReconcileDriveDeletions(ctx context.Context, userID string
 	cancelDrive()
 	if err != nil {
 		if drive.IsOAuthError(err) {
-			return nil, err
+			// Sin Drive conectado no hay nada que reconciliar: código propio
+			// para que la app no lo cuente como «apunte con error».
+			return nil, newServiceError(utils.ErrDriveNotConnected)
 		}
 		return nil, ErrDriveUnavailable
 	}
@@ -46,6 +48,9 @@ func (s *NoteService) ReconcileDriveDeletions(ctx context.Context, userID string
 		}
 		for _, n := range notes {
 			if err := s.reconcileOneNote(ctx, userID, n, active, summary); err != nil {
+				if drive.IsOAuthError(err) {
+					return nil, newServiceError(utils.ErrDriveNotConnected)
+				}
 				return nil, err
 			}
 		}

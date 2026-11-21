@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"mime"
+	"mime/quotedprintable"
 	"net"
 	"net/mail"
 	"net/smtp"
@@ -134,8 +135,15 @@ func parseBareAddress(address string) (string, error) {
 	return parsed.Address, nil
 }
 
-// send entrega un correo de texto plano UTF-8 a un único destinatario.
-func (m *SMTPMailer) send(ctx context.Context, recipient, subject, body string) error {
+// sendMessage entrega un correo compuesto (texto plano + HTML).
+func (m *SMTPMailer) sendMessage(ctx context.Context, recipient string, msg emailContent) error {
+	return m.send(ctx, recipient, msg.Subject, msg.Text, msg.HTML)
+}
+
+// send entrega un correo UTF-8 a un único destinatario. Con htmlBody vacío
+// es text/plain; si no, multipart/alternative con el texto primero (los
+// clientes muestran la última parte que soportan, normalmente el HTML).
+func (m *SMTPMailer) send(ctx context.Context, recipient, subject, textBody, htmlBody string) error {
 	if !m.Ready() {
 		return &SMTPError{Stage: "config"}
 	}
@@ -205,8 +213,7 @@ func (m *SMTPMailer) send(ctx context.Context, recipient, subject, body string) 
 		"To: " + to + "\r\n" +
 		"Subject: " + mime.QEncoding.Encode("utf-8", subject) + "\r\n" +
 		"Date: " + time.Now().UTC().Format(time.RFC1123Z) + "\r\n" +
-		"MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n" +
-		"Content-Transfer-Encoding: 8bit\r\n\r\n" + body
+		"MIME-Version: 1.0\r\n" + mimeBody(textBody, htmlBody)
 	if _, err := fmt.Fprint(writer, message); err != nil {
 		return smtpFailure("data", err)
 	}
@@ -217,4 +224,38 @@ func (m *SMTPMailer) send(ctx context.Context, recipient, subject, body string) 
 	// significa que el correo se haya perdido, así que no se informa como error.
 	_ = client.Quit()
 	return nil
+}
+
+// mimeBody arma Content-Type y cuerpo. Sin HTML es text/plain 8bit (líneas
+// cortas). Con HTML es multipart/alternative y ambas partes van en
+// quoted-printable (RFC 2045): el HTML de las plantillas tiene líneas de miles
+// de caracteres y RFC 5322 limita cada línea a 998; quoted-printable las parte
+// en líneas de 76 como máximo (saltos suaves «=») y codifica UTF-8 de forma
+// segura. El cliente decodifica y recupera exactamente el mismo contenido.
+func mimeBody(textBody, htmlBody string) string {
+	if htmlBody == "" {
+		return "Content-Type: text/plain; charset=UTF-8\r\n" +
+			"Content-Transfer-Encoding: 8bit\r\n\r\n" + textBody
+	}
+	boundary := "sigma-academy-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	return "Content-Type: multipart/alternative; boundary=\"" + boundary + "\"\r\n\r\n" +
+		"--" + boundary + "\r\n" +
+		"Content-Type: text/plain; charset=UTF-8\r\n" +
+		"Content-Transfer-Encoding: quoted-printable\r\n\r\n" +
+		quotedPrintable(textBody) + "\r\n" +
+		"--" + boundary + "\r\n" +
+		"Content-Type: text/html; charset=UTF-8\r\n" +
+		"Content-Transfer-Encoding: quoted-printable\r\n\r\n" +
+		quotedPrintable(htmlBody) + "\r\n" +
+		"--" + boundary + "--\r\n"
+}
+
+// quotedPrintable codifica s en quoted-printable con saltos de línea CRLF.
+func quotedPrintable(s string) string {
+	var b strings.Builder
+	w := quotedprintable.NewWriter(&b)
+	// Modo texto: los saltos de línea del contenido se emiten como CRLF.
+	_, _ = w.Write([]byte(strings.ReplaceAll(s, "\r\n", "\n")))
+	_ = w.Close()
+	return b.String()
 }

@@ -51,6 +51,10 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   static const int _notesIndex = 5;
   static const int _groupsIndex = 6;
+  static const int _profileIndex = 7;
+
+  /// true solo cuando se llega al perfil desde la sugerencia de Drive.
+  bool _profileScrollToDrive = false;
 
   late int _selectedIndex;
   bool _isCollapsed = false;
@@ -208,10 +212,26 @@ class _MainShellState extends State<MainShell> {
     const ScheduleScreen(),
     const AttendanceScreen(),
     const GradeCalculatorScreen(),
-    AllNotesScreen(key: _notesKey),
+    AllNotesScreen(
+      key: _notesKey,
+      onOpenProfile: _openProfileDrive,
+      driveStatusChecker: _profiles.getDriveStatus,
+    ),
     const GroupsScreen(),
-    ProfileScreen(userData: widget.userData),
+    ProfileScreen(
+      userData: widget.userData,
+      scrollToDrive: _profileScrollToDrive,
+    ),
   ];
+
+  /// «Ir a mi perfil» desde la sugerencia de Drive en Apuntes: abre el perfil
+  /// y lo desplaza hasta la tarjeta «Google Drive», donde está «Conectar Drive».
+  void _openProfileDrive() {
+    setState(() {
+      _profileScrollToDrive = true;
+      _selectedIndex = _profileIndex;
+    });
+  }
 
   List<_NavItem> get _navItems => const <_NavItem>[
     _NavItem(
@@ -277,7 +297,10 @@ class _MainShellState extends State<MainShell> {
       _openInbox();
       return;
     }
-    setState(() => _selectedIndex = index);
+    setState(() {
+      _profileScrollToDrive = false;
+      _selectedIndex = index;
+    });
   }
 
   /// Acción contextual "Nueva Nota" (solo pestaña de Notas): delega el diálogo

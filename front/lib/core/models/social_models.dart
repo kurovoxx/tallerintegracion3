@@ -132,6 +132,42 @@ class Overview {
   }
 }
 
+// POST /groups/join -> {group_id, name, already_member} (group_handler.go
+// JoinByCode). already_member=true si quien usó el código ya era integrante.
+class JoinGroupResult {
+  const JoinGroupResult({
+    required this.groupId,
+    required this.name,
+    this.alreadyMember = false,
+  });
+
+  final String groupId;
+  final String name;
+  final bool alreadyMember;
+
+  factory JoinGroupResult.fromJson(Map<String, dynamic> j) => JoinGroupResult(
+    groupId: _str(j, 'group_id'),
+    name: _str(j, 'name', 'Grupo'),
+    alreadyMember: j['already_member'] == true,
+  );
+}
+
+final RegExp _inviteCodePattern = RegExp(
+  r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}',
+);
+
+/// Extrae el código de invitación de lo que pegó el usuario.
+///
+/// Acepta el código solo, con espacios o saltos de línea, o un mensaje que lo
+/// contenga. También acepta el formato antiguo «id-del-grupo código» que
+/// copiaba el botón «Copiar datos de invitación»: en ese caso el código es el
+/// último UUID. Devuelve null si no encuentra ninguno.
+String? extractInviteCode(String raw) {
+  final matches = _inviteCodePattern.allMatches(raw).toList();
+  if (matches.isEmpty) return null;
+  return matches.last.group(0)!.toLowerCase();
+}
+
 // GET /groups/:id -> GroupView (group_handler.go Get).
 // Campos reales: id, name, description?, owner_user_id,
 // notes_restricted_to_staff, invite_token? (solo admin), created_at, role,

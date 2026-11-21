@@ -66,9 +66,14 @@ enum _DriveStatus {
 class ProfileScreen extends StatefulWidget {
   final Map<String, dynamic>? userData;
 
+  /// Al cargar, desplaza la vista hasta la tarjeta «Google Drive» (se usa al
+  /// llegar desde la sugerencia de conectar Drive en Apuntes).
+  final bool scrollToDrive;
+
   const ProfileScreen({
     super.key,
     this.userData,
+    this.scrollToDrive = false,
     ProfileService? service,
     AccountDeletionService? accountDeletionService,
     NotesApi? notesApi,
@@ -117,6 +122,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _searchingProfile = false;
   String _draftVisibility = 'public';
   _DriveStatus _driveStatus = _DriveStatus.idle;
+  final GlobalKey _driveCardKey = GlobalKey(debugLabel: 'profile-drive-card');
+  bool _scrolledToDrive = false;
 
   @override
   void initState() {
@@ -184,6 +191,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
     super.dispose();
   }
 
+  /// Lleva la tarjeta de Google Drive a la vista una sola vez, tras el primer
+  /// frame con el perfil cargado.
+  void _maybeScrollToDrive() {
+    if (!widget.scrollToDrive || _scrolledToDrive) return;
+    _scrolledToDrive = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _driveCardKey.currentContext;
+      if (!mounted || ctx == null) return;
+      Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic,
+        alignment: 0.1,
+      );
+    });
+  }
+
   // Contrato real: GET /profile/me (Auth).
   // Ver back/auth/cmd/server/main.go:107 y profile_handler.go:46.
   Future<void> _loadProfile() async {
@@ -204,6 +228,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _profile = p;
         _isLoading = false;
       });
+      _maybeScrollToDrive();
     } on ProfileApiException catch (_) {
       if (!mounted || !_sameSession(revision)) return;
       setState(() {
@@ -895,7 +920,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       const SizedBox(height: AppDimens.spaceLg),
       _buildPersonalDataCard(isDesktop),
       const SizedBox(height: AppDimens.spaceLg),
-      _buildDriveCard(isDesktop),
+      KeyedSubtree(key: _driveCardKey, child: _buildDriveCard(isDesktop)),
       const SizedBox(height: AppDimens.spaceXl),
       _buildAccountCard(isDesktop),
     ];
