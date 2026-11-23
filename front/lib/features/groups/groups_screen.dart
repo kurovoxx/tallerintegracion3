@@ -1432,17 +1432,6 @@ class _NewGroupSheetState extends State<_NewGroupSheet> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Center(
-                  child: Container(
-                    width: 44,
-                    height: 5,
-                    decoration: BoxDecoration(
-                      color: AppColors.border,
-                      borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: AppDimens.spaceLg),
                 Row(
                   children: [
                     const Expanded(
@@ -1454,7 +1443,7 @@ class _NewGroupSheetState extends State<_NewGroupSheet> {
                     NeobrutalistIconButton(
                       icon: Icons.close_rounded,
                       tooltip: 'Cerrar',
-                      size: 32,
+                      size: 36,
                       onPressed: () => Navigator.of(context).pop(),
                     ),
                   ],
