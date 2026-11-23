@@ -295,7 +295,7 @@ class _NotificationInboxState extends State<NotificationInbox> {
       thumbVisibility: true,
       trackVisibility: true,
       thickness: 8,
-      radius: BorderRadius.zero,
+      radius: Radius.zero,
       child: ListView.builder(
         padding: const EdgeInsets.only(right: AppDimens.spaceSm),
         itemCount: _items.length,
