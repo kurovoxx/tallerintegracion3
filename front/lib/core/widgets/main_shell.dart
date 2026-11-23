@@ -518,8 +518,6 @@ class _MainShellState extends State<MainShell> {
   /// Sección de seguidos en la sidebar: muestra la gente que el usuario sigue.
   /// Al tocar un seguido se abre su perfil público.
   Widget _buildFollowedSection({required bool isCollapsed}) {
-    if (_following.isEmpty) return const SizedBox.shrink();
-
     final maxShown = isCollapsed ? 6 : 8;
     final shown = _following.take(maxShown).toList();
 
@@ -571,6 +569,20 @@ class _MainShellState extends State<MainShell> {
           ),
         ),
         const SizedBox(height: AppDimens.spaceSm),
+        if (_following.isEmpty && !_loadingFollowing)
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppDimens.spaceLg,
+            ),
+            child: Text(
+              'Aún no sigues a nadie. Busca un perfil por código y dale a «Seguir».',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: AppColors.muted,
+              ),
+            ),
+          ),
         SizedBox(
           height: isCollapsed ? 44 : 72,
           child: ListView.builder(
