@@ -1333,39 +1333,35 @@ class _FolderStamp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Transform.rotate(
-      angle: -0.02,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          border: Border.all(
-            color: AppColors.border,
-            width: AppDimens.borderWidth,
-          ),
-          borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-          boxShadow: AppShadows.badge,
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceLow,
+        border: Border.all(
+          color: AppColors.border,
+          width: AppDimens.borderWidth,
         ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 12, color: AppColors.text),
-            const SizedBox(width: AppDimens.spaceXs),
-            Flexible(
-              child: Text(
-                label.toUpperCase(),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 9.5,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.8,
-                  color: AppColors.text,
-                ),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: AppColors.text),
+          const SizedBox(width: AppDimens.spaceSm),
+          Flexible(
+            child: Text(
+              label.toUpperCase(),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 0.7,
+                color: AppColors.text,
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
