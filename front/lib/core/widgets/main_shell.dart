@@ -278,12 +278,6 @@ class _MainShellState extends State<MainShell> {
       label: 'Perfil de Usuario',
       section: 'ESPACIO DE TRABAJO GENERAL',
     ),
-    _NavItem(
-      icon: Icons.notifications_rounded,
-      label: 'Notificaciones',
-      section: 'ESPACIO DE TRABAJO GENERAL',
-      showUnreadDot: true,
-    ),
   ];
 
   /// Selecciona una sección y cierra el drawer si está abierto.
@@ -291,11 +285,6 @@ class _MainShellState extends State<MainShell> {
     final scaffold = _scaffoldKey.currentState;
     if (scaffold != null && scaffold.isDrawerOpen) {
       Navigator.of(context).pop();
-    }
-    // Notificaciones es el último ítem: abre el diálogo en lugar de cambiar de página.
-    if (index == _navItems.length - 1) {
-      _openInbox();
-      return;
     }
     setState(() {
       _profileScrollToDrive = false;
@@ -401,7 +390,33 @@ class _MainShellState extends State<MainShell> {
           ),
         ],
       ),
-      actions: const <Widget>[SizedBox(width: AppDimens.spaceSm)],
+      actions: <Widget>[
+        IconButton(
+          tooltip: 'Notificaciones',
+          onPressed: _openInbox,
+          icon: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              const Icon(Icons.notifications_rounded, color: AppColors.text),
+              if (_unreadNotifications > 0)
+                Positioned(
+                  right: -3,
+                  top: -2,
+                  child: Container(
+                    width: 9,
+                    height: 9,
+                    decoration: BoxDecoration(
+                      color: AppColors.error,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: AppColors.surface, width: 1.5),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(width: AppDimens.spaceSm),
+      ],
     );
   }
 
@@ -496,7 +511,6 @@ class _MainShellState extends State<MainShell> {
                     label: item.label,
                     isSelected: isSelected,
                     isCollapsed: isCollapsed,
-                    showDot: item.showUnreadDot && _unreadNotifications > 0,
                     onTap: () => _onSelectPage(index),
                   ),
                 ],
@@ -729,15 +743,12 @@ class _NavItem {
     required this.label,
     required this.section,
     this.short,
-    this.showUnreadDot = false,
   });
 
   final IconData icon;
   final String label;
   final String? short;
   final String section;
-  // Solo Notificaciones: pinta el puntito rojo si hay no leídas.
-  final bool showUnreadDot;
 }
 
 class _SidebarTile extends StatelessWidget {

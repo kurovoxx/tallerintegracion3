@@ -291,10 +291,16 @@ class _NotificationInboxState extends State<NotificationInbox> {
         message: 'Aquí verás los recordatorios de tus reuniones.',
       );
     }
-    return ListView.builder(
-      shrinkWrap: true,
-      itemCount: _items.length,
-      itemBuilder: (context, i) => _tile(_items[i]),
+    return Scrollbar(
+      thumbVisibility: true,
+      trackVisibility: true,
+      thickness: 8,
+      radius: BorderRadius.zero,
+      child: ListView.builder(
+        padding: const EdgeInsets.only(right: AppDimens.spaceSm),
+        itemCount: _items.length,
+        itemBuilder: (context, i) => _tile(_items[i]),
+      ),
     );
   }
 
