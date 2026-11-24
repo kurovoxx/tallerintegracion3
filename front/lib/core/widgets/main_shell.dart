@@ -120,8 +120,9 @@ class _MainShellState extends State<MainShell> {
     _loadingUnread = true;
     try {
       final items = await _social.myNotifications();
+      final invitations = await _social.listPendingInvitations();
       if (!mounted) return;
-      final unread = items.where((n) => !n.read).length;
+      final unread = items.where((n) => !n.read).length + invitations.length;
       if (unread != _unreadNotifications) {
         setState(() => _unreadNotifications = unread);
       }

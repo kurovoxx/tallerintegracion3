@@ -147,6 +147,11 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	meetingH := httpHandler.NewMeetingHandler(meetingSvc)
 	notifH := httpHandler.NewNotificationHandler(service.NewNotificationService(meetingRepo))
 
+	// Invitaciones a grupos.
+	groupInviteRepo := repository.NewGroupInvitationRepository(pool)
+	groupInviteSvc := service.NewGroupInvitationService(groupInviteRepo)
+	groupInviteH := httpHandler.NewGroupInvitationHandler(groupInviteSvc)
+
 	streamTokenSvc := service.NewStreamTokenServiceWithKey(streamRepo, cfg.StreamSecret, cfg.StreamAPIKey)
 	// Sincronización server-side de membresía del canal al emitir tokens:
 	// MockClient en modo mock (sin red), RESTClient en modo real.
@@ -158,7 +163,7 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	viewSvc := service.NewViewService(groupSvc, todoSvc, sprintSvc, meetingSvc)
 	viewH := httpHandler.NewViewHandler(groupSvc, viewSvc)
 
-	startGin(groupSvc, todoH, sprintH, hoursH, meetingH, notifH, discordH, viewH, streamH, deletionRepo, pool, cfg)
+	startGin(groupSvc, todoH, sprintH, hoursH, meetingH, notifH, discordH, viewH, streamH, groupInviteH, deletionRepo, pool, cfg)
 }
 
 // startGRPC sirve SocialService (membresía/admin/limpieza) para Notes e
@@ -246,7 +251,7 @@ func streamNotifierFor(cfg *config.Config, streamRepo *repository.StreamReposito
 	)
 }
 
-func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, meetingH *httpHandler.MeetingHandler, notifH *httpHandler.NotificationHandler, discordH *httpHandler.DiscordHandler, viewH *httpHandler.ViewHandler, streamH *httpHandler.StreamHandler, deletionGate middleware.AccountAccessGate, pool *pgxpool.Pool, cfg *config.Config) {
+func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, meetingH *httpHandler.MeetingHandler, notifH *httpHandler.NotificationHandler, discordH *httpHandler.DiscordHandler, viewH *httpHandler.ViewHandler, streamH *httpHandler.StreamHandler, groupInviteH *httpHandler.GroupInvitationHandler, deletionGate middleware.AccountAccessGate, pool *pgxpool.Pool, cfg *config.Config) {
 	validator := &middleware.SimpleHS256Validator{
 		Secret:   []byte(cfg.JWTSecret),
 		Issuer:   "apuntes-auth",
@@ -312,6 +317,7 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 		protected.GET("/notifications/me", notifH.ListMine)
 		protected.POST("/notifications/:id/read", notifH.MarkRead)
 		protected.DELETE("/notifications/:id", notifH.Delete)
+		groupInviteH.RegisterRoutes(protected)
 		protected.GET("/groups/:id/stream-token", streamH.Token)
 		discordH.RegisterRoutes(protected)
 	}

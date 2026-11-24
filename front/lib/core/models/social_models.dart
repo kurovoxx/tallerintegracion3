@@ -92,6 +92,27 @@ class SidebarGroup {
   );
 }
 
+/// Grupo al que pertenece el usuario autenticado (GET /groups/me).
+class MyGroup {
+  const MyGroup({
+    required this.groupId,
+    required this.name,
+    required this.role,
+  });
+
+  final String groupId;
+  final String name;
+  final String role;
+
+  bool get isAdmin => role == 'admin';
+
+  factory MyGroup.fromJson(Map<String, dynamic> j) => MyGroup(
+    groupId: _str(j, 'group_id'),
+    name: _str(j, 'name', 'Grupo'),
+    role: _str(j, 'role', 'member'),
+  );
+}
+
 class Overview {
   Overview({
     required this.userId,
@@ -719,4 +740,47 @@ class Workspace {
       chatTokenEndpoint: _str(chat, 'token_endpoint'),
     );
   }
+}
+
+/// Invitación de grupo pendiente (viene de GET /group-invitations/pending).
+/// El usuario autenticado es el invitado: puede aceptar o rechazar.
+class GroupInvitation {
+  const GroupInvitation({
+    required this.id,
+    required this.groupId,
+    required this.groupName,
+    required this.invitedByUserId,
+    this.invitedByName,
+    required this.status, // pending, accepted, rejected
+    required this.createdAt,
+  });
+
+  final String id;
+  final String groupId;
+  final String groupName;
+  final String invitedByUserId;
+  final String? invitedByName;
+  final String status;
+  final DateTime createdAt;
+
+  factory GroupInvitation.fromJson(Map<String, dynamic> j) {
+    DateTime created = DateTime.now();
+    final raw = j['created_at'];
+    if (raw is String) {
+      created = DateTime.tryParse(raw) ?? created;
+    }
+    return GroupInvitation(
+      id: _str(j, 'id'),
+      groupId: _str(j, 'group_id'),
+      groupName: _str(j, 'group_name', 'Grupo'),
+      invitedByUserId: _str(j, 'invited_by_user_id'),
+      invitedByName: j['invited_by_name'] as String?,
+      status: _str(j, 'status', 'pending'),
+      createdAt: created,
+    );
+  }
+
+  bool get isPending => status == 'pending';
+  bool get isAccepted => status == 'accepted';
+  bool get isRejected => status == 'rejected';
 }

@@ -1,28 +1,33 @@
-/// Ruta: front/lib/features/academic/followed_screen.dart
-///
-/// Pestaña "Seguidos": lista las personas que el usuario autenticado sigue.
-/// Cada fila muestra el avatar, nombre, correo (si lo tiene) y un botón para
-/// dejar de seguir. Al tocar el nombre o avatar se abre el perfil público.
-/// Estilo Neo-Brutalism, consistente con GroupMembersTab.
+// Ruta: front/lib/features/academic/followed_screen.dart
+//
+// Pestaña "Seguidos": lista las personas que el usuario autenticado sigue.
+// Cada fila muestra el avatar, nombre, correo (si lo tiene) y un botón para
+// dejar de seguir. Al tocar el nombre o avatar se abre el perfil público.
+// Estilo Neo-Brutalism, consistente con GroupMembersTab.
 
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
 import '../../core/models/profile_models.dart';
+import '../../core/models/social_models.dart';
 import '../../core/services/profile_service.dart';
-import '../../core/services/session_manager.dart';
+import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
-import '../../core/widgets/user_avatar.dart';
 import 'public_profile_screen.dart';
 
 /// Pantalla de seguidos: muestra a quién sigue el usuario actual.
 class FollowedScreen extends StatefulWidget {
-  const FollowedScreen({super.key, ProfileService? service})
-    : _serviceOverride = service;
+  const FollowedScreen({
+    super.key,
+    ProfileService? service,
+    SocialService? groupsService,
+  }) : _serviceOverride = service,
+       _groupsServiceOverride = groupsService;
 
   final ProfileService? _serviceOverride;
+  final SocialService? _groupsServiceOverride;
 
   @override
   State<FollowedScreen> createState() => _FollowedScreenState();
@@ -30,24 +35,29 @@ class FollowedScreen extends StatefulWidget {
 
 class _FollowedScreenState extends State<FollowedScreen> {
   late final ProfileService _social;
+  late final SocialService _groupsService;
 
   bool _loading = true;
   String? _error;
   List<FollowedUser> _following = const [];
   String? _busyUserId;
 
-  String? get _me => SessionManager.currentUserId;
+  // Grupos donde el usuario es admin (para invitar a alguien que sigue).
+  List<MyGroup> _myGroups = const [];
+  bool _loadingMyGroups = false;
 
   @override
   void initState() {
     super.initState();
     _social = widget._serviceOverride ?? ProfileService();
+    _groupsService = widget._groupsServiceOverride ?? SocialService();
     _load();
   }
 
   @override
   void dispose() {
     if (widget._serviceOverride == null) _social.dispose();
+    if (widget._groupsServiceOverride == null) _groupsService.dispose();
     super.dispose();
   }
 
@@ -107,6 +117,74 @@ class _FollowedScreenState extends State<FollowedScreen> {
     }
   }
 
+  Future<void> _inviteToGroup(FollowedUser followed) async {
+    setState(() {
+      _busyUserId = followed.userId;
+      _loadingMyGroups = true;
+    });
+    try {
+      _myGroups = await _groupsService.listMyGroups();
+      if (!mounted) return;
+      final adminGroups = _myGroups.where((group) => group.isAdmin).toList();
+      if (adminGroups.isEmpty) {
+        _snack('Necesitas ser administrador de un grupo para invitar.');
+        return;
+      }
+
+      final selectedGroup = await showNeobrutalistDialog<MyGroup>(
+        context: context,
+        dialog: NeobrutalistDialog(
+          title: 'Invitar a ${followed.displayName}',
+          cancelLabel: 'Cancelar',
+          content: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Elige el grupo al que quieres invitar a esta persona.',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.text,
+                ),
+              ),
+              const SizedBox(height: AppDimens.spaceMd),
+              for (final group in adminGroups) ...[
+                NeobrutalistButton(
+                  label: group.name,
+                  icon: Icons.groups_rounded,
+                  variant: NeobrutalistButtonVariant.secondary,
+                  expand: true,
+                  onPressed: () => Navigator.of(context).pop(group),
+                ),
+                const SizedBox(height: AppDimens.spaceSm),
+              ],
+            ],
+          ),
+        ),
+      );
+      if (selectedGroup == null || !mounted) return;
+
+      await _groupsService.inviteToGroup(
+        groupId: selectedGroup.groupId,
+        invitedUserId: followed.userId,
+      );
+      if (!mounted) return;
+      _snack(
+        'Invitación enviada a ${followed.displayName} para ${selectedGroup.name}.',
+      );
+    } on SocialApiException catch (e) {
+      if (mounted) _snack(e.message, error: true);
+    } catch (_) {
+      if (mounted) _snack('No se pudo enviar la invitación.', error: true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busyUserId = null;
+          _loadingMyGroups = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -150,10 +228,7 @@ class _FollowedScreenState extends State<FollowedScreen> {
           ),
           if (_following.isNotEmpty)
             Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 6,
-                vertical: 2,
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
               decoration: BoxDecoration(
                 color: AppColors.accentYellow.withValues(alpha: 0.15),
                 border: Border.all(
@@ -228,8 +303,8 @@ class _FollowedScreenState extends State<FollowedScreen> {
             ),
           ],
         ),
-    );
-  }
+      );
+    }
     return ListView.builder(
       padding: const EdgeInsets.all(AppDimens.spaceMd),
       itemCount: _following.length,
@@ -282,7 +357,9 @@ class _FollowedScreenState extends State<FollowedScreen> {
               ],
             ),
             const SizedBox(height: AppDimens.spaceMd),
-            Row(
+            Wrap(
+              spacing: AppDimens.spaceSm,
+              runSpacing: AppDimens.spaceSm,
               children: <Widget>[
                 _action(
                   'Ver perfil',
@@ -296,6 +373,12 @@ class _FollowedScreenState extends State<FollowedScreen> {
                   Icons.person_remove_rounded,
                   NeobrutalistButtonVariant.secondary,
                   busy ? null : () => _toggleUnfollow(u),
+                ),
+                _action(
+                  _loadingMyGroups && busy ? 'Cargando grupos' : 'Invitar',
+                  Icons.group_add_rounded,
+                  NeobrutalistButtonVariant.accent,
+                  busy ? null : () => _inviteToGroup(u),
                 ),
               ],
             ),
@@ -328,10 +411,7 @@ class _FollowedScreenState extends State<FollowedScreen> {
       child: u.photoThumbUrl == null || u.photoThumbUrl!.isEmpty
           ? Text(
               u.displayName.isNotEmpty ? u.displayName[0].toUpperCase() : '?',
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w900,
-              ),
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900),
             )
           : null,
     );

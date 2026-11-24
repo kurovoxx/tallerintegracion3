@@ -4,6 +4,7 @@ import '../../core/models/social_models.dart';
 import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import '../../core/widgets/group_invitation_notifications.dart';
 
 /// Campanita de notificaciones para el header de grupos (tarea 3_5_14).
 /// Muestra badge con no-leídas y abre el diálogo; al cerrar, recarga el conteo.
@@ -61,8 +62,9 @@ class _NotificationsBellState extends State<NotificationsBell> {
     final seq = ++_refreshSeq;
     try {
       final items = await _service.myNotifications();
+      final invitations = await _service.listPendingInvitations();
       if (!mounted || seq != _refreshSeq) return;
-      _unread.value = _countUnread(items);
+      _unread.value = _countUnread(items) + invitations.length;
     } catch (_) {
       // Silencioso: sin sesión o backend caído, la campana no estorba.
     }
@@ -364,6 +366,7 @@ class _NotificationsListState extends State<_NotificationsList> {
   String? _error;
   // Cargas superpuestas (marcar varias seguidas): solo vale la última.
   int _loadSeq = 0;
+  int _pendingInvitations = 0;
   // Ids con POST /read en vuelo: un doble toque no repite la petición.
   final Set<String> _marking = <String>{};
 
@@ -384,7 +387,7 @@ class _NotificationsListState extends State<_NotificationsList> {
       if (!mounted || seq != _loadSeq) return;
       final unique = _dedupeById(items);
       setState(() => _items = unique);
-      widget.onUnreadChanged?.call(_countUnread(unique));
+      widget.onUnreadChanged?.call(_countUnread(unique) + _pendingInvitations);
     } on SocialApiException catch (e) {
       if (!mounted || seq != _loadSeq) return;
       setState(() => _error = e.message);
@@ -406,7 +409,7 @@ class _NotificationsListState extends State<_NotificationsList> {
         for (final item in _items) item.id == n.id ? item.asRead() : item,
       ];
     });
-    widget.onUnreadChanged?.call(_countUnread(_items));
+    widget.onUnreadChanged?.call(_countUnread(_items) + _pendingInvitations);
     try {
       await widget.service.markNotificationRead(n.id);
     } catch (_) {
@@ -432,83 +435,87 @@ class _NotificationsListState extends State<_NotificationsList> {
       );
     }
 
-    if (_error != null) {
-      return Padding(
-        padding: const EdgeInsets.all(AppDimens.spaceXl),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(
-              Icons.cloud_off_rounded,
-              size: 28,
-              color: AppColors.muted,
-            ),
-            const SizedBox(height: AppDimens.spaceSm),
-            Text(
-              _error!,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: AppColors.mutedStrong,
-              ),
-            ),
-            const SizedBox(height: AppDimens.spaceMd),
-            NeobrutalistButton(
-              label: 'Reintentar',
-              icon: Icons.refresh_rounded,
-              variant: NeobrutalistButtonVariant.secondary,
-              onPressed: _load,
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (_items.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.all(AppDimens.spaceXl),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.notifications_none_rounded,
-              size: 28,
-              color: AppColors.muted,
-            ),
-            SizedBox(height: AppDimens.spaceSm),
-            Text(
-              'SIN NOTIFICACIONES',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 0.4,
-                color: AppColors.text,
-              ),
-            ),
-            SizedBox(height: AppDimens.spaceXs),
-            Text(
-              'Aquí verás los recordatorios de tus reuniones.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w700,
-                color: AppColors.mutedStrong,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return ListView.builder(
+    return ListView(
       shrinkWrap: true,
       padding: const EdgeInsets.all(AppDimens.spaceSm),
-      itemCount: _items.length,
-      itemBuilder: (context, i) => _NotificationTile(
-        notification: _items[i],
-        onTap: () => _markRead(_items[i]),
-      ),
+      children: [
+        GroupInvitationNotifications(
+          service: widget.service,
+          onPendingCountChanged: (count) {
+            _pendingInvitations = count;
+            widget.onUnreadChanged?.call(
+              _countUnread(_items) + _pendingInvitations,
+            );
+          },
+        ),
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.all(AppDimens.spaceXl),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.cloud_off_rounded, color: AppColors.muted),
+                const SizedBox(height: AppDimens.spaceSm),
+                Text(
+                  _error!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.mutedStrong,
+                  ),
+                ),
+                const SizedBox(height: AppDimens.spaceMd),
+                NeobrutalistButton(
+                  label: 'Reintentar',
+                  icon: Icons.refresh_rounded,
+                  variant: NeobrutalistButtonVariant.secondary,
+                  onPressed: _load,
+                ),
+              ],
+            ),
+          )
+        else if (_items.isEmpty && _pendingInvitations == 0)
+          const Padding(
+            padding: EdgeInsets.all(AppDimens.spaceXl),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.notifications_none_rounded,
+                  size: 28,
+                  color: AppColors.muted,
+                ),
+                SizedBox(height: AppDimens.spaceSm),
+                Text(
+                  'SIN NOTIFICACIONES',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.4,
+                    color: AppColors.text,
+                  ),
+                ),
+                SizedBox(height: AppDimens.spaceXs),
+                Text(
+                  'Aquí verás invitaciones y recordatorios de reuniones.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.mutedStrong,
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          for (var i = 0; i < _items.length; i++)
+            _NotificationTile(
+              notification: _items[i],
+              onTap: () => _markRead(_items[i]),
+            ),
+      ],
     );
   }
 }

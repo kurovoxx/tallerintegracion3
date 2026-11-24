@@ -15,7 +15,7 @@
 
 ## Invocación (Front / Otros Servicios)
 
-- No se encontró invocación de `GET /groups/me` en `front/lib`. La pantalla principal ejecuta `_GroupsScreenState._load` (`front/lib/features/groups/groups_screen.dart:74-102`), que llama `SocialService.getOverview` (`front/lib/core/services/social_service.dart:83-93`) para obtener `GET /me/overview`.
+- `FollowedScreen._inviteToGroup` usa `SocialService.listMyGroups` para listar los grupos del usuario y ofrecer solo los que administra (`front/lib/features/academic/followed_screen.dart`).
 - No se encontró consumidor de producción desde otro microservicio.
 
 ## Flujo
@@ -26,7 +26,8 @@
 4. El handler responde el arreglo JSON, incluso vacío (`back/social/internal/handler/http/group_handler.go:135-140`). El consumidor Flutter documentado arriba usa `/me/overview`, no esta ruta.
 
 ## Front
-- **El front no llama este endpoint.** Para listar los grupos del usuario usa `GET /me/overview` (`SocialService.getOverview`, `front/lib/core/services/social_service.dart:84`), que devuelve además `sidebar.groups`, `stats` y `member_count` por grupo.
+- Para tarjetas y sidebar, el front usa `GET /me/overview` (`SocialService.getOverview`), que devuelve además `sidebar.groups`, `stats` y `member_count` por grupo.
+- Para elegir un grupo al invitar a una persona seguida, `SocialService.listMyGroups` consume este endpoint y `FollowedScreen` filtra los grupos con rol `admin`.
 - Consumidores del overview: `_GroupsScreenState._load` (`front/lib/features/groups/groups_screen.dart:81`, tarjetas de grupo) y el sidebar de `MainShell` (`front/lib/core/widgets/main_shell.dart:111`, primeros 5 grupos y contador).
 
 ## Tests
