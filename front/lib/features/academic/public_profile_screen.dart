@@ -200,7 +200,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo actualizar el seguimiento. Inténtalo de nuevo.'),
           backgroundColor: AppColors.error,
         ),
@@ -354,7 +354,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
           onPressed: () => Navigator.of(context).maybePop(),
         ),
         const SizedBox(width: AppDimens.spaceMd),
-        const Expanded(
+        Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
@@ -475,7 +475,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
         height: 180,
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
-          children: const <Widget>[
+          children: <Widget>[
             CircularProgressIndicator(color: AppColors.border),
             SizedBox(height: AppDimens.spaceMd),
             Text(
@@ -509,7 +509,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
           Text(
             title,
             textAlign: TextAlign.center,
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w900,
               fontSize: 16,
               color: AppColors.text,
@@ -519,7 +519,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
           Text(
             message,
             textAlign: TextAlign.center,
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w600,
               fontSize: 12.5,
               color: AppColors.mutedStrong,
@@ -595,7 +595,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
                     Text(
                       name,
                       key: const ValueKey('public-profile-name'),
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 22,
                         fontWeight: FontWeight.w900,
                         color: AppColors.text,
@@ -626,7 +626,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
           ),
           if (description != null || facts.isNotEmpty) ...<Widget>[
             const SizedBox(height: AppDimens.spaceLg),
-            const Divider(
+            Divider(
               color: AppColors.border,
               thickness: AppDimens.borderWidth,
               height: AppDimens.borderWidth,
@@ -678,7 +678,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
       children: <Widget>[
         Row(
           children: <Widget>[
-            const Expanded(
+            Expanded(
               child: Text(
                 'APUNTES PÚBLICOS',
                 style: TextStyle(
@@ -699,7 +699,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
         ),
         const SizedBox(height: AppDimens.spaceMd),
         if (_notesLoading)
-          const Padding(
+          Padding(
             padding: EdgeInsets.all(AppDimens.spaceXl),
             child: Center(
               child: CircularProgressIndicator(color: AppColors.border),
@@ -713,7 +713,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
               children: <Widget>[
                 Text(
                   _notesError!,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w800,
                     color: AppColors.text,
                   ),
@@ -729,7 +729,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
             ),
           )
         else if (_items.isEmpty)
-          const NeobrutalistCard(
+          NeobrutalistCard(
             key: ValueKey('public-profile-notes-empty'),
             child: Text(
               'Este perfil aún no tiene apuntes públicos.',
@@ -771,7 +771,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
             note.title,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w900,
               color: AppColors.text,
@@ -862,7 +862,7 @@ class _PublicAvatar extends StatelessWidget {
         .join();
     final fallback = Text(
       initials.isEmpty ? 'U' : initials,
-      style: const TextStyle(
+      style: TextStyle(
         fontSize: 26,
         fontWeight: FontWeight.w900,
         color: AppColors.text,
@@ -878,7 +878,7 @@ class _PublicAvatar extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.accentYellow,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
@@ -922,7 +922,7 @@ class _ProfileDetail extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.bg,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -938,7 +938,7 @@ class _ProfileDetail extends StatelessWidget {
             decoration: BoxDecoration(
               color: AppColors.accentYellow,
               border: Border.all(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidth,
               ),
               borderRadius: BorderRadius.circular(AppDimens.radiusChip),
@@ -952,7 +952,7 @@ class _ProfileDetail extends StatelessWidget {
               children: <Widget>[
                 Text(
                   label.toUpperCase(),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.w800,
                     letterSpacing: 0.6,
@@ -963,7 +963,7 @@ class _ProfileDetail extends StatelessWidget {
                 SelectableText(
                   value,
                   key: valueKey,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w700,
                     color: AppColors.text,

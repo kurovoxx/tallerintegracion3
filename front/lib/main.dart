@@ -21,6 +21,8 @@ Future<void> main() async {
   // En web el navegador valida TLS. Debe ir antes de cualquier http.Client.
   configurePillanCertificateTrust();
   WidgetsFlutterBinding.ensureInitialized();
+  // Modo de color guardado (neobrutalista por defecto, o UCT).
+  await AppThemeController.load();
   SessionManager.onSessionExpired = sessionExpiredNavigator(appNavigatorKey);
   final hasPersistedSession = await AuthedHttp.restorePersistedSession();
   runApp(
@@ -75,15 +77,19 @@ class _TallerIntegracionAppState extends State<TallerIntegracionApp>
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Sigma Academy',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.light,
-      navigatorKey: appNavigatorKey,
-      // Avisos que sobreviven a la pantalla (p. ej. una copia que termina
-      // después de volver atrás).
-      scaffoldMessengerKey: appScaffoldMessengerKey,
-      home: widget.home ?? const LoginScreen(),
+    // El tema se recalcula al cambiar el modo de color (neobrutalista/UCT).
+    return ValueListenableBuilder<AppColorMode>(
+      valueListenable: AppThemeController.mode,
+      builder: (context, _, _) => MaterialApp(
+        title: 'Sigma Academy',
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.light,
+        navigatorKey: appNavigatorKey,
+        // Avisos que sobreviven a la pantalla (p. ej. una copia que termina
+        // después de volver atrás).
+        scaffoldMessengerKey: appScaffoldMessengerKey,
+        home: widget.home ?? const LoginScreen(),
+      ),
     );
   }
 }

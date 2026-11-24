@@ -204,7 +204,7 @@ class _ProfilePhotoCropDialogState extends State<_ProfilePhotoCropDialog> {
           decoration: BoxDecoration(
             color: AppColors.surface,
             border: Border.all(
-              color: AppColors.border,
+              color: AppColors.outline,
               width: AppDimens.borderWidthThick,
             ),
             boxShadow: AppShadows.card,
@@ -217,7 +217,7 @@ class _ProfilePhotoCropDialogState extends State<_ProfilePhotoCropDialog> {
               children: [
                 Row(
                   children: [
-                    const Expanded(
+                    Expanded(
                       child: Text(
                         'AJUSTAR FOTO',
                         style: TextStyle(
@@ -239,7 +239,7 @@ class _ProfilePhotoCropDialogState extends State<_ProfilePhotoCropDialog> {
                   ],
                 ),
                 const SizedBox(height: AppDimens.spaceXs),
-                const Text(
+                Text(
                   'Arrastra la imagen para elegir la porción que se verá en tu '
                   'avatar. Usa los botones para acercar o alejar.',
                   style: TextStyle(
@@ -257,7 +257,7 @@ class _ProfilePhotoCropDialogState extends State<_ProfilePhotoCropDialog> {
                     decoration: BoxDecoration(
                       color: AppColors.surfaceLow,
                       border: Border.all(
-                        color: AppColors.border,
+                        color: AppColors.outline,
                         width: AppDimens.borderWidthThick,
                       ),
                       boxShadow: AppShadows.button,
@@ -298,13 +298,13 @@ class _ProfilePhotoCropDialogState extends State<_ProfilePhotoCropDialog> {
                         decoration: BoxDecoration(
                           color: AppColors.bg,
                           border: Border.all(
-                            color: AppColors.border,
+                            color: AppColors.outline,
                             width: AppDimens.borderWidth,
                           ),
                         ),
                         child: Text(
                           '${_zoom.toStringAsFixed(2)}x',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w900,
                             color: AppColors.text,

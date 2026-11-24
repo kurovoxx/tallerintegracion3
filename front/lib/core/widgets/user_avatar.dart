@@ -44,8 +44,8 @@ class UserAvatar extends StatefulWidget {
     required this.name,
     required this.size,
     this.photoUrl,
-    this.backgroundColor = AppColors.accentYellow,
-    this.foregroundColor = AppColors.text,
+    this.backgroundColor,
+    this.foregroundColor,
     this.borderRadius,
     this.border,
     this.boxShadow,
@@ -55,8 +55,8 @@ class UserAvatar extends StatefulWidget {
   final String name;
   final double size;
   final String? photoUrl;
-  final Color backgroundColor;
-  final Color foregroundColor;
+  final Color? backgroundColor;
+  final Color? foregroundColor;
   final BorderRadius? borderRadius;
   final BoxBorder? border;
   final List<BoxShadow>? boxShadow;
@@ -91,10 +91,10 @@ class _UserAvatarState extends State<UserAvatar> {
       clipBehavior: Clip.hardEdge,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: widget.backgroundColor,
+        color: (widget.backgroundColor ?? AppColors.accentYellow),
         border:
             widget.border ??
-            Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+            Border.all(color: AppColors.outline, width: AppDimens.borderWidth),
         borderRadius:
             widget.borderRadius ?? BorderRadius.circular(AppDimens.radiusChip),
         boxShadow: widget.boxShadow,
@@ -121,7 +121,7 @@ class _UserAvatarState extends State<UserAvatar> {
           fontSize: widget.fontSize ?? widget.size * 0.34,
           fontWeight: FontWeight.w900,
           letterSpacing: 0.2,
-          color: widget.foregroundColor,
+          color: (widget.foregroundColor ?? AppColors.text),
         ),
       ),
     );

@@ -309,7 +309,7 @@ void main() {
         ),
         const Size(1280, 900),
       );
-      // Ir a pestaña DISCORD (índice 1).
+      // Ir a pestaña DISCORD (índice 5).
       await tester.tap(find.text('DISCORD').first);
       await tester.pumpAndSettle();
       expect(find.text('DISCORD DEL GRUPO'), findsOneWidget);

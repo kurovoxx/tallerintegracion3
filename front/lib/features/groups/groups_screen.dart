@@ -122,7 +122,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Grupo creado.'),
           backgroundColor: AppColors.border,
         ),
@@ -131,7 +131,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
     } on SocialApiException catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo crear el grupo.'),
           backgroundColor: AppColors.error,
         ),
@@ -200,7 +200,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
     if (ok != true || !mounted) return;
     if (raw.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Pega el código de invitación.'),
           backgroundColor: AppColors.error,
         ),
@@ -210,7 +210,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
     final code = extractInviteCode(raw);
     if (code == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
             'Ese texto no contiene un código de invitación válido. '
             'Cópialo de nuevo desde «Invitar».',
@@ -293,7 +293,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
   Widget _buildContent(AppBreakpoint breakpoint, bool compact) {
     if (_isLoading) {
-      return const Center(
+      return Center(
         child: CircularProgressIndicator(color: AppColors.text),
       );
     }
@@ -304,7 +304,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
           decoration: BoxDecoration(
             color: AppColors.surface,
             border: Border.all(
-              color: AppColors.border,
+              color: AppColors.outline,
               width: AppDimens.borderWidth,
             ),
             borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -313,13 +313,13 @@ class _GroupsScreenState extends State<GroupsScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
+              Icon(
                 Icons.error_outline_rounded,
                 size: 36,
                 color: AppColors.text,
               ),
               const SizedBox(height: 12),
-              const Text(
+              Text(
                 'NO SE PUDO CARGAR TUS GRUPOS',
                 style: TextStyle(
                   fontWeight: FontWeight.w900,
@@ -331,7 +331,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
               Text(
                 _error!,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w600,
                   fontSize: 12,
                   color: AppColors.mutedStrong,
@@ -355,13 +355,13 @@ class _GroupsScreenState extends State<GroupsScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(
+            Icon(
               Icons.groups_rounded,
               size: 40,
               color: AppColors.mutedStrong,
             ),
             const SizedBox(height: 12),
-            const Text(
+            Text(
               'NO TIENES GRUPOS TODAVÍA',
               style: TextStyle(
                 fontWeight: FontWeight.w900,
@@ -370,7 +370,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
               ),
             ),
             const SizedBox(height: 6),
-            const Text(
+            Text(
               'Crea tu primer grupo y aparecerá aquí',
               style: TextStyle(
                 fontWeight: FontWeight.w600,
@@ -447,14 +447,14 @@ class _GroupsScreenState extends State<GroupsScreen> {
           style: TextStyle(
             fontSize: compact ? 22 : 26,
             fontWeight: FontWeight.w900,
-            color: AppColors.text,
+            color: AppColors.title,
             letterSpacing: -0.5,
           ),
         ),
         const SizedBox(height: AppDimens.spaceSm),
         Text(
           stats,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 12.5,
             fontWeight: FontWeight.w700,
             color: AppColors.mutedStrong,
@@ -606,7 +606,7 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
       if (!mounted) return;
       Navigator.of(context).pop(true);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Abandonaste el grupo.'),
           backgroundColor: AppColors.border,
         ),
@@ -658,7 +658,7 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
 
           // Descripción.
           if (description.isEmpty)
-            const Text(
+            Text(
               'Este grupo no tiene descripción.',
               style: TextStyle(
                 fontSize: 12,
@@ -689,7 +689,7 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
           else if (_error != null)
             Text(
               _error!,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
                 color: AppColors.error,
@@ -701,7 +701,7 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
               decoration: BoxDecoration(
                 color: AppColors.surfaceLow,
                 border: Border.all(
-                  color: AppColors.border,
+                  color: AppColors.outline,
                   width: AppDimens.borderWidth,
                 ),
                 borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -726,7 +726,7 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
             ),
 
           const SizedBox(height: AppDimens.spaceLg),
-          const Divider(
+          Divider(
             color: AppColors.border,
             thickness: AppDimens.borderWidth,
             height: 1,
@@ -734,7 +734,7 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
           const SizedBox(height: AppDimens.spaceSm),
 
           // Zona sensible: abandonar grupo.
-          const Text(
+          Text(
             'ZONA DE RIESGO',
             style: TextStyle(
               fontSize: 11,
@@ -816,7 +816,7 @@ class _InviteDialogState extends State<_InviteDialog> {
       if (!mounted) return;
       setState(() => _inviteToken = token);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Invitación actualizada.'),
           backgroundColor: AppColors.border,
         ),
@@ -824,7 +824,7 @@ class _InviteDialogState extends State<_InviteDialog> {
     } on SocialApiException catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo actualizar la invitación.'),
           backgroundColor: AppColors.error,
         ),
@@ -857,7 +857,7 @@ class _InviteDialogState extends State<_InviteDialog> {
       children: [
         Text(
           label.toUpperCase(),
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 11,
             fontWeight: FontWeight.w900,
             letterSpacing: 0.4,
@@ -875,7 +875,7 @@ class _InviteDialogState extends State<_InviteDialog> {
           decoration: BoxDecoration(
             color: AppColors.surfaceLow,
             border: Border.all(
-              color: AppColors.border,
+              color: AppColors.outline,
               width: AppDimens.borderWidth,
             ),
             borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -885,7 +885,7 @@ class _InviteDialogState extends State<_InviteDialog> {
               Expanded(
                 child: SelectableText(
                   value,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w800,
                     color: AppColors.text,
@@ -918,7 +918,7 @@ class _InviteDialogState extends State<_InviteDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text(
+            Text(
               'Comparte este código con la persona que quieras invitar. '
               'Debe abrir «Unirse a grupo» y pegarlo.',
               style: TextStyle(
@@ -942,7 +942,7 @@ class _InviteDialogState extends State<_InviteDialog> {
             else if (_error != null)
               Text(
                 _error!,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
                   color: AppColors.error,
@@ -970,7 +970,7 @@ class _InviteDialogState extends State<_InviteDialog> {
                 onPressed: _regenerating ? null : _regenerate,
               ),
               const SizedBox(height: AppDimens.spaceXs),
-              const Text(
+              Text(
                 'El código no vence. Si generas uno nuevo, el anterior deja '
                 'de funcionar (útil si se compartió por error).',
                 style: TextStyle(
@@ -1008,7 +1008,7 @@ class _GroupCard extends StatelessWidget {
   Color _colorFor(String id) {
     if (id.isEmpty) return AppColors.accentYellow;
     final h = id.hashCode;
-    const options = [
+    final options = [
       AppColors.accentYellow,
       AppColors.subjectBlue,
       AppColors.subjectMint,
@@ -1029,7 +1029,7 @@ class _GroupCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -1066,13 +1066,13 @@ class _GroupCard extends StatelessWidget {
                     decoration: BoxDecoration(
                       color: color,
                       border: Border.all(
-                        color: AppColors.border,
+                        color: AppColors.outline,
                         width: AppDimens.borderWidth,
                       ),
                       borderRadius: BorderRadius.circular(AppDimens.radiusChip),
                       boxShadow: AppShadows.badge,
                     ),
-                    child: const Icon(
+                    child: Icon(
                       Icons.groups_rounded,
                       size: 26,
                       color: AppColors.text,
@@ -1087,7 +1087,7 @@ class _GroupCard extends StatelessWidget {
                         group.name,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontWeight: FontWeight.w900,
                           fontSize: 14.5,
                           height: 1.15,
@@ -1099,7 +1099,7 @@ class _GroupCard extends StatelessWidget {
                       const SizedBox(height: 4),
                       Text(
                         'Rol: ${group.role}',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w800,
                           color: AppColors.mutedStrong,
@@ -1111,7 +1111,7 @@ class _GroupCard extends StatelessWidget {
               ],
             ),
           ),
-          const Divider(
+          Divider(
             color: AppColors.border,
             thickness: AppDimens.borderWidth,
             height: AppDimens.borderWidth,
@@ -1134,7 +1134,7 @@ class _GroupCard extends StatelessWidget {
                   ),
                   const SizedBox(width: AppDimens.spaceMd),
                 ] else ...[
-                  const Icon(
+                  Icon(
                     Icons.groups_rounded,
                     size: 18,
                     color: AppColors.mutedStrong,
@@ -1146,7 +1146,7 @@ class _GroupCard extends StatelessWidget {
                     '$members ${members == 1 ? 'integrante' : 'integrantes'}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 11.5,
                       fontWeight: FontWeight.w800,
                       color: AppColors.mutedStrong,
@@ -1156,7 +1156,7 @@ class _GroupCard extends StatelessWidget {
               ],
             ),
           ),
-          const Divider(
+          Divider(
             color: AppColors.border,
             thickness: AppDimens.borderWidth,
             height: AppDimens.borderWidth,
@@ -1242,7 +1242,7 @@ class _CodeChip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
       decoration: BoxDecoration(
         color: AppColors.bg,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radiusChip),
         boxShadow: AppShadows.badge,
       ),
@@ -1250,7 +1250,7 @@ class _CodeChip extends StatelessWidget {
         label.toUpperCase(),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: const TextStyle(
+        style: TextStyle(
           fontFamily: 'monospace',
           fontSize: 10,
           fontWeight: FontWeight.w900,
@@ -1307,7 +1307,7 @@ class _AvatarBox extends StatelessWidget {
       decoration: BoxDecoration(
         color: inverted ? AppColors.border : AppColors.accentYellow,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radiusChip),
@@ -1338,7 +1338,7 @@ class _FolderStamp extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surfaceLow,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -1353,7 +1353,7 @@ class _FolderStamp extends StatelessWidget {
               label.toUpperCase(),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 10,
                 fontWeight: FontWeight.w900,
                 letterSpacing: 0.7,
@@ -1412,11 +1412,11 @@ class _NewGroupSheetState extends State<_NewGroupSheet> {
           bottom: MediaQuery.viewInsetsOf(context).bottom,
         ),
         child: Container(
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             color: AppColors.surface,
             border: Border(
               top: BorderSide(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidthThick,
               ),
             ),
@@ -1449,7 +1449,7 @@ class _NewGroupSheetState extends State<_NewGroupSheet> {
                   ],
                 ),
                 const SizedBox(height: AppDimens.spaceMd),
-                const Text(
+                Text(
                   'CREAR GRUPO',
                   style: TextStyle(
                     fontWeight: FontWeight.w900,
@@ -1459,7 +1459,7 @@ class _NewGroupSheetState extends State<_NewGroupSheet> {
                   ),
                 ),
                 const SizedBox(height: 4),
-                const Text(
+                Text(
                   'Crea un espacio para organizar a tu equipo.',
                   style: TextStyle(
                     fontSize: 11,
@@ -1473,7 +1473,7 @@ class _NewGroupSheetState extends State<_NewGroupSheet> {
                 TextField(
                   controller: _nameController,
                   textInputAction: TextInputAction.next,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w800,
                     fontSize: 13.5,
                     color: AppColors.text,
@@ -1486,7 +1486,7 @@ class _NewGroupSheetState extends State<_NewGroupSheet> {
                 TextField(
                   controller: _descController,
                   textInputAction: TextInputAction.done,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w800,
                     fontSize: 13,
                     color: AppColors.text,

@@ -152,7 +152,7 @@ class _PublicNotePreviewScreenState extends State<PublicNotePreviewScreen> {
         backgroundColor: error ? AppColors.errorDeep : AppColors.border,
         content: Text(
           message,
-          style: const TextStyle(
+          style: TextStyle(
             color: AppColors.surface,
             fontWeight: FontWeight.w800,
           ),
@@ -223,7 +223,7 @@ class _PublicNotePreviewScreenState extends State<PublicNotePreviewScreen> {
                       key: const Key('note-preview-title'),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 22,
                         fontWeight: FontWeight.w900,
                         color: AppColors.text,
@@ -244,7 +244,7 @@ class _PublicNotePreviewScreenState extends State<PublicNotePreviewScreen> {
 
   Widget _buildBody() {
     if (_loading) {
-      return const Padding(
+      return Padding(
         padding: EdgeInsets.all(AppDimens.spaceXl),
         child: Center(child: CircularProgressIndicator(color: AppColors.text)),
       );
@@ -338,7 +338,7 @@ class _PublicNotePreviewScreenState extends State<PublicNotePreviewScreen> {
         children: <Widget>[
           Text(
             title,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w900,
               color: AppColors.text,
@@ -347,7 +347,7 @@ class _PublicNotePreviewScreenState extends State<PublicNotePreviewScreen> {
           const SizedBox(height: AppDimens.spaceSm),
           Text(
             message,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w700,
               color: AppColors.muted,

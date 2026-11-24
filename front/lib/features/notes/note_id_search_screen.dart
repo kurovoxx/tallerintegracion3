@@ -138,7 +138,7 @@ class _NoteIdSearchScreenState extends State<NoteIdSearchScreen> {
         backgroundColor: error ? AppColors.errorDeep : AppColors.border,
         content: Text(
           message,
-          style: const TextStyle(
+          style: TextStyle(
             color: AppColors.surface,
             fontWeight: FontWeight.w800,
           ),
@@ -196,7 +196,7 @@ class _NoteIdSearchScreenState extends State<NoteIdSearchScreen> {
                     onPressed: () => Navigator.of(context).maybePop(),
                   ),
                   const SizedBox(width: AppDimens.spaceMd),
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       'BUSCAR APUNTE POR ID',
                       style: TextStyle(
@@ -210,7 +210,7 @@ class _NoteIdSearchScreenState extends State<NoteIdSearchScreen> {
                 ],
               ),
               const SizedBox(height: AppDimens.spaceSm),
-              const Text(
+              Text(
                 'Pega el ID o el enlace de un apunte público, propio o compartido contigo.',
                 style: TextStyle(
                   fontSize: 13,
@@ -235,13 +235,13 @@ class _NoteIdSearchScreenState extends State<NoteIdSearchScreen> {
       controller: _controller,
       onSubmitted: (_) => _search(),
       textInputAction: TextInputAction.search,
-      style: const TextStyle(
+      style: TextStyle(
         fontWeight: FontWeight.w700,
         fontSize: 14,
         color: AppColors.text,
       ),
       decoration: appInputDecoration('ID del apunte o enlace').copyWith(
-        prefixIcon: const Icon(Icons.tag_rounded, color: AppColors.border),
+        prefixIcon: Icon(Icons.tag_rounded, color: AppColors.border),
       ),
     );
     final buttons = Wrap(
@@ -288,7 +288,7 @@ class _NoteIdSearchScreenState extends State<NoteIdSearchScreen> {
 
   Widget _buildState() {
     if (_loading) {
-      return const Padding(
+      return Padding(
         padding: EdgeInsets.all(AppDimens.spaceXl),
         child: Center(
           child: CircularProgressIndicator(color: AppColors.border),
@@ -390,7 +390,7 @@ class NoteSearchResultCard extends StatelessWidget {
         children: <Widget>[
           Text(
             note.title,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w900,
               color: AppColors.text,
@@ -432,7 +432,7 @@ class NoteSearchResultCard extends StatelessWidget {
             decoration: BoxDecoration(
               color: AppColors.bg,
               border: Border.all(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidth,
               ),
               borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -447,7 +447,7 @@ class NoteSearchResultCard extends StatelessWidget {
           ),
           if (documents.isNotEmpty) ...<Widget>[
             const SizedBox(height: AppDimens.spaceMd),
-            const Text(
+            Text(
               'ADJUNTOS',
               style: TextStyle(
                 fontSize: 11,
@@ -539,7 +539,7 @@ class _SearchMessageCard extends StatelessWidget {
             padding: const EdgeInsets.all(AppDimens.spaceSm),
             decoration: BoxDecoration(
               color: tone.background,
-              border: Border.all(color: AppColors.border, width: 1.5),
+              border: Border.all(color: AppColors.outline, width: 1.5),
               borderRadius: BorderRadius.circular(AppDimens.radiusChip),
             ),
             child: Icon(icon, color: tone.foreground, size: 22),
@@ -551,7 +551,7 @@ class _SearchMessageCard extends StatelessWidget {
               children: <Widget>[
                 Text(
                   title.toUpperCase(),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w900,
                     letterSpacing: 0.6,
@@ -561,7 +561,7 @@ class _SearchMessageCard extends StatelessWidget {
                 const SizedBox(height: AppDimens.spaceXs),
                 Text(
                   message,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w700,
                     color: AppColors.mutedStrong,

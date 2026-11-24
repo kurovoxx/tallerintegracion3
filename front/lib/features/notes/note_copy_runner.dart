@@ -137,7 +137,7 @@ class NoteCopyRunner {
         backgroundColor: ok ? AppColors.border : AppColors.errorDeep,
         content: Text(
           message,
-          style: const TextStyle(
+          style: TextStyle(
             color: AppColors.surface,
             fontWeight: FontWeight.w800,
           ),

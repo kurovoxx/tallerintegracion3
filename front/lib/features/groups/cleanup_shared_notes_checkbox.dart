@@ -32,7 +32,7 @@ class CleanupSharedNotesCheckbox extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppColors.surface,
           border: Border.all(
-            color: AppColors.border,
+            color: AppColors.outline,
             width: AppDimens.borderWidth,
           ),
           borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -49,8 +49,8 @@ class CleanupSharedNotesCheckbox extends StatelessWidget {
                 onChanged: (_) {},
                 activeColor: AppColors.border,
                 checkColor: AppColors.surface,
-                side: const BorderSide(
-                  color: AppColors.border,
+                side: BorderSide(
+                  color: AppColors.outline,
                   width: AppDimens.borderWidth,
                 ),
                 materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -60,7 +60,7 @@ class CleanupSharedNotesCheckbox extends StatelessWidget {
             Expanded(
               child: Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
                   color: AppColors.text,

@@ -74,20 +74,20 @@ class _ColumnPlateStyle {
 _ColumnPlateStyle _plateStyleFor(String title) {
   switch (title) {
     case 'En Progreso':
-      return const _ColumnPlateStyle(
+      return _ColumnPlateStyle(
         color: AppColors.accentBlue,
         foreground: AppColors.surface,
         icon: Icons.engineering_rounded,
       );
     case 'Finalizado':
-      return const _ColumnPlateStyle(
+      return _ColumnPlateStyle(
         color: AppColors.success,
         foreground: AppColors.text,
         icon: Icons.task_alt_rounded,
       );
     case 'Por Hacer':
     default:
-      return const _ColumnPlateStyle(
+      return _ColumnPlateStyle(
         color: AppColors.accentYellow,
         foreground: AppColors.text,
         icon: Icons.construction_rounded,
@@ -171,7 +171,7 @@ class _KanbanScreenState extends State<KanbanScreen> {
       if (keepBoard) {
         // Refresco en segundo plano: se conserva el tablero ya visible.
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             content: Text('No se pudo actualizar el tablero.'),
             backgroundColor: AppColors.error,
           ),
@@ -228,7 +228,7 @@ class _KanbanScreenState extends State<KanbanScreen> {
     } on SocialApiException catch (_) {
       if (!mounted) return null;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudieron cargar los miembros del grupo.'),
           backgroundColor: AppColors.error,
         ),
@@ -310,7 +310,7 @@ class _KanbanScreenState extends State<KanbanScreen> {
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Tarea creada.'),
           backgroundColor: AppColors.border,
         ),
@@ -319,7 +319,7 @@ class _KanbanScreenState extends State<KanbanScreen> {
     } on SocialApiException catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo crear la tarea.'),
           backgroundColor: AppColors.error,
         ),
@@ -392,7 +392,7 @@ class _KanbanScreenState extends State<KanbanScreen> {
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Tarea actualizada.'),
           backgroundColor: AppColors.border,
         ),
@@ -401,7 +401,7 @@ class _KanbanScreenState extends State<KanbanScreen> {
     } on SocialApiException catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo actualizar la tarea.'),
           backgroundColor: AppColors.error,
         ),
@@ -431,7 +431,7 @@ class _KanbanScreenState extends State<KanbanScreen> {
       await _social.deleteTodo(groupId: widget.groupId!.trim(), taskId: taskId);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Tarea eliminada.'),
           backgroundColor: AppColors.border,
         ),
@@ -440,7 +440,7 @@ class _KanbanScreenState extends State<KanbanScreen> {
     } on SocialApiException catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo eliminar la tarea.'),
           backgroundColor: AppColors.error,
         ),
@@ -474,7 +474,7 @@ class _KanbanScreenState extends State<KanbanScreen> {
         _realDone = before.$3;
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo mover la tarea.'),
           backgroundColor: AppColors.error,
         ),
@@ -767,7 +767,7 @@ class _KanbanScreenState extends State<KanbanScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
+              Text(
                 'NO SE PUDO CARGAR EL TABLERO',
                 style: TextStyle(
                   fontWeight: FontWeight.w900,
@@ -776,7 +776,7 @@ class _KanbanScreenState extends State<KanbanScreen> {
                 ),
               ),
               const SizedBox(height: 8),
-              const Text(
+              Text(
                 'No se pudo cargar el tablero.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
@@ -798,7 +798,7 @@ class _KanbanScreenState extends State<KanbanScreen> {
       );
     }
     if (_realTodo.isEmpty && _realDoing.isEmpty && _realDone.isEmpty) {
-      return const Center(
+      return Center(
         child: Padding(
           padding: EdgeInsets.all(16),
           child: Text(
@@ -826,12 +826,12 @@ class _KanbanScreenState extends State<KanbanScreen> {
       decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
       ),
-      child: const Text(
+      child: Text(
         'Selecciona un grupo para ver su tablero. '
         'Abajo: vista previa local de ejemplo.',
         style: TextStyle(
@@ -999,7 +999,7 @@ class _KanbanScreenState extends State<KanbanScreen> {
               Text(
                 'TABLERO KANBAN',
                 style: TextStyle(
-                  color: AppColors.text,
+                  color: AppColors.title,
                   fontWeight: FontWeight.w900,
                   fontSize: compact ? 22 : 28,
                   letterSpacing: -0.5,
@@ -1095,7 +1095,7 @@ class _KanbanColumn extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -1119,9 +1119,9 @@ class _KanbanColumn extends StatelessWidget {
       ),
       decoration: BoxDecoration(
         color: style.color,
-        border: const Border(
+        border: Border(
           bottom: BorderSide(
-            color: AppColors.border,
+            color: AppColors.outline,
             width: AppDimens.borderWidth,
           ),
         ),
@@ -1318,7 +1318,7 @@ class _TaskCardState extends State<_TaskCard> {
           decoration: BoxDecoration(
             color: AppColors.surface,
             border: Border.all(
-              color: AppColors.border,
+              color: AppColors.outline,
               width: AppDimens.borderWidth,
             ),
             borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -1345,7 +1345,7 @@ class _TaskCardState extends State<_TaskCard> {
                     InkWell(
                       onTap: widget.onMenu,
                       borderRadius: BorderRadius.circular(12),
-                      child: const Padding(
+                      child: Padding(
                         padding: EdgeInsets.all(2),
                         child: Icon(
                           Icons.more_vert_rounded,
@@ -1355,7 +1355,7 @@ class _TaskCardState extends State<_TaskCard> {
                       ),
                     )
                   else
-                    const Icon(
+                    Icon(
                       Icons.drag_indicator_rounded,
                       size: 15,
                       color: AppColors.muted,
@@ -1365,7 +1365,7 @@ class _TaskCardState extends State<_TaskCard> {
               const SizedBox(height: AppDimens.spaceSm),
               Text(
                 widget.task.title,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w800,
                   fontSize: 13,
                   height: 1.25,
@@ -1415,14 +1415,14 @@ class _TaskGhost extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.bg,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
       ),
       child: Row(
         children: [
-          const Icon(
+          Icon(
             Icons.drag_indicator_rounded,
             size: 15,
             color: AppColors.muted,
@@ -1433,7 +1433,7 @@ class _TaskGhost extends StatelessWidget {
               'ARRASTRANDO · $title',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 10.5,
                 fontWeight: FontWeight.w900,
                 letterSpacing: 0.5,
@@ -1476,7 +1476,7 @@ class _PrioritySticker extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
         color: background,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radiusChip),
         boxShadow: AppShadows.badge,
       ),
@@ -1505,7 +1505,7 @@ class _AssigneeSticker extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
       decoration: BoxDecoration(
         color: AppColors.surfaceLow,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radiusChip),
         boxShadow: AppShadows.badge,
       ),
@@ -1518,12 +1518,12 @@ class _AssigneeSticker extends StatelessWidget {
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: AppColors.accentYellow,
-              border: Border.all(color: AppColors.border, width: 1.5),
+              border: Border.all(color: AppColors.outline, width: 1.5),
               borderRadius: BorderRadius.circular(2),
             ),
             child: Text(
               initial,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 9,
                 fontWeight: FontWeight.w900,
                 color: AppColors.text,
@@ -1536,7 +1536,7 @@ class _AssigneeSticker extends StatelessWidget {
               name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 10.5,
                 fontWeight: FontWeight.w900,
                 letterSpacing: 0.3,
@@ -1562,14 +1562,14 @@ class _PlateCodeTag extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
       decoration: BoxDecoration(
         color: background,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radiusChip),
       ),
       child: Text(
         code.toUpperCase(),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: const TextStyle(
+        style: TextStyle(
           fontFamily: 'monospace',
           fontSize: 9.5,
           fontWeight: FontWeight.w800,
@@ -1592,13 +1592,13 @@ class _PlateCountBadge extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radiusChip),
         boxShadow: AppShadows.badge,
       ),
       child: Text(
         '$count',
-        style: const TextStyle(
+        style: TextStyle(
           fontFamily: 'monospace',
           fontSize: 11,
           fontWeight: FontWeight.w900,
@@ -1624,7 +1624,7 @@ class _PlateStamp extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppColors.surface,
           border: Border.all(
-            color: AppColors.border,
+            color: AppColors.outline,
             width: AppDimens.borderWidth,
           ),
           borderRadius: BorderRadius.circular(AppDimens.radiusChip),
@@ -1642,7 +1642,7 @@ class _PlateStamp extends StatelessWidget {
                 label.toUpperCase(),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 9.5,
                   fontWeight: FontWeight.w900,
                   letterSpacing: 0.8,
@@ -1710,7 +1710,7 @@ class _BoardTabChipState extends State<_BoardTabChip> {
             decoration: BoxDecoration(
               color: background,
               border: Border.all(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidth,
               ),
               borderRadius: BorderRadius.circular(AppDimens.radiusChip),
@@ -1752,13 +1752,13 @@ class _EmptyPlate extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(
+          Icon(
             Icons.layers_clear_rounded,
             size: 26,
             color: AppColors.muted,
           ),
           const SizedBox(height: AppDimens.spaceSm),
-          const Text(
+          Text(
             'PLACA LIBRE',
             style: TextStyle(
               fontSize: 11,
@@ -1834,11 +1834,11 @@ class _NewTaskSheetState extends State<_NewTaskSheet> {
           bottom: MediaQuery.viewInsetsOf(context).bottom,
         ),
         child: Container(
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             color: AppColors.surface,
             border: Border(
               top: BorderSide(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidthThick,
               ),
             ),
@@ -1872,7 +1872,7 @@ class _NewTaskSheetState extends State<_NewTaskSheet> {
                   ],
                 ),
                 const SizedBox(height: AppDimens.spaceMd),
-                const Text(
+                Text(
                   'NUEVA FICHA TÉCNICA',
                   style: TextStyle(
                     fontSize: 15,
@@ -1887,7 +1887,7 @@ class _NewTaskSheetState extends State<_NewTaskSheet> {
                 TextField(
                   controller: _titleController,
                   textInputAction: TextInputAction.next,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w800,
                     fontSize: 13.5,
                     color: AppColors.text,
@@ -1902,7 +1902,7 @@ class _NewTaskSheetState extends State<_NewTaskSheet> {
                 TextField(
                   controller: _subjectController,
                   textInputAction: TextInputAction.done,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontFamily: 'monospace',
                     fontWeight: FontWeight.w800,
                     fontSize: 13,
@@ -1981,11 +1981,11 @@ class _CardMenuSheet extends StatelessWidget {
           bottom: MediaQuery.viewInsetsOf(context).bottom,
         ),
         child: Container(
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             color: AppColors.surface,
             border: Border(
               top: BorderSide(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidthThick,
               ),
             ),
@@ -2004,7 +2004,7 @@ class _CardMenuSheet extends StatelessWidget {
                 title,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w900,
                   fontSize: 14,
                   color: AppColors.text,

@@ -314,7 +314,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         if (!mounted) return;
         if (manual) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
+            SnackBar(
               content: Text(reloadEmptyMessage),
               backgroundColor: AppColors.border,
             ),
@@ -371,7 +371,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     if (manual) {
       if (!hasSavedNotes(nodes)) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             content: Text(reloadEmptyMessage),
             backgroundColor: AppColors.border,
           ),
@@ -403,7 +403,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       if (cb != null) cb();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(reloadSuccessMessage),
           backgroundColor: AppColors.border,
         ),
@@ -556,7 +556,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         padding: const EdgeInsets.only(bottom: AppDimens.spaceMd),
         child: Text(
           'No se pudieron cargar tus notas oficiales: $_backendError',
-          style: const TextStyle(
+          style: TextStyle(
             fontWeight: FontWeight.w700,
             fontSize: 11.5,
             color: AppColors.errorDeep,
@@ -568,7 +568,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     final value = _backendAverage;
     if (value == null) {
       if (!_backendMode) return const SizedBox.shrink();
-      return const Padding(
+      return Padding(
         padding: EdgeInsets.only(bottom: AppDimens.spaceMd),
         child: Text(
           'SIN NOTAS OFICIALES REGISTRADAS',
@@ -619,7 +619,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text(
+        Text(
           'RESULTADO DE LA SIMULACIÓN',
           style: TextStyle(
             fontWeight: FontWeight.w900,
@@ -635,12 +635,12 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
             decoration: BoxDecoration(
               color: AppColors.surfaceLow,
               border: Border.all(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidth,
               ),
               borderRadius: BorderRadius.circular(AppDimens.radius),
             ),
-            child: const Text(
+            child: Text(
               'Completa tus notas y presiona Calcular para ver el resultado aquí.',
               style: TextStyle(
                 fontWeight: FontWeight.w700,
@@ -1141,7 +1141,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
             padding: const EdgeInsets.only(bottom: AppDimens.spaceSm),
             child: Text(
               _selectedCourse.toUpperCase(),
-              style: const TextStyle(
+              style: TextStyle(
                 fontWeight: FontWeight.w800,
                 fontSize: 11,
                 letterSpacing: 0.5,
@@ -1202,10 +1202,10 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
+              Text(
                 'CALCULADORA DE NOTAS',
                 style: TextStyle(
-                  color: AppColors.text,
+                  color: AppColors.title,
                   fontWeight: FontWeight.w900,
                   fontSize: 24,
                 ),
@@ -1300,7 +1300,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
 
     final header = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: const [
+      children: [
         Text(
           'NOTAS DEL SIMULADOR',
           style: TextStyle(
@@ -1417,7 +1417,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text(
+        Text(
           'ACCIONES',
           style: TextStyle(
             fontWeight: FontWeight.w900,
@@ -1592,7 +1592,7 @@ class _TargetCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Text(
+          Text(
             'NOTA OBJETIVO',
             style: TextStyle(
               fontWeight: FontWeight.w900,
@@ -1604,7 +1604,7 @@ class _TargetCard extends StatelessWidget {
           const SizedBox(height: AppDimens.spaceSm),
           Row(
             children: [
-              const Expanded(
+              Expanded(
                 child: Text(
                   'Quiero un',
                   style: TextStyle(
@@ -1625,7 +1625,7 @@ class _TargetCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: AppDimens.spaceXs),
-          const Text(
+          Text(
             'Escala 1.0 – 7.0',
             style: TextStyle(
               fontWeight: FontWeight.w700,
@@ -1657,7 +1657,7 @@ class _ModeSwitchCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Text(
+          Text(
             'MODO DE CÁLCULO',
             style: TextStyle(
               fontWeight: FontWeight.w900,
@@ -1669,7 +1669,7 @@ class _ModeSwitchCard extends StatelessWidget {
           const SizedBox(height: AppDimens.spaceSm),
           Row(
             children: [
-              const Expanded(
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -1860,7 +1860,7 @@ class _NormalGradeCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   label,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 11.5,
                     fontWeight: FontWeight.w900,
                     color: AppColors.text,
@@ -1900,7 +1900,7 @@ class _NormalGradeCard extends StatelessWidget {
           ] else ...[
             Row(
               children: [
-                const Expanded(
+                Expanded(
                   child: Text('PESO EN EL RAMO', style: _fieldLabelStyle),
                 ),
                 SizedBox(
@@ -1918,14 +1918,14 @@ class _NormalGradeCard extends StatelessWidget {
             const SizedBox(height: 6),
             Row(
               children: [
-                const Expanded(
+                Expanded(
                   child: Text('NOTA PADRE (AUTO)', style: _fieldLabelStyle),
                 ),
                 Text(
                   parentNote == null
                       ? '—'
                       : roundHalfUp(parentNote, 1).toStringAsFixed(1),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w900,
                     color: AppColors.accentBlue,
@@ -2000,7 +2000,7 @@ class _ConfidenceSwitch extends StatelessWidget {
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 color: selected ? AppColors.text : AppColors.surface,
-                border: Border.all(color: AppColors.border, width: 1.5),
+                border: Border.all(color: AppColors.outline, width: 1.5),
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
@@ -2070,7 +2070,7 @@ class _ChildGradeRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('NOTA', style: _fieldLabelStyle),
+                  Text('NOTA', style: _fieldLabelStyle),
                   const SizedBox(height: AppDimens.spaceXs),
                   _NumericInput(
                     controller: item.scoreController,
@@ -2087,7 +2087,7 @@ class _ChildGradeRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('PESO %', style: _fieldLabelStyle),
+                  Text('PESO %', style: _fieldLabelStyle),
                   const SizedBox(height: AppDimens.spaceXs),
                   _NumericInput(
                     controller: item.weightController,
@@ -2131,7 +2131,7 @@ class _ScoreAndWeightRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const labelStyle = TextStyle(
+    final labelStyle = TextStyle(
       fontSize: 9.5,
       fontWeight: FontWeight.w900,
       letterSpacing: 0.4,
@@ -2148,7 +2148,7 @@ class _ScoreAndWeightRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('NOTA', style: labelStyle),
+                  Text('NOTA', style: labelStyle),
                   const SizedBox(height: AppDimens.spaceXs),
                   _NumericInput(
                     controller: scoreController,
@@ -2165,7 +2165,7 @@ class _ScoreAndWeightRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('PONDERACIÓN (%)', style: labelStyle),
+                  Text('PONDERACIÓN (%)', style: labelStyle),
                   const SizedBox(height: AppDimens.spaceXs),
                   _NumericInput(
                     controller: weightController,
@@ -2182,7 +2182,7 @@ class _ScoreAndWeightRow extends StatelessWidget {
         const SizedBox(height: AppDimens.spaceSm),
         Row(
           children: [
-            const Expanded(child: Text('CONFIANZA', style: labelStyle)),
+            Expanded(child: Text('CONFIANZA', style: labelStyle)),
             _ConfidenceSwitch(
               value: confidence,
               onChanged: onConfidenceChanged,
@@ -2200,7 +2200,7 @@ class _NumericInput extends StatelessWidget {
     required this.hint,
     required this.onChanged,
     this.integer = false,
-    this.textColor = AppColors.text,
+    this.textColor,
     this.fieldKey,
   });
 
@@ -2208,7 +2208,7 @@ class _NumericInput extends StatelessWidget {
   final String hint;
   final VoidCallback onChanged;
   final bool integer;
-  final Color textColor;
+  final Color? textColor;
   final Key? fieldKey;
 
   @override
@@ -2223,7 +2223,7 @@ class _NumericInput extends StatelessWidget {
       style: TextStyle(
         fontWeight: FontWeight.w800,
         fontSize: 13,
-        color: textColor,
+        color: (textColor ?? AppColors.text),
       ),
       decoration: appInputDecoration(hint).copyWith(
         isDense: true,
@@ -2231,7 +2231,7 @@ class _NumericInput extends StatelessWidget {
           horizontal: AppDimens.spaceMd,
           vertical: AppDimens.spaceSm + AppDimens.borderWidth,
         ),
-        hintStyle: const TextStyle(
+        hintStyle: TextStyle(
           color: AppColors.muted,
           fontWeight: FontWeight.w700,
           fontSize: 12,
@@ -2323,7 +2323,7 @@ class _MiniActionButton extends StatelessWidget {
           ),
           decoration: BoxDecoration(
             color: AppColors.bg,
-            border: Border.all(color: AppColors.border, width: 1.5),
+            border: Border.all(color: AppColors.outline, width: 1.5),
             borderRadius: BorderRadius.circular(AppDimens.radiusChip),
             boxShadow: AppShadows.badge,
           ),
@@ -2334,7 +2334,7 @@ class _MiniActionButton extends StatelessWidget {
               const SizedBox(width: AppDimens.spaceXs),
               Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 9.5,
                   fontWeight: FontWeight.w900,
                   color: AppColors.text,
@@ -2348,7 +2348,7 @@ class _MiniActionButton extends StatelessWidget {
   }
 }
 
-const TextStyle _fieldLabelStyle = TextStyle(
+TextStyle get _fieldLabelStyle => TextStyle(
   fontSize: 9.5,
   fontWeight: FontWeight.w900,
   letterSpacing: 0.4,
@@ -2390,7 +2390,7 @@ class _ResultCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: background,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidthThick,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -2462,7 +2462,7 @@ class _ResultStat extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radiusChip),
@@ -2472,7 +2472,7 @@ class _ResultStat extends StatelessWidget {
         children: [
           Text(
             '$label ',
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 10,
               fontWeight: FontWeight.w900,
               letterSpacing: 0.4,
@@ -2481,7 +2481,7 @@ class _ResultStat extends StatelessWidget {
           ),
           Text(
             value,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w900,
               color: AppColors.text,
@@ -2529,10 +2529,10 @@ class _SquareIconButton extends StatelessWidget {
 BoxDecoration _cardDecoration({required Color color, required Offset shadow}) {
   return BoxDecoration(
     color: color,
-    border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+    border: Border.all(color: AppColors.outline, width: AppDimens.borderWidth),
     borderRadius: BorderRadius.circular(AppDimens.radius),
     boxShadow: [
-      BoxShadow(color: AppColors.border, offset: shadow, blurRadius: 0),
+      BoxShadow(color: AppColors.shadow, offset: shadow, blurRadius: 0),
     ],
   );
 }

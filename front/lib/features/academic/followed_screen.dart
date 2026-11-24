@@ -115,7 +115,7 @@ class _FollowedScreenState extends State<FollowedScreen> {
         child: Column(
           children: <Widget>[
             _header(),
-            const Divider(
+            Divider(
               color: AppColors.border,
               thickness: AppDimens.borderWidth,
               height: 1,
@@ -136,7 +136,7 @@ class _FollowedScreenState extends State<FollowedScreen> {
       ),
       child: Row(
         children: <Widget>[
-          const Icon(Icons.person_add_rounded, size: 16, color: AppColors.text),
+          Icon(Icons.person_add_rounded, size: 16, color: AppColors.text),
           const SizedBox(width: AppDimens.spaceSm),
           const Expanded(
             child: Text(
@@ -164,7 +164,7 @@ class _FollowedScreenState extends State<FollowedScreen> {
               ),
               child: Text(
                 '${_following.length}',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w900,
                   color: AppColors.accentYellow,
@@ -202,7 +202,7 @@ class _FollowedScreenState extends State<FollowedScreen> {
       );
     }
     if (_following.isEmpty) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
@@ -269,7 +269,7 @@ class _FollowedScreenState extends State<FollowedScreen> {
                           'Código: ${u.publicId}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
                             color: AppColors.muted,

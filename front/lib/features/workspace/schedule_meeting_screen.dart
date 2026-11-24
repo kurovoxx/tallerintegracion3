@@ -179,7 +179,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
       lastDate: DateTime.now().add(const Duration(days: 365)),
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
-          colorScheme: const ColorScheme.light(primary: AppColors.border),
+          colorScheme: ColorScheme.light(primary: AppColors.border),
         ),
         child: child!,
       ),
@@ -193,7 +193,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
       initialTime: _selectedTime,
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
-          colorScheme: const ColorScheme.light(primary: AppColors.border),
+          colorScheme: ColorScheme.light(primary: AppColors.border),
         ),
         child: child!,
       ),
@@ -240,7 +240,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
       await _loadUpcoming();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Reunión agendada.'),
           backgroundColor: AppColors.border,
         ),
@@ -290,7 +290,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                     decoration: BoxDecoration(
                       color: AppColors.surface,
                       border: Border.all(
-                        color: AppColors.border,
+                        color: AppColors.outline,
                         width: AppDimens.borderWidthAction,
                       ),
                       borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -312,7 +312,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                               validator: (v) => (v == null || v.trim().isEmpty)
                                   ? 'Requerido'
                                   : null,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontWeight: FontWeight.w700,
                                 fontSize: 13,
                                 color: AppColors.text,
@@ -329,7 +329,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                               decoration: appInputDecoration(
                                 'Agenda, temas a revisar...',
                               ),
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontWeight: FontWeight.w600,
                                 fontSize: 13,
                                 color: AppColors.text,
@@ -369,7 +369,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                               decoration: appInputDecoration(
                                 'https://meet.google.com/...',
                               ),
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontWeight: FontWeight.w700,
                                 fontSize: 13,
                                 color: AppColors.text,
@@ -378,7 +378,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                           ),
                           const SizedBox(height: AppDimens.spaceMd),
                           const AppFieldLabel('INVITAR MIEMBROS DEL GRUPO'),
-                          const Text(
+                          Text(
                             'Toca un integrante para agregarlo con su correo real. El chip muestra el nombre; internamente se guarda el email.',
                             style: TextStyle(
                               fontSize: 11,
@@ -438,7 +438,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                             ),
                           const SizedBox(height: AppDimens.spaceXl),
                           const AppFieldLabel('INVITAR POR CORREO (EXTERNO)'),
-                          const Text(
+                          Text(
                             'Solo para alguien fuera del grupo. Si es miembro, selecciónalo arriba.',
                             style: TextStyle(
                               fontSize: 11,
@@ -456,7 +456,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                                   appInputDecoration(
                                     'Correo del invitado',
                                   ).copyWith(
-                                    prefixIcon: const Icon(
+                                    prefixIcon: Icon(
                                       Icons.alternate_email_rounded,
                                       size: 18,
                                       color: AppColors.text,
@@ -469,13 +469,13 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                                             borderRadius: BorderRadius.circular(
                                               AppDimens.radius,
                                             ),
-                                            borderSide: const BorderSide(
+                                            borderSide: BorderSide(
                                               color: AppColors.error,
                                               width: AppDimens.borderWidth,
                                             ),
                                           ),
                                   ),
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontWeight: FontWeight.w700,
                                 fontSize: 13,
                                 color: AppColors.text,
@@ -537,14 +537,14 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                     Container(
                       padding: const EdgeInsets.all(AppDimens.spaceMd),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFE7F6E7),
+                        color: AppColors.successTint,
                         border: Border.all(
-                          color: AppColors.border,
+                          color: AppColors.outline,
                           width: AppDimens.borderWidth,
                         ),
                         borderRadius: BorderRadius.circular(AppDimens.radius),
                       ),
-                      child: const Text(
+                      child: Text(
                         'Reunión agendada.',
                         style: TextStyle(
                           fontSize: 12,
@@ -559,16 +559,16 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                     Container(
                       padding: const EdgeInsets.all(AppDimens.spaceMd),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFFDE8E8),
+                        color: AppColors.errorTintSoft,
                         border: Border.all(
-                          color: AppColors.border,
+                          color: AppColors.outline,
                           width: AppDimens.borderWidth,
                         ),
                         borderRadius: BorderRadius.circular(AppDimens.radius),
                       ),
                       child: Text(
                         _submitError!,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w700,
                           color: AppColors.text,
@@ -584,12 +584,12 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                       decoration: BoxDecoration(
                         color: AppColors.bg,
                         border: Border.all(
-                          color: AppColors.border,
+                          color: AppColors.outline,
                           width: AppDimens.borderWidth,
                         ),
                         borderRadius: BorderRadius.circular(AppDimens.radius),
                       ),
-                      child: const Text(
+                      child: Text(
                         'Selecciona un grupo para agendar una reunión.',
                         style: TextStyle(
                           fontSize: 11.5,
@@ -612,7 +612,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                         ),
                       )
                     else if (_upcoming.isEmpty)
-                      const Text(
+                      Text(
                         'Aún no hay reuniones agendadas.',
                         style: TextStyle(
                           fontSize: 12,
@@ -628,7 +628,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                           decoration: BoxDecoration(
                             color: AppColors.bg,
                             border: Border.all(
-                              color: AppColors.border,
+                              color: AppColors.outline,
                               width: AppDimens.borderWidth,
                             ),
                             borderRadius: BorderRadius.circular(
@@ -640,7 +640,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                             children: [
                               Text(
                                 m.title,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w800,
                                   color: AppColors.text,
@@ -649,7 +649,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                               const SizedBox(height: 2),
                               Text(
                                 _formatWhen(m.scheduledAt),
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 11.5,
                                   fontWeight: FontWeight.w700,
                                   color: AppColors.mutedStrong,
@@ -662,7 +662,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                                   m.description!.trim(),
                                   maxLines: 3,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w600,
                                     color: AppColors.text,
@@ -707,12 +707,12 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
           style: TextStyle(
             fontSize: isDesktop ? 24 : 20,
             fontWeight: FontWeight.w900,
-            color: AppColors.text,
+            color: AppColors.title,
             letterSpacing: -0.5,
           ),
         ),
         const SizedBox(height: AppDimens.spaceXs),
-        const Text(
+        Text(
           'Elige fecha y hora para reunir al grupo.',
           style: TextStyle(
             fontSize: 12.5,
@@ -765,7 +765,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
               decoration: BoxDecoration(
                 color: AppColors.bg,
                 border: Border.all(
-                  color: AppColors.border,
+                  color: AppColors.outline,
                   width: AppDimens.borderWidth,
                 ),
                 borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -780,14 +780,14 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                       value,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w900,
                         fontSize: 13,
                         color: AppColors.text,
                       ),
                     ),
                   ),
-                  const Icon(
+                  Icon(
                     Icons.expand_more_rounded,
                     size: 16,
                     color: AppColors.text,
@@ -811,7 +811,7 @@ class _FieldShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: const BoxDecoration(boxShadow: AppShadows.badge),
+      decoration: BoxDecoration(boxShadow: AppShadows.badge),
       child: child,
     );
   }
@@ -867,7 +867,7 @@ class _MemberStickerChipState extends State<_MemberStickerChip> {
             decoration: BoxDecoration(
               color: selected ? AppColors.accentYellow : AppColors.surface,
               border: Border.all(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidth,
               ),
               borderRadius: BorderRadius.circular(AppDimens.radiusChip),
@@ -888,7 +888,7 @@ class _MemberStickerChipState extends State<_MemberStickerChip> {
                 const SizedBox(width: AppDimens.spaceXs),
                 Text(
                   widget.label.toUpperCase(),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w900,
                     letterSpacing: 0.6,
@@ -923,7 +923,7 @@ class _GuestStickerChip extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.accentYellow,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radiusChip),
@@ -932,7 +932,7 @@ class _GuestStickerChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(
+          Icon(
             Icons.mail_outline_rounded,
             size: 13,
             color: AppColors.text,
@@ -943,7 +943,7 @@ class _GuestStickerChip extends StatelessWidget {
               label,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.w900,
                 letterSpacing: 0.3,
@@ -963,15 +963,15 @@ class _GuestStickerChip extends StatelessWidget {
                 onTap: onRemove,
                 child: Container(
                   padding: const EdgeInsets.all(6),
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     border: Border(
                       left: BorderSide(
-                        color: AppColors.border,
+                        color: AppColors.outline,
                         width: AppDimens.borderWidth,
                       ),
                     ),
                   ),
-                  child: const Icon(
+                  child: Icon(
                     Icons.close_rounded,
                     size: 14,
                     color: AppColors.text,
@@ -1045,12 +1045,12 @@ class _InkProgressBar extends StatelessWidget {
       height: 10,
       decoration: BoxDecoration(
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
       ),
-      child: const LinearProgressIndicator(
+      child: LinearProgressIndicator(
         minHeight: 6,
         color: AppColors.border,
         backgroundColor: AppColors.surfaceLow,

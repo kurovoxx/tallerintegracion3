@@ -115,7 +115,7 @@ class _NoteLikeSaveBarState extends State<NoteLikeSaveBar> {
         backgroundColor: AppColors.errorDeep,
         content: Text(
           message,
-          style: const TextStyle(
+          style: TextStyle(
             color: AppColors.surface,
             fontWeight: FontWeight.w800,
           ),
@@ -177,7 +177,7 @@ class _NoteLikeSaveBarState extends State<NoteLikeSaveBar> {
           duration: const Duration(seconds: 1),
           content: Text(
             saved ? 'Apunte guardado' : 'Quitado de guardados',
-            style: const TextStyle(
+            style: TextStyle(
               color: AppColors.surface,
               fontWeight: FontWeight.w800,
             ),

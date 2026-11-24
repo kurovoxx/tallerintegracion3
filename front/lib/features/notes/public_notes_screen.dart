@@ -170,7 +170,7 @@ class _PublicNotesScreenState extends State<PublicNotesScreen> {
                       onPressed: () => Navigator.of(context).maybePop(),
                     ),
                     const SizedBox(width: AppDimens.spaceMd),
-                    const Expanded(
+                    Expanded(
                       child: Text(
                         'APUNTES PÚBLICOS',
                         style: TextStyle(
@@ -184,7 +184,7 @@ class _PublicNotesScreenState extends State<PublicNotesScreen> {
                   ],
                 ),
                 const SizedBox(height: AppDimens.spaceSm),
-                const Text(
+                Text(
                   'Apuntes que otros estudiantes publicaron. Dales like o guárdalos para después.',
                   style: TextStyle(
                     fontSize: 13,
@@ -198,13 +198,13 @@ class _PublicNotesScreenState extends State<PublicNotesScreen> {
                   controller: _search,
                   onChanged: _onSearchChanged,
                   onSubmitted: (_) => _load(),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w700,
                     fontSize: 14,
                     color: AppColors.text,
                   ),
                   decoration: appInputDecoration('Buscar por título…').copyWith(
-                    prefixIcon: const Icon(
+                    prefixIcon: Icon(
                       Icons.search_rounded,
                       color: AppColors.border,
                     ),
@@ -232,7 +232,7 @@ class _PublicNotesScreenState extends State<PublicNotesScreen> {
 
   List<Widget> _buildContent() {
     if (_loading) {
-      return const <Widget>[
+      return <Widget>[
         Padding(
           padding: EdgeInsets.all(AppDimens.spaceXl),
           child: Center(
@@ -249,7 +249,7 @@ class _PublicNotesScreenState extends State<PublicNotesScreen> {
             children: <Widget>[
               Text(
                 _error!,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w800,
                   color: AppColors.text,
                 ),
@@ -268,7 +268,7 @@ class _PublicNotesScreenState extends State<PublicNotesScreen> {
     }
     final visible = _visible;
     if (visible.isEmpty) {
-      return const <Widget>[
+      return <Widget>[
         NeobrutalistCard(
           child: Text(
             'No hay apuntes públicos que coincidan.',
@@ -331,7 +331,7 @@ class PublicNoteCard extends StatelessWidget {
             note.title,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w900,
               color: AppColors.text,

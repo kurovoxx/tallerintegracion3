@@ -180,7 +180,7 @@ class _PasswordRecoveryScreenState extends State<PasswordRecoveryScreen> {
                   helperText:
                       'Mínimo 8 caracteres, una letra y un número, sin espacios.',
                   helperMaxLines: 2,
-                  helperStyle: const TextStyle(
+                  helperStyle: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
                     color: AppColors.mutedStrong,

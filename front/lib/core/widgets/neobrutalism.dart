@@ -84,6 +84,15 @@ class ClickCursor extends StatelessWidget {
 
 enum NeobrutalistButtonVariant { primary, secondary, accent, info, danger }
 
+/// Borde de un botón: en Sigma siempre la tinta; en UCT los botones rellenos
+/// usan su propio color (sin contorno visible) y el secundario un trazo suave.
+Color _variantBorder(NeobrutalistButtonVariant variant, Color background) {
+  if (!AppThemeController.isUct) return AppColors.border;
+  return variant == NeobrutalistButtonVariant.secondary
+      ? AppColors.outline
+      : background;
+}
+
 class _ButtonPalette {
   const _ButtonPalette({required this.background, required this.foreground});
 
@@ -136,29 +145,31 @@ class _NeobrutalistButtonState extends State<NeobrutalistButton> {
   _ButtonPalette get _palette {
     switch (widget.variant) {
       case NeobrutalistButtonVariant.primary:
-        return const _ButtonPalette(
-          background: AppColors.border,
-          foreground: AppColors.surface,
+        return _ButtonPalette(
+          background: AppColors.primary,
+          foreground: AppColors.onPrimary,
         );
       case NeobrutalistButtonVariant.secondary:
-        return const _ButtonPalette(
+        return _ButtonPalette(
           background: AppColors.surface,
-          foreground: AppColors.text,
+          foreground: AppThemeController.isUct
+              ? AppColors.border
+              : AppColors.text,
         );
       case NeobrutalistButtonVariant.accent:
-        return const _ButtonPalette(
+        return _ButtonPalette(
           background: AppColors.accentYellow,
-          foreground: AppColors.text,
+          foreground: AppColors.onAccent,
         );
       case NeobrutalistButtonVariant.info:
-        return const _ButtonPalette(
+        return _ButtonPalette(
           background: AppColors.accentBlueDeep,
-          foreground: AppColors.surface,
+          foreground: AppColors.onPrimary,
         );
       case NeobrutalistButtonVariant.danger:
-        return const _ButtonPalette(
+        return _ButtonPalette(
           background: AppColors.errorDeep,
-          foreground: AppColors.surface,
+          foreground: AppColors.onPrimary,
         );
     }
   }
@@ -177,7 +188,9 @@ class _NeobrutalistButtonState extends State<NeobrutalistButton> {
     final foreground = !_enabled
         ? AppColors.muted
         : (_focused ? palette.background : palette.foreground);
-    final borderColor = _enabled ? AppColors.border : AppColors.muted;
+    final borderColor = !_enabled
+        ? AppColors.muted
+        : _variantBorder(widget.variant, palette.background);
     final pressed = _pressed && _enabled;
 
     final content = AnimatedContainer(
@@ -300,7 +313,7 @@ class _NeobrutalistIconButtonState extends State<NeobrutalistIconButton> {
     if (!_enabled) return AppColors.surfaceLow;
     switch (widget.variant) {
       case NeobrutalistButtonVariant.primary:
-        return AppColors.border;
+        return AppColors.primary;
       case NeobrutalistButtonVariant.accent:
         return AppColors.accentYellow;
       case NeobrutalistButtonVariant.info:
@@ -318,10 +331,11 @@ class _NeobrutalistIconButtonState extends State<NeobrutalistIconButton> {
       case NeobrutalistButtonVariant.primary:
       case NeobrutalistButtonVariant.info:
       case NeobrutalistButtonVariant.danger:
-        return AppColors.surface;
+        return AppColors.onPrimary;
       case NeobrutalistButtonVariant.secondary:
+        return AppThemeController.isUct ? AppColors.border : AppColors.text;
       case NeobrutalistButtonVariant.accent:
-        return AppColors.text;
+        return AppColors.onAccent;
     }
   }
 
@@ -346,7 +360,9 @@ class _NeobrutalistIconButtonState extends State<NeobrutalistIconButton> {
       decoration: BoxDecoration(
         color: _background,
         border: Border.all(
-          color: _enabled ? AppColors.border : AppColors.muted,
+          color: _enabled
+              ? _variantBorder(widget.variant, _background)
+              : AppColors.muted,
           width: widget.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -419,7 +435,11 @@ class _NeobrutalistFabState extends State<NeobrutalistFab> {
       decoration: BoxDecoration(
         color: enabled ? AppColors.accentYellow : AppColors.surfaceLow,
         border: Border.all(
-          color: enabled ? AppColors.border : AppColors.muted,
+          color: !enabled
+              ? AppColors.muted
+              : (AppThemeController.isUct
+                    ? AppColors.accentYellow
+                    : AppColors.border),
           width: AppDimens.borderWidthAction,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -430,7 +450,7 @@ class _NeobrutalistFabState extends State<NeobrutalistFab> {
       child: Icon(
         widget.icon,
         size: 24,
-        color: enabled ? AppColors.text : AppColors.muted,
+        color: enabled ? AppColors.onAccent : AppColors.muted,
       ),
     );
 
@@ -515,7 +535,7 @@ class NeobrutalistBadge extends StatelessWidget {
       ),
       decoration: BoxDecoration(
         color: tone.background,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radiusChip),
         boxShadow: AppShadows.badge,
       ),
@@ -597,7 +617,7 @@ class NeobrutalistDialog extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppColors.surface,
           border: Border.all(
-            color: AppColors.border,
+            color: AppColors.outline,
             width: AppDimens.borderWidthThick,
           ),
           borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -611,7 +631,7 @@ class NeobrutalistDialog extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
               child: Text(
                 title.toUpperCase(),
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.w900,
                   letterSpacing: 0.6,
@@ -619,7 +639,7 @@ class NeobrutalistDialog extends StatelessWidget {
                 ),
               ),
             ),
-            const Divider(
+            Divider(
               color: AppColors.border,
               thickness: AppDimens.borderWidth,
               height: 1,
@@ -639,7 +659,7 @@ class NeobrutalistDialog extends StatelessWidget {
                 ),
               ),
             if (actions != null && actions!.isNotEmpty) ...<Widget>[
-              const Divider(
+              Divider(
                 color: AppColors.border,
                 thickness: AppDimens.borderWidth,
                 height: 1,
@@ -654,7 +674,7 @@ class NeobrutalistDialog extends StatelessWidget {
                 ),
               ),
             ] else if (confirmLabel != null || cancelLabel != null) ...<Widget>[
-              const Divider(
+              Divider(
                 color: AppColors.border,
                 thickness: AppDimens.borderWidth,
                 height: 1,
@@ -729,9 +749,9 @@ class NeobrutalistCard extends StatelessWidget {
     this.title,
     this.trailing,
     this.footer,
-    this.backgroundColor = AppColors.surface,
+    this.backgroundColor,
     this.padding = const EdgeInsets.all(AppDimens.spaceLg),
-    this.shadow = AppShadows.hard4,
+    this.shadow,
     this.borderWidth = AppDimens.borderWidth,
     this.onTap,
     this.semanticLabel,
@@ -741,9 +761,9 @@ class NeobrutalistCard extends StatelessWidget {
   final String? title;
   final Widget? trailing;
   final Widget? footer;
-  final Color backgroundColor;
+  final Color? backgroundColor;
   final EdgeInsetsGeometry padding;
-  final BoxShadow shadow;
+  final BoxShadow? shadow;
   final double borderWidth;
   final VoidCallback? onTap;
   final String? semanticLabel;
@@ -752,10 +772,10 @@ class NeobrutalistCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final card = Container(
       decoration: BoxDecoration(
-        color: backgroundColor,
-        border: Border.all(color: AppColors.border, width: borderWidth),
+        color: (backgroundColor ?? AppColors.surface),
+        border: Border.all(color: AppColors.outline, width: borderWidth),
         borderRadius: BorderRadius.circular(AppDimens.radius),
-        boxShadow: <BoxShadow>[shadow],
+        boxShadow: <BoxShadow>[(shadow ?? AppShadows.hard4)],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -769,7 +789,7 @@ class NeobrutalistCard extends StatelessWidget {
                   Expanded(
                     child: Text(
                       title!.toUpperCase(),
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w900,
                         letterSpacing: 0.6,
@@ -781,7 +801,7 @@ class NeobrutalistCard extends StatelessWidget {
                 ],
               ),
             ),
-            const Divider(
+            Divider(
               color: AppColors.border,
               thickness: AppDimens.borderWidth,
               height: 1,
@@ -789,7 +809,7 @@ class NeobrutalistCard extends StatelessWidget {
           ],
           Padding(padding: padding, child: child),
           if (footer != null) ...<Widget>[
-            const Divider(
+            Divider(
               color: AppColors.border,
               thickness: AppDimens.borderWidth,
               height: 1,
@@ -1096,7 +1116,7 @@ class _SelectOptionTileState extends State<_SelectOptionTile> {
                   ? AppColors.accentYellow
                   : AppColors.surface,
               border: Border.all(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidth,
               ),
               borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -1118,7 +1138,7 @@ class _SelectOptionTileState extends State<_SelectOptionTile> {
                     widget.label,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w800,
                       color: AppColors.text,
@@ -1126,7 +1146,7 @@ class _SelectOptionTileState extends State<_SelectOptionTile> {
                   ),
                 ),
                 if (widget.selected)
-                  const Icon(
+                  Icon(
                     Icons.check_rounded,
                     size: 18,
                     color: AppColors.text,
@@ -1168,13 +1188,13 @@ Future<DateTime?> showNeobrutalistDatePicker({
             onSurface: AppColors.text,
             surfaceTint: Colors.transparent,
           ),
-          datePickerTheme: const DatePickerThemeData(
+          datePickerTheme: DatePickerThemeData(
             backgroundColor: AppColors.surface,
             surfaceTintColor: Colors.transparent,
             elevation: 0,
             shape: RoundedRectangleBorder(
               side: BorderSide(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidthThick,
               ),
             ),
@@ -1184,7 +1204,7 @@ Future<DateTime?> showNeobrutalistDatePicker({
               RoundedRectangleBorder(),
             ),
             todayBorder: BorderSide(
-              color: AppColors.border,
+              color: AppColors.outline,
               width: AppDimens.borderWidth,
             ),
           ),

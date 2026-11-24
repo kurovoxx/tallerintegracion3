@@ -11,7 +11,7 @@ class AppFieldLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(
       text,
-      style: const TextStyle(
+      style: TextStyle(
         fontSize: 12,
         fontWeight: FontWeight.w900,
         color: AppColors.text,
@@ -26,25 +26,25 @@ class AppFieldLabel extends StatelessWidget {
 InputDecoration appInputDecoration(String hint) {
   return InputDecoration(
     hintText: hint,
-    hintStyle: const TextStyle(color: AppColors.muted, fontWeight: FontWeight.w600, fontSize: 14),
+    hintStyle: TextStyle(color: AppColors.muted, fontWeight: FontWeight.w600, fontSize: 14),
     filled: true,
     fillColor: AppColors.bg,
     contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
     enabledBorder: OutlineInputBorder(
       borderRadius: BorderRadius.circular(AppDimens.radius),
-      borderSide: const BorderSide(color: AppColors.border, width: AppDimens.borderWidth),
+      borderSide: BorderSide(color: AppColors.outline, width: AppDimens.borderWidth),
     ),
     focusedBorder: OutlineInputBorder(
       borderRadius: BorderRadius.circular(AppDimens.radius),
-      borderSide: const BorderSide(color: AppColors.border, width: AppDimens.borderWidth),
+      borderSide: BorderSide(color: AppColors.outline, width: AppDimens.borderWidth),
     ),
     errorBorder: OutlineInputBorder(
       borderRadius: BorderRadius.circular(AppDimens.radius),
-      borderSide: const BorderSide(color: AppColors.error, width: AppDimens.borderWidth),
+      borderSide: BorderSide(color: AppColors.error, width: AppDimens.borderWidth),
     ),
     focusedErrorBorder: OutlineInputBorder(
       borderRadius: BorderRadius.circular(AppDimens.radius),
-      borderSide: const BorderSide(color: AppColors.error, width: AppDimens.borderWidth),
+      borderSide: BorderSide(color: AppColors.error, width: AppDimens.borderWidth),
     ),
   );
 }
@@ -66,10 +66,10 @@ class SubmitButton extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: 14),
           decoration: BoxDecoration(
             color: AppColors.border,
-            border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+            border: Border.all(color: AppColors.outline, width: AppDimens.borderWidth),
             borderRadius: BorderRadius.circular(AppDimens.radius),
-            boxShadow: const [
-              BoxShadow(color: AppColors.border, offset: Offset(3, 3), blurRadius: 0),
+            boxShadow: [
+              AppShadows.hard3,
             ],
           ),
           child: Row(
@@ -77,15 +77,15 @@ class SubmitButton extends StatelessWidget {
             children: [
               Text(
                 text,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w800,
-                  color: Colors.white,
+                  color: AppColors.surface,
                   letterSpacing: 0.5,
                 ),
               ),
               const SizedBox(width: 8),
-              const Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 16),
+              Icon(Icons.arrow_forward_rounded, color: AppColors.onPrimary, size: 16),
             ],
           ),
         ),
@@ -109,10 +109,10 @@ class FeatureCard extends StatelessWidget {
       padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+        border: Border.all(color: AppColors.outline, width: AppDimens.borderWidth),
         borderRadius: BorderRadius.circular(AppDimens.radius),
-        boxShadow: const [
-          BoxShadow(color: AppColors.border, offset: Offset(4, 4), blurRadius: 0),
+        boxShadow: [
+          AppShadows.hard4,
         ],
       ),
       child: Column(
@@ -123,10 +123,10 @@ class FeatureCard extends StatelessWidget {
             height: 42,
             decoration: BoxDecoration(
               color: AppColors.bg,
-              border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+              border: Border.all(color: AppColors.outline, width: AppDimens.borderWidth),
               borderRadius: BorderRadius.circular(AppDimens.radius),
-              boxShadow: const [
-                BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0),
+              boxShadow: [
+                AppShadows.hard2,
               ],
             ),
             child: Icon(icon, color: AppColors.text, size: 20),
@@ -134,12 +134,12 @@ class FeatureCard extends StatelessWidget {
           const SizedBox(height: 14),
           Text(
             title,
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: AppColors.text),
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: AppColors.text),
           ),
           const SizedBox(height: 8),
           Text(
             desc,
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.muted, height: 1.35),
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.muted, height: 1.35),
           ),
         ],
       ),

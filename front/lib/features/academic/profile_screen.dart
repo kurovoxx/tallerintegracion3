@@ -318,7 +318,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } catch (_) {
       if (!mounted) return;
       messenger.showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo procesar la imagen. Prueba con otra foto.'),
           backgroundColor: AppColors.error,
         ),
@@ -345,7 +345,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _draftPhotoThumbUrl = null;
       });
       messenger.showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Foto de perfil actualizada.'),
           backgroundColor: AppColors.border,
         ),
@@ -353,7 +353,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } on ProfileApiException catch (_) {
       if (!mounted || !_sameSession(revision)) return;
       messenger.showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo guardar la foto. Inténtalo de nuevo.'),
           backgroundColor: AppColors.error,
         ),
@@ -361,7 +361,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } catch (_) {
       if (!mounted || !_sameSession(revision)) return;
       messenger.showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo guardar la foto. Inténtalo de nuevo.'),
           backgroundColor: AppColors.error,
         ),
@@ -408,7 +408,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
             'Cambios guardados.',
             style: TextStyle(fontWeight: FontWeight.w700),
@@ -419,7 +419,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } on ProfileApiException catch (_) {
       if (!mounted || !_sameSession(revision)) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
             'No se pudo guardar. Revisa los datos e inténtalo de nuevo.',
           ),
@@ -429,7 +429,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } catch (_) {
       if (!mounted || !_sameSession(revision)) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
             'No se pudo guardar. Revisa los datos e inténtalo de nuevo.',
           ),
@@ -640,7 +640,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final code = normalizePublicId(_profile?.publicId ?? '');
     if (code == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
             'No se pudo obtener el código de tu perfil. Vuelve a iniciar sesión.',
           ),
@@ -655,7 +655,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo copiar el código. Inténtalo nuevamente.'),
           backgroundColor: AppColors.error,
         ),
@@ -847,14 +847,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
         Text(
           'MI PERFIL',
           style: TextStyle(
-            color: AppColors.text,
+            color: AppColors.title,
             fontWeight: FontWeight.w900,
             fontSize: isDesktop ? 28 : 24,
             letterSpacing: -0.6,
           ),
         ),
         const SizedBox(height: 2),
-        const Text(
+        Text(
           'Tu identidad académica dentro de Sigma Academy',
           style: TextStyle(
             color: AppColors.muted,
@@ -952,7 +952,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           ),
           const SizedBox(height: AppDimens.spaceMd),
-          const Text(
+          Text(
             'Eliminar tu cuenta borra tu perfil, tus sesiones y tu '
             'participación en grupos. Es permanente.',
             style: TextStyle(
@@ -1011,7 +1011,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         Text(
           description,
           textAlign: isDesktop ? TextAlign.start : TextAlign.center,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 13,
             fontWeight: FontWeight.w600,
             color: AppColors.mutedStrong,
@@ -1065,7 +1065,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text(
+          Text(
             'Encuentra el perfil de otra persona con el código que te '
             'compartió.',
             style: TextStyle(
@@ -1088,7 +1088,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 setState(() => _publicProfileSearchError = null);
               }
             },
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w700,
               fontSize: 14,
               color: AppColors.text,
@@ -1097,7 +1097,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 appInputDecoration(
                   'Ingresa el código del perfil que deseas buscar',
                 ).copyWith(
-                  prefixIcon: const Icon(
+                  prefixIcon: Icon(
                     Icons.person_search_rounded,
                     size: 18,
                     color: AppColors.text,
@@ -1108,7 +1108,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
           if (_searchingProfile) ...[
             const SizedBox(height: AppDimens.spaceSm),
-            const LinearProgressIndicator(
+            LinearProgressIndicator(
               key: ValueKey('public-profile-searching'),
               color: AppColors.border,
               backgroundColor: AppColors.surface,
@@ -1168,7 +1168,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 : p.email!.trim(),
           ),
           const SizedBox(height: AppDimens.spaceLg),
-          const Divider(
+          Divider(
             color: AppColors.border,
             thickness: AppDimens.borderWidth,
             height: 1,
@@ -1260,20 +1260,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 decoration: BoxDecoration(
                   color: AppColors.accentYellow,
                   border: Border.all(
-                    color: AppColors.border,
+                    color: AppColors.outline,
                     width: AppDimens.borderWidth,
                   ),
                   borderRadius: BorderRadius.circular(AppDimens.radius),
                   boxShadow: AppShadows.badge,
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.cloud_rounded,
                   size: 22,
                   color: AppColors.text,
                 ),
               ),
               const SizedBox(width: AppDimens.spaceMd),
-              const Expanded(
+              Expanded(
                 child: Text(
                   'Delega el respaldo de tus apuntes y archivos: la vinculación se autoriza por OAuth '
                   'y el backend guarda el acceso para sincronizar tu Drive.',
@@ -1293,13 +1293,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
             const SizedBox(height: AppDimens.spaceSm),
             // Caja neobrutalista: mismo decorado que el resto de inputs.
             DecoratedBox(
-              decoration: const BoxDecoration(boxShadow: AppShadows.badge),
+              decoration: BoxDecoration(boxShadow: AppShadows.badge),
               child: TextField(
                 controller: _googleEmailController,
                 keyboardType: TextInputType.emailAddress,
                 enabled: !busy,
                 decoration: appInputDecoration('tucorreo@gmail.com'),
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w700,
                   fontSize: 14,
                   color: AppColors.text,
@@ -1307,7 +1307,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
             ),
             const SizedBox(height: AppDimens.spaceSm),
-            const Text(
+            Text(
               'Se usa para abrir tu cuenta y verificar la conexión. Nunca se comparte.',
               style: TextStyle(
                 fontSize: 11.5,
@@ -1481,7 +1481,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       children: [
         const AppFieldLabel('FOTO DE PERFIL'),
         const SizedBox(height: AppDimens.spaceSm),
-        const Text(
+        Text(
           'Si la imagen no es cuadrada, podrás elegir la porción que se verá '
           'en tu avatar antes de guardarla.',
           textAlign: TextAlign.start,
@@ -1523,7 +1523,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       decoration: BoxDecoration(
         color: AppColors.bg,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
       ),
@@ -1583,7 +1583,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -1619,13 +1619,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
       decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
         boxShadow: AppShadows.card,
       ),
-      child: const Column(
+      child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           CircularProgressIndicator(color: AppColors.text),
@@ -1651,13 +1651,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(
+            Icon(
               Icons.error_outline_rounded,
               size: 48,
               color: AppColors.text,
             ),
             const SizedBox(height: AppDimens.spaceMd),
-            const Text(
+            Text(
               'NO SE PUDO CARGAR TU PERFIL',
               textAlign: TextAlign.center,
               style: TextStyle(
@@ -1671,7 +1671,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               Text(
                 _errorMessage!,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w600,
                   fontSize: 12,
                   color: AppColors.mutedStrong,
@@ -1724,7 +1724,7 @@ class _ProfileCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -1746,7 +1746,7 @@ class _ProfileCard extends StatelessWidget {
                 Expanded(
                   child: Text(
                     title.toUpperCase(),
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w900,
                       letterSpacing: 0.6,
@@ -1763,7 +1763,7 @@ class _ProfileCard extends StatelessWidget {
               ],
             ),
           ),
-          const Divider(
+          Divider(
             color: AppColors.border,
             thickness: AppDimens.borderWidth,
             height: 1,
@@ -1809,7 +1809,7 @@ class _ProfileTextField extends StatelessWidget {
         AppFieldLabel(label),
         const SizedBox(height: AppDimens.spaceSm),
         Container(
-          decoration: const BoxDecoration(boxShadow: AppShadows.badge),
+          decoration: BoxDecoration(boxShadow: AppShadows.badge),
           child: TextFormField(
             controller: controller,
             keyboardType: keyboardType,
@@ -1818,7 +1818,7 @@ class _ProfileTextField extends StatelessWidget {
             maxLength: maxLength,
             validator: validator,
             cursorColor: AppColors.text,
-            style: const TextStyle(
+            style: TextStyle(
               color: AppColors.text,
               fontWeight: FontWeight.w700,
               fontSize: 14,
@@ -1827,7 +1827,7 @@ class _ProfileTextField extends StatelessWidget {
               prefixIcon: prefixIcon == null
                   ? null
                   : Icon(prefixIcon, size: 18, color: AppColors.text),
-              counterStyle: const TextStyle(
+              counterStyle: TextStyle(
                 color: AppColors.muted,
                 fontWeight: FontWeight.w700,
                 fontSize: 11,
@@ -1923,7 +1923,7 @@ class _AvatarState extends State<_Avatar> {
               decoration: BoxDecoration(
                 color: AppColors.accentYellow,
                 border: Border.all(
-                  color: AppColors.border,
+                  color: AppColors.outline,
                   width: AppDimens.borderWidth,
                 ),
                 borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
@@ -1960,12 +1960,12 @@ class _AvatarState extends State<_Avatar> {
                           decoration: BoxDecoration(
                             color: AppColors.accentYellow,
                             border: Border.all(
-                              color: AppColors.border,
+                              color: AppColors.outline,
                               width: AppDimens.borderWidth,
                             ),
                             boxShadow: AppShadows.badge,
                           ),
-                          child: const Icon(
+                          child: Icon(
                             Icons.edit_rounded,
                             size: 19,
                             color: AppColors.text,
@@ -2046,7 +2046,7 @@ class _VisibilityOption extends StatelessWidget {
             decoration: BoxDecoration(
               color: active ? AppColors.accentYellow : AppColors.bg,
               border: Border.all(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidth,
               ),
               borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -2059,7 +2059,7 @@ class _VisibilityOption extends StatelessWidget {
                 const SizedBox(width: AppDimens.spaceXs),
                 Text(
                   label,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w900,
                     color: AppColors.text,
@@ -2097,7 +2097,7 @@ class _SummaryRow extends StatelessWidget {
           decoration: BoxDecoration(
             color: AppColors.bg,
             border: Border.all(
-              color: AppColors.border,
+              color: AppColors.outline,
               width: AppDimens.borderWidth,
             ),
             borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
@@ -2111,7 +2111,7 @@ class _SummaryRow extends StatelessWidget {
             children: [
               Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w800,
                   color: AppColors.muted,
@@ -2121,7 +2121,7 @@ class _SummaryRow extends StatelessWidget {
               const SizedBox(height: 2),
               Text(
                 value,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
                   color: AppColors.text,

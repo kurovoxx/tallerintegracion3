@@ -374,9 +374,9 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         backgroundColor: AppColors.surface,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppDimens.radius),
-          side: const BorderSide(color: AppColors.border, width: 3),
+          side: BorderSide(color: AppColors.outline, width: 3),
         ),
-        title: const Text(
+        title: Text(
           'LIMPIAR MALLA',
           style: TextStyle(
             fontWeight: FontWeight.w900,
@@ -384,7 +384,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             color: AppColors.text,
           ),
         ),
-        content: const Text(
+        content: Text(
           '¿Seguro que quieres limpiar todos los ramos? Esta acción dejará los semestres vacíos.',
           style: TextStyle(
             fontWeight: FontWeight.w700,
@@ -414,7 +414,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       });
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Malla limpiada'),
           backgroundColor: AppColors.border,
         ),
@@ -618,7 +618,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           .toList(),
     );
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
+      SnackBar(
         content: Text('Ramo eliminado'),
         backgroundColor: AppColors.border,
       ),
@@ -696,14 +696,14 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         Text(
           'MI MALLA CURRICULAR',
           style: TextStyle(
-            color: AppColors.text,
+            color: AppColors.title,
             fontWeight: FontWeight.w900,
             fontSize: isDesktop ? 28 : 22,
             letterSpacing: -0.6,
           ),
         ),
         SizedBox(height: isMobile ? 2 : 4),
-        const Text(
+        Text(
           'Planifica y visualiza tu progreso académico.',
           style: TextStyle(
             color: AppColors.muted,
@@ -720,12 +720,12 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
                 color: AppColors.accentYellow,
-                border: Border.all(color: AppColors.border, width: 1.5),
+                border: Border.all(color: AppColors.outline, width: 1.5),
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
                 'CRÉDITOS APROBADOS: $_totalCreditsApproved',
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w900,
                   fontSize: 11,
                   color: AppColors.text,
@@ -736,12 +736,12 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
                 color: AppColors.surface,
-                border: Border.all(color: AppColors.border, width: 1.5),
+                border: Border.all(color: AppColors.outline, width: 1.5),
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
                 'TOTAL MALLA: $_totalCreditsAll créditos',
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w800,
                   fontSize: 11,
                   color: AppColors.muted,
@@ -752,12 +752,12 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
                 color: AppColors.success,
-                border: Border.all(color: AppColors.border, width: 1.5),
+                border: Border.all(color: AppColors.outline, width: 1.5),
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
                 'PROGRESO CARRERA: $_careerProgressPercent%',
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w900,
                   fontSize: 11,
                   color: AppColors.text,
@@ -776,7 +776,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           ),
           decoration: BoxDecoration(
             color: AppColors.surface,
-            border: Border.all(color: AppColors.border, width: 2),
+            border: Border.all(color: AppColors.outline, width: 2),
             borderRadius: BorderRadius.circular(AppDimens.radius),
             boxShadow: AppShadows.badge,
           ),
@@ -785,13 +785,13 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             children: [
               Row(
                 children: [
-                  const Icon(
+                  Icon(
                     Icons.trending_up_rounded,
                     size: 16,
                     color: AppColors.text,
                   ),
                   const SizedBox(width: 8),
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       'AVANCE DE TU CARRERA',
                       style: TextStyle(
@@ -804,7 +804,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                   ),
                   Text(
                     '$_careerProgressPercent%',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontWeight: FontWeight.w900,
                       fontSize: 11,
                       color: AppColors.text,
@@ -816,7 +816,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
               Container(
                 height: 12,
                 decoration: BoxDecoration(
-                  border: Border.all(color: AppColors.border, width: 2),
+                  border: Border.all(color: AppColors.outline, width: 2),
                   color: AppColors.bg,
                 ),
                 child: FractionallySizedBox(
@@ -828,13 +828,13 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
               const SizedBox(height: 6),
               Row(
                 children: [
-                  const Icon(
+                  Icon(
                     Icons.sync_rounded,
                     size: 13,
                     color: AppColors.muted,
                   ),
                   const SizedBox(width: 6),
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       'Sincronizado con tus cursos registrados en Mis Cursos',
                       maxLines: 1,
@@ -1025,7 +1025,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           padding: EdgeInsets.all(isMobile ? 8 : 12),
           decoration: BoxDecoration(
             color: AppColors.surface,
-            border: Border.all(color: AppColors.border, width: 2),
+            border: Border.all(color: AppColors.outline, width: 2),
             borderRadius: BorderRadius.circular(AppDimens.radius),
           ),
           child: Wrap(
@@ -1039,16 +1039,16 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                   Container(
                     width: 10,
                     height: 10,
-                    decoration: const BoxDecoration(
+                    decoration: BoxDecoration(
                       color: AppColors.accentYellow,
                       shape: BoxShape.circle,
                       border: Border.fromBorderSide(
-                        BorderSide(color: AppColors.border, width: 1),
+                        BorderSide(color: AppColors.outline, width: 1),
                       ),
                     ),
                   ),
                   const SizedBox(width: 8),
-                  const Text(
+                  Text(
                     'Aprobado',
                     style: TextStyle(
                       fontWeight: FontWeight.w800,
@@ -1066,12 +1066,12 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                     height: 10,
                     decoration: BoxDecoration(
                       color: AppColors.bg,
-                      border: Border.all(color: AppColors.border, width: 1),
+                      border: Border.all(color: AppColors.outline, width: 1),
                       shape: BoxShape.circle,
                     ),
                   ),
                   const SizedBox(width: 8),
-                  const Text(
+                  Text(
                     'En Curso / Pendiente',
                     style: TextStyle(
                       fontWeight: FontWeight.w800,
@@ -1087,16 +1087,16 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                   Container(
                     width: 10,
                     height: 10,
-                    decoration: const BoxDecoration(
+                    decoration: BoxDecoration(
                       color: AppColors.subjectCoral,
                       shape: BoxShape.circle,
                       border: Border.fromBorderSide(
-                        BorderSide(color: AppColors.border, width: 1),
+                        BorderSide(color: AppColors.outline, width: 1),
                       ),
                     ),
                   ),
                   const SizedBox(width: 8),
-                  const Text(
+                  Text(
                     'Reprobado',
                     style: TextStyle(
                       fontWeight: FontWeight.w800,
@@ -1106,7 +1106,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
                   ),
                 ],
               ),
-              const Text(
+              Text(
                 'Tap en ícono para cambiar estado',
                 style: TextStyle(
                   fontWeight: FontWeight.w700,
@@ -1130,7 +1130,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       padding: EdgeInsets.all(isMobile ? 10 : 14),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        border: Border.all(color: AppColors.border, width: 2),
+        border: Border.all(color: AppColors.outline, width: 2),
         borderRadius: BorderRadius.circular(AppDimens.radius),
         boxShadow: AppShadows.badge,
       ),
@@ -1138,7 +1138,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text(
+          Text(
             'SEMESTRES',
             style: TextStyle(
               fontWeight: FontWeight.w900,
@@ -1150,7 +1150,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           const SizedBox(height: 4),
           Text(
             '$_semesterCount de $_kMaxSemesters',
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w800,
               fontSize: 12,
               color: AppColors.muted,
@@ -1175,7 +1175,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
           ),
           if (_semesterCount > 1 && lastHasSubjects) ...[
             const SizedBox(height: 8),
-            const Text(
+            Text(
               'Vacía el último semestre antes de eliminarlo.',
               style: TextStyle(
                 fontWeight: FontWeight.w700,
@@ -1188,7 +1188,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
             const SizedBox(height: 8),
             Text(
               'Máximo $_kMaxSemesters semestres.',
-              style: const TextStyle(
+              style: TextStyle(
                 fontWeight: FontWeight.w700,
                 fontSize: 10.5,
                 color: AppColors.muted,
@@ -1217,19 +1217,15 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
       decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
-        boxShadow: const [
-          BoxShadow(
-            color: AppColors.border,
-            offset: Offset(4, 4),
-            blurRadius: 0,
-          ),
+        boxShadow: [
+          AppShadows.hard4,
         ],
       ),
-      child: const Center(
+      child: Center(
         child: CircularProgressIndicator(color: AppColors.text),
       ),
     );
@@ -1242,13 +1238,13 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(
+            Icon(
               Icons.error_outline_rounded,
               size: 48,
               color: AppColors.text,
             ),
             const SizedBox(height: 12),
-            const Text(
+            Text(
               'NO SE PUDO CARGAR LA MALLA',
               textAlign: TextAlign.center,
               style: TextStyle(
@@ -1258,7 +1254,7 @@ class _CurriculumScreenState extends State<CurriculumScreen> {
               ),
             ),
             const SizedBox(height: 8),
-            const Text(
+            Text(
               'Verifica tu conexión e intenta nuevamente.',
               textAlign: TextAlign.center,
               style: TextStyle(
@@ -1349,11 +1345,11 @@ class _AddSubjectDialogState extends State<_AddSubjectDialog> {
       backgroundColor: AppColors.surface,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppDimens.radius),
-        side: const BorderSide(color: AppColors.border, width: 3),
+        side: BorderSide(color: AppColors.outline, width: 3),
       ),
       title: Text(
         'AÑADIR RAMO · SEMESTRE ${widget.semester}',
-        style: const TextStyle(
+        style: TextStyle(
           fontWeight: FontWeight.w900,
           fontSize: 14,
           color: AppColors.text,
@@ -1399,14 +1395,14 @@ class _AddSubjectDialogState extends State<_AddSubjectDialog> {
                   padding: const EdgeInsets.symmetric(horizontal: 10),
                   decoration: BoxDecoration(
                     color: AppColors.bg,
-                    border: Border.all(color: AppColors.border, width: 2),
+                    border: Border.all(color: AppColors.outline, width: 2),
                     borderRadius: BorderRadius.circular(AppDimens.radius),
                   ),
                   child: DropdownButtonHideUnderline(
                     child: DropdownButton<String>(
                       value: _pickedId,
                       isExpanded: true,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w800,
                         fontSize: 13,
                         color: AppColors.text,
@@ -1433,7 +1429,7 @@ class _AddSubjectDialogState extends State<_AddSubjectDialog> {
               const SizedBox(height: 6),
               TextFormField(
                 controller: _nameCtrl,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w700,
                   fontSize: 13,
                   color: AppColors.text,
@@ -1456,7 +1452,7 @@ class _AddSubjectDialogState extends State<_AddSubjectDialog> {
                         const SizedBox(height: 6),
                         TextFormField(
                           controller: _codeCtrl,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontWeight: FontWeight.w700,
                             fontSize: 13,
                             color: AppColors.text,
@@ -1489,7 +1485,7 @@ class _AddSubjectDialogState extends State<_AddSubjectDialog> {
                             FilteringTextInputFormatter.digitsOnly,
                             LengthLimitingTextInputFormatter(2),
                           ],
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontWeight: FontWeight.w700,
                             fontSize: 13,
                             color: AppColors.text,
@@ -1514,14 +1510,14 @@ class _AddSubjectDialogState extends State<_AddSubjectDialog> {
                 padding: const EdgeInsets.symmetric(horizontal: 10),
                 decoration: BoxDecoration(
                   color: AppColors.bg,
-                  border: Border.all(color: AppColors.border, width: 2),
+                  border: Border.all(color: AppColors.outline, width: 2),
                   borderRadius: BorderRadius.circular(AppDimens.radius),
                 ),
                 child: DropdownButtonHideUnderline(
                   child: DropdownButton<String>(
                     value: _status,
                     isExpanded: true,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontWeight: FontWeight.w800,
                       fontSize: 13,
                       color: AppColors.text,
@@ -1601,7 +1597,7 @@ class _SemesterColumn extends StatelessWidget {
             ? AppColors.bg.withValues(alpha: 0.6)
             : AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: isEmpty
               ? AppDimens.borderWidthThick
               : AppDimens.borderWidth + 2,
@@ -1619,7 +1615,7 @@ class _SemesterColumn extends StatelessWidget {
             decoration: BoxDecoration(
               border: Border(
                 bottom: BorderSide(
-                  color: AppColors.border,
+                  color: AppColors.outline,
                   width: isEmpty ? 3 : 4,
                   style: isEmpty ? BorderStyle.solid : BorderStyle.solid,
                 ),
@@ -1632,7 +1628,7 @@ class _SemesterColumn extends StatelessWidget {
                     'SEMESTRE $semester',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontWeight: FontWeight.w900,
                       fontSize: 13,
                       color: AppColors.text,
@@ -1648,12 +1644,12 @@ class _SemesterColumn extends StatelessWidget {
                   ),
                   decoration: BoxDecoration(
                     color: AppColors.border,
-                    border: Border.all(color: AppColors.border, width: 1.5),
+                    border: Border.all(color: AppColors.outline, width: 1.5),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
                     '$credits créditos',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontWeight: FontWeight.w900,
                       fontSize: 10,
                       color: AppColors.surface,
@@ -1675,20 +1671,20 @@ class _SemesterColumn extends StatelessWidget {
                         decoration: BoxDecoration(
                           color: AppColors.surface,
                           border: Border.all(
-                            color: AppColors.border,
+                            color: AppColors.outline,
                             width: 2,
                             style: BorderStyle.solid,
                           ),
                           borderRadius: BorderRadius.circular(AppDimens.radius),
                         ),
-                        child: const Icon(
+                        child: Icon(
                           Icons.drag_indicator_rounded,
                           size: 28,
                           color: AppColors.muted,
                         ),
                       ),
                       const SizedBox(height: 12),
-                      const Text(
+                      Text(
                         'Arrastra ramos aquí o añade nuevos.',
                         textAlign: TextAlign.center,
                         style: TextStyle(
@@ -1722,7 +1718,7 @@ class _SemesterColumn extends StatelessWidget {
               decoration: BoxDecoration(
                 color: AppColors.surface,
                 border: Border.all(
-                  color: AppColors.border,
+                  color: AppColors.outline,
                   width: 2,
                   style: BorderStyle.solid,
                 ),
@@ -1730,7 +1726,7 @@ class _SemesterColumn extends StatelessWidget {
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
-                children: const [
+                children: [
                   Icon(Icons.add_rounded, size: 16, color: AppColors.text),
                   SizedBox(width: 6),
                   Text(
@@ -1811,14 +1807,10 @@ class _CurriculumCard extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: cardBg,
-        border: Border.all(color: AppColors.border, width: isFailed ? 3 : 2),
+        border: Border.all(color: AppColors.outline, width: isFailed ? 3 : 2),
         borderRadius: BorderRadius.circular(AppDimens.radius),
-        boxShadow: const [
-          BoxShadow(
-            color: AppColors.border,
-            offset: Offset(2, 2),
-            blurRadius: 0,
-          ),
+        boxShadow: [
+          AppShadows.hard2,
         ],
       ),
       child: Column(
@@ -1828,8 +1820,8 @@ class _CurriculumCard extends StatelessWidget {
             height: 6,
             decoration: BoxDecoration(
               color: topColor,
-              border: const Border(
-                bottom: BorderSide(color: AppColors.border, width: 1),
+              border: Border(
+                bottom: BorderSide(color: AppColors.outline, width: 1),
               ),
             ),
           ),
@@ -1867,7 +1859,7 @@ class _CurriculumCard extends StatelessWidget {
                             decoration: BoxDecoration(
                               color: AppColors.bg,
                               border: Border.all(
-                                color: AppColors.border,
+                                color: AppColors.outline,
                                 width: 1.5,
                               ),
                               borderRadius: BorderRadius.circular(4),
@@ -1875,7 +1867,7 @@ class _CurriculumCard extends StatelessWidget {
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                const Icon(
+                                Icon(
                                   Icons.sell_rounded,
                                   size: 10,
                                   color: AppColors.text,
@@ -1883,7 +1875,7 @@ class _CurriculumCard extends StatelessWidget {
                                 const SizedBox(width: 4),
                                 Text(
                                   ramo['code'] as String,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontWeight: FontWeight.w900,
                                     fontSize: 10,
                                     color: AppColors.text,
@@ -1913,7 +1905,7 @@ class _CurriculumCard extends StatelessWidget {
                           decoration: BoxDecoration(
                             color: AppColors.accentBlue,
                             border: Border.all(
-                              color: AppColors.border,
+                              color: AppColors.outline,
                               width: 1.5,
                             ),
                             borderRadius: BorderRadius.circular(
@@ -1923,7 +1915,7 @@ class _CurriculumCard extends StatelessWidget {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(
+                              Icon(
                                 Icons.link_rounded,
                                 size: 10,
                                 color: AppColors.surface,
@@ -1931,7 +1923,7 @@ class _CurriculumCard extends StatelessWidget {
                               const SizedBox(width: 4),
                               Text(
                                 requisiteLabel,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontWeight: FontWeight.w900,
                                   fontSize: 9,
                                   color: AppColors.surface,
@@ -1951,7 +1943,7 @@ class _CurriculumCard extends StatelessWidget {
                           decoration: BoxDecoration(
                             color: AppColors.accentBlue,
                             border: Border.all(
-                              color: AppColors.border,
+                              color: AppColors.outline,
                               width: 1.5,
                             ),
                             borderRadius: BorderRadius.circular(
@@ -1961,7 +1953,7 @@ class _CurriculumCard extends StatelessWidget {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(
+                              Icon(
                                 Icons.link_rounded,
                                 size: 10,
                                 color: AppColors.surface,
@@ -1969,7 +1961,7 @@ class _CurriculumCard extends StatelessWidget {
                               const SizedBox(width: 4),
                               Text(
                                 requisiteLabel,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontWeight: FontWeight.w900,
                                   fontSize: 9,
                                   color: AppColors.surface,
@@ -2002,14 +1994,14 @@ class _CurriculumCard extends StatelessWidget {
                         padding: const EdgeInsets.all(4),
                         decoration: BoxDecoration(
                           border: Border.all(
-                            color: AppColors.border.withValues(alpha: 0.5),
+                            color: AppColors.outline.withValues(alpha: 0.5),
                             width: 1,
                           ),
                           borderRadius: BorderRadius.circular(
                             AppDimens.radiusChip,
                           ),
                         ),
-                        child: const Icon(
+                        child: Icon(
                           Icons.close_rounded,
                           size: 12,
                           color: AppColors.muted,

@@ -299,7 +299,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
     });
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
+      SnackBar(
         content: Text('Curso creado correctamente'),
         backgroundColor: AppColors.border,
       ),
@@ -428,7 +428,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
     });
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
+      SnackBar(
         content: Text('Curso actualizado correctamente'),
         backgroundColor: AppColors.border,
       ),
@@ -676,14 +676,14 @@ class _CoursesScreenState extends State<CoursesScreen> {
         Text(
           'MIS CURSOS',
           style: TextStyle(
-            color: AppColors.text,
+            color: AppColors.title,
             fontWeight: FontWeight.w900,
             fontSize: context.isExpanded ? 28 : 22,
             letterSpacing: -0.6,
           ),
         ),
         const SizedBox(height: AppDimens.spaceXs),
-        const Text(
+        Text(
           'Planifica y visualiza tu progreso académico',
           style: TextStyle(
             color: AppColors.mutedStrong,
@@ -770,7 +770,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
 
     final search = TextField(
       onChanged: (v) => setState(() => _searchQuery = v),
-      style: const TextStyle(
+      style: TextStyle(
         fontWeight: FontWeight.w700,
         fontSize: 13,
         color: AppColors.text,
@@ -778,7 +778,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
       textInputAction: TextInputAction.search,
       decoration: appInputDecoration('Buscar por nombre, código o profesor…')
           .copyWith(
-            prefixIcon: const Icon(
+            prefixIcon: Icon(
               Icons.search_rounded,
               color: AppColors.muted,
               size: 20,
@@ -793,7 +793,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
       decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -802,12 +802,12 @@ class _CoursesScreenState extends State<CoursesScreen> {
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
           value: _statusFilter,
-          icon: const Icon(
+          icon: Icon(
             Icons.expand_more_rounded,
             size: 20,
             color: AppColors.text,
           ),
-          style: const TextStyle(
+          style: TextStyle(
             fontWeight: FontWeight.w800,
             fontSize: 13,
             color: AppColors.text,
@@ -914,7 +914,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
       decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -922,9 +922,9 @@ class _CoursesScreenState extends State<CoursesScreen> {
       ),
       child: Column(
         children: [
-          const Icon(Icons.menu_book_rounded, size: 40, color: AppColors.muted),
+          Icon(Icons.menu_book_rounded, size: 40, color: AppColors.muted),
           const SizedBox(height: AppDimens.spaceMd),
-          const Text(
+          Text(
             'AÚN NO TIENES CURSOS',
             textAlign: TextAlign.center,
             style: TextStyle(
@@ -935,7 +935,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
             ),
           ),
           const SizedBox(height: AppDimens.spaceXs),
-          const Text(
+          Text(
             'Agrega tu primer curso para ver unidades, materiales, evaluaciones y asistencia.',
             textAlign: TextAlign.center,
             style: TextStyle(
@@ -963,20 +963,20 @@ class _CoursesScreenState extends State<CoursesScreen> {
       decoration: BoxDecoration(
         color: AppColors.surfaceLow,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
       ),
       child: Column(
         children: [
-          const Icon(
+          Icon(
             Icons.search_off_rounded,
             size: 36,
             color: AppColors.muted,
           ),
           const SizedBox(height: AppDimens.spaceSm),
-          const Text(
+          Text(
             'SIN RESULTADOS',
             style: TextStyle(
               fontWeight: FontWeight.w900,
@@ -991,7 +991,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
                 ? 'No hay cursos que coincidan con los filtros actuales.'
                 : 'No hay cursos para mostrar.',
             textAlign: TextAlign.center,
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w700,
               fontSize: 12,
               color: AppColors.mutedStrong,
@@ -1033,7 +1033,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Row(
+            Row(
               children: [
                 SizedBox(
                   width: 18,
@@ -1068,7 +1068,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
                     decoration: BoxDecoration(
                       color: AppColors.surfaceLow,
                       border: Border.all(
-                        color: AppColors.border,
+                        color: AppColors.outline,
                         width: AppDimens.borderWidth,
                       ),
                       borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -1093,7 +1093,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
           decoration: BoxDecoration(
             color: AppColors.surface,
             border: Border.all(
-              color: AppColors.border,
+              color: AppColors.outline,
               width: AppDimens.borderWidth,
             ),
             borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -1102,13 +1102,13 @@ class _CoursesScreenState extends State<CoursesScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
+              Icon(
                 Icons.error_outline_rounded,
                 size: 48,
                 color: AppColors.text,
               ),
               const SizedBox(height: AppDimens.spaceMd),
-              const Text(
+              Text(
                 'NO SE PUDIERON CARGAR TUS CURSOS',
                 textAlign: TextAlign.center,
                 style: TextStyle(
@@ -1118,7 +1118,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
                 ),
               ),
               const SizedBox(height: AppDimens.spaceSm),
-              const Text(
+              Text(
                 'Intenta nuevamente en unos segundos.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
@@ -1230,7 +1230,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                     decoration: BoxDecoration(
                       color: AppColors.surface,
                       border: Border.all(
-                        color: AppColors.border,
+                        color: AppColors.outline,
                         width: AppDimens.borderWidthThick,
                       ),
                       borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -1248,7 +1248,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                                 children: [
                                   Text(
                                     '${course['code']} · ${course['credits']} CRÉDITOS',
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       fontWeight: FontWeight.w900,
                                       fontSize: 11,
                                       color: AppColors.mutedStrong,
@@ -1345,7 +1345,7 @@ class _CourseProgress extends StatelessWidget {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Text(
+            Text(
               'AVANCE DEL CURSO',
               style: TextStyle(
                 fontWeight: FontWeight.w900,
@@ -1356,7 +1356,7 @@ class _CourseProgress extends StatelessWidget {
             ),
             Text(
               '$progress%',
-              style: const TextStyle(
+              style: TextStyle(
                 fontWeight: FontWeight.w900,
                 fontSize: 12,
                 color: AppColors.text,
@@ -1370,7 +1370,7 @@ class _CourseProgress extends StatelessWidget {
           decoration: BoxDecoration(
             color: AppColors.surfaceLow,
             border: Border.all(
-              color: AppColors.border,
+              color: AppColors.outline,
               width: AppDimens.borderWidth,
             ),
           ),
@@ -1442,7 +1442,7 @@ class _CourseSections extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text(
+        Text(
           'SECCIONES DEL CURSO',
           style: TextStyle(
             fontWeight: FontWeight.w900,
@@ -1452,7 +1452,7 @@ class _CourseSections extends StatelessWidget {
           ),
         ),
         const SizedBox(height: AppDimens.spaceXs),
-        const Text(
+        Text(
           'Cada sección se abre en su propia ventana.',
           style: TextStyle(
             fontWeight: FontWeight.w700,
@@ -1534,7 +1534,7 @@ class _CourseCard extends StatelessWidget {
                       (course['name'] as String).toUpperCase(),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w900,
                         fontSize: 14.5,
                         color: AppColors.text,
@@ -1545,7 +1545,7 @@ class _CourseCard extends StatelessWidget {
                     const SizedBox(height: AppDimens.spaceXs),
                     Text(
                       '${course['code']} · ${course['credits']} créditos',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w800,
                         fontSize: 11,
                         color: AppColors.mutedStrong,
@@ -1593,7 +1593,7 @@ class _CourseCard extends StatelessWidget {
             decoration: BoxDecoration(
               color: AppColors.surfaceLow,
               border: Border.all(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidth,
               ),
             ),
@@ -1672,7 +1672,7 @@ class _CourseMeta extends StatelessWidget {
             text,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w700,
               fontSize: 11.5,
               color: AppColors.mutedStrong,
@@ -1709,7 +1709,7 @@ class _DetailMeta extends StatelessWidget {
               const SizedBox(width: AppDimens.spaceXs),
               Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w900,
                   fontSize: 10,
                   letterSpacing: 0.5,
@@ -1721,7 +1721,7 @@ class _DetailMeta extends StatelessWidget {
           const SizedBox(height: AppDimens.spaceXs),
           Text(
             value,
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w800,
               fontSize: 13,
               color: AppColors.text,
@@ -1842,11 +1842,11 @@ class _CourseDialogState extends State<_CourseDialog> {
         backgroundColor: AppColors.surface,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppDimens.radius),
-          side: const BorderSide(color: AppColors.border, width: 3),
+          side: BorderSide(color: AppColors.outline, width: 3),
         ),
         title: Text(
           _isEditing ? 'EDITAR CURSO' : 'CREAR NUEVO CURSO',
-          style: const TextStyle(
+          style: TextStyle(
             fontWeight: FontWeight.w900,
             fontSize: 16,
             color: AppColors.text,
@@ -1863,7 +1863,7 @@ class _CourseDialogState extends State<_CourseDialog> {
                 const SizedBox(height: 6),
                 TextFormField(
                   controller: _nameCtrl,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w700,
                     fontSize: 14,
                     color: AppColors.text,
@@ -1886,7 +1886,7 @@ class _CourseDialogState extends State<_CourseDialog> {
                           const SizedBox(height: 6),
                           TextFormField(
                             controller: _codeCtrl,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontWeight: FontWeight.w700,
                               fontSize: 13,
                               color: AppColors.text,
@@ -1917,7 +1917,7 @@ class _CourseDialogState extends State<_CourseDialog> {
                               FilteringTextInputFormatter.digitsOnly,
                               LengthLimitingTextInputFormatter(2),
                             ],
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontWeight: FontWeight.w700,
                               fontSize: 13,
                               color: AppColors.text,
@@ -1940,7 +1940,7 @@ class _CourseDialogState extends State<_CourseDialog> {
                 const SizedBox(height: 6),
                 TextFormField(
                   controller: _professorCtrl,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w700,
                     fontSize: 13,
                     color: AppColors.text,
@@ -1953,7 +1953,7 @@ class _CourseDialogState extends State<_CourseDialog> {
                 // 'Lun / Mié · 10:00–11:30'.
                 Row(
                   children: [
-                    const Text(
+                    Text(
                       'HORARIO SEMANAL',
                       style: TextStyle(
                         fontWeight: FontWeight.w900,
@@ -1970,7 +1970,7 @@ class _CourseDialogState extends State<_CourseDialog> {
                             _scheduleEntries.clear();
                           });
                         },
-                        child: const Text(
+                        child: Text(
                           'LIMPIAR',
                           style: TextStyle(
                             fontWeight: FontWeight.w900,
@@ -1991,7 +1991,7 @@ class _CourseDialogState extends State<_CourseDialog> {
                 ),
                 const SizedBox(height: 8),
                 if (_scheduleEntries.isEmpty)
-                  const Text(
+                  Text(
                     'Elige días y franjas en el popup para armar el horario.',
                     style: TextStyle(
                       fontWeight: FontWeight.w700,
@@ -2019,14 +2019,14 @@ class _CourseDialogState extends State<_CourseDialog> {
                   padding: const EdgeInsets.symmetric(horizontal: 10),
                   decoration: BoxDecoration(
                     color: AppColors.bg,
-                    border: Border.all(color: AppColors.border, width: 2),
+                    border: Border.all(color: AppColors.outline, width: 2),
                     borderRadius: BorderRadius.circular(AppDimens.radius),
                   ),
                   child: DropdownButtonHideUnderline(
                     child: DropdownButton<String>(
                       value: _status,
                       isExpanded: true,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w800,
                         fontSize: 13,
                         color: AppColors.text,
@@ -2062,7 +2062,7 @@ class _CourseDialogState extends State<_CourseDialog> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text(
+            child: Text(
               'CANCELAR',
               style: TextStyle(
                 fontWeight: FontWeight.w800,
@@ -2075,7 +2075,7 @@ class _CourseDialogState extends State<_CourseDialog> {
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.accentYellow,
               foregroundColor: AppColors.text,
-              side: const BorderSide(color: AppColors.border, width: 2),
+              side: BorderSide(color: AppColors.outline, width: 2),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(AppDimens.radius),
               ),
@@ -2203,9 +2203,9 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
         backgroundColor: AppColors.surface,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppDimens.radius),
-          side: const BorderSide(color: AppColors.border, width: 3),
+          side: BorderSide(color: AppColors.outline, width: 3),
         ),
-        title: const Text(
+        title: Text(
           'SELECCIONAR HORARIO/SALA',
           style: TextStyle(
             fontWeight: FontWeight.w900,
@@ -2218,7 +2218,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text(
+              Text(
                 'DÍAS',
                 style: TextStyle(
                   fontWeight: FontWeight.w900,
@@ -2249,7 +2249,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                 ],
               ),
               const SizedBox(height: 14),
-              const Text(
+              Text(
                 'BLOQUE / HORA',
                 style: TextStyle(
                   fontWeight: FontWeight.w900,
@@ -2272,7 +2272,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                 ],
               ),
               const SizedBox(height: 10),
-              const Text(
+              Text(
                 'MANUAL (HH:MM)',
                 style: TextStyle(
                   fontWeight: FontWeight.w900,
@@ -2288,7 +2288,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                     child: TextField(
                       controller: _manualStartCtrl,
                       keyboardType: TextInputType.datetime,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w700,
                         fontSize: 13,
                         color: AppColors.text,
@@ -2297,7 +2297,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                       onChanged: (_) => setState(() {}),
                     ),
                   ),
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.symmetric(horizontal: 8),
                     child: Text(
                       '–',
@@ -2312,7 +2312,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                     child: TextField(
                       controller: _manualEndCtrl,
                       keyboardType: TextInputType.datetime,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w700,
                         fontSize: 13,
                         color: AppColors.text,
@@ -2327,7 +2327,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                 const SizedBox(height: 6),
                 Text(
                   _manualErrorText()!,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w800,
                     fontSize: 11,
                     color: AppColors.error,
@@ -2335,7 +2335,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                 ),
               ],
               const SizedBox(height: 10),
-              const Text(
+              Text(
                 'SALA DEL BLOQUE (OPCIONAL)',
                 style: TextStyle(
                   fontWeight: FontWeight.w900,
@@ -2347,7 +2347,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
               const SizedBox(height: 6),
               TextField(
                 controller: _roomCtrl,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w700,
                   fontSize: 13,
                   color: AppColors.text,
@@ -2364,7 +2364,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                   ),
                   decoration: BoxDecoration(
                     color: AppColors.accentYellow,
-                    border: Border.all(color: AppColors.border, width: 2),
+                    border: Border.all(color: AppColors.outline, width: 2),
                     borderRadius: BorderRadius.circular(AppDimens.radius),
                   ),
                   child: Column(
@@ -2372,7 +2372,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                     children: [
                       Text(
                         _preview,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontWeight: FontWeight.w900,
                           fontSize: 11,
                           color: AppColors.text,
@@ -2381,7 +2381,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                       if (_realRoom(_roomCtrl.text) != null)
                         Text(
                           'SALA ${_realRoom(_roomCtrl.text)}',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontWeight: FontWeight.w800,
                             fontSize: 10,
                             color: AppColors.muted,
@@ -2401,7 +2401,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
               ),
               if (_added.isNotEmpty) ...[
                 const SizedBox(height: 14),
-                const Text(
+                Text(
                   'BLOQUES AÑADIDOS',
                   style: TextStyle(
                     fontWeight: FontWeight.w900,
@@ -2430,7 +2430,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text(
+            child: Text(
               'CANCELAR',
               style: TextStyle(
                 fontWeight: FontWeight.w800,
@@ -2469,7 +2469,7 @@ class _ScheduleEntryChip extends StatelessWidget {
       padding: const EdgeInsets.only(left: 10, right: 4, top: 6, bottom: 6),
       decoration: BoxDecoration(
         color: AppColors.accentYellow,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radiusChip),
       ),
       child: Row(
@@ -2481,7 +2481,7 @@ class _ScheduleEntryChip extends StatelessWidget {
             children: [
               Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w900,
                   fontSize: 10,
                   color: AppColors.text,
@@ -2490,7 +2490,7 @@ class _ScheduleEntryChip extends StatelessWidget {
               if (_realRoom(room) != null)
                 Text(
                   'SALA ${_realRoom(room)}',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w800,
                     fontSize: 9,
                     color: AppColors.muted,
@@ -2502,7 +2502,7 @@ class _ScheduleEntryChip extends StatelessWidget {
           InkWell(
             onTap: onDelete,
             borderRadius: BorderRadius.circular(4),
-            child: const Padding(
+            child: Padding(
               padding: EdgeInsets.all(2),
               child: Icon(Icons.close_rounded, size: 14, color: AppColors.text),
             ),
@@ -2543,7 +2543,7 @@ class _ScheduleDayChip extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(
             color: selected ? AppColors.accentYellow : AppColors.surface,
-            border: Border.all(color: AppColors.border, width: 1.5),
+            border: Border.all(color: AppColors.outline, width: 1.5),
             borderRadius: BorderRadius.circular(AppDimens.radiusChip),
             boxShadow: selected ? null : AppShadows.badge,
           ),
