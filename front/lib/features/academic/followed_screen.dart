@@ -139,7 +139,7 @@ class _FollowedScreenState extends State<FollowedScreen> {
           content: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text(
+              Text(
                 'Elige el grupo al que quieres invitar a esta persona.',
                 style: TextStyle(
                   fontWeight: FontWeight.w700,

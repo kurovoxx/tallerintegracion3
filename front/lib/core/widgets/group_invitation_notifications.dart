@@ -102,7 +102,7 @@ class _GroupInvitationNotificationsState
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             content: Text('No se pudo responder a la invitación.'),
             backgroundColor: AppColors.errorDeep,
           ),
@@ -136,7 +136,7 @@ class _GroupInvitationNotificationsState
             Expanded(
               child: Text(
                 _error!,
-                style: const TextStyle(
+                style: TextStyle(
                   color: AppColors.errorDeep,
                   fontSize: 11,
                   fontWeight: FontWeight.w700,
@@ -167,7 +167,7 @@ class _GroupInvitationNotificationsState
           ),
           child: Row(
             children: [
-              const Expanded(
+              Expanded(
                 child: Text(
                   'INVITACIONES A GRUPOS',
                   style: TextStyle(
@@ -214,7 +214,7 @@ class _GroupInvitationNotificationsState
           children: [
             Text(
               '${inviter == null || inviter.isEmpty ? "Alguien" : inviter} te invita a ${invitation.groupName}',
-              style: const TextStyle(
+              style: TextStyle(
                 color: AppColors.text,
                 fontSize: 12,
                 fontWeight: FontWeight.w800,

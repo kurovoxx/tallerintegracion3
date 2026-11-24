@@ -454,12 +454,12 @@ class _NotificationsListState extends State<_NotificationsList> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.cloud_off_rounded, color: AppColors.muted),
+                Icon(Icons.cloud_off_rounded, color: AppColors.muted),
                 const SizedBox(height: AppDimens.spaceSm),
                 Text(
                   _error!,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
                     color: AppColors.mutedStrong,
@@ -476,7 +476,7 @@ class _NotificationsListState extends State<_NotificationsList> {
             ),
           )
         else if (_items.isEmpty && _pendingInvitations == 0)
-          const Padding(
+          Padding(
             padding: EdgeInsets.all(AppDimens.spaceXl),
             child: Column(
               mainAxisSize: MainAxisSize.min,
