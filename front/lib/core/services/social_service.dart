@@ -66,8 +66,10 @@ class SocialService {
       code ??= 'unauthorized';
     }
     if (res.statusCode == 403) {
-      message = 'Acceso denegado (403). Debes ser miembro del grupo.';
       code ??= 'forbidden';
+      if (code == 'forbidden') {
+        message = 'Acceso denegado (403). Debes ser miembro del grupo.';
+      }
     }
     if (res.statusCode == 404) {
       message = 'No encontrado (404). Revisa el ID del grupo.';
@@ -90,6 +92,28 @@ class SocialService {
     if (res.statusCode != 200) throw _toError(res);
     final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
     return Overview.fromJson(body);
+  }
+
+  // GET /groups/me -> grupos del usuario con su rol.
+  Future<List<MyGroup>> listMyGroups() async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .get(Uri.parse('$baseUrl/groups/me'), headers: _headers())
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) throw _toError(res);
+    final raw = jsonDecode(utf8.decode(res.bodyBytes));
+    if (raw is! List) {
+      throw SocialApiException(
+        'El backend devolvió una lista de grupos inválida.',
+        statusCode: res.statusCode,
+        code: 'invalid_groups_response',
+      );
+    }
+    return raw
+        .whereType<Map>()
+        .map((group) => MyGroup.fromJson(Map<String, dynamic>.from(group)))
+        .toList();
   }
 
   // POST /groups {name, description?} -> 201 {group_id}
@@ -1056,6 +1080,107 @@ class SocialService {
     );
     if (res.statusCode != 201 && res.statusCode != 200) throw _toError(res);
     notifyGroupsChanged();
+  }
+
+  // POST /groups/:id/invite -> 201 {invitation_id, status, message}.
+  // Invita a un usuario seguido a un grupo. Solo admin del grupo.
+  Future<String> inviteToGroup({
+    required String groupId,
+    required String invitedUserId,
+  }) async {
+    final gid = groupId.trim();
+    if (gid.isEmpty) {
+      throw SocialApiException('groupId vacío.', code: 'invalid_group_id');
+    }
+    final iid = invitedUserId.trim();
+    if (iid.isEmpty) {
+      throw SocialApiException(
+        'invitedUserId vacío.',
+        code: 'invalid_invited_user_id',
+      );
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .post(
+            Uri.parse('$baseUrl/groups/$gid/invite'),
+            headers: _headers(json: true),
+            body: jsonEncode({'invited_user_id': iid}),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 201) throw _toError(res);
+    final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    final invitationId = (body['invitation_id'] as String?) ?? '';
+    if (invitationId.isEmpty) {
+      throw SocialApiException(
+        'El backend no devolvió invitation_id.',
+        statusCode: res.statusCode,
+        code: 'missing_invitation_id',
+      );
+    }
+    return invitationId;
+  }
+
+  // POST /group-invitations/:id/accept -> 200 {status, message}.
+  Future<void> acceptInvitation(String invitationId) async {
+    final iid = invitationId.trim();
+    if (iid.isEmpty) {
+      throw SocialApiException(
+        'invitation id vacío.',
+        code: 'invalid_invitation_id',
+      );
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .post(
+            Uri.parse('$baseUrl/group-invitations/$iid/accept'),
+            headers: _headers(json: true),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) throw _toError(res);
+    notifyGroupsChanged();
+  }
+
+  // POST /group-invitations/:id/reject -> 200 {status, message}.
+  Future<void> rejectInvitation(String invitationId) async {
+    final iid = invitationId.trim();
+    if (iid.isEmpty) {
+      throw SocialApiException(
+        'invitation id vacío.',
+        code: 'invalid_invitation_id',
+      );
+    }
+    final res = await AuthedHttp.run(
+      () => _client
+          .post(
+            Uri.parse('$baseUrl/group-invitations/$iid/reject'),
+            headers: _headers(json: true),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) throw _toError(res);
+    notifyGroupsChanged();
+  }
+
+  // GET /group-invitations/pending -> 200 {data: [GroupInvitation, ...]}.
+  Future<List<GroupInvitation>> listPendingInvitations() async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .get(
+            Uri.parse('$baseUrl/group-invitations/pending'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) throw _toError(res);
+    final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    final raw = body['data'];
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map<String, dynamic>>()
+        .map((e) => GroupInvitation.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
   }
 
   void dispose() {

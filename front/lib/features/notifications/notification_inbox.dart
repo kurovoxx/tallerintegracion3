@@ -5,6 +5,7 @@ import '../../core/models/social_models.dart';
 import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import '../../core/widgets/group_invitation_notifications.dart';
 
 /// Diálogo de bandeja de entrada de notificaciones.
 /// Muestra título, descripción, hora, nombre del grupo y enlace (si lo tiene).
@@ -25,6 +26,7 @@ class _NotificationInboxState extends State<NotificationInbox> {
   List<MeetingNotification> _items = const [];
   bool _loading = true;
   String? _error;
+  int _pendingInvitationCount = 0;
   // Ids con DELETE en vuelo: un doble toque no repite la petición.
   final Set<String> _deleting = <String>{};
 
@@ -166,7 +168,7 @@ class _NotificationInboxState extends State<NotificationInbox> {
               children: [
                 Expanded(
                   child: Text(
-                    'TUS RECORDATORIOS DE REUNIONES',
+                    'TUS NOTIFICACIONES',
                     style: TextStyle(
                       fontWeight: FontWeight.w900,
                       fontSize: 11.5,
@@ -192,7 +194,21 @@ class _NotificationInboxState extends State<NotificationInbox> {
               ],
             ),
             const SizedBox(height: AppDimens.spaceMd),
-            Expanded(child: _buildList()),
+            Expanded(
+              child: Column(
+                children: [
+                  GroupInvitationNotifications(
+                    service: _service,
+                    onPendingCountChanged: (count) {
+                      if (mounted) {
+                        setState(() => _pendingInvitationCount = count);
+                      }
+                    },
+                  ),
+                  Expanded(child: _buildList()),
+                ],
+              ),
+            ),
           ],
         ),
         actions: [
@@ -285,6 +301,9 @@ class _NotificationInboxState extends State<NotificationInbox> {
       );
     }
     if (_items.isEmpty) {
+      if (_pendingInvitationCount > 0) {
+        return const SizedBox.shrink();
+      }
       return _stateCard(
         icon: Icons.notifications_none_rounded,
         title: 'SIN NOTIFICACIONES',
