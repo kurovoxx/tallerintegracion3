@@ -231,7 +231,7 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
         children: [
           Text(
             label.toUpperCase(),
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w900,
               letterSpacing: 0.5,
@@ -303,7 +303,7 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
     );
   }
 
-  static const Widget _inheritedNote = Text(
+  static Widget get _inheritedNote => Text(
     'Habilitado para todo el grupo (puedes quitarlo a este integrante)',
     style: TextStyle(
       fontSize: 11,
@@ -474,7 +474,7 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
       child: Column(
         children: [
           _header(),
-          const Divider(
+          Divider(
             color: AppColors.border,
             thickness: AppDimens.borderWidth,
             height: 1,
@@ -494,7 +494,7 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
       ),
       child: Row(
         children: [
-          const Icon(Icons.group_rounded, size: 16, color: AppColors.text),
+          Icon(Icons.group_rounded, size: 16, color: AppColors.text),
           const SizedBox(width: AppDimens.spaceSm),
           Expanded(
             child: Text(
@@ -591,7 +591,7 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
                           m.email!,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
                             color: AppColors.muted,

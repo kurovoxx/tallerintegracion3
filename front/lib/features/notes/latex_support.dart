@@ -286,7 +286,7 @@ class LatexFallback extends StatelessWidget {
         child: Text.rich(
           TextSpan(
             children: <InlineSpan>[
-              const TextSpan(
+              TextSpan(
                 text: '⚠ ',
                 style: TextStyle(
                   color: AppColors.errorDeep,
@@ -295,7 +295,7 @@ class LatexFallback extends StatelessWidget {
               ),
               TextSpan(
                 text: display ? '$reason\n' : '',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w900,
                   color: AppColors.errorDeep,
@@ -303,7 +303,7 @@ class LatexFallback extends StatelessWidget {
               ),
               TextSpan(
                 text: shown,
-                style: const TextStyle(
+                style: TextStyle(
                   fontFamily: 'monospace',
                   fontSize: 12,
                   color: AppColors.text,
@@ -385,13 +385,13 @@ class LatexToolbar extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         color: AppColors.surfaceLow,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radius),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          const Padding(
+          Padding(
             padding: EdgeInsets.only(top: 4),
             child: Icon(
               Icons.functions_rounded,
@@ -400,7 +400,7 @@ class LatexToolbar extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 6),
-          const Padding(
+          Padding(
             padding: EdgeInsets.only(top: 5),
             child: Text(
               'LATEX:',
@@ -437,7 +437,7 @@ class LatexToolbar extends StatelessWidget {
                           decoration: BoxDecoration(
                             color: AppColors.surface,
                             border: Border.all(
-                              color: AppColors.border,
+                              color: AppColors.outline,
                               width: 1.5,
                             ),
                             borderRadius: BorderRadius.circular(
@@ -447,7 +447,7 @@ class LatexToolbar extends StatelessWidget {
                           ),
                           child: Text(
                             snip.label,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w900,
                               color: AppColors.text,

@@ -87,7 +87,7 @@ class _NotificationInboxState extends State<NotificationInbox> {
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo eliminar la notificación.'),
           backgroundColor: AppColors.error,
         ),
@@ -166,7 +166,7 @@ class _NotificationInboxState extends State<NotificationInbox> {
           children: [
             Row(
               children: [
-                const Expanded(
+                Expanded(
                   child: Text(
                     'TUS NOTIFICACIONES',
                     style: TextStyle(
@@ -245,7 +245,7 @@ class _NotificationInboxState extends State<NotificationInbox> {
               decoration: BoxDecoration(
                 color: AppColors.accentYellow,
                 border: Border.all(
-                  color: AppColors.border,
+                  color: AppColors.outline,
                   width: AppDimens.borderWidth,
                 ),
                 boxShadow: AppShadows.badge,
@@ -256,7 +256,7 @@ class _NotificationInboxState extends State<NotificationInbox> {
             Text(
               title,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12.5,
                 fontWeight: FontWeight.w900,
                 letterSpacing: 0.4,
@@ -267,7 +267,7 @@ class _NotificationInboxState extends State<NotificationInbox> {
             Text(
               message,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 11.5,
                 fontWeight: FontWeight.w700,
                 color: AppColors.mutedStrong,
@@ -340,11 +340,11 @@ class _NotificationInboxState extends State<NotificationInbox> {
                 decoration: BoxDecoration(
                   color: unread ? AppColors.surface : AppColors.surfaceLow,
                   border: Border.all(
-                    color: AppColors.border,
+                    color: AppColors.outline,
                     width: AppDimens.borderWidth,
                   ),
                   borderRadius: BorderRadius.circular(AppDimens.radius),
-                  boxShadow: unread ? const [AppShadows.hard2] : null,
+                  boxShadow: unread ? [AppShadows.hard2] : null,
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -371,7 +371,7 @@ class _NotificationInboxState extends State<NotificationInbox> {
                               AppDimens.radiusChip,
                             ),
                             onTap: () => _openLink(n.link!),
-                            child: const Icon(
+                            child: Icon(
                               Icons.open_in_new_rounded,
                               size: 16,
                               color: AppColors.text,
@@ -382,7 +382,7 @@ class _NotificationInboxState extends State<NotificationInbox> {
                     const SizedBox(height: AppDimens.spaceXs),
                     Text(
                       'Reunión: ${_formatWhen(n.scheduledAt)}',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 11.5,
                         fontWeight: FontWeight.w800,
                         color: AppColors.text,
@@ -392,7 +392,7 @@ class _NotificationInboxState extends State<NotificationInbox> {
                       const SizedBox(height: AppDimens.spaceXs),
                       Text(
                         'Grupo: ${n.groupName}',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
                           color: AppColors.mutedStrong,
@@ -405,7 +405,7 @@ class _NotificationInboxState extends State<NotificationInbox> {
                         n.description!,
                         maxLines: 3,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
                           color: AppColors.text,

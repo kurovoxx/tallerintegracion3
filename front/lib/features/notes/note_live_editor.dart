@@ -226,7 +226,7 @@ class _PreviewPanel extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -241,13 +241,13 @@ class _PreviewPanel extends StatelessWidget {
               horizontal: AppDimens.spaceMd,
               vertical: AppDimens.spaceXs + 2,
             ),
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               color: AppColors.surfaceLow,
               border: Border(
-                bottom: BorderSide(color: AppColors.border, width: 1.5),
+                bottom: BorderSide(color: AppColors.outline, width: 1.5),
               ),
             ),
-            child: const Row(
+            child: Row(
               children: <Widget>[
                 Icon(Icons.visibility_rounded, size: 14, color: AppColors.text),
                 SizedBox(width: AppDimens.spaceXs),
@@ -286,7 +286,7 @@ class _PreviewPanel extends StatelessWidget {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(AppDimens.spaceMd),
       child: isEmpty
-          ? const Text(
+          ? Text(
               r'Escribe Markdown o LaTeX ($x^2$, $$...$$) y verás el resultado aquí.',
               style: TextStyle(
                 fontSize: 12.5,

@@ -71,7 +71,7 @@ class NoteContentView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (note.content.trim().isEmpty) {
-      return const Text(
+      return Text(
         '(Apunte sin contenido)',
         style: TextStyle(
           fontSize: 13,

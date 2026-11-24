@@ -128,7 +128,7 @@ class _SavedNotesScreenState extends State<SavedNotesScreen> {
         backgroundColor: error ? AppColors.errorDeep : AppColors.border,
         content: Text(
           message,
-          style: const TextStyle(
+          style: TextStyle(
             color: AppColors.surface,
             fontWeight: FontWeight.w800,
           ),
@@ -249,7 +249,7 @@ class _SavedNotesScreenState extends State<SavedNotesScreen> {
                       onPressed: () => Navigator.of(context).maybePop(),
                     ),
                     const SizedBox(width: AppDimens.spaceMd),
-                    const Expanded(
+                    Expanded(
                       child: Text(
                         'APUNTES GUARDADOS',
                         style: TextStyle(
@@ -263,7 +263,7 @@ class _SavedNotesScreenState extends State<SavedNotesScreen> {
                   ],
                 ),
                 const SizedBox(height: AppDimens.spaceSm),
-                const Text(
+                Text(
                   'Tus marcadores de apuntes propios y de otros estudiantes.',
                   style: TextStyle(
                     fontSize: 13,
@@ -276,14 +276,14 @@ class _SavedNotesScreenState extends State<SavedNotesScreen> {
                   key: const Key('saved-notes-search'),
                   controller: _search,
                   onChanged: _onSearchChanged,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w700,
                     fontSize: 14,
                     color: AppColors.text,
                   ),
                   decoration: appInputDecoration('Buscar en guardados…')
                       .copyWith(
-                        prefixIcon: const Icon(
+                        prefixIcon: Icon(
                           Icons.search_rounded,
                           color: AppColors.border,
                         ),
@@ -326,7 +326,7 @@ class _SavedNotesScreenState extends State<SavedNotesScreen> {
 
   List<Widget> _buildContent() {
     if (_loading) {
-      return const <Widget>[
+      return <Widget>[
         Padding(
           padding: EdgeInsets.all(AppDimens.spaceXl),
           child: Center(
@@ -343,7 +343,7 @@ class _SavedNotesScreenState extends State<SavedNotesScreen> {
             children: <Widget>[
               Text(
                 _error!,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w800,
                   color: AppColors.text,
                 ),
@@ -361,7 +361,7 @@ class _SavedNotesScreenState extends State<SavedNotesScreen> {
       ];
     }
     if (_items.isEmpty) {
-      return const <Widget>[
+      return <Widget>[
         NeobrutalistCard(
           key: Key('saved-notes-empty'),
           child: Text(
@@ -413,7 +413,7 @@ class _FilterLabel extends StatelessWidget {
     padding: const EdgeInsets.only(bottom: AppDimens.spaceXs),
     child: Text(
       text.toUpperCase(),
-      style: const TextStyle(
+      style: TextStyle(
         fontSize: 11,
         fontWeight: FontWeight.w900,
         letterSpacing: 0.6,
@@ -477,7 +477,7 @@ class SavedNoteCard extends StatelessWidget {
             item.title,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w900,
               color: AppColors.text,
@@ -571,7 +571,7 @@ class SavedNoteCard extends StatelessWidget {
                   item.title,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w900,
                     color: AppColors.mutedStrong,
@@ -591,7 +591,7 @@ class SavedNoteCard extends StatelessWidget {
             const SizedBox(height: AppDimens.spaceSm),
             Text(
               'Eliminado el ${_fmt(item.deletedAt!)}. Solo puedes quitarlo de tus guardados.',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12.5,
                 fontWeight: FontWeight.w700,
                 color: AppColors.mutedStrong,
@@ -599,7 +599,7 @@ class SavedNoteCard extends StatelessWidget {
             ),
           ] else ...<Widget>[
             const SizedBox(height: AppDimens.spaceSm),
-            const Text(
+            Text(
               'Solo puedes quitarlo de tus guardados.',
               style: TextStyle(
                 fontSize: 12.5,

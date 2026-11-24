@@ -39,11 +39,11 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
 
   final List<String> _tabs = const [
     'CHAT',
-    'DISCORD',
     'HOJA SPRINT',
     'KANBAN',
     'AGENDAR',
     'NOTAS',
+    'DISCORD',
     'MIEMBROS',
   ];
 
@@ -198,7 +198,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
             } catch (_) {
               if (!context.mounted) return;
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
+                SnackBar(
                   content: Text(
                     'No se pudo procesar la imagen. Prueba con otra foto.',
                   ),
@@ -216,7 +216,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
             final newName = nameCtrl.text.trim();
             if (newName.isEmpty) {
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
+                SnackBar(
                   content: Text('El nombre no puede estar vacío.'),
                   backgroundColor: AppColors.error,
                 ),
@@ -241,7 +241,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
             } on SocialApiException catch (_) {
               if (!mounted) return;
               ScaffoldMessenger.of(this.context).showSnackBar(
-                const SnackBar(
+                SnackBar(
                   content: Text('No se pudo editar el grupo.'),
                   backgroundColor: AppColors.error,
                 ),
@@ -250,12 +250,12 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
             }
           }
 
-          const groupIcon = Icon(
+          final groupIcon = Icon(
             Icons.groups_rounded,
             size: 42,
             color: AppColors.text,
           );
-          const fieldStyle = TextStyle(
+          final fieldStyle = TextStyle(
             fontWeight: FontWeight.w700,
             fontSize: 14,
             color: AppColors.text,
@@ -298,7 +298,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                     decoration: BoxDecoration(
                       color: AppColors.accentYellow,
                       border: Border.all(
-                        color: AppColors.border,
+                        color: AppColors.outline,
                         width: AppDimens.borderWidth,
                       ),
                       borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -378,7 +378,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
 
     if (saved == true && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Grupo actualizado.'),
           backgroundColor: AppColors.border,
         ),
@@ -406,6 +406,11 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
     _loadHeader();
   }
 
+  /// Texto secundario de la cabecera (sobre marino en modo UCT).
+  Color get _headerMuted => AppThemeController.isUct
+      ? AppColors.onPrimaryMuted
+      : AppColors.muted;
+
   Widget _buildHeaderTitle(String? groupId) {
     // Sin UUID: solo datos de navegación.
     if (groupId == null) {
@@ -418,26 +423,26 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
             navName,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w900,
-              color: Color(0xFF1A1A1A),
+              color: AppColors.appBarFg,
               letterSpacing: -0.3,
             ),
           ),
-          const Text(
+          Text(
             'Datos de navegación',
             style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w700,
-              color: Color(0xFF555555),
+              color: _headerMuted,
             ),
           ),
         ],
       );
     }
     if (_loadingHeader) {
-      return const Column(
+      return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
@@ -445,7 +450,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w900,
-              color: Color(0xFF1A1A1A),
+              color: AppColors.appBarFg,
               letterSpacing: -0.3,
             ),
           ),
@@ -454,8 +459,8 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
             width: 120,
             height: 4,
             child: LinearProgressIndicator(
-              color: Color(0xFF1A1A1A),
-              backgroundColor: Color(0xFFF5F0E8),
+              color: AppColors.appBarFg,
+              backgroundColor: AppColors.bg,
             ),
           ),
         ],
@@ -465,34 +470,34 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             'NO SE PUDO CARGAR EL GRUPO',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w900,
-              color: Color(0xFF1A1A1A),
+              color: AppColors.appBarFg,
             ),
           ),
           Text(
             _headerError!,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 10,
               fontWeight: FontWeight.w700,
-              color: Color(0xFF555555),
+              color: _headerMuted,
             ),
           ),
           InkWell(
             onTap: _loadHeader,
-            child: const Text(
+            child: Text(
               'REINTENTAR',
               style: TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.w900,
-                color: Color(0xFF1A1A1A),
+                color: AppColors.appBarFg,
                 decoration: TextDecoration.underline,
               ),
             ),
@@ -502,12 +507,12 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
     }
     final d = _detail;
     if (d == null) {
-      return const Text(
+      return Text(
         'GRUPO',
         style: TextStyle(
           fontSize: 14,
           fontWeight: FontWeight.w900,
-          color: Color(0xFF1A1A1A),
+          color: AppColors.appBarFg,
         ),
       );
     }
@@ -521,10 +526,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
           d.name.toUpperCase(),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 14,
             fontWeight: FontWeight.w900,
-            color: Color(0xFF1A1A1A),
+            color: AppColors.appBarFg,
             letterSpacing: -0.3,
           ),
         ),
@@ -533,10 +538,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
             '$count ${count == 1 ? 'integrante' : 'integrantes'}',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w700,
-              color: Color(0xFF555555),
+              color: _headerMuted,
             ),
           ),
       ],
@@ -553,26 +558,31 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
 
   @override
   Widget build(BuildContext context) {
+    final uct = AppThemeController.isUct;
     final groupId = _realGroupId();
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F0E8),
+      backgroundColor: AppColors.bg,
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: AppColors.appBarBg,
+        foregroundColor: AppColors.appBarFg,
         elevation: 0,
         scrolledUnderElevation: 0,
-        shape: const Border(
-          bottom: BorderSide(color: Color(0xFF1A1A1A), width: 2),
+        shape: Border(
+          bottom: BorderSide(
+            color: AppColors.appBarBorder,
+            width: uct ? 3 : 2,
+          ),
         ),
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded, color: Color(0xFF1A1A1A)),
+          icon: Icon(Icons.arrow_back_rounded, color: AppColors.appBarFg),
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: _buildHeaderTitle(groupId),
         actions: [
           if (_isAdmin)
             IconButton(
-              icon: const Icon(Icons.edit_rounded, color: Color(0xFF1A1A1A)),
+              icon: Icon(Icons.edit_rounded, color: AppColors.appBarFg),
               onPressed: _openEditGroupDialog,
               tooltip: 'Editar grupo',
             ),
@@ -582,13 +592,17 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
         children: [
           // Barra de pestañas neobrutalista horizontally scrollable
           Container(
-            color: Colors.white,
+            // UCT: franja azul como el menú principal del portal.
+            color: uct ? AppColors.primary : AppColors.surface,
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
                 children: List.generate(_tabs.length, (i) {
                   final selected = i == _currentIndex;
+                  final tabFg = selected
+                      ? AppColors.onAccent
+                      : (uct ? AppColors.onPrimary : AppColors.text);
                   IconData icon;
                   switch (i) {
                     case 0:
@@ -629,39 +643,36 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
                         ),
                         decoration: BoxDecoration(
                           color: selected
-                              ? const Color(0xFFFFCC00)
-                              : Colors.white,
+                              ? AppColors.accentYellow
+                              : (uct ? Colors.transparent : AppColors.surface),
                           border: Border.all(
-                            color: const Color(0xFF1A1A1A),
-                            width: 2,
+                            color: !uct
+                                ? AppColors.outline
+                                : (selected
+                                      ? AppColors.accentYellow
+                                      : AppColors.onPrimaryMuted),
+                            width: uct ? 1 : 2,
                           ),
-                          boxShadow: selected
-                              ? const [
-                                  BoxShadow(
-                                    color: Color(0xFF1A1A1A),
-                                    offset: Offset(3, 3),
-                                    blurRadius: 0,
-                                  ),
-                                ]
-                              : const [
-                                  BoxShadow(
-                                    color: Color(0xFF1A1A1A),
-                                    offset: Offset(2, 2),
-                                    blurRadius: 0,
-                                  ),
-                                ],
+                          borderRadius: BorderRadius.circular(
+                            uct ? AppDimens.radiusSoft : 0,
+                          ),
+                          boxShadow: uct
+                              ? null
+                              : (selected
+                                    ? [AppShadows.hard3]
+                                    : [AppShadows.hard2]),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(icon, size: 14, color: Colors.black),
+                            Icon(icon, size: 14, color: tabFg),
                             const SizedBox(width: 6),
                             Text(
                               _tabs[i],
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w900,
-                                color: Colors.black,
+                                color: tabFg,
                                 letterSpacing: 0.3,
                               ),
                             ),
@@ -674,17 +685,17 @@ class _GroupDetailScreenState extends State<GroupDetailScreen>
               ),
             ),
           ),
-          Container(height: 2, color: Colors.black),
+          if (!uct) Container(height: 2, color: AppColors.outline),
           Expanded(
             child: TabBarView(
               controller: _tabController,
               children: [
                 GroupChatTab(groupId: groupId, service: _service),
-                GroupDiscordTab(groupId: groupId, service: _service),
                 SprintSheetScreen(groupId: groupId, service: _service),
                 KanbanScreen(groupId: groupId, service: _service),
                 ScheduleMeetingScreen(groupId: groupId, service: _service),
                 GroupNotesTab(groupId: groupId),
+                GroupDiscordTab(groupId: groupId, service: _service),
                 GroupMembersTab(groupId: groupId),
               ],
             ),
@@ -918,7 +929,7 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
                   } on SocialApiException catch (_) {
                     if (!mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
+                      SnackBar(
                         content: Text('No se pudo guardar la integración.'),
                         backgroundColor: AppColors.error,
                       ),
@@ -960,7 +971,7 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
     webhookCtrl.dispose();
     if (saved == true && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Integración guardada.'),
           backgroundColor: AppColors.border,
         ),
@@ -973,7 +984,7 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
     final hasInvite = (_config?.inviteUrl.trim().isNotEmpty ?? false);
     final serverName = _config?.serverName.trim() ?? '';
     return Container(
-      color: const Color(0xFFF5F0E8),
+      color: AppColors.bg,
       child: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
@@ -987,14 +998,10 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
                   vertical: 20,
                 ),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF5865F2),
-                  border: Border.all(color: Colors.black, width: 3),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Colors.black,
-                      offset: Offset(6, 6),
-                      blurRadius: 0,
-                    ),
+                  color: AppColors.discord,
+                  border: Border.all(color: AppColors.outline, width: 3),
+                  boxShadow: [
+                    AppShadows.hard6,
                   ],
                 ),
                 child: Column(
@@ -1003,33 +1010,33 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
                       width: 64,
                       height: 64,
                       decoration: BoxDecoration(
-                        color: Colors.white,
-                        border: Border.all(color: Colors.black, width: 2),
+                        color: AppColors.surface,
+                        border: Border.all(color: AppColors.outline, width: 2),
                         shape: BoxShape.circle,
                       ),
-                      child: const Icon(
+                      child: Icon(
                         Icons.forum_rounded,
                         size: 32,
-                        color: Color(0xFF5865F2),
+                        color: AppColors.discord,
                       ),
                     ),
                     const SizedBox(height: 16),
-                    const Text(
+                    Text(
                       'DISCORD DEL GRUPO',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w900,
-                        color: Colors.white,
+                        color: AppColors.surface,
                         letterSpacing: -0.5,
                       ),
                     ),
                     const SizedBox(height: 8),
                     if (_loadingRole || _loadingConfig)
-                      const Center(
+                      Center(
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
-                          color: Colors.white,
+                          color: AppColors.surface,
                         ),
                       )
                     else ...[
@@ -1037,10 +1044,10 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
                         Text(
                           serverName,
                           textAlign: TextAlign.center,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w800,
-                            color: Colors.white,
+                            color: AppColors.surface,
                           ),
                         ),
                       const SizedBox(height: 4),
@@ -1051,10 +1058,10 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
                                   ? 'Aún no hay Discord configurado. Configúralo para habilitar avisos.'
                                   : 'El servidor lo configura el equipo administrador.'),
                         textAlign: TextAlign.center,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w600,
-                          color: Colors.white,
+                          color: AppColors.surface,
                           height: 1.3,
                         ),
                       ),
@@ -1071,23 +1078,19 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
                                   vertical: 12,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  border: Border.all(color: Colors.black, width: 2),
-                                  boxShadow: const [
-                                    BoxShadow(
-                                      color: Colors.black,
-                                      offset: Offset(3, 3),
-                                      blurRadius: 0,
-                                    ),
+                                  color: AppColors.surface,
+                                  border: Border.all(color: AppColors.outline, width: 2),
+                                  boxShadow: [
+                                    AppShadows.hard3,
                                   ],
                                 ),
-                                child: const Row(
+                                child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     Icon(
                                       Icons.forum_rounded,
                                       size: 18,
-                                      color: Color(0xFF5865F2),
+                                      color: AppColors.discord,
                                     ),
                                     SizedBox(width: 8),
                                     Text(
@@ -1095,7 +1098,7 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
                                       style: TextStyle(
                                         fontWeight: FontWeight.w900,
                                         fontSize: 12,
-                                        color: Color(0xFF5865F2),
+                                        color: AppColors.discord,
                                       ),
                                     ),
                                   ],
@@ -1108,20 +1111,16 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
                               child: Container(
                                 padding: const EdgeInsets.all(12),
                                 decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  border: Border.all(color: Colors.black, width: 2),
-                                  boxShadow: const [
-                                    BoxShadow(
-                                      color: Colors.black,
-                                      offset: Offset(3, 3),
-                                      blurRadius: 0,
-                                    ),
+                                  color: AppColors.surface,
+                                  border: Border.all(color: AppColors.outline, width: 2),
+                                  boxShadow: [
+                                    AppShadows.hard3,
                                   ],
                                 ),
-                                child: const Icon(
+                                child: Icon(
                                   Icons.copy_rounded,
                                   size: 18,
-                                  color: Color(0xFF5865F2),
+                                  color: AppColors.discord,
                                 ),
                               ),
                             ),
@@ -1132,21 +1131,21 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
                         const SizedBox(height: 12),
                         OutlinedButton.icon(
                           onPressed: _openConfigDialog,
-                          icon: const Icon(
+                          icon: Icon(
                             Icons.settings_rounded,
                             size: 16,
-                            color: Colors.white,
+                            color: AppColors.surface,
                           ),
-                          label: const Text(
+                          label: Text(
                             'Configurar Discord',
                             style: TextStyle(
                               fontWeight: FontWeight.w800,
-                              color: Colors.white,
+                              color: AppColors.surface,
                             ),
                           ),
                           style: OutlinedButton.styleFrom(
-                            side: const BorderSide(
-                              color: Colors.white,
+                            side: BorderSide(
+                              color: AppColors.surface,
                               width: 2,
                             ),
                           ),
@@ -1160,15 +1159,15 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.white,
-                  border: Border.all(color: Colors.black, width: 2),
+                  color: AppColors.surface,
+                  border: Border.all(color: AppColors.outline, width: 2),
                 ),
-                child: const Row(
+                child: Row(
                   children: [
                     Icon(
                       Icons.info_outline_rounded,
                       size: 16,
-                      color: Colors.black,
+                      color: AppColors.text,
                     ),
                     SizedBox(width: 8),
                     Expanded(
@@ -1177,7 +1176,7 @@ class _GroupDiscordTabState extends State<GroupDiscordTab> {
                         style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w600,
-                          color: Colors.black,
+                          color: AppColors.text,
                         ),
                       ),
                     ),

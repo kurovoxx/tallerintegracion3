@@ -79,7 +79,7 @@ class _EmailNotVerifiedDialogState extends State<_EmailNotVerifiedDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text(
+            Text(
               'Tu cuenta todavía no está confirmada. Revisa tu correo y usa el '
               'código que te enviamos, o pide uno nuevo.',
               style: authFieldTextStyle,

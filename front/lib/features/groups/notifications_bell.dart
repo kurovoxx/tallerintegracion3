@@ -119,12 +119,12 @@ class _NotificationsBellState extends State<NotificationsBell> {
                 padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                 decoration: BoxDecoration(
                   color: AppColors.error,
-                  border: Border.all(color: AppColors.border, width: 2),
+                  border: Border.all(color: AppColors.outline, width: 2),
                   borderRadius: BorderRadius.circular(AppDimens.radiusChip),
                 ),
                 child: Text(
                   _unread.value > 9 ? '9+' : '${_unread.value}',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.w900,
                     color: AppColors.surface,
@@ -253,7 +253,7 @@ class _NotificationsPopupState extends State<_NotificationsPopup>
                           decoration: BoxDecoration(
                             color: AppColors.surface,
                             border: Border.all(
-                              color: AppColors.border,
+                              color: AppColors.outline,
                               width: AppDimens.borderWidth,
                             ),
                           ),
@@ -283,7 +283,7 @@ class _NotificationsPopupState extends State<_NotificationsPopup>
       decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -297,7 +297,7 @@ class _NotificationsPopupState extends State<_NotificationsPopup>
             padding: const EdgeInsets.fromLTRB(14, 10, 4, 10),
             child: Row(
               children: [
-                const Expanded(
+                Expanded(
                   child: Text(
                     'NOTIFICACIONES',
                     style: TextStyle(
@@ -334,7 +334,7 @@ class _NotificationsPopupState extends State<_NotificationsPopup>
               ],
             ),
           ),
-          Container(height: 2, color: AppColors.border),
+          Container(height: 2, color: AppColors.outline),
           Flexible(
             child: _NotificationsList(
               service: service,
@@ -550,11 +550,11 @@ class _NotificationTile extends StatelessWidget {
             decoration: BoxDecoration(
               color: unread ? AppColors.surface : AppColors.surfaceLow,
               border: Border.all(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidth,
               ),
               borderRadius: BorderRadius.circular(AppDimens.radius),
-              boxShadow: unread ? const [AppShadows.hard2] : null,
+              boxShadow: unread ? [AppShadows.hard2] : null,
             ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -585,7 +585,7 @@ class _NotificationTile extends StatelessWidget {
                       const SizedBox(height: AppDimens.spaceXs),
                       Text(
                         _formatWhen(notification.scheduledAt),
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
                           color: AppColors.mutedStrong,

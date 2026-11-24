@@ -139,12 +139,12 @@ class _DriveConnectSuggestionState extends State<DriveConnectSuggestion> {
       decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
       ),
-      child: const Icon(
+      child: Icon(
         Icons.cloud_off_rounded,
         color: AppColors.text,
         size: 24,
@@ -164,7 +164,7 @@ class _DriveConnectSuggestionState extends State<DriveConnectSuggestion> {
       children: <Widget>[
         icon,
         const SizedBox(width: AppDimens.spaceMd),
-        const Expanded(
+        Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
@@ -206,19 +206,19 @@ class _DriveConnectSuggestionState extends State<DriveConnectSuggestion> {
       ),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radius),
       ),
       child: Text(
         label,
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 11,
           fontWeight: FontWeight.w900,
           color: AppColors.text,
         ),
       ),
     );
-    const arrow = Icon(
+    final arrow = Icon(
       Icons.chevron_right_rounded,
       size: 18,
       color: AppColors.text,
@@ -229,7 +229,7 @@ class _DriveConnectSuggestionState extends State<DriveConnectSuggestion> {
       spacing: AppDimens.spaceXs,
       runSpacing: AppDimens.spaceXs,
       children: <Widget>[
-        const Text(
+        Text(
           '¿DÓNDE CONECTARLO?',
           style: TextStyle(
             fontSize: 11,

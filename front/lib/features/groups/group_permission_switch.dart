@@ -144,7 +144,7 @@ class _GroupPermissionSwitchState extends State<GroupPermissionSwitch> {
         decoration: BoxDecoration(
           color: on ? AppColors.accentYellow : AppColors.surface,
           border: Border.all(
-            color: AppColors.border,
+            color: AppColors.outline,
             width: AppDimens.borderWidth,
           ),
           boxShadow: AppShadows.badge,
@@ -157,7 +157,7 @@ class _GroupPermissionSwitchState extends State<GroupPermissionSwitch> {
                 widget.label,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w900,
                   fontSize: 11,
                   letterSpacing: 0.5,
@@ -172,7 +172,7 @@ class _GroupPermissionSwitchState extends State<GroupPermissionSwitch> {
               activeTrackColor: AppColors.surface,
               inactiveThumbColor: AppColors.text,
               inactiveTrackColor: AppColors.surfaceLow,
-              trackOutlineColor: const WidgetStatePropertyAll(AppColors.border),
+              trackOutlineColor: WidgetStatePropertyAll(AppColors.border),
               onChanged: _saving ? null : _toggle,
             ),
           ],

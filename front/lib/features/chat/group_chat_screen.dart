@@ -253,16 +253,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 decoration: BoxDecoration(
                   color: AppColors.surface,
                   border: Border.all(
-                    color: AppColors.border,
+                    color: AppColors.outline,
                     width: AppDimens.borderWidth,
                   ),
                   borderRadius: BorderRadius.circular(AppDimens.radius),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: AppColors.border,
-                      offset: Offset(3, 3),
-                      blurRadius: 0,
-                    ),
+                  boxShadow: [
+                    AppShadows.hard3,
                   ],
                 ),
                 child: _buildBody(),
@@ -283,7 +279,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       ),
       child: Row(
         children: [
-          const Expanded(
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -311,7 +307,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
               color: AppColors.bg,
-              border: Border.all(color: AppColors.border, width: 2),
+              border: Border.all(color: AppColors.outline, width: 2),
               borderRadius: BorderRadius.circular(20),
             ),
             child: Row(
@@ -324,7 +320,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 const SizedBox(width: 6),
                 Text(
                   live ? 'EN LÍNEA' : 'DESCONECTADO',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.w900,
                     color: AppColors.text,
@@ -355,7 +351,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(
+                Icon(
                   Icons.forum_outlined,
                   size: 40,
                   color: AppColors.mutedStrong,
@@ -366,7 +362,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                       ? 'El chat no está disponible en este momento.'
                       : _message,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                     color: AppColors.mutedStrong,
@@ -387,7 +383,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           children: [
             Expanded(
               child: _messages.isEmpty
-                  ? const Center(
+                  ? Center(
                       child: Text(
                         'Aún no hay mensajes. Escribe el primero.',
                         textAlign: TextAlign.center,
@@ -406,7 +402,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                           _MessageBubble(message: _messages[i]),
                     ),
             ),
-            const Divider(color: AppColors.border, thickness: 2, height: 1),
+            Divider(color: AppColors.border, thickness: 2, height: 1),
             _buildInput(),
           ],
         );
@@ -422,7 +418,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             child: Container(
               decoration: BoxDecoration(
                 color: AppColors.bg,
-                border: Border.all(color: AppColors.border, width: 2),
+                border: Border.all(color: AppColors.outline, width: 2),
                 borderRadius: BorderRadius.circular(16),
               ),
               // Multilínea: Enter envía, Shift+Enter inserta salto. Así los
@@ -438,7 +434,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                   maxLines: 6,
                   keyboardType: TextInputType.multiline,
                   textInputAction: TextInputAction.newline,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     hintText: 'Escribe un mensaje...',
                     hintStyle: TextStyle(
                       color: AppColors.muted,
@@ -451,7 +447,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                       vertical: 12,
                     ),
                   ),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w600,
                     fontSize: 13,
                     color: AppColors.text,
@@ -469,7 +465,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
               height: 44,
               decoration: BoxDecoration(
                 color: AppColors.accentYellow,
-                border: Border.all(color: AppColors.border, width: 2),
+                border: Border.all(color: AppColors.outline, width: 2),
                 shape: BoxShape.circle,
               ),
               child: _sending
@@ -477,7 +473,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                       padding: EdgeInsets.all(12),
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
-                  : const Icon(
+                  : Icon(
                       Icons.send_rounded,
                       size: 18,
                       color: AppColors.text,
@@ -545,7 +541,7 @@ class _MessageBubble extends StatelessWidget {
         ),
         decoration: BoxDecoration(
           color: mine ? AppColors.accentYellow : AppColors.bg,
-          border: Border.all(color: AppColors.border, width: 2),
+          border: Border.all(color: AppColors.outline, width: 2),
           borderRadius: BorderRadius.circular(16),
         ),
         child: Column(
@@ -561,7 +557,7 @@ class _MessageBubble extends StatelessWidget {
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
                     color: mine ? AppColors.border : AppColors.accentYellow,
-                    border: Border.all(color: AppColors.border, width: 1.5),
+                    border: Border.all(color: AppColors.outline, width: 1.5),
                     borderRadius: BorderRadius.circular(11),
                   ),
                   child: Text(
@@ -579,7 +575,7 @@ class _MessageBubble extends StatelessWidget {
                     who,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.w900,
                       color: AppColors.mutedStrong,
@@ -589,7 +585,7 @@ class _MessageBubble extends StatelessWidget {
                 const SizedBox(width: 6),
                 Text(
                   _timeOf(message.createdAt),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 9,
                     fontWeight: FontWeight.w600,
                     color: AppColors.muted,
@@ -607,7 +603,7 @@ class _MessageBubble extends StatelessWidget {
                 child: Text(
                   body,
                   softWrap: false,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w400,
                     color: AppColors.text,
@@ -619,7 +615,7 @@ class _MessageBubble extends StatelessWidget {
             else
               Text(
                 body,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
                   color: AppColors.text,

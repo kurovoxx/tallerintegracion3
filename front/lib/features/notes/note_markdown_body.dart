@@ -90,7 +90,7 @@ class NoteMarkdownBody extends StatelessWidget {
     return matches.isEmpty ? null : matches.first;
   }
 
-  static const TextStyle _paragraphStyle = TextStyle(
+  static TextStyle get _paragraphStyle => TextStyle(
     fontSize: 14,
     height: 1.5,
     color: AppColors.text,
@@ -271,7 +271,7 @@ class NoteMarkdownBody extends StatelessWidget {
             Expanded(
               child: Text.rich(
                 TextSpan(
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12.5,
                     height: 1.3,
                     fontWeight: FontWeight.w900,
@@ -349,13 +349,13 @@ class NoteMarkdownBody extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: const BoxDecoration(
-        color: Color(0xFFF5F0E8),
+      decoration: BoxDecoration(
+        color: AppColors.bg,
         border: Border(
-          left: BorderSide(color: AppColors.border, width: 3),
-          top: BorderSide(color: AppColors.border, width: 1),
-          right: BorderSide(color: AppColors.border, width: 1),
-          bottom: BorderSide(color: AppColors.border, width: 1),
+          left: BorderSide(color: AppColors.outline, width: 3),
+          top: BorderSide(color: AppColors.outline, width: 1),
+          right: BorderSide(color: AppColors.outline, width: 1),
+          bottom: BorderSide(color: AppColors.outline, width: 1),
         ),
       ),
       child: Text.rich(
@@ -396,7 +396,7 @@ class NoteMarkdownBody extends StatelessWidget {
                 clipBehavior: Clip.hardEdge,
                 decoration: BoxDecoration(
                   color: AppColors.surfaceLow,
-                  border: Border.all(color: AppColors.border, width: 2),
+                  border: Border.all(color: AppColors.outline, width: 2),
                   borderRadius: BorderRadius.circular(AppDimens.radius),
                   boxShadow: AppShadows.badge,
                 ),
@@ -414,7 +414,7 @@ class NoteMarkdownBody extends StatelessWidget {
                         ),
                         color: AppColors.surfaceLow,
                         alignment: Alignment.center,
-                        child: const Row(
+                        child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Icon(
@@ -441,7 +441,7 @@ class NoteMarkdownBody extends StatelessWidget {
                           height: 64,
                           color: AppColors.surfaceLow,
                           alignment: Alignment.center,
-                          child: const SizedBox(
+                          child: SizedBox(
                             width: 22,
                             height: 22,
                             child: CircularProgressIndicator(
@@ -464,7 +464,7 @@ class NoteMarkdownBody extends StatelessWidget {
                           decoration: BoxDecoration(
                             color: AppColors.accentYellow,
                             border: Border.all(
-                              color: AppColors.border,
+                              color: AppColors.outline,
                               width: 1.5,
                             ),
                             borderRadius: BorderRadius.circular(
@@ -472,7 +472,7 @@ class NoteMarkdownBody extends StatelessWidget {
                             ),
                             boxShadow: AppShadows.badge,
                           ),
-                          child: const Row(
+                          child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Icon(
@@ -505,7 +505,7 @@ class NoteMarkdownBody extends StatelessWidget {
                           decoration: BoxDecoration(
                             color: AppColors.surface,
                             border: Border.all(
-                              color: AppColors.border,
+                              color: AppColors.outline,
                               width: 1.5,
                             ),
                             borderRadius: BorderRadius.circular(
@@ -514,7 +514,7 @@ class NoteMarkdownBody extends StatelessWidget {
                           ),
                           child: Text(
                             alt,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 9,
                               fontWeight: FontWeight.w900,
                               color: AppColors.text,
@@ -550,7 +550,7 @@ class NoteMarkdownBody extends StatelessWidget {
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
               color: AppColors.surface,
-              border: Border.all(color: AppColors.border, width: 2),
+              border: Border.all(color: AppColors.outline, width: 2),
               borderRadius: BorderRadius.circular(AppDimens.radius),
               boxShadow: AppShadows.badge,
             ),
@@ -562,7 +562,7 @@ class NoteMarkdownBody extends StatelessWidget {
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
                     color: AppColors.errorDeep,
-                    border: Border.all(color: AppColors.border, width: 1.5),
+                    border: Border.all(color: AppColors.outline, width: 1.5),
                     borderRadius: BorderRadius.circular(AppDimens.radius),
                   ),
                   child: Icon(
@@ -570,7 +570,7 @@ class NoteMarkdownBody extends StatelessWidget {
                         ? Icons.picture_as_pdf_rounded
                         : Icons.description_rounded,
                     size: 18,
-                    color: Colors.white,
+                    color: AppColors.surface,
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -582,13 +582,13 @@ class NoteMarkdownBody extends StatelessWidget {
                         name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w900,
                           color: AppColors.text,
                         ),
                       ),
-                      const Text(
+                      Text(
                         'Documento adjunto · Toca para abrir',
                         style: TextStyle(
                           fontSize: 10,
@@ -606,11 +606,11 @@ class NoteMarkdownBody extends StatelessWidget {
                   ),
                   decoration: BoxDecoration(
                     color: AppColors.accentYellow,
-                    border: Border.all(color: AppColors.border, width: 1.5),
+                    border: Border.all(color: AppColors.outline, width: 1.5),
                     borderRadius: BorderRadius.circular(AppDimens.radiusChip),
                     boxShadow: AppShadows.badge,
                   ),
-                  child: const Text(
+                  child: Text(
                     'VER',
                     style: TextStyle(
                       fontSize: 9,
@@ -632,8 +632,8 @@ class NoteMarkdownBody extends StatelessWidget {
       width: double.infinity,
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
-        color: const Color(0xFFF4F4F0),
-        border: Border.all(color: AppColors.border, width: 2),
+        color: AppColors.codeBg,
+        border: Border.all(color: AppColors.outline, width: 2),
         borderRadius: BorderRadius.circular(AppDimens.radius),
         boxShadow: AppShadows.badge,
       ),
@@ -642,21 +642,21 @@ class NoteMarkdownBody extends StatelessWidget {
         children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               color: AppColors.surfaceLow,
               border: Border(
-                bottom: BorderSide(color: AppColors.border, width: 1.5),
+                bottom: BorderSide(color: AppColors.outline, width: 1.5),
               ),
             ),
             child: Row(
               children: [
-                const Icon(
+                Icon(
                   Icons.terminal_rounded,
                   size: 14,
                   color: AppColors.text,
                 ),
                 const SizedBox(width: 6),
-                const Text(
+                Text(
                   'CÓDIGO',
                   style: TextStyle(
                     fontSize: 10,
@@ -671,20 +671,20 @@ class NoteMarkdownBody extends StatelessWidget {
                     onTap: () {
                       Clipboard.setData(ClipboardData(text: code));
                       ScaffoldMessenger.of(ctx).showSnackBar(
-                        const SnackBar(
-                          backgroundColor: Colors.black,
+                        SnackBar(
+                          backgroundColor: AppColors.border,
                           duration: Duration(seconds: 1),
                           content: Text(
                             'Código copiado al portapapeles',
                             style: TextStyle(
-                              color: Colors.white,
+                              color: AppColors.surface,
                               fontWeight: FontWeight.w800,
                             ),
                           ),
                         ),
                       );
                     },
-                    child: const Row(
+                    child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(
@@ -714,7 +714,7 @@ class NoteMarkdownBody extends StatelessWidget {
               scrollDirection: Axis.horizontal,
               child: SelectableText(
                 code,
-                style: const TextStyle(
+                style: TextStyle(
                   fontFamily: 'monospace',
                   fontSize: 12,
                   height: 1.4,
@@ -766,7 +766,7 @@ class NoteMarkdownBody extends StatelessWidget {
         spans.add(
           TextSpan(
             text: token.substring(2, token.length - 2),
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w900,
               color: AppColors.text,
             ),
@@ -776,7 +776,7 @@ class NoteMarkdownBody extends StatelessWidget {
         spans.add(
           TextSpan(
             text: token.substring(1, token.length - 1),
-            style: const TextStyle(
+            style: TextStyle(
               fontStyle: FontStyle.italic,
               color: AppColors.text,
             ),
@@ -786,10 +786,10 @@ class NoteMarkdownBody extends StatelessWidget {
         spans.add(
           TextSpan(
             text: token.substring(1, token.length - 1),
-            style: const TextStyle(
+            style: TextStyle(
               fontFamily: 'monospace',
               fontSize: 12,
-              backgroundColor: Color(0xFFF4F4F0),
+              backgroundColor: AppColors.codeBg,
               color: AppColors.text,
             ),
           ),
@@ -856,7 +856,7 @@ class NoteMarkdownBody extends StatelessWidget {
         onTap: () => _openLink(url),
         child: Text(
           label,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 14,
             height: 1.5,
             fontWeight: FontWeight.w800,
@@ -900,7 +900,7 @@ class NoteMarkdownBody extends StatelessWidget {
           decoration: BoxDecoration(
             color: AppColors.surfaceLow,
             border: Border.all(
-              color: AppColors.border,
+              color: AppColors.outline,
               width: AppDimens.borderWidth,
             ),
             borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -911,7 +911,7 @@ class NoteMarkdownBody extends StatelessWidget {
             resource: _attachmentFor(url),
             fit: BoxFit.contain,
             debugLabel: 'INLINE',
-            fallback: () => const Center(
+            fallback: () => Center(
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -952,7 +952,7 @@ class NoteMarkdownBody extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
           decoration: BoxDecoration(
             color: AppColors.accentYellow,
-            border: Border.all(color: AppColors.border, width: 1.5),
+            border: Border.all(color: AppColors.outline, width: 1.5),
             borderRadius: BorderRadius.circular(AppDimens.radiusChip),
             boxShadow: AppShadows.badge,
           ),
@@ -971,7 +971,7 @@ class NoteMarkdownBody extends StatelessWidget {
                 child: Text(
                   name,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w900,
                     color: AppColors.text,
@@ -979,7 +979,7 @@ class NoteMarkdownBody extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 4),
-              const Icon(
+              Icon(
                 Icons.open_in_new_rounded,
                 size: 12,
                 color: AppColors.text,

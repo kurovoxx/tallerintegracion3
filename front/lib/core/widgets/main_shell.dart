@@ -17,6 +17,7 @@ import '../models/profile_models.dart';
 import '../services/profile_service.dart';
 import '../services/social_service.dart';
 import '../theme/app_theme.dart';
+import 'color_mode_toggle.dart';
 import 'neobrutalism.dart';
 import 'user_avatar.dart';
 import '../../features/academic/public_profile_screen.dart';
@@ -305,13 +306,14 @@ class _MainShellState extends State<MainShell> {
 
   PreferredSizeWidget _buildAppBar({required bool isDesktop}) {
     return AppBar(
-      backgroundColor: AppColors.surface,
+      backgroundColor: AppColors.appBarBg,
+      foregroundColor: AppColors.appBarFg,
       elevation: 0,
       scrolledUnderElevation: 0,
-      shape: const Border(
+      shape: Border(
         bottom: BorderSide(
-          color: AppColors.border,
-          width: AppDimens.borderWidth,
+          color: AppColors.appBarBorder,
+          width: AppThemeController.isUct ? 3 : AppDimens.borderWidth,
         ),
       ),
       leading: Builder(
@@ -320,7 +322,7 @@ class _MainShellState extends State<MainShell> {
             isDesktop
                 ? (_isCollapsed ? Icons.menu_rounded : Icons.menu_open_rounded)
                 : Icons.menu_rounded,
-            color: AppColors.text,
+            color: AppColors.appBarFg,
           ),
           tooltip: isDesktop
               ? (_isCollapsed ? 'Expandir menú' : 'Colapsar menú')
@@ -342,23 +344,23 @@ class _MainShellState extends State<MainShell> {
             decoration: BoxDecoration(
               color: AppColors.accentYellow,
               border: Border.all(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidth,
               ),
               borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
             ),
-            child: const Center(
+            child: Center(
               child: Text(
                 'S',
                 style: TextStyle(
                   fontWeight: FontWeight.w900,
-                  color: AppColors.text,
+                  color: AppColors.onAccent,
                 ),
               ),
             ),
           ),
           const SizedBox(width: AppDimens.spaceSm),
-          const Flexible(
+          Flexible(
             child: Text(
               'SIGMA ACADEMY',
               maxLines: 1,
@@ -366,7 +368,7 @@ class _MainShellState extends State<MainShell> {
               style: TextStyle(
                 fontWeight: FontWeight.w900,
                 fontSize: 16,
-                color: AppColors.text,
+                color: AppColors.appBarFg,
                 letterSpacing: -0.5,
               ),
             ),
@@ -374,13 +376,15 @@ class _MainShellState extends State<MainShell> {
         ],
       ),
       actions: <Widget>[
+        // Interruptor de paleta (neobrutalista <-> UCT), como un modo oscuro.
+        const ColorModeToggle(),
         IconButton(
           tooltip: 'Notificaciones',
           onPressed: _openInbox,
           icon: Stack(
             clipBehavior: Clip.none,
             children: [
-              const Icon(Icons.notifications_rounded, color: AppColors.text),
+              Icon(Icons.notifications_rounded, color: AppColors.appBarFg),
               if (_unreadNotifications > 0)
                 Positioned(
                   right: -3,
@@ -392,7 +396,7 @@ class _MainShellState extends State<MainShell> {
                     decoration: BoxDecoration(
                       color: AppColors.error,
                       shape: BoxShape.circle,
-                      border: Border.all(color: AppColors.surface, width: 1.5),
+                      border: Border.all(color: AppColors.appBarBg, width: 1.5),
                     ),
                   ),
                 ),
@@ -419,11 +423,11 @@ class _MainShellState extends State<MainShell> {
           duration: AppMotion.expand,
           curve: AppMotion.shell,
           width: width,
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             color: AppColors.surface,
             border: Border(
               right: BorderSide(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidth,
               ),
             ),
@@ -448,8 +452,8 @@ class _MainShellState extends State<MainShell> {
     return Drawer(
       elevation: 0,
       backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-        side: BorderSide(color: AppColors.border, width: AppDimens.borderWidth),
+      shape: RoundedRectangleBorder(
+        side: BorderSide(color: AppColors.outline, width: AppDimens.borderWidth),
       ),
       child: SafeArea(child: _buildSidebarContent(isCollapsed: false)),
     );
@@ -482,7 +486,7 @@ class _MainShellState extends State<MainShell> {
                       ),
                       child: Text(
                         item.section,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w900,
                           color: AppColors.muted,
@@ -502,7 +506,7 @@ class _MainShellState extends State<MainShell> {
             },
           ),
         ),
-        const Divider(
+        Divider(
           color: AppColors.border,
           thickness: AppDimens.borderWidth,
           height: 1,
@@ -548,7 +552,7 @@ class _MainShellState extends State<MainShell> {
                         name ?? 'Mi cuenta',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontWeight: FontWeight.w900,
                           fontSize: 12,
                           color: AppColors.text,
@@ -559,7 +563,7 @@ class _MainShellState extends State<MainShell> {
                           second,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontWeight: FontWeight.w600,
                             fontSize: 11,
                             color: AppColors.muted,
@@ -612,6 +616,7 @@ class _SidebarTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final uct = AppThemeController.isUct;
     final tile = ClickCursor(
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
@@ -624,13 +629,36 @@ class _SidebarTile extends StatelessWidget {
             vertical: 10,
           ),
           decoration: BoxDecoration(
-            color: isSelected ? AppColors.accentYellow : Colors.transparent,
-            border: Border.all(
-              color: isSelected ? AppColors.border : Colors.transparent,
-              width: AppDimens.borderWidth,
-            ),
+            color: isSelected ? AppColors.navSelectedBg : Colors.transparent,
+            // UCT: barra dorada a la izquierda; Sigma: contorno + sombra dura.
+            border: uct
+                ? Border(
+                    left: BorderSide(
+                      color: isSelected
+                          ? AppColors.navIndicator
+                          : Colors.transparent,
+                      width: 4,
+                    ),
+                    // Mismo alto que en Sigma (borde de 2 px invisible).
+                    top: const BorderSide(
+                      color: Colors.transparent,
+                      width: AppDimens.borderWidth,
+                    ),
+                    right: const BorderSide(
+                      color: Colors.transparent,
+                      width: AppDimens.borderWidth,
+                    ),
+                    bottom: const BorderSide(
+                      color: Colors.transparent,
+                      width: AppDimens.borderWidth,
+                    ),
+                  )
+                : Border.all(
+                    color: isSelected ? AppColors.border : Colors.transparent,
+                    width: AppDimens.borderWidth,
+                  ),
             borderRadius: BorderRadius.circular(AppDimens.radius),
-            boxShadow: isSelected ? AppShadows.badge : null,
+            boxShadow: isSelected && !uct ? AppShadows.badge : null,
           ),
           child: Row(
             mainAxisAlignment: isCollapsed
@@ -640,7 +668,11 @@ class _SidebarTile extends StatelessWidget {
               Stack(
                 clipBehavior: Clip.none,
                 children: <Widget>[
-                  Icon(icon, size: 20, color: AppColors.text),
+                  Icon(
+                    icon,
+                    size: 20,
+                    color: isSelected ? AppColors.navSelectedFg : AppColors.text,
+                  ),
                   if (showDot)
                     Positioned(
                       right: -3,
@@ -654,7 +686,7 @@ class _SidebarTile extends StatelessWidget {
                           shape: BoxShape.circle,
                           border: Border.all(
                             color: isSelected
-                                ? AppColors.accentYellow
+                                ? AppColors.navSelectedBg
                                 : AppColors.surface,
                             width: 1.5,
                           ),
@@ -675,7 +707,9 @@ class _SidebarTile extends StatelessWidget {
                       fontWeight: isSelected
                           ? FontWeight.w900
                           : FontWeight.w700,
-                      color: AppColors.text,
+                      color: isSelected
+                          ? AppColors.navSelectedFg
+                          : AppColors.text,
                     ),
                   ),
                 ),

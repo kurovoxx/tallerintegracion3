@@ -12,7 +12,7 @@ import '../../core/widgets/neobrutalism.dart';
 const double authFormMaxWidth = 480;
 
 /// Texto de los campos: el mismo que usan Login y Registro.
-const TextStyle authFieldTextStyle = TextStyle(
+TextStyle authFieldTextStyle = TextStyle(
   fontWeight: FontWeight.w700,
   fontSize: 14,
   color: AppColors.text,
@@ -40,11 +40,11 @@ class AuthFormScaffold extends StatelessWidget {
                 horizontal: AppDimens.spaceLg,
                 vertical: AppDimens.spaceMd,
               ),
-              decoration: const BoxDecoration(
+              decoration: BoxDecoration(
                 color: AppColors.surface,
                 border: Border(
                   bottom: BorderSide(
-                    color: AppColors.border,
+                    color: AppColors.outline,
                     width: AppDimens.borderWidth,
                   ),
                 ),
@@ -62,7 +62,7 @@ class AuthFormScaffold extends StatelessWidget {
                       title.toUpperCase(),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w900,
                         letterSpacing: 0.5,
@@ -111,7 +111,7 @@ class AuthFormHeading extends StatelessWidget {
       children: [
         Text(
           title.toUpperCase(),
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 24,
             fontWeight: FontWeight.w900,
             letterSpacing: -0.5,
@@ -123,7 +123,7 @@ class AuthFormHeading extends StatelessWidget {
           const SizedBox(height: AppDimens.spaceMd),
           Text(
             subtitle!,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w700,
               height: 1.35,
@@ -193,7 +193,7 @@ class AuthStatusMessage extends StatelessWidget {
           Text(
             message,
             key: messageKey,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w700,
               height: 1.35,
@@ -230,7 +230,7 @@ class AuthPrimaryButton extends StatelessWidget {
       ),
       trailing: onPressed == null
           ? null
-          : const Icon(
+          : Icon(
               Icons.arrow_forward_rounded,
               size: 16,
               color: AppColors.surface,
@@ -304,7 +304,7 @@ SnackBar authSuccessSnackBar(String text) {
     backgroundColor: AppColors.border,
     content: Text(
       text,
-      style: const TextStyle(
+      style: TextStyle(
         fontWeight: FontWeight.w800,
         color: AppColors.surface,
       ),
@@ -318,7 +318,7 @@ SnackBar authErrorSnackBar(String text) {
     backgroundColor: AppColors.error,
     content: Text(
       text,
-      style: const TextStyle(
+      style: TextStyle(
         fontWeight: FontWeight.w700,
         color: AppColors.surface,
       ),

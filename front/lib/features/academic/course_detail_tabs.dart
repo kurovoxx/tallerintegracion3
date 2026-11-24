@@ -74,11 +74,11 @@ class _ContentsTabState extends State<ContentsTab> {
         backgroundColor: AppColors.surface,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppDimens.radius),
-          side: const BorderSide(color: AppColors.border, width: 3),
+          side: BorderSide(color: AppColors.outline, width: 3),
         ),
         title: Text(
           current == null ? 'NUEVO CONTENIDO' : 'EDITAR CONTENIDO',
-          style: const TextStyle(
+          style: TextStyle(
             fontWeight: FontWeight.w900,
             fontSize: 14,
             color: AppColors.text,
@@ -93,7 +93,7 @@ class _ContentsTabState extends State<ContentsTab> {
               const SizedBox(height: 6),
               TextField(
                 controller: titleCtrl,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w700,
                   fontSize: 13,
                   color: AppColors.text,
@@ -106,7 +106,7 @@ class _ContentsTabState extends State<ContentsTab> {
               TextField(
                 controller: bodyCtrl,
                 maxLines: 4,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w700,
                   fontSize: 13,
                   color: AppColors.text,
@@ -130,7 +130,7 @@ class _ContentsTabState extends State<ContentsTab> {
               final title = titleCtrl.text.trim();
               if (title.isEmpty) {
                 ScaffoldMessenger.of(ctx).showSnackBar(
-                  const SnackBar(
+                  SnackBar(
                     content: Text('El título es requerido'),
                     backgroundColor: AppColors.border,
                   ),
@@ -177,7 +177,7 @@ class _ContentsTabState extends State<ContentsTab> {
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo guardar: error inesperado'),
           backgroundColor: AppColors.border,
         ),
@@ -200,7 +200,7 @@ class _ContentsTabState extends State<ContentsTab> {
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo eliminar: error inesperado'),
           backgroundColor: AppColors.border,
         ),
@@ -224,7 +224,7 @@ class _ContentsTabState extends State<ContentsTab> {
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo actualizar: error inesperado'),
           backgroundColor: AppColors.border,
         ),
@@ -241,12 +241,12 @@ class _ContentsTabState extends State<ContentsTab> {
         decoration: BoxDecoration(
           color: AppColors.surface,
           border: Border.all(
-            color: AppColors.border,
+            color: AppColors.outline,
             width: AppDimens.borderWidth,
           ),
           borderRadius: BorderRadius.circular(AppDimens.radius),
         ),
-        child: const CircularProgressIndicator(color: AppColors.text),
+        child: CircularProgressIndicator(color: AppColors.text),
       );
     }
     if (_error != null) {
@@ -255,7 +255,7 @@ class _ContentsTabState extends State<ContentsTab> {
         decoration: BoxDecoration(
           color: AppColors.surface,
           border: Border.all(
-            color: AppColors.border,
+            color: AppColors.outline,
             width: AppDimens.borderWidth,
           ),
           borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -265,7 +265,7 @@ class _ContentsTabState extends State<ContentsTab> {
           children: [
             Text(
               _error!,
-              style: const TextStyle(
+              style: TextStyle(
                 fontWeight: FontWeight.w700,
                 fontSize: 13,
                 color: AppColors.muted,
@@ -302,12 +302,12 @@ class _ContentsTabState extends State<ContentsTab> {
             decoration: BoxDecoration(
               color: AppColors.surface,
               border: Border.all(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidth,
               ),
               borderRadius: BorderRadius.circular(AppDimens.radius),
             ),
-            child: const Text(
+            child: Text(
               'SIN CONTENIDOS: AGREGA LA PRIMERA UNIDAD',
               textAlign: TextAlign.center,
               style: TextStyle(
@@ -330,16 +330,12 @@ class _ContentsTabState extends State<ContentsTab> {
       decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
-        boxShadow: const [
-          BoxShadow(
-            color: AppColors.border,
-            offset: Offset(2, 2),
-            blurRadius: 0,
-          ),
+        boxShadow: [
+          AppShadows.hard2,
         ],
       ),
       child: Row(
@@ -348,7 +344,7 @@ class _ContentsTabState extends State<ContentsTab> {
             value: c.done,
             activeColor: AppColors.accentYellow,
             checkColor: AppColors.text,
-            side: const BorderSide(color: AppColors.border, width: 2),
+            side: BorderSide(color: AppColors.outline, width: 2),
             onChanged: (v) => _toggleDone(c, v ?? false),
           ),
           const SizedBox(width: 6),
@@ -371,7 +367,7 @@ class _ContentsTabState extends State<ContentsTab> {
                     c.body!,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontWeight: FontWeight.w700,
                       fontSize: 11,
                       color: AppColors.muted,
@@ -480,9 +476,9 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
         backgroundColor: AppColors.surface,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppDimens.radius),
-          side: const BorderSide(color: AppColors.border, width: 3),
+          side: BorderSide(color: AppColors.outline, width: 3),
         ),
-        title: const Text(
+        title: Text(
           'RENOMBRAR NOTA',
           style: TextStyle(
             fontWeight: FontWeight.w900,
@@ -492,7 +488,7 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
         ),
         content: TextField(
           controller: ctrl,
-          style: const TextStyle(
+          style: TextStyle(
             fontWeight: FontWeight.w700,
             fontSize: 13,
             color: AppColors.text,
@@ -518,7 +514,7 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
     if (name == null || !mounted) return;
     if (name.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('El nombre no puede estar vacío'),
           backgroundColor: AppColors.border,
         ),
@@ -539,7 +535,7 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo renombrar: error inesperado'),
           backgroundColor: AppColors.border,
         ),
@@ -556,12 +552,12 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
         decoration: BoxDecoration(
           color: AppColors.surface,
           border: Border.all(
-            color: AppColors.border,
+            color: AppColors.outline,
             width: AppDimens.borderWidth,
           ),
           borderRadius: BorderRadius.circular(AppDimens.radius),
         ),
-        child: const CircularProgressIndicator(color: AppColors.text),
+        child: CircularProgressIndicator(color: AppColors.text),
       );
     }
     if (_error != null) {
@@ -570,7 +566,7 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
         decoration: BoxDecoration(
           color: AppColors.surface,
           border: Border.all(
-            color: AppColors.border,
+            color: AppColors.outline,
             width: AppDimens.borderWidth,
           ),
           borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -580,7 +576,7 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
           children: [
             Text(
               _error!,
-              style: const TextStyle(
+              style: TextStyle(
                 fontWeight: FontWeight.w700,
                 fontSize: 13,
                 color: AppColors.muted,
@@ -620,7 +616,7 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
               hasOfficial
                   ? 'Promedio oficial guardado${_averageStatusLabel != null ? ' · $_averageStatusLabel' : ''}.'
                   : 'Aún no hay promedio oficial.',
-              style: const TextStyle(
+              style: TextStyle(
                 fontWeight: FontWeight.w700,
                 fontSize: 12.5,
                 color: AppColors.mutedStrong,
@@ -665,7 +661,7 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
             Expanded(
               child: Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w900,
                   fontSize: 13,
                   letterSpacing: 0.6,
@@ -678,7 +674,7 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
           ],
         ),
         const SizedBox(height: AppDimens.spaceSm),
-        const Divider(
+        Divider(
           color: AppColors.border,
           thickness: AppDimens.borderWidth,
           height: 1,
@@ -693,12 +689,12 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
       decoration: BoxDecoration(
         color: AppColors.surfaceLow,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
       ),
-      child: const Column(
+      child: Column(
         children: [
           Icon(Icons.assignment_outlined, size: 32, color: AppColors.muted),
           SizedBox(height: AppDimens.spaceSm),
@@ -764,7 +760,7 @@ class _EvaluationsTabState extends State<EvaluationsTab> {
                     '$prefix${grade.name}',
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontWeight: FontWeight.w800,
                       fontSize: 13.5,
                       color: AppColors.text,

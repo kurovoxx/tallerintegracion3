@@ -922,8 +922,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         duration: const Duration(seconds: 3),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppDimens.radius),
-          side: const BorderSide(
-            color: AppColors.border,
+          side: BorderSide(
+            color: AppColors.outline,
             width: AppDimens.borderWidth,
           ),
         ),
@@ -938,7 +938,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             Expanded(
               child: Text(
                 message,
-                style: const TextStyle(
+                style: TextStyle(
                   color: AppColors.text,
                   fontWeight: FontWeight.w800,
                   fontSize: 12.5,
@@ -2150,11 +2150,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       if (!mounted) return const _RemoteResult(ok: true, status: 404);
       setState(() {});
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          backgroundColor: Colors.black,
+        SnackBar(
+          backgroundColor: AppColors.border,
           content: Text(
             'La nota ya no existía en el servidor; se eliminó la copia local.',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+            style: TextStyle(color: AppColors.onPrimary, fontWeight: FontWeight.w800),
           ),
         ),
       );
@@ -2172,11 +2172,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       if (!mounted) return const _RemoteResult(ok: true, status: 202);
       setState(() {});
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          backgroundColor: Colors.black,
+        SnackBar(
+          backgroundColor: AppColors.border,
           content: Text(
             'La nota se eliminó de este equipo; se borrará del servidor al recuperar la conexión.',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+            style: TextStyle(color: AppColors.onPrimary, fontWeight: FontWeight.w800),
           ),
         ),
       );
@@ -2347,7 +2347,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
               padding: const EdgeInsets.all(AppDimens.spaceMd),
               child: Row(
                 children: [
-                  const Icon(
+                  Icon(
                     Icons.picture_as_pdf_rounded,
                     size: 18,
                     color: AppColors.text,
@@ -2362,7 +2362,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                           _convertedFilename ?? 'documento.pdf',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontWeight: FontWeight.w900,
                             fontSize: 12,
                             color: AppColors.text,
@@ -2370,7 +2370,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                         ),
                         Text(
                           '${_convertedSizeBytes ?? 0} bytes',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 11,
                             color: AppColors.mutedStrong,
                           ),
@@ -2381,7 +2381,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                 ],
               ),
             ),
-            const Divider(
+            Divider(
               color: AppColors.border,
               thickness: AppDimens.borderWidth,
               height: 1,
@@ -2394,7 +2394,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                   padding: const EdgeInsets.all(AppDimens.spaceMd),
                   child: SelectableText(
                     _convertedMarkdown!,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
                       color: AppColors.text,
@@ -2576,17 +2576,17 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        backgroundColor: Colors.black,
+        backgroundColor: AppColors.border,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.zero,
-          side: const BorderSide(color: Colors.black, width: 2),
+          side: BorderSide(color: AppColors.outline, width: 2),
         ),
         content: Text(
           (_isSaved[note.id] ?? false)
               ? (rid != null ? 'Apunte guardado' : 'Nota guardada localmente')
               : 'Nota removida de guardados',
-          style: const TextStyle(
-            color: Colors.white,
+          style: TextStyle(
+            color: AppColors.surface,
             fontWeight: FontWeight.w800,
           ),
         ),
@@ -2603,11 +2603,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       backgroundColor: Colors.transparent,
       builder: (_) => Container(
         decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border.all(color: Colors.black, width: 2),
+          color: AppColors.surface,
+          border: Border.all(color: AppColors.outline, width: 2),
           borderRadius: const BorderRadius.vertical(top: Radius.circular(0)),
-          boxShadow: const [
-            BoxShadow(color: Colors.black, offset: Offset(4, 4)),
+          boxShadow: [
+            AppShadows.hard4,
           ],
         ),
         padding: const EdgeInsets.all(20),
@@ -2615,34 +2615,34 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Center(child: Container(width: 40, height: 4, color: Colors.black)),
+            Center(child: Container(width: 40, height: 4, color: AppColors.text)),
             const SizedBox(height: 16),
-            const Text(
+            Text(
               'COMPARTIR NOTA',
               style: TextStyle(
                 fontWeight: FontWeight.w900,
                 fontSize: 14,
-                color: Colors.black,
+                color: AppColors.text,
               ),
             ),
             const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: const Color(0xFFF5F0E8),
-                border: Border.all(color: Colors.black, width: 2),
+                color: AppColors.bg,
+                border: Border.all(color: AppColors.outline, width: 2),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.link_rounded, size: 18, color: Colors.black),
+                  Icon(Icons.link_rounded, size: 18, color: AppColors.text),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       link,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w700,
                         fontSize: 12,
-                        color: Colors.black,
+                        color: AppColors.text,
                       ),
                     ),
                   ),
@@ -2654,27 +2654,27 @@ class AllNotesScreenState extends State<AllNotesScreen> {
               width: double.infinity,
               child: ElevatedButton(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFFFCC00),
-                  foregroundColor: Colors.black,
+                  backgroundColor: AppColors.accentYellow,
+                  foregroundColor: AppColors.text,
                   shape: const RoundedRectangleBorder(
                     borderRadius: BorderRadius.zero,
                   ),
-                  side: const BorderSide(color: Colors.black, width: 2),
+                  side: BorderSide(color: AppColors.outline, width: 2),
                   padding: const EdgeInsets.symmetric(vertical: 12),
                 ),
                 onPressed: () {
                   Clipboard.setData(ClipboardData(text: link));
                   Navigator.pop(context);
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
+                    SnackBar(
                       content: Text(
                         'Enlace copiado al portapapeles',
                         style: TextStyle(
-                          color: Colors.white,
+                          color: AppColors.surface,
                           fontWeight: FontWeight.w800,
                         ),
                       ),
-                      backgroundColor: Colors.black,
+                      backgroundColor: AppColors.border,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.zero,
                       ),
@@ -2740,7 +2740,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
           decoration: BoxDecoration(
             color: AppColors.surface,
-            border: Border.all(color: AppColors.border, width: 2),
+            border: Border.all(color: AppColors.outline, width: 2),
             borderRadius: BorderRadius.circular(AppDimens.radius),
             boxShadow: AppShadows.dialog,
           ),
@@ -2904,14 +2904,14 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                   _buildSearchBar(),
                   if (_isSyncingBackend || _isReconciling) ...<Widget>[
                     const SizedBox(height: 8),
-                    const LinearProgressIndicator(
+                    LinearProgressIndicator(
                       color: AppColors.border,
                       backgroundColor: AppColors.bg,
                     ),
                   ],
                   if (_isReconciling) ...<Widget>[
                     const SizedBox(height: 4),
-                    const Text(
+                    Text(
                       'Reconciliando notas con Google Drive…',
                       style: TextStyle(
                         fontSize: 11.5,
@@ -2925,17 +2925,17 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFFDE8E8),
-                        border: Border.all(color: Colors.black, width: 2),
+                        color: AppColors.errorTintSoft,
+                        border: Border.all(color: AppColors.outline, width: 2),
                       ),
                       child: Text(
                         _hiddenDemoCount > 0
                             ? '${_backendError!} Se ocultaron $_hiddenDemoCount ejemplos locales; no se muestran como reales.'
                             : _backendError!,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 11.5,
                           fontWeight: FontWeight.w700,
-                          color: Colors.black,
+                          color: AppColors.text,
                         ),
                       ),
                     ),
@@ -2946,15 +2946,15 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFFFF3CD),
-                        border: Border.all(color: Colors.black, width: 2),
+                        color: AppColors.warningTint,
+                        border: Border.all(color: AppColors.outline, width: 2),
                       ),
-                      child: const Text(
+                      child: Text(
                         'Modo local sin sesión: se muestran datos de ejemplo. Inicia sesión para sincronizar tus notas.',
                         style: TextStyle(
                           fontSize: 11.5,
                           fontWeight: FontWeight.w700,
-                          color: Colors.black,
+                          color: AppColors.text,
                         ),
                       ),
                     ),
@@ -3265,14 +3265,14 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                 style: TextStyle(
                   fontSize: isDesktop ? 26 : 22,
                   fontWeight: FontWeight.w900,
-                  color: AppColors.text,
+                  color: AppColors.title,
                   letterSpacing: -0.5,
                 ),
               ),
               const SizedBox(height: 4),
               Row(
                 children: <Widget>[
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       'Busca y organiza tus apuntes',
                       maxLines: 1,
@@ -3293,13 +3293,13 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                       ),
                       decoration: BoxDecoration(
                         color: AppColors.accentYellow,
-                        border: Border.all(color: AppColors.border, width: 1.5),
+                        border: Border.all(color: AppColors.outline, width: 1.5),
                         borderRadius: BorderRadius.circular(
                           AppDimens.radiusChip,
                         ),
                         boxShadow: AppShadows.badge,
                       ),
-                      child: const Text(
+                      child: Text(
                         'MODO OFFLINE',
                         style: TextStyle(
                           fontSize: 9,
@@ -3364,7 +3364,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -3377,18 +3377,18 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         decoration: InputDecoration(
           hintText:
               'Buscar por título o contenido... (ej: "calculo*", "joins")',
-          hintStyle: const TextStyle(
+          hintStyle: TextStyle(
             color: AppColors.muted,
             fontWeight: FontWeight.w600,
             fontSize: 13,
           ),
-          prefixIcon: const Icon(Icons.search_rounded, color: AppColors.border),
+          prefixIcon: Icon(Icons.search_rounded, color: AppColors.border),
           suffixIcon: ValueListenableBuilder<TextEditingValue>(
             valueListenable: _searchController,
             builder: (context, value, child) {
               if (value.text.isEmpty) return const SizedBox.shrink();
               return IconButton(
-                icon: const Icon(Icons.clear_rounded, color: AppColors.muted),
+                icon: Icon(Icons.clear_rounded, color: AppColors.muted),
                 onPressed: () {
                   _searchController.clear();
                   _onSearchChanged('');
@@ -3402,7 +3402,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             vertical: 14,
           ),
         ),
-        style: const TextStyle(
+        style: TextStyle(
           fontWeight: FontWeight.w700,
           fontSize: 14,
           color: AppColors.text,
@@ -3496,7 +3496,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             ),
             child: Text(
               'Conversiones restantes: $_conversionsRemaining/$_kMaxConversionsPerHour',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.w800,
                 color: AppColors.mutedStrong,
@@ -3552,7 +3552,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       backgroundColor: AppColors.accentYellow,
       // Se abre el buscador solo con el UUID extraído (no la URL completa).
       onTap: () => _openIdSearch(initialQuery: extractNoteId(_currentQuery)),
-      child: const Row(
+      child: Row(
         children: <Widget>[
           Icon(Icons.tag_rounded, color: AppColors.text, size: 18),
           SizedBox(width: AppDimens.spaceSm),
@@ -3599,7 +3599,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                 decoration: BoxDecoration(
                   color: selected ? AppColors.accentYellow : AppColors.surface,
                   border: Border.all(
-                    color: AppColors.border,
+                    color: AppColors.outline,
                     width: AppDimens.borderWidth,
                   ),
                   borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -3607,7 +3607,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                 ),
                 child: Text(
                   c['label']!,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w900,
                     fontSize: 11,
                     color: AppColors.text,
@@ -3624,8 +3624,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
 
   Widget _buildBody(bool isDesktop) {
     if (_isLoading) {
-      return const Center(
-        child: CircularProgressIndicator(color: Colors.black),
+      return Center(
+        child: CircularProgressIndicator(color: AppColors.text),
       );
     }
     if (_error != null) {
@@ -3633,31 +3633,27 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         child: Container(
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            color: Colors.white,
-            border: Border.all(color: Colors.black, width: 2),
-            boxShadow: const [
-              BoxShadow(
-                color: Colors.black,
-                offset: Offset(4, 4),
-                blurRadius: 0,
-              ),
+            color: AppColors.surface,
+            border: Border.all(color: AppColors.outline, width: 2),
+            boxShadow: [
+              AppShadows.hard4,
             ],
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
+              Icon(
                 Icons.error_outline_rounded,
                 size: 36,
-                color: Color(0xFFE63B2E),
+                color: AppColors.error,
               ),
               const SizedBox(height: 12),
               Text(
                 _error!,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w700,
-                  color: Colors.black,
+                  color: AppColors.text,
                   fontSize: 13,
                 ),
               ),
@@ -3666,8 +3662,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                 width: double.infinity,
                 child: ElevatedButton(
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.black,
-                    foregroundColor: Colors.white,
+                    backgroundColor: AppColors.border,
+                    foregroundColor: AppColors.onPrimary,
                     shape: const RoundedRectangleBorder(
                       borderRadius: BorderRadius.zero,
                     ),
@@ -3701,37 +3697,33 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                       Container(
                         padding: const EdgeInsets.all(18),
                         decoration: BoxDecoration(
-                          color: Colors.white,
-                          border: Border.all(color: Colors.black, width: 2),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Colors.black,
-                              offset: Offset(3, 3),
-                              blurRadius: 0,
-                            ),
+                          color: AppColors.surface,
+                          border: Border.all(color: AppColors.outline, width: 2),
+                          boxShadow: [
+                            AppShadows.hard3,
                           ],
                         ),
-                        child: const Icon(
+                        child: Icon(
                           Icons.search_off_rounded,
                           size: 36,
-                          color: Color(0xFF555555),
+                          color: AppColors.muted,
                         ),
                       ),
                       const SizedBox(height: 14),
-                      const Text(
+                      Text(
                         'SIN RESULTADOS',
                         style: TextStyle(
                           fontWeight: FontWeight.w900,
-                          color: Colors.black,
+                          color: AppColors.text,
                         ),
                       ),
                       const SizedBox(height: 6),
-                      const Text(
+                      Text(
                         'Prueba con otra palabra clave o prefijo (ej: prog*)',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           fontWeight: FontWeight.w600,
-                          color: Color(0xFF555555),
+                          color: AppColors.muted,
                           fontSize: 12,
                         ),
                       ),
@@ -3756,51 +3748,47 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                     Container(
                       padding: const EdgeInsets.all(20),
                       decoration: BoxDecoration(
-                        color: Colors.white,
-                        border: Border.all(color: Colors.black, width: 2),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Colors.black,
-                            offset: Offset(3, 3),
-                            blurRadius: 0,
-                          ),
+                        color: AppColors.surface,
+                        border: Border.all(color: AppColors.outline, width: 2),
+                        boxShadow: [
+                          AppShadows.hard3,
                         ],
                       ),
-                      child: const Icon(
+                      child: Icon(
                         Icons.note_add_rounded,
                         size: 36,
-                        color: Colors.black,
+                        color: AppColors.text,
                       ),
                     ),
                     const SizedBox(height: 14),
-                    const Text(
+                    Text(
                       'NO TIENES NOTAS CREADAS TODAVÍA',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontWeight: FontWeight.w900,
-                        color: Colors.black,
+                        color: AppColors.text,
                         fontSize: 14,
                       ),
                     ),
                     const SizedBox(height: 6),
-                    const Text(
+                    Text(
                       'Crea tu primera nota y aparecerá aquí',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF555555),
+                        color: AppColors.muted,
                         fontSize: 12,
                       ),
                     ),
                     const SizedBox(height: 16),
                     ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.black,
-                        foregroundColor: Colors.white,
+                        backgroundColor: AppColors.border,
+                        foregroundColor: AppColors.onPrimary,
                         shape: const RoundedRectangleBorder(
                           borderRadius: BorderRadius.zero,
                         ),
-                        side: const BorderSide(color: Colors.black, width: 2),
+                        side: BorderSide(color: AppColors.outline, width: 2),
                         padding: const EdgeInsets.symmetric(
                           horizontal: 20,
                           vertical: 12,
@@ -3907,15 +3895,11 @@ class _VisibilityOption extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 10),
         decoration: BoxDecoration(
-          color: active ? const Color(0xFF0055FF) : const Color(0xFFF5F0E8),
-          border: Border.all(color: Colors.black, width: 2),
+          color: active ? AppColors.accentBlue : AppColors.bg,
+          border: Border.all(color: AppColors.outline, width: 2),
           boxShadow: active
-              ? const [
-                  BoxShadow(
-                    color: Colors.black,
-                    offset: Offset(2, 2),
-                    blurRadius: 0,
-                  ),
+              ? [
+                  AppShadows.hard2,
                 ]
               : null,
         ),
@@ -3925,7 +3909,7 @@ class _VisibilityOption extends StatelessWidget {
             style: TextStyle(
               fontWeight: FontWeight.w900,
               fontSize: 11,
-              color: active ? Colors.white : Colors.black,
+              color: active ? AppColors.surface : AppColors.text,
             ),
           ),
         ),
@@ -4009,7 +3993,7 @@ class _NoteCardState extends State<_NoteCard> {
           decoration: BoxDecoration(
             color: AppColors.surface,
             border: Border.all(
-              color: AppColors.border,
+              color: AppColors.outline,
               width: AppDimens.borderWidth,
             ),
             borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -4025,7 +4009,7 @@ class _NoteCardState extends State<_NoteCard> {
                       widget.note.title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w900,
                         fontSize: 13,
                         color: AppColors.text,
@@ -4038,7 +4022,7 @@ class _NoteCardState extends State<_NoteCard> {
                         widget.note.content,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 11,
                           color: AppColors.muted,
                           height: 1.3,
@@ -4059,7 +4043,7 @@ class _NoteCardState extends State<_NoteCard> {
                       widget.note.title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w900,
                         fontSize: 16,
                         color: AppColors.text,
@@ -4071,7 +4055,7 @@ class _NoteCardState extends State<_NoteCard> {
                       widget.note.content,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w500,
                         color: AppColors.muted,
@@ -4095,7 +4079,7 @@ class _NoteCardState extends State<_NoteCard> {
           padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
           decoration: BoxDecoration(
             color: isPublic ? AppColors.accentBlueDeep : AppColors.accentYellow,
-            border: Border.all(color: AppColors.border, width: 1.5),
+            border: Border.all(color: AppColors.outline, width: 1.5),
             borderRadius: BorderRadius.circular(AppDimens.radiusChip),
             boxShadow: AppShadows.badge,
           ),
@@ -4114,13 +4098,13 @@ class _NoteCardState extends State<_NoteCard> {
             padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
             decoration: BoxDecoration(
               color: AppColors.accentYellow,
-              border: Border.all(color: AppColors.border, width: 1.5),
+              border: Border.all(color: AppColors.outline, width: 1.5),
               borderRadius: BorderRadius.circular(AppDimens.radiusChip),
               boxShadow: AppShadows.badge,
             ),
             child: Text(
               widget.syncLabel!,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 9,
                 fontWeight: FontWeight.w900,
                 color: AppColors.text,
@@ -4133,7 +4117,7 @@ class _NoteCardState extends State<_NoteCard> {
           child: Text(
             _formatDate(widget.note.updatedAt),
             textAlign: TextAlign.end,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 9,
               fontWeight: FontWeight.w700,
               color: AppColors.muted,
@@ -4193,10 +4177,10 @@ class _NoteCardState extends State<_NoteCard> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              const Icon(Icons.share_rounded, size: 13, color: AppColors.text),
+              Icon(Icons.share_rounded, size: 13, color: AppColors.text),
               if (!isGrid) ...<Widget>[
                 const SizedBox(width: 4),
-                const Text(
+                Text(
                   'Compartir',
                   style: TextStyle(
                     fontSize: 11,
@@ -4263,7 +4247,7 @@ class _CardActionState extends State<_CardAction> {
           padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
           decoration: BoxDecoration(
             color: widget.background,
-            border: Border.all(color: AppColors.border, width: 1.5),
+            border: Border.all(color: AppColors.outline, width: 1.5),
             borderRadius: BorderRadius.circular(AppDimens.radiusChip),
             boxShadow: _pressed ? const <BoxShadow>[] : AppShadows.badge,
           ),
@@ -4278,22 +4262,22 @@ class _ActionButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final bool isActive;
-  final Color activeColor;
-  final Color activeForeground;
+  final Color? activeColor;
+  final Color? activeForeground;
   final VoidCallback onTap;
   const _ActionButton({
     required this.icon,
     required this.label,
     this.isActive = false,
-    this.activeColor = AppColors.accentYellow,
-    this.activeForeground = AppColors.text,
+    this.activeColor,
+    this.activeForeground,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final background = isActive ? activeColor : AppColors.surface;
-    final foreground = isActive ? activeForeground : AppColors.text;
+    final background = isActive ? (activeColor ?? AppColors.accentYellow) : AppColors.surface;
+    final foreground = isActive ? (activeForeground ?? AppColors.text) : AppColors.text;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       child: InkWell(
@@ -4303,7 +4287,7 @@ class _ActionButton extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(
             color: background,
-            border: Border.all(color: AppColors.border, width: 1.5),
+            border: Border.all(color: AppColors.outline, width: 1.5),
             borderRadius: BorderRadius.circular(AppDimens.radiusChip),
             boxShadow: AppShadows.badge,
           ),
@@ -4577,11 +4561,11 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     if (_driveWarning != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          backgroundColor: Colors.black,
+          backgroundColor: AppColors.border,
           content: Text(
             _driveWarning!,
-            style: const TextStyle(
-              color: Colors.white,
+            style: TextStyle(
+              color: AppColors.surface,
               fontWeight: FontWeight.w800,
             ),
           ),
@@ -4727,9 +4711,9 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
         confirmVariant: NeobrutalistButtonVariant.danger,
         closeOnConfirm: false,
         onConfirm: () => Navigator.of(context).pop(true),
-        content: const Text(
+        content: Text(
           '¿Eliminar esta nota? También se eliminarán sus archivos adjuntos.',
-          style: TextStyle(fontWeight: FontWeight.w600, color: Colors.black),
+          style: TextStyle(fontWeight: FontWeight.w600, color: AppColors.text),
         ),
       ),
     );
@@ -4743,13 +4727,13 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          backgroundColor: Colors.black,
+          backgroundColor: AppColors.border,
           content: Text(
             res.status == -1
                 ? 'Sin conexión: no se pudo eliminar.'
                 : 'No se pudo eliminar. Inténtalo más tarde.',
-            style: const TextStyle(
-              color: Colors.white,
+            style: TextStyle(
+              color: AppColors.surface,
               fontWeight: FontWeight.w800,
             ),
           ),
@@ -4777,13 +4761,13 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     setState(() => _cloning = false);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        backgroundColor: Colors.black,
+        backgroundColor: AppColors.border,
         content: Text(
           res.ok
               ? 'Copia guardada exitosamente en tu Drive'
               : _cloneErrorText(res),
-          style: const TextStyle(
-            color: Colors.white,
+          style: TextStyle(
+            color: AppColors.surface,
             fontWeight: FontWeight.w800,
           ),
         ),
@@ -4811,11 +4795,11 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        backgroundColor: Colors.black,
+        backgroundColor: AppColors.border,
         content: Text(
           message,
-          style: const TextStyle(
-            color: Colors.white,
+          style: TextStyle(
+            color: AppColors.surface,
             fontWeight: FontWeight.w800,
           ),
         ),
@@ -5016,7 +5000,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
         // sobrante de la miniatura se funde con la paleta neobrutalista.
         color: AppColors.bg,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -5029,9 +5013,9 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
         children: [
           child,
           Container(
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               border: Border(
-                top: BorderSide(color: AppColors.border, width: 2),
+                top: BorderSide(color: AppColors.outline, width: 2),
               ),
               color: AppColors.bg,
             ),
@@ -5040,7 +5024,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
               name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 10,
                 fontWeight: FontWeight.w800,
                 color: AppColors.text,
@@ -5063,7 +5047,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: AppColors.surfaceLow,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radius),
         boxShadow: AppShadows.badge,
       ),
@@ -5072,7 +5056,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
         children: [
           Text(
             'ARCHIVOS ADJUNTOS (${_attachments.length})',
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 10,
               fontWeight: FontWeight.w900,
               color: AppColors.text,
@@ -5095,7 +5079,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
             ],
           ),
           if (_pendingRemovedIds.isNotEmpty)
-            const Padding(
+            Padding(
               padding: EdgeInsets.only(top: 6),
               child: Text(
                 'Se quitarán al GUARDAR. CANCELAR los conserva.',
@@ -5121,13 +5105,13 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     return <Widget>[
       if (images.isNotEmpty) ...[
         if (docs.isNotEmpty) ...[
-          const Text(
+          Text(
             'IMÁGENES',
             style: TextStyle(
               fontWeight: FontWeight.w900,
               fontSize: 10,
               letterSpacing: 0.5,
-              color: Color(0xFF555555),
+              color: AppColors.muted,
             ),
           ),
           const SizedBox(height: 8),
@@ -5151,13 +5135,13 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
         if (docs.isNotEmpty) const SizedBox(height: 14),
       ],
       if (docs.isNotEmpty) ...[
-        const Text(
+        Text(
           'DOCUMENTOS',
           style: TextStyle(
             fontWeight: FontWeight.w900,
             fontSize: 10,
             letterSpacing: 0.5,
-            color: Color(0xFF555555),
+            color: AppColors.muted,
           ),
         ),
         const SizedBox(height: 8),
@@ -5182,14 +5166,14 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      decoration: const BoxDecoration(
-        color: Colors.white,
+      decoration: BoxDecoration(
+        color: AppColors.surface,
         border: Border(
-          top: BorderSide(color: Colors.black, width: 2),
-          left: BorderSide(color: Colors.black, width: 2),
-          right: BorderSide(color: Colors.black, width: 2),
+          top: BorderSide(color: AppColors.outline, width: 2),
+          left: BorderSide(color: AppColors.outline, width: 2),
+          right: BorderSide(color: AppColors.outline, width: 2),
         ),
-        boxShadow: [BoxShadow(color: Colors.black, offset: Offset(6, 6))],
+        boxShadow: [AppShadows.hard6],
       ),
       child: Column(
         children: [
@@ -5198,7 +5182,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
             width: 40,
             height: 4,
             decoration: BoxDecoration(
-              color: Colors.black,
+              color: AppColors.text,
               borderRadius: BorderRadius.circular(0),
             ),
           ),
@@ -5232,9 +5216,9 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
               color: widget.note.visibility == 'public'
-                  ? const Color(0xFF0055FF)
-                  : const Color(0xFFFFCC00),
-              border: Border.all(color: Colors.black, width: 1.5),
+                  ? AppColors.accentBlue
+                  : AppColors.accentYellow,
+              border: Border.all(color: AppColors.outline, width: 1.5),
             ),
             child: Text(
               widget.note.visibility.toUpperCase(),
@@ -5242,8 +5226,8 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                 fontSize: 10,
                 fontWeight: FontWeight.w900,
                 color: widget.note.visibility == 'public'
-                    ? Colors.white
-                    : Colors.black,
+                    ? AppColors.surface
+                    : AppColors.text,
               ),
             ),
           ),
@@ -5254,17 +5238,17 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFF5F0E8),
-                  border: Border.all(color: Colors.black, width: 1.5),
+                  color: AppColors.bg,
+                  border: Border.all(color: AppColors.outline, width: 1.5),
                 ),
                 child: Text(
                   widget.tag,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.w800,
-                    color: Colors.black,
+                    color: AppColors.text,
                   ),
                 ),
               ),
@@ -5273,27 +5257,27 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
           const SizedBox(width: 8),
           Text(
             _fmtDate(widget.note.updatedAt),
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w700,
-              color: Color(0xFF1A1A1A),
+              color: AppColors.text,
             ),
           ),
         ],
       ),
       if (_loadingRemote) ...[
         const SizedBox(height: 12),
-        const LinearProgressIndicator(
-          color: Colors.black,
-          backgroundColor: Color(0xFFF5F0E8),
+        LinearProgressIndicator(
+          color: AppColors.text,
+          backgroundColor: AppColors.bg,
         ),
         const SizedBox(height: 4),
-        const Text(
+        Text(
           'Sincronizando con Drive…',
           style: TextStyle(
             fontSize: 11,
             fontWeight: FontWeight.w700,
-            color: Color(0xFF555555),
+            color: AppColors.muted,
           ),
         ),
       ],
@@ -5302,24 +5286,24 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
         Container(
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-            color: const Color(0xFFFFF3C4),
-            border: Border.all(color: Colors.black, width: 1.5),
+            color: AppColors.warningTint,
+            border: Border.all(color: AppColors.outline, width: 1.5),
           ),
           child: Row(
             children: [
-              const Icon(
+              Icon(
                 Icons.warning_amber_rounded,
-                color: Colors.black,
+                color: AppColors.text,
                 size: 18,
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   _driveWarning!,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w800,
-                    color: Colors.black,
+                    color: AppColors.text,
                   ),
                 ),
               ),
@@ -5384,7 +5368,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                 color: _attachNoticeOk
                     ? AppColors.subjectMint
                     : AppColors.accentYellow,
-                border: Border.all(color: AppColors.border, width: 1.5),
+                border: Border.all(color: AppColors.outline, width: 1.5),
                 borderRadius: BorderRadius.circular(AppDimens.radiusChip),
               ),
               child: Row(
@@ -5400,7 +5384,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                   Expanded(
                     child: Text(
                       _attachNotice!,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 10,
                         fontWeight: FontWeight.w800,
                         color: AppColors.text,
@@ -5435,10 +5419,10 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
           const SizedBox(height: 8),
           Text(
             _editError!,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w800,
-              color: Color(0xFFE63B2E),
+              color: AppColors.error,
             ),
           ),
         ],
@@ -5448,10 +5432,10 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
             Expanded(
               child: TextButton(
                 onPressed: _saving ? null : _cancelEdit,
-                child: const Text(
+                child: Text(
                   'CANCELAR',
                   style: TextStyle(
-                    color: Colors.black,
+                    color: AppColors.text,
                     fontWeight: FontWeight.w800,
                   ),
                 ),
@@ -5461,8 +5445,8 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
             Expanded(
               child: ElevatedButton(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.black,
-                  foregroundColor: Colors.white,
+                  backgroundColor: AppColors.border,
+                  foregroundColor: AppColors.onPrimary,
                   shape: const RoundedRectangleBorder(
                     borderRadius: BorderRadius.zero,
                   ),
@@ -5481,15 +5465,15 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
       ] else ...[
         Text(
           _title,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 22,
             fontWeight: FontWeight.w900,
-            color: Colors.black,
+            color: AppColors.text,
             height: 1.2,
           ),
         ),
         const SizedBox(height: 12),
-        Container(height: 2, color: Colors.black),
+        Container(height: 2, color: AppColors.outline),
         const SizedBox(height: 16),
         NoteMarkdownBody(
           content: _content,
@@ -5500,11 +5484,11 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
       ],
       if (_mergedResources.isNotEmpty) ...[
         const SizedBox(height: 16),
-        Container(height: 2, color: Colors.black),
+        Container(height: 2, color: AppColors.outline),
         const SizedBox(height: 14),
-        const Row(
+        Row(
           children: [
-            Icon(Icons.folder_open_rounded, size: 16, color: Colors.black),
+            Icon(Icons.folder_open_rounded, size: 16, color: AppColors.text),
             SizedBox(width: 6),
             Text(
               'RECURSOS ADJUNTOS',
@@ -5512,7 +5496,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
                 fontWeight: FontWeight.w900,
                 fontSize: 13,
                 letterSpacing: 0.5,
-                color: Colors.black,
+                color: AppColors.text,
               ),
             ),
           ],
@@ -5739,7 +5723,7 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
         focusNode: _titleFocus,
         decoration: appInputDecoration('Título').copyWith(
           errorText: _titleError,
-          errorStyle: const TextStyle(
+          errorStyle: TextStyle(
             color: AppColors.error,
             fontWeight: FontWeight.w800,
             fontSize: 12,
@@ -5769,7 +5753,7 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
               color: _attachNoticeOk
                   ? AppColors.subjectMint
                   : AppColors.accentYellow,
-              border: Border.all(color: AppColors.border, width: 1.5),
+              border: Border.all(color: AppColors.outline, width: 1.5),
               borderRadius: BorderRadius.circular(AppDimens.radiusChip),
             ),
             child: Row(
@@ -5785,7 +5769,7 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
                 Expanded(
                   child: Text(
                     _attachNotice!,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.w800,
                       color: AppColors.text,
@@ -6289,14 +6273,14 @@ class _AttachmentToolbar extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         color: AppColors.surfaceLow,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radius),
       ),
       child: Row(
         children: [
-          const Icon(Icons.attachment_rounded, size: 16, color: AppColors.text),
+          Icon(Icons.attachment_rounded, size: 16, color: AppColors.text),
           const SizedBox(width: 6),
-          const Text(
+          Text(
             'ADJUNTAR:',
             style: TextStyle(
               fontSize: 10,
@@ -6371,7 +6355,7 @@ class _AttachmentToolbarBtn extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(
             color: fill,
-            border: Border.all(color: AppColors.border, width: 1.5),
+            border: Border.all(color: AppColors.outline, width: 1.5),
             borderRadius: BorderRadius.circular(AppDimens.radiusChip),
             boxShadow: AppShadows.badge,
           ),
@@ -6382,7 +6366,7 @@ class _AttachmentToolbarBtn extends StatelessWidget {
               const SizedBox(width: 4),
               Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w900,
                   color: AppColors.text,
@@ -6676,7 +6660,7 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
                         child: Text(
                           '${file.name} · ${file.sizeLabel}',
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w700,
                             color: AppColors.text,
@@ -6688,7 +6672,7 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
                           cursor: SystemMouseCursors.click,
                           child: GestureDetector(
                             onTap: () => setState(() => _selected.remove(file)),
-                            child: const Padding(
+                            child: Padding(
                               padding: EdgeInsets.symmetric(
                                 horizontal: 4,
                                 vertical: 2,
@@ -6715,7 +6699,7 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
                   : () => setState(() => _manual = !_manual),
               child: Text(
                 _manual ? 'Usar selector de archivos' : 'Usar enlace manual',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w800,
                   color: AppColors.text,
@@ -6726,7 +6710,7 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
           ),
           const SizedBox(height: 8),
           if (_error != null)
-            Text(_error!, style: const TextStyle(color: AppColors.error)),
+            Text(_error!, style: TextStyle(color: AppColors.error)),
           const AppFieldLabel('NOMBRE'),
           const SizedBox(height: 4),
           TextField(
@@ -6774,7 +6758,7 @@ class _DetectedAttachmentsPreview extends StatelessWidget {
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: AppColors.surfaceLow,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radius),
         boxShadow: AppShadows.badge,
       ),
@@ -6783,7 +6767,7 @@ class _DetectedAttachmentsPreview extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(
+              Icon(
                 Icons.attach_file_rounded,
                 size: 14,
                 color: AppColors.text,
@@ -6792,7 +6776,7 @@ class _DetectedAttachmentsPreview extends StatelessWidget {
               Expanded(
                 child: Text(
                   'REFERENCIAS EN EL TEXTO (${attachments.length})',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.w900,
                     color: AppColors.text,
@@ -6802,7 +6786,7 @@ class _DetectedAttachmentsPreview extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 6),
-              const Text(
+              Text(
                 'Toca / (x)',
                 style: TextStyle(
                   fontSize: 9,
@@ -6848,7 +6832,7 @@ class _DetectedAttachmentChip extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: isImage ? AppColors.subjectMint : AppColors.accentYellow,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radiusChip),
         boxShadow: AppShadows.badge,
       ),
@@ -6879,7 +6863,7 @@ class _DetectedAttachmentChip extends StatelessWidget {
                       child: Text(
                         resource['name'] as String,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.w900,
                           color: AppColors.text,
@@ -6896,7 +6880,7 @@ class _DetectedAttachmentChip extends StatelessWidget {
             cursor: SystemMouseCursors.click,
             child: GestureDetector(
               onTap: onRemove,
-              child: const Padding(
+              child: Padding(
                 padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                 child: Icon(
                   Icons.close_rounded,
@@ -6937,7 +6921,7 @@ class _EditAttachmentChip extends StatelessWidget {
           color: pending
               ? AppColors.accentYellow
               : (isImage ? AppColors.subjectMint : AppColors.accentYellow),
-          border: Border.all(color: AppColors.border, width: 1.5),
+          border: Border.all(color: AppColors.outline, width: 1.5),
           borderRadius: BorderRadius.circular(AppDimens.radiusChip),
           boxShadow: AppShadows.badge,
         ),
@@ -6964,7 +6948,7 @@ class _EditAttachmentChip extends StatelessWidget {
                     child: Text(
                       resource['name'] as String,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 10,
                         fontWeight: FontWeight.w900,
                         color: AppColors.text,
@@ -6973,7 +6957,7 @@ class _EditAttachmentChip extends StatelessWidget {
                   ),
                   if (pending) ...[
                     const SizedBox(width: 4),
-                    const Text(
+                    Text(
                       'SE QUITARÁ',
                       style: TextStyle(
                         fontSize: 8,
@@ -7249,7 +7233,7 @@ class _ResourceImageThumb extends StatelessWidget {
       return Container(
         color: AppColors.surfaceLow,
         alignment: Alignment.center,
-        child: const Column(
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -7278,7 +7262,7 @@ class _ResourceImageThumb extends StatelessWidget {
           decoration: BoxDecoration(
             color: AppColors.border,
             border: Border.all(
-              color: AppColors.border,
+              color: AppColors.outline,
               width: AppDimens.borderWidth,
             ),
             borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -7296,7 +7280,7 @@ class _ResourceImageThumb extends StatelessWidget {
                   fallback: fallback,
                   loadingBuilder: (context, child, progress) {
                     if (progress == null) return child;
-                    return const Center(
+                    return Center(
                       child: SizedBox(
                         width: 18,
                         height: 18,
@@ -7378,7 +7362,7 @@ class _ResourceRemoveButtonState extends State<_ResourceRemoveButton> {
                 ),
                 decoration: BoxDecoration(
                   color: _focused ? AppColors.surface : AppColors.errorDeep,
-                  border: Border.all(color: AppColors.border, width: 1.5),
+                  border: Border.all(color: AppColors.outline, width: 1.5),
                   borderRadius: BorderRadius.circular(AppDimens.radius),
                   boxShadow: _pressed ? const [] : AppShadows.badge,
                 ),
@@ -7422,7 +7406,7 @@ class _ResourceDocTile extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -7436,7 +7420,7 @@ class _ResourceDocTile extends StatelessWidget {
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: isPdf ? AppColors.errorDeep : AppColors.accentBlueDeep,
-              border: Border.all(color: AppColors.border, width: 2),
+              border: Border.all(color: AppColors.outline, width: 2),
               borderRadius: BorderRadius.circular(AppDimens.radius),
             ),
             child: Icon(
@@ -7454,7 +7438,7 @@ class _ResourceDocTile extends StatelessWidget {
                   resource['name'] as String,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w800,
                     fontSize: 12.5,
                     color: AppColors.text,
@@ -7465,7 +7449,7 @@ class _ResourceDocTile extends StatelessWidget {
                 Text(
                   '${isPdf ? 'PDF' : 'DOC'} · $sizeLabel'
                   '${info.exists ? ' · DOCUMENTO LISTO' : ''}',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w700,
                     fontSize: 11,
                     color: AppColors.muted,
@@ -7502,13 +7486,13 @@ class _ResourceDocTile extends StatelessWidget {
 class _DocAction extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
-  final Color fill;
-  final Color foreground;
+  final Color? fill;
+  final Color? foreground;
   const _DocAction({
     required this.label,
     required this.onTap,
-    this.fill = AppColors.surface,
-    this.foreground = AppColors.text,
+    this.fill,
+    this.foreground,
   });
 
   @override
@@ -7520,8 +7504,8 @@ class _DocAction extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
           decoration: BoxDecoration(
-            color: fill,
-            border: Border.all(color: AppColors.border, width: 1.5),
+            color: (fill ?? AppColors.surface),
+            border: Border.all(color: AppColors.outline, width: 1.5),
             borderRadius: BorderRadius.circular(AppDimens.radiusChip),
             boxShadow: AppShadows.badge,
           ),
@@ -7530,7 +7514,7 @@ class _DocAction extends StatelessWidget {
             style: TextStyle(
               fontWeight: FontWeight.w900,
               fontSize: 9,
-              color: foreground,
+              color: (foreground ?? AppColors.text),
             ),
           ),
         ),
@@ -7550,7 +7534,7 @@ Widget _resourceInfoRow(String label, String value, {bool mono = false}) {
           width: 76,
           child: Text(
             label,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 9,
               fontWeight: FontWeight.w900,
               letterSpacing: 0.5,
@@ -7648,11 +7632,11 @@ class _ResourceViewerDialogState extends State<_ResourceViewerDialog> {
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        backgroundColor: Colors.black,
+        backgroundColor: AppColors.border,
         content: Text(
           message,
-          style: const TextStyle(
-            color: Colors.white,
+          style: TextStyle(
+            color: AppColors.surface,
             fontWeight: FontWeight.w800,
           ),
         ),
@@ -7717,13 +7701,13 @@ class _ResourceViewerDialogState extends State<_ResourceViewerDialog> {
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        backgroundColor: Colors.black,
+        backgroundColor: AppColors.border,
         content: Text(
           ok
               ? 'Abriendo ${resource['name']} en el visor del sistema…'
               : 'No se pudo abrir el archivo. Comprueba tu acceso e inténtalo de nuevo.',
-          style: const TextStyle(
-            color: Colors.white,
+          style: TextStyle(
+            color: AppColors.surface,
             fontWeight: FontWeight.w800,
           ),
         ),
@@ -7753,11 +7737,11 @@ class _ResourceViewerDialogState extends State<_ResourceViewerDialog> {
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        backgroundColor: Colors.black,
+        backgroundColor: AppColors.border,
         content: Text(
           message,
-          style: const TextStyle(
-            color: Colors.white,
+          style: TextStyle(
+            color: AppColors.surface,
             fontWeight: FontWeight.w800,
           ),
         ),
@@ -7828,7 +7812,7 @@ class _ResourceViewerDialogState extends State<_ResourceViewerDialog> {
               decoration: BoxDecoration(
                 color: AppColors.surfaceLow,
                 border: Border.all(
-                  color: AppColors.border,
+                  color: AppColors.outline,
                   width: AppDimens.borderWidth,
                 ),
                 borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -7844,7 +7828,7 @@ class _ResourceViewerDialogState extends State<_ResourceViewerDialog> {
                   fallback: () => Container(
                     color: AppColors.surfaceLow,
                     alignment: Alignment.center,
-                    child: const Column(
+                    child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(
@@ -7869,7 +7853,7 @@ class _ResourceViewerDialogState extends State<_ResourceViewerDialog> {
                     return Container(
                       color: AppColors.bg,
                       alignment: Alignment.center,
-                      child: const CircularProgressIndicator(
+                      child: CircularProgressIndicator(
                         color: AppColors.border,
                       ),
                     );
@@ -7920,13 +7904,13 @@ class _ResourceViewerDialogState extends State<_ResourceViewerDialog> {
         ? AppColors.subjectMint
         : (_hasAttachment || info.isRemote)
         ? AppColors.accentYellow
-        : const Color(0xFFFFD6D2);
+        : AppColors.errorTint;
 
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: AppColors.bg,
-        border: Border.all(color: AppColors.border, width: 2),
+        border: Border.all(color: AppColors.outline, width: 2),
         borderRadius: BorderRadius.circular(AppDimens.radius),
       ),
       child: Column(
@@ -7941,7 +7925,7 @@ class _ResourceViewerDialogState extends State<_ResourceViewerDialog> {
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: isPdf ? AppColors.errorDeep : AppColors.accentBlueDeep,
-                  border: Border.all(color: AppColors.border, width: 2),
+                  border: Border.all(color: AppColors.outline, width: 2),
                   borderRadius: BorderRadius.circular(AppDimens.radius),
                 ),
                 child: Icon(
@@ -7958,7 +7942,7 @@ class _ResourceViewerDialogState extends State<_ResourceViewerDialog> {
                   resource['name'] as String,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w900,
                     fontSize: 13,
                     color: AppColors.text,
@@ -7985,13 +7969,13 @@ class _ResourceViewerDialogState extends State<_ResourceViewerDialog> {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
               color: badgeColor,
-              border: Border.all(color: AppColors.border, width: 1.5),
+              border: Border.all(color: AppColors.outline, width: 1.5),
               borderRadius: BorderRadius.circular(AppDimens.radiusChip),
               boxShadow: AppShadows.badge,
             ),
             child: Text(
               badgeLabel,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 9,
                 fontWeight: FontWeight.w900,
                 letterSpacing: 0.5,

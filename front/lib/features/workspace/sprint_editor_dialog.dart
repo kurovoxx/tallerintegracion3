@@ -121,7 +121,7 @@ class _SprintEditorDialogState extends State<SprintEditorDialog> {
           ),
           if (widget.sheet != null) ...[
             const SizedBox(height: AppDimens.spaceMd),
-            const Text(
+            Text(
               'Cambiar el rango no elimina las horas registradas.',
               style: TextStyle(
                 fontSize: 12,
@@ -134,7 +134,7 @@ class _SprintEditorDialogState extends State<SprintEditorDialog> {
             const SizedBox(height: AppDimens.spaceSm),
             Text(
               _error!,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w800,
                 color: AppColors.errorDeep,

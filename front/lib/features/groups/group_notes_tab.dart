@@ -271,7 +271,7 @@ class _GroupNotesTabState extends State<GroupNotesTab> {
       child: Column(
         children: [
           _header(),
-          const Divider(
+          Divider(
             color: AppColors.border,
             thickness: AppDimens.borderWidth,
             height: 1,
@@ -298,7 +298,7 @@ class _GroupNotesTabState extends State<GroupNotesTab> {
           final compact = constraints.maxWidth < 420 || textScale > 1.3;
           return Row(
             children: [
-              const Icon(
+              Icon(
                 Icons.description_rounded,
                 size: 16,
                 color: AppColors.text,
@@ -437,7 +437,7 @@ class _GroupNotesTabState extends State<GroupNotesTab> {
               note.title,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 15,
                 fontWeight: FontWeight.w900,
                 color: AppColors.text,
@@ -544,7 +544,7 @@ class _NoteViewer extends StatelessWidget {
           const SizedBox(height: AppDimens.spaceMd),
         ],
         if (markdown.trim().isEmpty)
-          const Text(
+          Text(
             '(sin contenido)',
             style: TextStyle(
               fontSize: 13,
@@ -565,7 +565,7 @@ class _NoteViewer extends StatelessWidget {
           ),
         if (listed.isNotEmpty) ...[
           const SizedBox(height: AppDimens.spaceLg),
-          const Divider(
+          Divider(
             color: AppColors.border,
             thickness: AppDimens.borderWidth,
             height: 1,
@@ -601,7 +601,7 @@ class _NoteViewer extends StatelessWidget {
           decoration: BoxDecoration(
             color: AppColors.surfaceLow,
             border: Border.all(
-              color: AppColors.border,
+              color: AppColors.outline,
               width: AppDimens.borderWidth,
             ),
             borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -630,7 +630,7 @@ class _NoteViewer extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppColors.surface,
           border: Border.all(
-            color: AppColors.border,
+            color: AppColors.outline,
             width: AppDimens.borderWidth,
           ),
           borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -757,7 +757,7 @@ class _ShareNoteDialogState extends State<_ShareNoteDialog> {
                                 ? AppColors.accentYellow
                                 : AppColors.surface,
                             border: Border.all(
-                              color: AppColors.border,
+                              color: AppColors.outline,
                               width: AppDimens.borderWidth,
                             ),
                             borderRadius: BorderRadius.circular(
@@ -873,7 +873,7 @@ class _ShareNoteDialogState extends State<_ShareNoteDialog> {
             _accessMode == NotesSharingService.accessModeLink
                 ? 'Cualquiera con el enlace del grupo puede verla.'
                 : 'Solo los miembros del grupo acceden (permisos por correo).',
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w600,
               color: AppColors.muted,
