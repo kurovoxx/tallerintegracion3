@@ -403,6 +403,7 @@ class _MainShellState extends State<MainShell> {
                   right: -3,
                   top: -2,
                   child: Container(
+                    key: const ValueKey('notifications-unread-dot'),
                     width: 9,
                     height: 9,
                     decoration: BoxDecoration(
