@@ -571,23 +571,27 @@ Permitir que un usuario siga a otro para tener un vínculo directo con su perfil
 - «Seguir a todos» desde la lista de miembros (sigue siendo uno por uno).
 - Dejar de seguirse a uno mismo (el backend lo rechaza con 400).
 
-## 4_5_12 — Panel de seguidos en la sidebar
+## 4_5_12 — Pestaña de Seguidos en el sidebar
 
 ### Objetivo
 
-Mostrar en el sidebar global (sidebar de navegación de Sigma Academy) la gente que el usuario sigue, para poder acceder rápidamente a sus perfiles públicos sin tener que buscarlos por código.
+Mostrar en el sidebar global (sidebar de navegación de Sigma Academy) una pestaña dedicada a "Seguidos" que liste a todas las personas que el usuario sigue. Al tocar la pestaña, se abre una pantalla con el título "Siguiendo" y una lista de seguidos similar a la lista de miembros de grupos, donde cada entrada muestra avatar, nombre, código de perfil y un botón para dejar de seguir.
 
 ### Alcance
 
 | Aspecto | Valor |
 |---------|-------|
-| Pantalla | Sidebar global (`main_shell.dart`) |
-| Sección | «SIGUIENDO» con cantidad de seguidos y fila de chips (avatar + nombre) |
-| Comportamiento | Al tocar a un seguido se abre su `PublicProfileScreen` (misma pantalla que se abre al buscar por código de perfil) |
+| Pantalla | Nueva pestaña "Seguidos" en el sidebar global (`main_shell.dart`) + pantalla dedicada (`followed_screen.dart`) |
+| Comportamiento | Al tocar la pestaña "Seguidos" se abre una pantalla con lista de seguidos. Cada entrada muestra avatar, nombre, código de perfil y botón "Dejar de seguir". Al tocar el nombre/avatar se abre el perfil público del seguido. |
 | Datos | Se usa `GET /profile/following/:public_id` del backend (ya implementado en 4_5_11) |
-| Visibilidad | Se muestra solo cuando hay al menos un seguido; cuando está vacía no renderiza nada |
-| Colapsado | Cuando el sidebar está colapsado (rail), se muestran solo los avatares (sin nombres) |
-| Límite | Se muestran hasta 8 seguidos cuando está expandido, 6 cuando está colapsado |
+| Visibilidad | La pestaña siempre está disponible en el sidebar, incluso si no hay seguidos (muestra mensaje vacío) |
+| Acciones | Cada seguido tiene botón "Ver perfil" y "Dejar de seguir" |
+
+### Endpoints de la API
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| `GET` | `/profile/following/:public_id` | Lista a quién sigue el usuario (público). |
 
 ### Archivos
 
@@ -595,18 +599,19 @@ Mostrar en el sidebar global (sidebar de navegación de Sigma Academy) la gente 
 |---------|--------|
 | `front/lib/core/models/profile_models.dart` | Modelo `FollowedUser` (desde JSON de `GET /profile/following/:public_id`) |
 | `front/lib/core/services/profile_service.dart` | Método `listFollowing(String publicId)` que llama a `GET /profile/following/:public_id` |
-| `front/lib/core/widgets/main_shell.dart` | Estado `_following`/`_loadingFollowing`, carga al iniciar el shell, sección `_buildFollowedSection` y chip `_followedChip` en el sidebar, navegación a `PublicProfileScreen` al tocar |
+| `front/lib/features/academic/followed_screen.dart` | **Nuevo**: pantalla de seguidos con lista, botón dejar de seguir, y navegación a perfil público |
+| `front/lib/core/widgets/main_shell.dart` | Agrega ítem de nav "Seguidos" y pantalla `FollowedScreen` en `_pages`. Remueve el panel de seguidos del sidebar. |
 | `documentation/docMartinSprint3.md` | Esta sección |
 
 ### Verificación
 
-- `flutter analyze` en `main_shell.dart`, `profile_service.dart`, `profile_models.dart`: sin errores nuevos.
-- `flutter test`: 612 tests pasando.
-- Prueba manual: al iniciar el shell con seguido(s), aparece la sección «SIGUIENDO» en la sidebar con su/s avatar(es). Al tocar un seguido, se abre su perfil público con nombre, institución y apuntes públicos.
+- `flutter analyze` en `followed_screen.dart`, `main_shell.dart`, `profile_service.dart`, `profile_models.dart`: sin errores nuevos.
+- `flutter test`: 661 tests pasando.
+- Prueba manual: al tocar la pestaña "Seguidos" en el sidebar se abre una pantalla con la lista de seguidos. Cada entrada tiene botón "Ver perfil" y "Dejar de seguir". Al tocar "Ver perfil" se abre `PublicProfileScreen`.
 
 ### No entra
 
-- Botón «Ver todos los seguidos» que abra una pantalla dedicada (se puede agregar como mejora futura).
-- Lista de seguidores (quienes me siguen a mí) en la sidebar (solo se muestra a quién sigo yo).
-- Sincronización en tiempo real cuando se sigue/deja de seguir desde otra pantalla (se recarga al abrir el shell).
+- Lista de seguidores (quienes me siguen a mí) en la pestaña (solo se muestra a quién sigo yo).
+- Sincronización en tiempo real cuando se sigue/deja de seguir desde otra pantalla (se recarga al abrir la pestaña).
+- Buscar usuarios directamente desde la pestaña de seguidos (se debe usar el buscador de perfiles).
 
