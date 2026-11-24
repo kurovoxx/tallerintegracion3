@@ -2,10 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../features/academic/followed_screen.dart';
+import '../../features/academic/grade_calculator_screen.dart';
 import '../../features/academic/attendance_screen.dart';
 import '../../features/academic/courses_screen.dart';
 import '../../features/academic/curriculum_screen.dart';
-import '../../features/academic/grade_calculator_screen.dart';
 import '../../features/academic/profile_screen.dart';
 import '../../features/academic/schedule_screen.dart';
 import '../../features/groups/groups_screen.dart';
@@ -52,6 +53,7 @@ class _MainShellState extends State<MainShell> {
   static const int _notesIndex = 5;
   static const int _groupsIndex = 6;
   static const int _profileIndex = 7;
+  static const int _followedIndex = 8;
 
   /// true solo cuando se llega al perfil desde la sugerencia de Drive.
   bool _profileScrollToDrive = false;
@@ -72,9 +74,6 @@ class _MainShellState extends State<MainShell> {
   int _unreadNotifications = 0;
   bool _loadingUnread = false;
   Timer? _unreadTimer;
-  // Seguidos: gente que el usuario sigue (para el panel de la sidebar).
-  List<FollowedUser> _following = const [];
-  bool _loadingFollowing = false;
 
   @override
   void initState() {
@@ -149,31 +148,8 @@ class _MainShellState extends State<MainShell> {
     try {
       await _profiles.getProfile();
       // El servicio publica en ProfileService.current; el listener repinta.
-      if (!mounted) return;
-      await _loadFollowed();
     } catch (_) {
       // Silencioso: el perfil tiene su propia pantalla con reintento.
-    }
-  }
-
-  /// Carga a quién sigue el usuario autenticado para el panel de seguidos.
-  Future<void> _loadFollowed() async {
-    if (_loadingFollowing) return;
-    final profile = ProfileService.current.value;
-    if (profile == null || profile.publicId.isEmpty) return;
-    _loadingFollowing = true;
-    try {
-      final list = await _profiles.listFollowing(profile.publicId);
-      if (!mounted) return;
-      setState(() {
-        _following = list;
-        _loadingFollowing = false;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _loadingFollowing = false;
-      });
     }
   }
 
@@ -222,6 +198,7 @@ class _MainShellState extends State<MainShell> {
       userData: widget.userData,
       scrollToDrive: _profileScrollToDrive,
     ),
+    const FollowedScreen(),
   ];
 
   /// «Ir a mi perfil» desde la sugerencia de Drive en Apuntes: abre el perfil
@@ -276,6 +253,11 @@ class _MainShellState extends State<MainShell> {
     _NavItem(
       icon: Icons.person_rounded,
       label: 'Perfil de Usuario',
+      section: 'ESPACIO DE TRABAJO GENERAL',
+    ),
+    _NavItem(
+      icon: Icons.person_add_rounded,
+      label: 'Seguidos',
       section: 'ESPACIO DE TRABAJO GENERAL',
     ),
   ];
@@ -524,152 +506,8 @@ class _MainShellState extends State<MainShell> {
           thickness: AppDimens.borderWidth,
           height: 1,
         ),
-        _buildFollowedSection(isCollapsed: isCollapsed),
         _buildProfileFooter(isCollapsed: isCollapsed),
       ],
-    );
-  }
-
-  /// Sección de seguidos en la sidebar: muestra la gente que el usuario sigue.
-  /// Al tocar un seguido se abre su perfil público.
-  Widget _buildFollowedSection({required bool isCollapsed}) {
-    final maxShown = isCollapsed ? 6 : 8;
-    final shown = _following.take(maxShown).toList();
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        Padding(
-          padding: const EdgeInsets.fromLTRB(
-            AppDimens.spaceLg,
-            AppDimens.spaceMd,
-            AppDimens.spaceLg,
-            6,
-          ),
-          child: Row(
-            children: <Widget>[
-              const Text(
-                'SIGUIENDO',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w900,
-                  color: AppColors.muted,
-                  letterSpacing: 0.8,
-                ),
-              ),
-              const SizedBox(width: AppDimens.spaceSm),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 6,
-                  vertical: 2,
-                ),
-                decoration: BoxDecoration(
-                  color: AppColors.accentYellow.withValues(alpha: 0.15),
-                  border: Border.all(
-                    color: AppColors.border,
-                    width: AppDimens.borderWidth,
-                  ),
-                  borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-                ),
-                child: Text(
-                  '${_following.length}',
-                  style: const TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.accentYellow,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: AppDimens.spaceSm),
-        if (_following.isEmpty && !_loadingFollowing)
-          Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppDimens.spaceLg,
-            ),
-            child: Text(
-              'Aún no sigues a nadie. Busca un perfil por código y dale a «Seguir».',
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: AppColors.muted,
-              ),
-            ),
-          ),
-        SizedBox(
-          height: isCollapsed ? 44 : 72,
-          child: ListView.builder(
-            scrollDirection: Axis.horizontal,
-            itemCount: shown.length,
-            itemBuilder: (_, i) {
-              final followed = shown[i];
-              return _followedChip(followed, isCollapsed: isCollapsed);
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// Chip de un seguido: avatar + nombre (cuando hay espacio) y al tocar se
-  /// abre su perfil público.
-  Widget _followedChip(FollowedUser followed, {required bool isCollapsed}) {
-    return GestureDetector(
-      onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => PublicProfileScreen(publicId: followed.publicId),
-          ),
-        );
-      },
-      child: Container(
-        width: isCollapsed ? 40 : 76,
-        margin: const EdgeInsets.only(
-          left: AppDimens.spaceSm,
-          right: AppDimens.spaceXs,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: <Widget>[
-            CircleAvatar(
-              radius: isCollapsed ? 14 : 20,
-              backgroundImage: followed.photoThumbUrl != null &&
-                      followed.photoThumbUrl!.isNotEmpty
-                  ? NetworkImage(followed.photoThumbUrl!)
-                  : null,
-              child: followed.photoThumbUrl == null ||
-                      followed.photoThumbUrl!.isEmpty
-                  ? Text(
-                      followed.displayName.isNotEmpty
-                          ? followed.displayName[0].toUpperCase()
-                          : '?',
-                      style: const TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    )
-                  : null,
-            ),
-            if (!isCollapsed) ...<Widget>[
-              const SizedBox(height: AppDimens.spaceXs),
-              Text(
-                followed.displayName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 9,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.text,
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
     );
   }
 
