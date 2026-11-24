@@ -69,11 +69,7 @@ func (h *FollowHandler) Follow(c *gin.Context) {
 		utils.RespondError(c, http.StatusBadRequest, "bad_request", "user_id inválido")
 		return
 	}
-	var pgUID pgtype.UUID
-	if err := pgUID.Scan(uid); err != nil {
-		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
-		return
-	}
+	pgUID := pgtype.UUID{Bytes: [16]byte(uid), Valid: true}
 
 	created, err := h.svc.Follow(c.Request.Context(), pgUID, publicID)
 	if err != nil {
@@ -119,11 +115,7 @@ func (h *FollowHandler) Unfollow(c *gin.Context) {
 		utils.RespondError(c, http.StatusBadRequest, "bad_request", "user_id inválido")
 		return
 	}
-	var pgUID pgtype.UUID
-	if err := pgUID.Scan(uid); err != nil {
-		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
-		return
-	}
+	pgUID := pgtype.UUID{Bytes: [16]byte(uid), Valid: true}
 
 	removed, err := h.svc.Unfollow(c.Request.Context(), pgUID, publicID)
 	if err != nil {
@@ -168,11 +160,7 @@ func (h *FollowHandler) FollowStatus(c *gin.Context) {
 		utils.RespondError(c, http.StatusBadRequest, "bad_request", "user_id inválido")
 		return
 	}
-	var pgUID pgtype.UUID
-	if err := pgUID.Scan(uid); err != nil {
-		utils.RespondError(c, http.StatusInternalServerError, "internal_error", "Error interno")
-		return
-	}
+	pgUID := pgtype.UUID{Bytes: [16]byte(uid), Valid: true}
 
 	following, err := h.svc.IsFollowing(c.Request.Context(), pgUID, publicID)
 	if err != nil {

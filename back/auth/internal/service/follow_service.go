@@ -7,12 +7,22 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/model"
-	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/repository"
 )
+
+// FollowRepo es la interfaz que el servicio necesita del repositorio.
+// Permite usar mocks en tests sin tocar la BD.
+type FollowRepo interface {
+	Follow(ctx context.Context, followerID, followingID pgtype.UUID) (bool, error)
+	Unfollow(ctx context.Context, followerID, followingID pgtype.UUID) (bool, error)
+	IsFollowing(ctx context.Context, followerID, followingID pgtype.UUID) (bool, error)
+	ListFollowers(ctx context.Context, followingID pgtype.UUID) ([]model.FollowedUser, error)
+	ListFollowing(ctx context.Context, followeeID pgtype.UUID) ([]model.FollowedUser, error)
+	GetUserIDByPublicID(ctx context.Context, publicID string) (pgtype.UUID, error)
+}
 
 // FollowService gestiona relaciones de seguir/dejar de seguir usuarios.
 type FollowService struct {
-	repo *repository.FollowRepository
+	repo FollowRepo
 }
 
 // ErrFollowSelf se devuelve cuando un usuario intenta seguirse a sí mismo.
@@ -21,7 +31,7 @@ var ErrFollowSelf = errors.New("no puedes seguirte a ti mismo")
 // ErrUserNotFound se devuelve cuando el public_id no corresponde a un usuario.
 var ErrUserNotFound = errors.New("usuario no encontrado")
 
-func NewFollowService(repo *repository.FollowRepository) *FollowService {
+func NewFollowService(repo FollowRepo) *FollowService {
 	return &FollowService{repo: repo}
 }
 
@@ -31,7 +41,14 @@ func (s *FollowService) resolvePublicID(ctx context.Context, publicID string) (p
 	if publicID == "" {
 		return pgtype.UUID{}, ErrUserNotFound
 	}
-	return s.repo.GetUserIDByPublicID(ctx, publicID)
+	id, err := s.repo.GetUserIDByPublicID(ctx, publicID)
+	if err != nil {
+		if strings.Contains(err.Error(), "usuario no encontrado") {
+			return pgtype.UUID{}, ErrUserNotFound
+		}
+		return pgtype.UUID{}, err
+	}
+	return id, nil
 }
 
 // Follow hace que followerID siga a followingID (resuelto desde publicID).
