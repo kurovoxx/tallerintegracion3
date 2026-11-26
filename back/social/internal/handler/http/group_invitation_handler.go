@@ -24,6 +24,12 @@ func NewGroupInvitationHandler(svc *service.GroupInvitationService) *GroupInvita
 	return &GroupInvitationHandler{svc: svc}
 }
 
+// toPGUUID convierte un uuid.UUID al tipo que acepta pgx. pgtype.UUID.Scan
+// rechaza uuid.UUID, por eso se construye directamente.
+func toPGUUID(id uuid.UUID) pgtype.UUID {
+	return pgtype.UUID{Bytes: [16]byte(id), Valid: true}
+}
+
 // RegisterRoutes registra las rutas de invitaciones en un router ya protegido.
 func (h *GroupInvitationHandler) RegisterRoutes(r gin.IRoutes) {
 	r.POST("/groups/:id/invite", h.Invite)
@@ -66,26 +72,14 @@ func (h *GroupInvitationHandler) Invite(c *gin.Context) {
 		utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "user id inválido")
 		return
 	}
-	var pgInviterID pgtype.UUID
-	if err := pgInviterID.Scan(inviterID); err != nil {
-		utils.RespondError(c, http.StatusInternalServerError, utils.ErrInternal, "error interno")
-		return
-	}
+	pgInviterID := toPGUUID(inviterID)
 	invitedID, err := uuid.Parse(req.InvitedUserID)
 	if err != nil {
 		utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "invited_user_id inválido")
 		return
 	}
-	var pgInvitedID pgtype.UUID
-	if err := pgInvitedID.Scan(invitedID); err != nil {
-		utils.RespondError(c, http.StatusInternalServerError, utils.ErrInternal, "error interno")
-		return
-	}
-	var pgGroupID pgtype.UUID
-	if err := pgGroupID.Scan(uuid.MustParse(groupID)); err != nil {
-		utils.RespondError(c, http.StatusInternalServerError, utils.ErrInternal, "error interno")
-		return
-	}
+	pgInvitedID := toPGUUID(invitedID)
+	pgGroupID := toPGUUID(uuid.MustParse(groupID))
 
 	invID, err := h.svc.InviteToGroup(c.Request.Context(), pgInviterID, pgGroupID, pgInvitedID)
 	if err != nil {
@@ -137,16 +131,8 @@ func (h *GroupInvitationHandler) Accept(c *gin.Context) {
 		utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "user id inválido")
 		return
 	}
-	var pgUID pgtype.UUID
-	if err := pgUID.Scan(uid); err != nil {
-		utils.RespondError(c, http.StatusInternalServerError, utils.ErrInternal, "error interno")
-		return
-	}
-	var pgID pgtype.UUID
-	if err := pgID.Scan(uuid.MustParse(id)); err != nil {
-		utils.RespondError(c, http.StatusInternalServerError, utils.ErrInternal, "error interno")
-		return
-	}
+	pgUID := toPGUUID(uid)
+	pgID := toPGUUID(uuid.MustParse(id))
 
 	accepted, err := h.svc.AcceptInvitation(c.Request.Context(), pgID, pgUID)
 	if err != nil {
@@ -187,16 +173,8 @@ func (h *GroupInvitationHandler) Reject(c *gin.Context) {
 		utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "user id inválido")
 		return
 	}
-	var pgUID pgtype.UUID
-	if err := pgUID.Scan(uid); err != nil {
-		utils.RespondError(c, http.StatusInternalServerError, utils.ErrInternal, "error interno")
-		return
-	}
-	var pgID pgtype.UUID
-	if err := pgID.Scan(uuid.MustParse(id)); err != nil {
-		utils.RespondError(c, http.StatusInternalServerError, utils.ErrInternal, "error interno")
-		return
-	}
+	pgUID := toPGUUID(uid)
+	pgID := toPGUUID(uuid.MustParse(id))
 
 	rejected, err := h.svc.RejectInvitation(c.Request.Context(), pgID, pgUID)
 	if err != nil {
@@ -228,11 +206,7 @@ func (h *GroupInvitationHandler) ListPending(c *gin.Context) {
 		utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "user id inválido")
 		return
 	}
-	var pgUID pgtype.UUID
-	if err := pgUID.Scan(uid); err != nil {
-		utils.RespondError(c, http.StatusInternalServerError, utils.ErrInternal, "error interno")
-		return
-	}
+	pgUID := toPGUUID(uid)
 
 	invitations, err := h.svc.ListPendingInvitations(c.Request.Context(), pgUID)
 	if err != nil {
