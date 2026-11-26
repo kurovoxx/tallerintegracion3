@@ -21,7 +21,7 @@ PKG_NAME="sigma-academy"
 DISPLAY_NAME="Sigma Academy"
 BINARY_NAME="taller_integracion_front" # nombre técnico que genera Flutter/CMake
 APP_ID="cl.uct.taller_integracion_front"
-ICON_SOURCE="$FRONT_DIR/web/icons/Logo.png"
+ICON_SOURCE="$FRONT_DIR/web/icons/Icon-512.png"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/dist}"
 
 # Arquitectura del paquete. Flutter usa x64/arm64 como carpeta de build.
