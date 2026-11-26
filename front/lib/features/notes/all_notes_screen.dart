@@ -1791,11 +1791,15 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   }
 
   /// Edición sincronizada: PATCH /notes/:id con {title, content}.
+  /// [visibility] solo se envía cuando cambia: el backend recalcula los
+  /// permisos de Drive (anyone/reader) al recibirla, así que se evita hacerlo
+  /// en cada guardado de texto.
   Future<_RemoteResult> _patchNoteRemote(
     LocalNote note,
     String title,
-    String content,
-  ) async {
+    String content, {
+    String? visibility,
+  }) async {
     final url = '$notesBaseUrl/notes/${note.id}';
     var version = _versions[note.id] ?? note.version;
     if (version == null) {
@@ -1807,7 +1811,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       debugPrint('[Notes] PATCH blocked id=${note.id} code=missing_version');
       return const _RemoteResult(ok: false, status: 0, code: 'missing_version');
     }
-    final body = {'title': title, 'content': content, 'version': version};
+    final body = <String, Object>{
+      'title': title,
+      'content': content,
+      'version': version,
+      'visibility': ?visibility,
+    };
     final operationId =
         'note-${note.id}-${DateTime.now().microsecondsSinceEpoch}';
     debugPrint(
@@ -2026,28 +2035,52 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     await _applySearch(_currentQuery);
   }
 
+  /// Al crear, la etiqueta se deriva de la visibilidad ('General'/'Privado').
+  /// Si la nota cambia de visibilidad y conserva esa etiqueta automática, se
+  /// actualiza; una etiqueta distinta (p. ej. 'Desde PDF') no se toca.
+  void _syncAutoTag(String id, String visibility) {
+    final current = _noteTags[id];
+    if (current != null && current != 'General' && current != 'Privado') {
+      return;
+    }
+    _noteTags[id] = visibility == 'public' ? 'General' : 'Privado';
+    if (mounted) setState(() {});
+  }
+
   /// Guarda edición: solo con 200 actualiza local y reporta sincronizado.
   Future<_EditSaveOutcome> _saveEditFlow(
     LocalNote note,
     String title,
     String content,
+    String visibility,
   ) async {
     final remoteId = _remoteIds[note.id];
     if (remoteId != null) {
       note = _latestNotes[remoteId] ?? note.copyWith(id: remoteId);
     }
+    final visibilityChanged = visibility != note.visibility;
     if (!_isRemoteNote(note.id)) {
       await _applyLocalUpsert(
         note.copyWith(
           title: title,
           content: content,
+          visibility: visibility,
           updatedAt: DateTime.now(),
         ),
       );
+      if (visibilityChanged) _syncAutoTag(note.id, visibility);
       return _EditSaveOutcome.synced;
     }
-    final remote = await _patchNoteRemote(note, title, content);
+    final remote = await _patchNoteRemote(
+      note,
+      title,
+      content,
+      visibility: visibilityChanged ? visibility : null,
+    );
     if (remote.ok) {
+      // Se guarda la visibilidad que confirma el servidor (fuente de verdad).
+      final savedVisibility =
+          remote.data?['visibility'] as String? ?? visibility;
       await _applyLocalUpsert(
         LocalNote(
           needsSync: false,
@@ -2056,10 +2089,13 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           ownerUserId: note.ownerUserId,
           title: remote.data?['title'] as String? ?? title,
           content: content,
-          visibility: note.visibility,
+          visibility: savedVisibility,
           updatedAt: DateTime.now(),
         ),
       );
+      if (savedVisibility != note.visibility) {
+        _syncAutoTag(note.id, savedVisibility);
+      }
       // La nota volvió a quedar sincronizada: se retira el badge de error.
       _noteSyncState.remove(note.id);
       if (mounted) setState(() {});
@@ -2837,7 +2873,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           onToggleSave: () => _toggleSave(opened),
           onShare: () => _shareNote(opened),
           onFetchRemote: () => _fetchHybridContent(opened),
-          onSaveEdit: (title, content) => _saveEditFlow(opened, title, content),
+          onSaveEdit: (title, content, visibility) =>
+              _saveEditFlow(opened, title, content, visibility),
           onDelete: () => _deleteFlow(opened),
           onClone: () => _cloneFlow(opened),
           pendingSyncOf: _pendingSyncFor,
@@ -3878,41 +3915,248 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   }
 }
 
-class _VisibilityOption extends StatelessWidget {
-  final String label;
-  final bool active;
-  final VoidCallback onTap;
-  const _VisibilityOption({
-    required this.label,
-    required this.active,
-    required this.onTap,
+/// Selector PÚBLICO / PRIVADO compartido por «Nueva nota» y «Editar».
+/// [value] es 'public' o 'private'. Los colores coinciden con los badges de
+/// la nota (público = azul profundo, privado = amarillo) y salen de
+/// [AppColors], así que sigue a la paleta activa (Sigma o UCT).
+class _VisibilitySelector extends StatelessWidget {
+  const _VisibilitySelector({
+    required this.value,
+    required this.onChanged,
+    this.enabled = true,
   });
+
+  final String value;
+  final ValueChanged<String> onChanged;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        decoration: BoxDecoration(
-          color: active ? AppColors.accentBlue : AppColors.bg,
-          border: Border.all(color: AppColors.outline, width: 2),
-          boxShadow: active
-              ? [
-                  AppShadows.hard2,
-                ]
-              : null,
+    final public = _VisibilityOption(
+      key: const ValueKey('visibility-public'),
+      label: 'PÚBLICO',
+      icon: Icons.public_rounded,
+      active: value == 'public',
+      activeColor: AppColors.accentBlueDeep,
+      activeForeground: AppColors.surface,
+      enabled: enabled,
+      onTap: () => onChanged('public'),
+    );
+    final private = _VisibilityOption(
+      key: const ValueKey('visibility-private'),
+      label: 'PRIVADO',
+      icon: Icons.lock_rounded,
+      active: value == 'private',
+      activeColor: AppColors.accentYellow,
+      activeForeground: AppColors.text,
+      enabled: enabled,
+      onTap: () => onChanged('private'),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const AppFieldLabel('VISIBILIDAD'),
+        const SizedBox(height: AppDimens.spaceXs),
+        Semantics(
+          container: true,
+          label: 'Visibilidad de la nota',
+          // Muy angosto (móvil pequeño o texto al 200 %): se apilan para no
+          // recortar las etiquetas.
+          child: LayoutBuilder(
+            builder: (context, box) => box.maxWidth < 260
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      public,
+                      const SizedBox(height: AppDimens.spaceSm),
+                      private,
+                    ],
+                  )
+                : Row(
+                    children: [
+                      Expanded(child: public),
+                      const SizedBox(width: AppDimens.spaceSm),
+                      Expanded(child: private),
+                    ],
+                  ),
+          ),
         ),
-        child: Center(
-          child: Text(
-            label,
-            style: TextStyle(
-              fontWeight: FontWeight.w900,
-              fontSize: 11,
-              color: active ? AppColors.surface : AppColors.text,
+      ],
+    );
+  }
+}
+
+/// Opción del selector: borde de tinta, sombra dura que se hunde al presionar
+/// o al quedar seleccionada, cursor de click, foco visible con teclado y
+/// área táctil ≥ 48 dp. El estado se lee por icono + check, no solo color.
+class _VisibilityOption extends StatefulWidget {
+  const _VisibilityOption({
+    super.key,
+    required this.label,
+    required this.icon,
+    required this.active,
+    required this.activeColor,
+    required this.activeForeground,
+    required this.onTap,
+    this.enabled = true,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool active;
+  final Color activeColor;
+  final Color activeForeground;
+  final VoidCallback onTap;
+  final bool enabled;
+
+  @override
+  State<_VisibilityOption> createState() => _VisibilityOptionState();
+}
+
+class _VisibilityOptionState extends State<_VisibilityOption> {
+  bool _pressed = false;
+  bool _focused = false;
+
+  void _setPressed(bool v) {
+    if (_pressed != v) setState(() => _pressed = v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.enabled;
+    final sunk = _pressed || widget.active;
+    final fg = widget.active ? widget.activeForeground : AppColors.text;
+    final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    return Semantics(
+      button: true,
+      selected: widget.active,
+      enabled: enabled,
+      label: widget.label,
+      excludeSemantics: true,
+      child: FocusableActionDetector(
+        enabled: enabled,
+        mouseCursor: enabled
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.forbidden,
+        onShowFocusHighlight: (v) => setState(() => _focused = v),
+        actions: {
+          ActivateIntent: CallbackAction<ActivateIntent>(
+            onInvoke: (_) {
+              widget.onTap();
+              return null;
+            },
+          ),
+        },
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: enabled ? (_) => _setPressed(true) : null,
+          onTapUp: enabled ? (_) => _setPressed(false) : null,
+          onTapCancel: enabled ? () => _setPressed(false) : null,
+          onTap: enabled ? widget.onTap : null,
+          child: AnimatedContainer(
+            duration: reduceMotion ? Duration.zero : AppMotion.press,
+            curve: AppMotion.standard,
+            constraints: const BoxConstraints(minHeight: 48),
+            transform: Matrix4.translationValues(
+              sunk ? AppShadows.offsetBadge.dx : 0,
+              sunk ? AppShadows.offsetBadge.dy : 0,
+              0,
+            ),
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppDimens.spaceMd,
+              vertical: AppDimens.spaceSm,
+            ),
+            decoration: BoxDecoration(
+              color: !enabled
+                  ? AppColors.surfaceLow
+                  : widget.active
+                  ? widget.activeColor
+                  : AppColors.surface,
+              border: Border.all(
+                // Foco de teclado: borde de tinta más grueso.
+                color: _focused ? AppColors.border : AppColors.outline,
+                width: _focused
+                    ? AppDimens.borderWidthThick
+                    : AppDimens.borderWidth,
+              ),
+              borderRadius: BorderRadius.circular(AppDimens.radius),
+              boxShadow: sunk || !enabled
+                  ? const <BoxShadow>[]
+                  : AppShadows.badge,
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(widget.icon, size: 18, color: fg),
+                const SizedBox(width: AppDimens.spaceSm),
+                Flexible(
+                  child: Text(
+                    widget.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.6,
+                      color: fg,
+                    ),
+                  ),
+                ),
+                if (widget.active) ...[
+                  const SizedBox(width: AppDimens.spaceXs),
+                  Icon(Icons.check_rounded, size: 16, color: fg),
+                ],
+              ],
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Aviso en Editar cuando la visibilidad elegida difiere de la guardada:
+/// explica el efecto antes de GUARDAR (nada cambia hasta entonces).
+class _VisibilityChangeNotice extends StatelessWidget {
+  const _VisibilityChangeNotice({required this.toPublic});
+
+  final bool toPublic;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const ValueKey('visibility-change-notice'),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppDimens.spaceSm,
+        vertical: 6,
+      ),
+      decoration: BoxDecoration(
+        color: toPublic ? AppColors.infoTint : AppColors.warningTint,
+        border: Border.all(color: AppColors.outline, width: 1.5),
+        borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            toPublic ? Icons.public_rounded : Icons.lock_rounded,
+            size: 14,
+            color: AppColors.text,
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              toPublic
+                  ? 'Al guardar, cualquier persona podrá verla en Apuntes públicos.'
+                  : 'Al guardar, dejará de aparecer en Apuntes públicos. Los grupos con los que ya la compartiste conservan su acceso.',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                color: AppColors.text,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -4390,7 +4634,11 @@ class _NoteDetailSheet extends StatefulWidget {
   final VoidCallback onToggleSave;
   final VoidCallback onShare;
   final Future<_RemoteResult> Function() onFetchRemote;
-  final Future<_EditSaveOutcome> Function(String title, String content)
+  final Future<_EditSaveOutcome> Function(
+    String title,
+    String content,
+    String visibility,
+  )
   onSaveEdit;
   final Future<_RemoteResult> Function() onDelete;
   final Future<_RemoteResult> Function() onClone;
@@ -4438,6 +4686,10 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
   Set<String> _removedResourcesBackup = {};
   late String _title;
   late String _content;
+  // Visibilidad vigente (badge de cabecera) y la elegida en modo Editar;
+  // solo se confirma al GUARDAR con éxito, CANCELAR la descarta.
+  late String _visibility;
+  late String _editVisibility;
   late int _likes;
   late bool _liked;
   late bool _saved;
@@ -4458,6 +4710,8 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     super.initState();
     _title = widget.note.title;
     _content = widget.note.content;
+    _visibility = widget.note.visibility;
+    _editVisibility = _visibility;
     _likes = widget.likesCount;
     _liked = widget.isLiked;
     _saved = widget.isSaved;
@@ -4583,6 +4837,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     setState(() {
       _editing = true;
       _editError = null;
+      _editVisibility = _visibility;
       _pendingRemovedIds.clear();
       // Snapshot para que CANCELAR restaure el estado previo.
       _attachmentsBackup = List<Map<String, dynamic>>.from(_attachments);
@@ -4646,7 +4901,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
       _editError = null;
     });
     // 2. PATCH contenido/versión.
-    final outcome = await widget.onSaveEdit(t, c);
+    final outcome = await widget.onSaveEdit(t, c, _editVisibility);
     if (!mounted) return;
     if (outcome != _EditSaveOutcome.synced) {
       setState(() => _saving = false);
@@ -4693,6 +4948,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
       _pendingRemovedIds.clear();
       _title = t;
       _content = c;
+      _visibility = _editVisibility;
       if (_contentCtrl != null) _contentCtrl!.text = _content;
       _editing = false;
       _releaseEditControllersAfterFrame();
@@ -5214,18 +5470,21 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
         children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            // Refleja la visibilidad guardada (cambia tras GUARDAR en Editar).
+            // Texto blanco sobre azul usa accentBlueDeep (AAA), como la tarjeta.
             decoration: BoxDecoration(
-              color: widget.note.visibility == 'public'
-                  ? AppColors.accentBlue
+              color: _visibility == 'public'
+                  ? AppColors.accentBlueDeep
                   : AppColors.accentYellow,
               border: Border.all(color: AppColors.outline, width: 1.5),
             ),
             child: Text(
-              widget.note.visibility.toUpperCase(),
+              _visibility == 'public' ? 'PÚBLICO' : 'PRIVADO',
               style: TextStyle(
                 fontSize: 10,
                 fontWeight: FontWeight.w900,
-                color: widget.note.visibility == 'public'
+                letterSpacing: 0.5,
+                color: _visibility == 'public'
                     ? AppColors.surface
                     : AppColors.text,
               ),
@@ -5319,6 +5578,16 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
           controller: _titleCtrl,
           decoration: appInputDecoration('Título'),
         ),
+        const SizedBox(height: 12),
+        _VisibilitySelector(
+          value: _editVisibility,
+          enabled: !_saving,
+          onChanged: (v) => setState(() => _editVisibility = v),
+        ),
+        if (_editVisibility != _visibility) ...[
+          const SizedBox(height: 6),
+          _VisibilityChangeNotice(toPublic: _editVisibility == 'public'),
+        ],
         const SizedBox(height: 12),
         const AppFieldLabel('CONTENIDO MARKDOWN / LATEX'),
         const SizedBox(height: 4),
@@ -5791,26 +6060,10 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
           onPreviewResource: _showResource,
         ),
         const SizedBox(height: 12),
-        const AppFieldLabel('VISIBILIDAD'),
-        const SizedBox(height: 4),
-        Row(
-          children: [
-            Expanded(
-              child: _VisibilityOption(
-                label: 'PÚBLICO',
-                active: _visibility == 'public',
-                onTap: () => setState(() => _visibility = 'public'),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: _VisibilityOption(
-                label: 'PRIVADO',
-                active: _visibility == 'private',
-                onTap: () => setState(() => _visibility = 'private'),
-              ),
-            ),
-          ],
+        _VisibilitySelector(
+          value: _visibility,
+          enabled: !_submitting,
+          onChanged: (v) => setState(() => _visibility = v),
         ),
       ],
     );
