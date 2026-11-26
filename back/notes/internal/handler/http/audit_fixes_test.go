@@ -398,8 +398,8 @@ func TestHandlerOAuthErrorNoLeak(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &errBody); err != nil {
 		t.Fatalf("respuesta debe ser JSON controlado: %v", err)
 	}
-	if errBody["error"]["code"] != "forbidden" {
-		t.Fatalf("code esperado forbidden, got %s", w.Body.String())
+	if errBody["error"]["code"] != "drive_not_connected" {
+		t.Fatalf("code esperado drive_not_connected, got %s", w.Body.String())
 	}
 }
 

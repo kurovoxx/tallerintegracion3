@@ -212,6 +212,32 @@ class AcademicApi {
     return AcademicCurriculum(id: id, name: name);
   }
 
+  // PATCH /curricula/:id {semester_count} -> malla actualizada.
+  Future<AcademicCurriculum> updateCurriculumSemesterCount(
+    String curriculumId,
+    int semesterCount,
+  ) async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .patch(
+            Uri.parse('$_baseUrl/curricula/$curriculumId'),
+            headers: _headers(json: true),
+            body: jsonEncode(<String, dynamic>{
+              'semester_count': semesterCount,
+            }),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 200) {
+      throw _toError(res, 'No se pudo actualizar la malla.');
+    }
+    final body = jsonDecode(utf8.decode(res.bodyBytes));
+    if (body is! Map) {
+      throw AcademicApiException('Respuesta inesperada del servidor.');
+    }
+    return AcademicCurriculum.fromJson(Map<String, dynamic>.from(body));
+  }
+
   // GET /curricula/:id/subjects -> materias de la malla.
   Future<List<AcademicSubject>> listSubjects(String curriculumId) async {
     final res = await AuthedHttp.run(
@@ -296,6 +322,7 @@ class AcademicApi {
     required String startTime,
     required String endTime,
     String? modality,
+    String? room,
   }) async {
     final res = await AuthedHttp.run(
       () => _client
@@ -308,11 +335,27 @@ class AcademicApi {
               'end_time': endTime,
               if (modality != null && modality.trim().isNotEmpty)
                 'modality': modality.trim(),
+              if (room != null && room.trim().isNotEmpty) 'room': room.trim(),
             }),
           )
           .timeout(const Duration(seconds: 10)),
     );
     return _createdId(res, 'No se pudo crear el horario.');
+  }
+
+  // DELETE /schedules/:id -> 204.
+  Future<void> deleteSchedule(String scheduleId) async {
+    final res = await AuthedHttp.run(
+      () => _client
+          .delete(
+            Uri.parse('$_baseUrl/schedules/$scheduleId'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    if (res.statusCode != 204) {
+      throw _toError(res, 'No se pudo eliminar el horario.');
+    }
   }
 
   /// Normaliza "HH:MM[:SS]" a "HH:MM" para comparar horarios.
@@ -331,6 +374,7 @@ class AcademicApi {
     required String startTime,
     required String endTime,
     String? modality,
+    String? room,
     bool skipExisting = true,
   }) async {
     final created = <String>[];
@@ -366,6 +410,7 @@ class AcademicApi {
             startTime: startTime,
             endTime: endTime,
             modality: modality,
+            room: room,
           ),
         );
       } on AcademicApiException catch (e) {

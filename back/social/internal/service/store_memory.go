@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +24,8 @@ type MemoryGroupStore struct {
 	order  []string                            // ids de grupos en orden de creación
 	member map[string][]*model.GroupMembership // por grupo, en orden de ingreso
 	bans   map[string]map[string]string        // grupo -> usuario baneado -> quién baneó
+	// defaults: permisos habilitados para todos los miembros, por grupo.
+	defaults map[string]model.MemberPermissions
 }
 
 // NewMemoryGroupStore crea el store. El reloj interno avanza un segundo por
@@ -37,6 +40,8 @@ func NewMemoryGroupStore() *MemoryGroupStore {
 		groups: map[string]*model.Group{},
 		member: map[string][]*model.GroupMembership{},
 		bans:   map[string]map[string]string{},
+
+		defaults: map[string]model.MemberPermissions{},
 	}
 }
 
@@ -89,12 +94,13 @@ func (m *MemoryGroupStore) ListMyGroupsDetailed(_ context.Context, userID string
 		if ms := m.find(gid, userID); ms != nil {
 			g := m.groups[gid]
 			out = append(out, &model.GroupCard{
-				GroupID:     gid,
-				Name:        g.Name,
-				Description: g.Description,
-				Role:        ms.Role,
-				MemberCount: len(m.member[gid]),
-				JoinedAt:    ms.JoinedAt,
+				GroupID:       gid,
+				Name:          g.Name,
+				Description:   g.Description,
+				PhotoThumbURL: g.PhotoThumbURL,
+				Role:          ms.Role,
+				MemberCount:   len(m.member[gid]),
+				JoinedAt:      ms.JoinedAt,
 			})
 		}
 	}
@@ -117,6 +123,18 @@ func (m *MemoryGroupStore) JoinWithInviteToken(_ context.Context, groupID, invit
 	return nil
 }
 
+func (m *MemoryGroupStore) FindByInviteToken(_ context.Context, inviteToken string) (*model.Group, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, g := range m.groups {
+		if g.InviteToken == inviteToken {
+			cp := *g
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *MemoryGroupStore) RegenerateInviteToken(_ context.Context, groupID, userID string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -137,18 +155,35 @@ func (m *MemoryGroupStore) IsMember(_ context.Context, groupID, userID string) (
 	return m.find(groupID, userID) != nil, nil
 }
 
-func (m *MemoryGroupStore) ListMembers(_ context.Context, groupID string) ([]*model.GroupMembership, error) {
+func (m *MemoryGroupStore) ListMembers(ctx context.Context, groupID string) ([]*model.GroupMembership, error) {
+	return m.ListMembersLimit(ctx, groupID, 0)
+}
+
+func (m *MemoryGroupStore) ListMembersLimit(_ context.Context, groupID string, limit int) ([]*model.GroupMembership, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.groups[groupID]; !ok {
 		return nil, errors.New("group_not_found")
 	}
-	out := make([]*model.GroupMembership, 0, len(m.member[groupID]))
-	for _, ms := range m.member[groupID] {
+	all := m.member[groupID]
+	if limit > 0 && limit < len(all) {
+		all = all[:limit]
+	}
+	out := make([]*model.GroupMembership, 0, len(all))
+	for _, ms := range all {
 		cp := *ms
 		out = append(out, &cp)
 	}
 	return out, nil
+}
+
+func (m *MemoryGroupStore) CountMembers(_ context.Context, groupID string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.groups[groupID]; !ok {
+		return 0, errors.New("group_not_found")
+	}
+	return len(m.member[groupID]), nil
 }
 
 func (m *MemoryGroupStore) KickMember(_ context.Context, groupID, adminID, targetUserID string) error {
@@ -204,6 +239,69 @@ func (m *MemoryGroupStore) ChangeMemberRole(_ context.Context, groupID, adminID,
 	return nil
 }
 
+func (m *MemoryGroupStore) SetMemberPermissions(_ context.Context, groupID, adminID, targetUserID string, upd model.MemberPermissionsUpdate) (model.MemberPermissions, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.requireAdminLocked(groupID, adminID); err != nil {
+		return model.MemberPermissions{}, err
+	}
+	if adminID == targetUserID {
+		return model.MemberPermissions{}, errors.New("cannot_modify_self")
+	}
+	if err := m.requireRemovableLocked(groupID, targetUserID); err != nil {
+		return model.MemberPermissions{}, err
+	}
+	ms := m.find(groupID, targetUserID)
+	if ms == nil {
+		return model.MemberPermissions{}, errors.New("target_not_found")
+	}
+	defaults := m.defaults[groupID]
+	// Mismo criterio que el repositorio Postgres: el valor enviado es el permiso
+	// efectivo deseado; si se retira y el grupo lo habilita, queda denegado.
+	if upd.CanShareNotes != nil {
+		ms.CanShareNotes = *upd.CanShareNotes
+		ms.DenyShareNotes = !*upd.CanShareNotes && defaults.CanShareNotes
+	}
+	if upd.CanCreateMeetings != nil {
+		ms.CanCreateMeetings = *upd.CanCreateMeetings
+		ms.DenyCreateMeetings = !*upd.CanCreateMeetings && defaults.CanCreateMeetings
+	}
+	if upd.CanEditKanban != nil {
+		ms.CanEditKanban = *upd.CanEditKanban
+		ms.DenyEditKanban = !*upd.CanEditKanban && defaults.CanEditKanban
+	}
+	return model.EffectiveMemberPermissions(ms.Role, ms.MemberPermissions, defaults, ms.MemberPermissionDenials), nil
+}
+
+func (m *MemoryGroupStore) GetMemberDefaults(_ context.Context, groupID string) (model.MemberPermissions, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.groups[groupID]; !ok {
+		return model.MemberPermissions{}, errors.New("group_not_found")
+	}
+	return m.defaults[groupID], nil
+}
+
+func (m *MemoryGroupStore) SetMemberDefaults(_ context.Context, groupID, adminID string, upd model.MemberPermissionsUpdate) (model.MemberPermissions, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.requireAdminLocked(groupID, adminID); err != nil {
+		return model.MemberPermissions{}, err
+	}
+	d := m.defaults[groupID]
+	if upd.CanShareNotes != nil {
+		d.CanShareNotes = *upd.CanShareNotes
+	}
+	if upd.CanCreateMeetings != nil {
+		d.CanCreateMeetings = *upd.CanCreateMeetings
+	}
+	if upd.CanEditKanban != nil {
+		d.CanEditKanban = *upd.CanEditKanban
+	}
+	m.defaults[groupID] = d
+	return d, nil
+}
+
 func (m *MemoryGroupStore) TransferAdmin(_ context.Context, groupID, currentAdminID, newAdminID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -256,6 +354,31 @@ func (m *MemoryGroupStore) DeleteGroup(_ context.Context, groupID string) error 
 	}
 	m.deleteGroupLocked(groupID)
 	return nil
+}
+
+func (m *MemoryGroupStore) UpdateGroup(_ context.Context, groupID, userID string, update model.GroupUpdate) (*model.Group, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.requireAdminLocked(groupID, userID); err != nil {
+		return nil, err
+	}
+	g, ok := m.groups[groupID]
+	if !ok {
+		return nil, errors.New("group_not_found")
+	}
+	if strings.TrimSpace(update.Name) == "" {
+		return nil, errors.New("invalid_name")
+	}
+	g.Name = update.Name
+	g.Description = update.Description
+	if update.UpdatePhotoURL {
+		g.PhotoURL = update.PhotoURL
+	}
+	if update.UpdatePhotoThumb {
+		g.PhotoThumbURL = update.PhotoThumbURL
+	}
+	cp := *g
+	return &cp, nil
 }
 
 // HandleAccountDeletion replica la sucesión de repository.removeUserFromGroup.

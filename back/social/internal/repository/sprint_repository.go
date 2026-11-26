@@ -5,6 +5,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository/sqlc"
 )
 
@@ -26,6 +27,17 @@ func (r *SprintRepository) GetGroupByID(ctx context.Context, id pgtype.UUID) (sq
 
 func (r *SprintRepository) IsMember(ctx context.Context, groupID, userID pgtype.UUID) (bool, error) {
 	return r.queries.IsGroupMember(ctx, sqlc.IsGroupMemberParams{
+		GroupID: groupID,
+		UserID:  userID,
+	})
+}
+
+func (r *SprintRepository) GetMemberPermissions(ctx context.Context, groupID, userID pgtype.UUID) (model.MemberPermissions, error) {
+	return getMemberPermissions(ctx, r.pool, groupID, userID)
+}
+
+func (r *SprintRepository) GetMemberRole(ctx context.Context, groupID, userID pgtype.UUID) (string, error) {
+	return r.queries.GetGroupMemberRole(ctx, sqlc.GetGroupMemberRoleParams{
 		GroupID: groupID,
 		UserID:  userID,
 	})

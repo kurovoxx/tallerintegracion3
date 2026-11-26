@@ -7,6 +7,8 @@
 // - GET /groups/:id/sprint-sheet -> sprintTaskToJSON
 // No inventa campos que el backend no entregue (ej. subject, avatares).
 
+import 'profile_models.dart' show normalizePublicId;
+
 class SocialApiException implements Exception {
   SocialApiException(this.message, {this.statusCode, this.code});
 
@@ -35,11 +37,18 @@ int _int(Map<String, dynamic> j, String key, [int fallback = 0]) {
   return fallback;
 }
 
+String? _optionalPhoto(Object? raw) {
+  if (raw is! String) return null;
+  final value = raw.trim();
+  return value.isEmpty ? null : value;
+}
+
 class GroupCard {
   GroupCard({
     required this.groupId,
     required this.name,
     this.description,
+    this.photoThumbUrl,
     required this.role,
     required this.memberCount,
     this.joinedAt,
@@ -48,6 +57,7 @@ class GroupCard {
   final String groupId;
   final String name;
   final String? description;
+  final String? photoThumbUrl;
   final String role;
   final int memberCount;
   final DateTime? joinedAt;
@@ -60,6 +70,7 @@ class GroupCard {
       groupId: _str(j, 'group_id'),
       name: _str(j, 'name', 'Grupo'),
       description: j['description'] as String?,
+      photoThumbUrl: _optionalPhoto(j['photo_thumb_url']),
       role: _str(j, 'role', 'member'),
       memberCount: _int(j, 'member_count'),
       joinedAt: joined,
@@ -75,6 +86,27 @@ class SidebarGroup {
   final String role;
 
   factory SidebarGroup.fromJson(Map<String, dynamic> j) => SidebarGroup(
+    groupId: _str(j, 'group_id'),
+    name: _str(j, 'name', 'Grupo'),
+    role: _str(j, 'role', 'member'),
+  );
+}
+
+/// Grupo al que pertenece el usuario autenticado (GET /groups/me).
+class MyGroup {
+  const MyGroup({
+    required this.groupId,
+    required this.name,
+    required this.role,
+  });
+
+  final String groupId;
+  final String name;
+  final String role;
+
+  bool get isAdmin => role == 'admin';
+
+  factory MyGroup.fromJson(Map<String, dynamic> j) => MyGroup(
     groupId: _str(j, 'group_id'),
     name: _str(j, 'name', 'Grupo'),
     role: _str(j, 'role', 'member'),
@@ -121,30 +153,72 @@ class Overview {
   }
 }
 
-// GET /groups/:id -> GroupView (group_handler.go:119 Get).
+// POST /groups/join -> {group_id, name, already_member} (group_handler.go
+// JoinByCode). already_member=true si quien usó el código ya era integrante.
+class JoinGroupResult {
+  const JoinGroupResult({
+    required this.groupId,
+    required this.name,
+    this.alreadyMember = false,
+  });
+
+  final String groupId;
+  final String name;
+  final bool alreadyMember;
+
+  factory JoinGroupResult.fromJson(Map<String, dynamic> j) => JoinGroupResult(
+    groupId: _str(j, 'group_id'),
+    name: _str(j, 'name', 'Grupo'),
+    alreadyMember: j['already_member'] == true,
+  );
+}
+
+final RegExp _inviteCodePattern = RegExp(
+  r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}',
+);
+
+/// Extrae el código de invitación de lo que pegó el usuario.
+///
+/// Acepta el código solo, con espacios o saltos de línea, o un mensaje que lo
+/// contenga. También acepta el formato antiguo «id-del-grupo código» que
+/// copiaba el botón «Copiar datos de invitación»: en ese caso el código es el
+/// último UUID. Devuelve null si no encuentra ninguno.
+String? extractInviteCode(String raw) {
+  final matches = _inviteCodePattern.allMatches(raw).toList();
+  if (matches.isEmpty) return null;
+  return matches.last.group(0)!.toLowerCase();
+}
+
+// GET /groups/:id -> GroupView (group_handler.go Get).
 // Campos reales: id, name, description?, owner_user_id,
-// notes_restricted_to_staff, invite_token? (solo admin), created_at, role.
-// No trae member_count ni subject: no mostrarlos como reales.
+// notes_restricted_to_staff, invite_token? (solo admin), created_at, role,
+// member_count. No trae subject: no mostrarlo como real.
 class GroupDetail {
   GroupDetail({
     required this.id,
     required this.name,
     this.description,
+    this.photoUrl,
+    this.photoThumbUrl,
     required this.ownerUserId,
     required this.notesRestrictedToStaff,
     this.inviteToken,
     this.createdAt,
     required this.role,
+    this.memberCount = 0,
   });
 
   final String id;
   final String name;
   final String? description;
+  final String? photoUrl;
+  final String? photoThumbUrl;
   final String ownerUserId;
   final bool notesRestrictedToStaff;
   final String? inviteToken;
   final DateTime? createdAt;
   final String role;
+  final int memberCount;
 
   factory GroupDetail.fromJson(Map<String, dynamic> j) {
     DateTime? created;
@@ -155,11 +229,14 @@ class GroupDetail {
       id: _str(j, 'id'),
       name: _str(j, 'name', 'Grupo'),
       description: j['description'] as String?,
+      photoUrl: _optionalPhoto(j['photo_url']),
+      photoThumbUrl: _optionalPhoto(j['photo_thumb_url']),
       ownerUserId: _str(j, 'owner_user_id'),
       notesRestrictedToStaff: notesRestricted is bool ? notesRestricted : false,
       inviteToken: j['invite_token'] as String?,
       createdAt: created,
       role: _str(j, 'role', 'member'),
+      memberCount: _int(j, 'member_count'),
     );
   }
 }
@@ -293,8 +370,9 @@ class SprintTask {
 }
 
 // GET /groups/:id/members -> lista directa de GroupMembership,
-// enriquecida con display_name/email cuando Identity los resuelve
-// (campos omitidos si no).
+// enriquecida con display_name/email/public_id cuando Identity los resuelve
+// (campos omitidos si no). public_id es el código público del perfil: es lo
+// que se muestra en la ficha; user_id es interno y solo se usa en la lógica.
 class GroupMember {
   GroupMember({
     required this.id,
@@ -304,6 +382,14 @@ class GroupMember {
     this.joinedAt,
     this.displayName,
     this.email,
+    this.photoThumbUrl,
+    this.canShareNotes = false,
+    this.canCreateMeetings = false,
+    this.canEditKanban = false,
+    this.denyShareNotes = false,
+    this.denyCreateMeetings = false,
+    this.denyEditKanban = false,
+    this.publicId,
   });
 
   final String id;
@@ -311,8 +397,24 @@ class GroupMember {
   final String userId;
   final String role;
   final DateTime? joinedAt;
+
+  /// Permisos que un admin delegó a este miembro común (los admins ya pueden
+  /// todo sin necesitarlos).
+  final bool canShareNotes;
+  final bool canCreateMeetings;
+  final bool canEditKanban;
+
+  /// Retiro explícito de un permiso a este miembro aunque el grupo lo tenga
+  /// habilitado para todos (lo decide un admin desde «Permisos»).
+  final bool denyShareNotes;
+  final bool denyCreateMeetings;
+  final bool denyEditKanban;
   final String? displayName;
   final String? email;
+  final String? photoThumbUrl;
+
+  /// Código público del perfil (12 caracteres) o null si no se resolvió.
+  final String? publicId;
 
   /// Nombre humano sin inventar: display_name, email o id corto.
   /// Nunca es un UUID desnudo como etiqueta principal.
@@ -326,9 +428,23 @@ class GroupMember {
 
   /// Etiqueta mínima cuando no hay nombre ni correo.
   String get shortLabel {
+    final code = publicId;
+    if (code != null) return '$code · $role';
     final short = userId.length > 8 ? '${userId.substring(0, 8)}…' : userId;
     return '$short · $role';
   }
+
+  /// Permiso real de un miembro común: (propio OR grupo) salvo retiro
+  /// individual. Los admins pueden todo, pero esta vista solo se usa para
+  /// miembros comunes.
+  bool sharesNotesWith(GroupMemberDefaults defaults) =>
+      (canShareNotes || defaults.canShareNotes) && !denyShareNotes;
+
+  bool createsMeetingsWith(GroupMemberDefaults defaults) =>
+      (canCreateMeetings || defaults.canCreateMeetings) && !denyCreateMeetings;
+
+  bool editsKanbanWith(GroupMemberDefaults defaults) =>
+      (canEditKanban || defaults.canEditKanban) && !denyEditKanban;
 
   factory GroupMember.fromJson(Map<String, dynamic> j) {
     DateTime? joined;
@@ -338,6 +454,8 @@ class GroupMember {
     if (name != null && name.trim().isEmpty) name = null;
     String? mail = j['email'] as String?;
     if (mail != null && mail.trim().isEmpty) mail = null;
+    String? photo = j['photo_thumb_url'] as String?;
+    if (photo != null && photo.trim().isEmpty) photo = null;
     return GroupMember(
       id: _str(j, 'id'),
       groupId: _str(j, 'group_id'),
@@ -346,8 +464,38 @@ class GroupMember {
       joinedAt: joined,
       displayName: name,
       email: mail,
+      photoThumbUrl: photo,
+      canShareNotes: j['can_share_notes'] == true,
+      canCreateMeetings: j['can_create_meetings'] == true,
+      canEditKanban: j['can_edit_kanban'] == true,
+      denyShareNotes: j['deny_share_notes'] == true,
+      denyCreateMeetings: j['deny_create_meetings'] == true,
+      denyEditKanban: j['deny_edit_kanban'] == true,
+      // Solo se acepta con formato de código público: nunca un UUID.
+      publicId: normalizePublicId((j['public_id'] as String?) ?? ''),
     );
   }
+}
+
+// GET|PATCH /groups/:id/permissions -> permisos habilitados para TODOS los
+// miembros del grupo (los cambia un admin; se suman a los de cada miembro).
+class GroupMemberDefaults {
+  const GroupMemberDefaults({
+    this.canShareNotes = false,
+    this.canCreateMeetings = false,
+    this.canEditKanban = false,
+  });
+
+  final bool canShareNotes;
+  final bool canCreateMeetings;
+  final bool canEditKanban;
+
+  factory GroupMemberDefaults.fromJson(Map<String, dynamic> j) =>
+      GroupMemberDefaults(
+        canShareNotes: j['can_share_notes'] == true,
+        canCreateMeetings: j['can_create_meetings'] == true,
+        canEditKanban: j['can_edit_kanban'] == true,
+      );
 }
 
 // GET /groups/:id/stream-token -> 200 {token, channel_id, api_key?}.
@@ -416,17 +564,21 @@ class SprintHoursList {
 // GET /groups/:id/discord-config -> 200 {server_name, invite_url,
 // webhook_url?}. 404 discord_not_configured si nunca se configuró.
 class DiscordConfig {
-  DiscordConfig({required this.serverName, required this.inviteUrl, this.webhookUrl});
+  DiscordConfig({
+    required this.serverName,
+    required this.inviteUrl,
+    this.webhookUrl,
+  });
 
   final String serverName;
   final String inviteUrl;
   final String? webhookUrl;
 
   factory DiscordConfig.fromJson(Map<String, dynamic> j) => DiscordConfig(
-        serverName: _str(j, 'server_name'),
-        inviteUrl: _str(j, 'invite_url'),
-        webhookUrl: j['webhook_url'] as String?,
-      );
+    serverName: _str(j, 'server_name'),
+    inviteUrl: _str(j, 'invite_url'),
+    webhookUrl: j['webhook_url'] as String?,
+  );
 }
 
 class MeetingItem {
@@ -434,12 +586,14 @@ class MeetingItem {
     required this.id,
     required this.title,
     this.description,
+    this.link,
     required this.scheduledAt,
   });
 
   final String id;
   final String title;
   final String? description;
+  final String? link;
   final DateTime scheduledAt;
 
   factory MeetingItem.fromJson(Map<String, dynamic> j) {
@@ -450,13 +604,15 @@ class MeetingItem {
       id: _str(j, 'id'),
       title: _str(j, 'title', 'Reunión'),
       description: j['description'] as String?,
+      link: j['link'] as String?,
       scheduledAt: when,
     );
   }
 }
 
 /// Notificación in-app de reunión (tarea 3_5_14).
-/// Backend: GET /notifications/me, POST /notifications/:id/read.
+/// Backend: GET /notifications/me, POST /notifications/:id/read,
+/// DELETE /notifications/:id.
 class MeetingNotification {
   MeetingNotification({
     required this.id,
@@ -467,6 +623,9 @@ class MeetingNotification {
     required this.read,
     this.readAt,
     required this.createdAt,
+    this.description,
+    this.link,
+    this.groupName,
   });
 
   final String id;
@@ -477,6 +636,9 @@ class MeetingNotification {
   final bool read;
   final DateTime? readAt;
   final DateTime createdAt;
+  final String? description;
+  final String? link;
+  final String? groupName;
 
   factory MeetingNotification.fromJson(Map<String, dynamic> j) {
     DateTime when = DateTime.now();
@@ -487,7 +649,8 @@ class MeetingNotification {
     if (rawRead is String) readAt = DateTime.tryParse(rawRead);
     DateTime created = DateTime.now();
     final rawCreated = j['created_at'];
-    if (rawCreated is String) created = DateTime.tryParse(rawCreated) ?? created;
+    if (rawCreated is String)
+      created = DateTime.tryParse(rawCreated) ?? created;
     final read = j['read'] is bool ? j['read'] as bool : readAt != null;
     return MeetingNotification(
       id: _str(j, 'id'),
@@ -498,6 +661,9 @@ class MeetingNotification {
       read: read,
       readAt: readAt,
       createdAt: created,
+      description: j['description'] as String?,
+      link: j['link'] as String?,
+      groupName: j['group_name'] as String?,
     );
   }
 }
@@ -574,4 +740,47 @@ class Workspace {
       chatTokenEndpoint: _str(chat, 'token_endpoint'),
     );
   }
+}
+
+/// Invitación de grupo pendiente (viene de GET /group-invitations/pending).
+/// El usuario autenticado es el invitado: puede aceptar o rechazar.
+class GroupInvitation {
+  const GroupInvitation({
+    required this.id,
+    required this.groupId,
+    required this.groupName,
+    required this.invitedByUserId,
+    this.invitedByName,
+    required this.status, // pending, accepted, rejected
+    required this.createdAt,
+  });
+
+  final String id;
+  final String groupId;
+  final String groupName;
+  final String invitedByUserId;
+  final String? invitedByName;
+  final String status;
+  final DateTime createdAt;
+
+  factory GroupInvitation.fromJson(Map<String, dynamic> j) {
+    DateTime created = DateTime.now();
+    final raw = j['created_at'];
+    if (raw is String) {
+      created = DateTime.tryParse(raw) ?? created;
+    }
+    return GroupInvitation(
+      id: _str(j, 'id'),
+      groupId: _str(j, 'group_id'),
+      groupName: _str(j, 'group_name', 'Grupo'),
+      invitedByUserId: _str(j, 'invited_by_user_id'),
+      invitedByName: j['invited_by_name'] as String?,
+      status: _str(j, 'status', 'pending'),
+      createdAt: created,
+    );
+  }
+
+  bool get isPending => status == 'pending';
+  bool get isAccepted => status == 'accepted';
+  bool get isRejected => status == 'rejected';
 }

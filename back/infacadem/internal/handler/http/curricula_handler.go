@@ -3,6 +3,7 @@ package http
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -21,7 +22,8 @@ func NewCurriculaHandler(svc *service.CurriculumService) *CurriculaHandler {
 }
 
 type curriculumRequest struct {
-	Name string `json:"name"`
+	Name          string `json:"name"`
+	SemesterCount *int   `json:"semester_count"`
 }
 
 func respondServiceError(c *gin.Context, op, userID string, started time.Time, err error) {
@@ -112,6 +114,34 @@ func (h *CurriculaHandler) Update(c *gin.Context) {
 		utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "Request inválido")
 		logAcademicOp(c, "UpdateCurriculum", http.StatusBadRequest, userID, started, "code="+utils.ErrBadRequest)
 		return
+	}
+	hasName := strings.TrimSpace(req.Name) != ""
+	if !hasName && req.SemesterCount == nil {
+		utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "Nada que actualizar")
+		logAcademicOp(c, "UpdateCurriculum", http.StatusBadRequest, userID, started, "code="+utils.ErrBadRequest)
+		return
+	}
+	if hasName {
+		if _, err := service.ValidateName(req.Name); err != nil {
+			respondServiceError(c, "UpdateCurriculum", userID, started, err)
+			return
+		}
+	}
+	if req.SemesterCount != nil && !hasName {
+		cur, err := h.svc.UpdateSemesterCount(c.Request.Context(), userID, c.Param("id"), *req.SemesterCount)
+		if err != nil {
+			respondServiceError(c, "UpdateCurriculum", userID, started, err)
+			return
+		}
+		logAcademicOp(c, "UpdateCurriculum", http.StatusOK, userID, started, "")
+		c.JSON(http.StatusOK, cur)
+		return
+	}
+	if req.SemesterCount != nil {
+		if _, err := h.svc.UpdateSemesterCount(c.Request.Context(), userID, c.Param("id"), *req.SemesterCount); err != nil {
+			respondServiceError(c, "UpdateCurriculum", userID, started, err)
+			return
+		}
 	}
 	cur, err := h.svc.Update(c.Request.Context(), userID, c.Param("id"), req.Name)
 	if err != nil {

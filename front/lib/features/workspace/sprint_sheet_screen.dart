@@ -8,6 +8,7 @@ import '../../core/models/social_models.dart';
 import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import '../groups/group_permission_switch.dart';
 import 'sprint_editor_dialog.dart';
 
 // ---------------------------------------------------------------------------
@@ -415,7 +416,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     } on SocialApiException catch (_) {
       if (!mounted) return null;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudieron cargar los miembros del grupo.'),
           backgroundColor: AppColors.error,
         ),
@@ -431,7 +432,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     if (members == null || members.isEmpty) {
       if (members != null) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             content: Text('El grupo aún no tiene miembros para asignar.'),
             backgroundColor: AppColors.error,
           ),
@@ -476,15 +477,16 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                   children: [
                     const AppFieldLabel('Responsable (requerido)'),
                     const SizedBox(height: 4),
-                    DropdownButton<String>(
+                    NeobrutalistSelectField<String?>(
                       value: selectedUserId,
-                      hint: const Text('Elige un miembro'),
-                      isExpanded: true,
-                      items: [
+                      hint: 'Elige un miembro',
+                      dialogTitle: 'Responsable',
+                      icon: Icons.person_outline_rounded,
+                      options: [
                         for (final m in members)
-                          DropdownMenuItem<String>(
+                          NeobrutalistSelectOption<String?>(
                             value: m.userId,
-                            child: Text(m.displayLabel),
+                            label: m.displayLabel,
                           ),
                       ],
                       onChanged: (v) =>
@@ -521,7 +523,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     if (ok != true || !mounted) return;
     if (title.isEmpty || selectedUserId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Título y responsable son requeridos.'),
           backgroundColor: AppColors.error,
         ),
@@ -554,7 +556,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Tarea creada.'),
           backgroundColor: AppColors.border,
         ),
@@ -563,7 +565,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     } on SocialApiException catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo crear la tarea.'),
           backgroundColor: AppColors.error,
         ),
@@ -620,15 +622,16 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                   children: [
                     const AppFieldLabel('Responsable (requerido)'),
                     const SizedBox(height: 4),
-                    DropdownButton<String>(
+                    NeobrutalistSelectField<String?>(
                       value: selectedUserId,
-                      hint: const Text('Elige un miembro'),
-                      isExpanded: true,
-                      items: [
+                      hint: 'Elige un miembro',
+                      dialogTitle: 'Responsable',
+                      icon: Icons.person_outline_rounded,
+                      options: [
                         for (final m in members)
-                          DropdownMenuItem<String>(
+                          NeobrutalistSelectOption<String?>(
                             value: m.userId,
-                            child: Text(m.displayLabel),
+                            label: m.displayLabel,
                           ),
                       ],
                       onChanged: (v) =>
@@ -662,7 +665,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     if (ok != true || !mounted) return;
     if (title.isEmpty || selectedUserId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Título y responsable son requeridos.'),
           backgroundColor: AppColors.error,
         ),
@@ -671,7 +674,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     }
     if (estimate == null || !estimate.isFinite || estimate < 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Horas asignadas inválidas.'),
           backgroundColor: AppColors.error,
         ),
@@ -690,7 +693,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Tarea actualizada.'),
           backgroundColor: AppColors.border,
         ),
@@ -699,7 +702,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     } on SocialApiException catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo actualizar la tarea.'),
           backgroundColor: AppColors.error,
         ),
@@ -729,7 +732,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Tarea eliminada.'),
           backgroundColor: AppColors.border,
         ),
@@ -738,7 +741,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     } on SocialApiException catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo eliminar la tarea.'),
           backgroundColor: AppColors.error,
         ),
@@ -991,7 +994,10 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
 
     await showNeobrutalistDialog<void>(
       context: context,
-      dialog: _NewSprintDialog(nameController: nameCtrl, goalController: goalCtrl),
+      dialog: _NewSprintDialog(
+        nameController: nameCtrl,
+        goalController: goalCtrl,
+      ),
     );
 
     if (!mounted) return;
@@ -1078,7 +1084,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     final iso = day;
     if (iso.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo determinar la fecha de la columna.'),
           backgroundColor: AppColors.error,
         ),
@@ -1104,7 +1110,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Horas registradas.'),
           backgroundColor: AppColors.border,
         ),
@@ -1113,7 +1119,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     } on SocialApiException catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudieron registrar las horas.'),
           backgroundColor: AppColors.error,
         ),
@@ -1161,7 +1167,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     } on SocialApiException catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo actualizar la tarea.'),
           backgroundColor: AppColors.error,
         ),
@@ -1207,7 +1213,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                 const SizedBox(height: 12),
                 _buildLegendBar(),
                 const SizedBox(height: 8),
-                const Text(
+                Text(
                   'Vista previa local: datos de ejemplo.',
                   style: TextStyle(
                     fontSize: 11,
@@ -1252,12 +1258,12 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
         decoration: BoxDecoration(
           color: AppColors.surface,
           border: Border.all(
-            color: AppColors.border,
+            color: AppColors.outline,
             width: AppDimens.borderWidth,
           ),
           borderRadius: BorderRadius.circular(AppDimens.radius),
         ),
-        child: const Text(
+        child: Text(
           'Selecciona un grupo para ver su hoja de sprint.',
           style: TextStyle(
             fontSize: 12,
@@ -1276,7 +1282,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
         ),
       );
     }
-    return const Text(
+    return Text(
       'No se pudo cargar la hoja de sprint.',
       style: TextStyle(
         fontSize: 12,
@@ -1291,7 +1297,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     if (_isRealGroup) {
       return Row(
         children: [
-          const Expanded(
+          Expanded(
             child: Text(
               'HOJA DE SPRINT',
               style: TextStyle(
@@ -1302,6 +1308,16 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
               ),
             ),
           ),
+          // Solo admins: habilita a todos los miembros a modificar el sprint.
+          Flexible(
+            child: GroupPermissionSwitch(
+              groupId: widget.groupId,
+              permission: GroupPermission.editKanban,
+              label: 'TODOS PUEDEN MODIFICAR',
+              service: widget._serviceOverride,
+            ),
+          ),
+          const SizedBox(width: 8),
           NeobrutalistButton(
             label: _creatingReal ? 'Creando...' : 'Nueva tarea',
             icon: Icons.add_rounded,
@@ -1320,7 +1336,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     }
     return Row(
       children: [
-        const Expanded(
+        Expanded(
           child: Text(
             'HOJA DE SPRINT',
             style: TextStyle(
@@ -1403,7 +1419,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
         onConfirm: () => Navigator.of(context).pop(true),
         content: Text(
           '¿Eliminar ${sheet.name}? También se eliminarán sus tareas y horas registradas.',
-          style: const TextStyle(
+          style: TextStyle(
             fontWeight: FontWeight.w600,
             color: AppColors.text,
           ),
@@ -1422,9 +1438,9 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
       await _loadReal(selectId: neighborId);
     } on SocialApiException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1492,7 +1508,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        border: Border.all(color: AppColors.border, width: 2),
+        border: Border.all(color: AppColors.outline, width: 2),
         boxShadow: AppShadows.card,
       ),
       child: Wrap(
@@ -1512,7 +1528,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
           _MetricTile(
             label: 'HORAS USADAS',
             value: '${totalUsed.toStringAsFixed(1)}h',
-            bg: const Color(0xFFD6E3FF),
+            bg: AppColors.infoTint,
           ),
           _MetricTile(
             label: 'HORAS RESTANTES',
@@ -1548,10 +1564,10 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
       barrierColor: AppColors.scrim,
       builder: (dialogContext) => Dialog(
         backgroundColor: AppColors.surface,
-        shape: const RoundedRectangleBorder(
+        shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.zero,
           side: BorderSide(
-            color: AppColors.border,
+            color: AppColors.outline,
             width: AppDimens.borderWidthThick,
           ),
         ),
@@ -1567,7 +1583,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                 children: [
                   Row(
                     children: [
-                      const Expanded(
+                      Expanded(
                         child: Text(
                           'GRÁFICO BURNDOWN',
                           style: TextStyle(
@@ -1586,7 +1602,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                     ],
                   ),
                   const SizedBox(height: 4),
-                  const Divider(color: AppColors.border, thickness: 2),
+                  Divider(color: AppColors.border, thickness: 2),
                   const SizedBox(height: 10),
                   chart,
                   // Sin leyenda en grupo real (redundante con la tabla).
@@ -1639,7 +1655,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
       return Container(
         decoration: BoxDecoration(
           color: AppColors.surface,
-          border: Border.all(color: AppColors.border, width: 2),
+          border: Border.all(color: AppColors.outline, width: 2),
           boxShadow: AppShadows.card,
         ),
         child: Column(
@@ -1648,22 +1664,22 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
             // Cabecera única fecha/día (ej. 29/09 MARTES) sin duplicar.
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: const BoxDecoration(
+              decoration: BoxDecoration(
                 color: AppColors.accentYellow,
                 border: Border(
-                  bottom: BorderSide(color: AppColors.border, width: 2),
+                  bottom: BorderSide(color: AppColors.outline, width: 2),
                 ),
               ),
               child: Text(
                 '${_sprint.name.toUpperCase()} • ${_sprint.start} → ${_sprint.end}',
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w900,
                   fontSize: 11,
                   color: AppColors.text,
                 ),
               ),
             ),
-            const Padding(
+            Padding(
               padding: EdgeInsets.all(20),
               child: Text(
                 'Aún no hay tareas en este sprint.',
@@ -1687,11 +1703,11 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surface,
-        border: Border.all(color: AppColors.border, width: 2),
+        border: Border.all(color: AppColors.outline, width: 2),
         boxShadow: AppShadows.card,
       ),
       child: Table(
-        border: TableBorder.all(color: AppColors.border, width: 2),
+        border: TableBorder.all(color: AppColors.outline, width: 2),
         defaultColumnWidth: const FixedColumnWidth(90),
         columnWidths: const {
           0: FixedColumnWidth(220),
@@ -1722,7 +1738,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                   alignment: Alignment.center,
                   child: Text(
                     _dayDates[i],
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontFamily: 'monospace',
                       fontSize: 10,
                       fontWeight: FontWeight.w900,
@@ -1744,11 +1760,11 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
               for (final d in _days)
                 Container(
                   height: 26,
-                  color: AppColors.border,
+                  color: AppColors.outline,
                   alignment: Alignment.center,
                   child: Text(
                     d.toUpperCase(),
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.w900,
                       color: AppColors.surface,
@@ -1760,7 +1776,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
           // Filas por integrante
           for (final member in _members) ...[
             TableRow(
-              decoration: const BoxDecoration(color: AppColors.surfaceLow),
+              decoration: BoxDecoration(color: AppColors.surfaceLow),
               children: [
                 Padding(
                   padding: const EdgeInsets.symmetric(
@@ -1772,7 +1788,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                       Expanded(
                         child: Text(
                           member,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontWeight: FontWeight.w900,
                             fontSize: 11,
                             color: AppColors.text,
@@ -1811,7 +1827,7 @@ class _SprintSheetScreenState extends State<SprintSheetScreen> {
                             t.task,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontWeight: FontWeight.w700,
                               fontSize: 10,
                               color: AppColors.text,
@@ -1943,7 +1959,7 @@ class _SprintChip extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
             color: selected ? AppColors.accentYellow : AppColors.surface,
-            border: Border.all(color: AppColors.border, width: 2),
+            border: Border.all(color: AppColors.outline, width: 2),
             borderRadius: BorderRadius.circular(AppDimens.radius),
             boxShadow: selected ? AppShadows.button : const <BoxShadow>[],
           ),
@@ -1979,15 +1995,12 @@ class _SprintChip extends StatelessWidget {
                       padding: const EdgeInsets.all(2),
                       decoration: BoxDecoration(
                         color: AppColors.surface,
-                        border: Border.all(
-                          color: AppColors.border,
-                          width: 1.5,
-                        ),
+                        border: Border.all(color: AppColors.outline, width: 1.5),
                         borderRadius: BorderRadius.circular(
                           AppDimens.radiusChip,
                         ),
                       ),
-                      child: const Icon(
+                      child: Icon(
                         Icons.close_rounded,
                         size: 12,
                         color: AppColors.text,
@@ -2088,40 +2101,19 @@ class _NewTaskDialogState extends State<_NewTaskDialog> {
           children: [
             const AppFieldLabel('INTEGRANTE'),
             const SizedBox(height: 4),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-              decoration: BoxDecoration(
-                color: AppColors.bg,
-                border: Border.all(color: AppColors.border, width: 2),
-                borderRadius: BorderRadius.circular(AppDimens.radius),
-              ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  value: _selectedMember,
-                  isExpanded: true,
-                  isDense: true,
-                  icon: const Icon(Icons.expand_more_rounded),
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 12,
-                    color: AppColors.text,
+            NeobrutalistSelectField<String>(
+              value: _selectedMember,
+              hint: 'Elige un integrante',
+              dialogTitle: 'Integrante',
+              icon: Icons.person_outline_rounded,
+              options: [
+                for (final member in widget.members)
+                  NeobrutalistSelectOption<String>(
+                    value: member,
+                    label: member,
                   ),
-                  items: widget.members
-                      .map(
-                        (member) => DropdownMenuItem<String>(
-                          value: member,
-                          child: Text(member, overflow: TextOverflow.ellipsis),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (value) {
-                    if (value != null) {
-                      setState(() => _selectedMember = value);
-                    }
-                  },
-                ),
-              ),
+              ],
+              onChanged: (value) => setState(() => _selectedMember = value),
             ),
             const SizedBox(height: 12),
             const AppFieldLabel('TÍTULO'),
@@ -2129,7 +2121,7 @@ class _NewTaskDialogState extends State<_NewTaskDialog> {
             TextField(
               controller: _titleController,
               autofocus: true,
-              style: const TextStyle(
+              style: TextStyle(
                 fontWeight: FontWeight.w700,
                 fontSize: 13,
                 color: AppColors.text,
@@ -2153,7 +2145,7 @@ class _NewTaskDialogState extends State<_NewTaskDialog> {
                 decimal: true,
               ),
               inputFormatters: [FilteringTextInputFormatter.allow(_hoursRegex)],
-              style: const TextStyle(
+              style: TextStyle(
                 fontWeight: FontWeight.w800,
                 fontSize: 13,
                 color: AppColors.text,
@@ -2219,7 +2211,7 @@ class _NewSprintDialogState extends State<_NewSprintDialog> {
             TextField(
               controller: widget.nameController,
               autofocus: true,
-              style: const TextStyle(
+              style: TextStyle(
                 fontWeight: FontWeight.w800,
                 fontSize: 13,
                 color: AppColors.text,
@@ -2233,7 +2225,7 @@ class _NewSprintDialogState extends State<_NewSprintDialog> {
             const SizedBox(height: 4),
             TextField(
               controller: widget.goalController,
-              style: const TextStyle(
+              style: TextStyle(
                 fontWeight: FontWeight.w700,
                 fontSize: 13,
                 color: AppColors.text,
@@ -2299,7 +2291,7 @@ class _ImputeHoursDialogState extends State<_ImputeHoursDialog> {
         children: [
           Text(
             '${widget.taskTitle.toUpperCase()} • ${widget.day.toUpperCase()}',
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w900,
               color: AppColors.muted,
@@ -2311,7 +2303,7 @@ class _ImputeHoursDialogState extends State<_ImputeHoursDialog> {
             autofocus: true,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             inputFormatters: [FilteringTextInputFormatter.allow(_hoursRegex)],
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w900,
               fontSize: 15,
               color: AppColors.text,
@@ -2358,7 +2350,7 @@ class _DayCell extends StatelessWidget {
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: hasHours ? AppColors.accentYellow : AppColors.surface,
-            border: Border.all(color: AppColors.border, width: 1.5),
+            border: Border.all(color: AppColors.outline, width: 1.5),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -2388,8 +2380,8 @@ class _DayCell extends StatelessWidget {
 class _HeaderCellFixed extends StatelessWidget {
   final String text;
   final double width;
-  final Color bg;
-  const _HeaderCellFixed(this.text, this.width, {this.bg = AppColors.surface});
+  final Color? bg;
+  const _HeaderCellFixed(this.text, this.width, {this.bg});
 
   @override
   Widget build(BuildContext context) {
@@ -2398,13 +2390,13 @@ class _HeaderCellFixed extends StatelessWidget {
       height: 28,
       alignment: Alignment.center,
       padding: const EdgeInsets.symmetric(horizontal: 4),
-      decoration: BoxDecoration(color: bg),
+      decoration: BoxDecoration(color: (bg ?? AppColors.surface)),
       child: Text(
         text,
         textAlign: TextAlign.center,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: const TextStyle(
+        style: TextStyle(
           fontWeight: FontWeight.w900,
           fontSize: 9,
           letterSpacing: 0.4,
@@ -2426,7 +2418,7 @@ class _LegendBar extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        border: Border.all(color: AppColors.border, width: 2),
+        border: Border.all(color: AppColors.outline, width: 2),
         boxShadow: AppShadows.card,
       ),
       child: Wrap(spacing: 10, runSpacing: 6, children: items),
@@ -2445,13 +2437,13 @@ class _LegendChip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: color,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radiusChip),
         boxShadow: AppShadows.badge,
       ),
       child: Text(
         label,
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 10,
           fontWeight: FontWeight.w900,
           color: AppColors.text,
@@ -2485,7 +2477,7 @@ class _PriorityChip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
       decoration: BoxDecoration(
         color: _bg,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radiusChip),
         boxShadow: AppShadows.badge,
       ),
@@ -2516,13 +2508,13 @@ class _PriorityChip extends StatelessWidget {
                       'media' => AppColors.accentYellow,
                       _ => AppColors.surfaceLow,
                     },
-                    border: Border.all(color: AppColors.border, width: 1),
+                    border: Border.all(color: AppColors.outline, width: 1),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Text(
                   p.toUpperCase(),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w900,
                     fontSize: 11,
                     color: AppColors.text,
@@ -2553,14 +2545,14 @@ class _StatusChip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
       decoration: BoxDecoration(
         color: color,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radiusChip),
         boxShadow: AppShadows.badge,
       ),
       child: Text(
         status.toUpperCase(),
         textAlign: TextAlign.center,
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 9,
           fontWeight: FontWeight.w900,
           color: AppColors.text,
@@ -2589,13 +2581,13 @@ class _StatusChip extends StatelessWidget {
                   height: 10,
                   decoration: BoxDecoration(
                     color: _statusChipColor(s),
-                    border: Border.all(color: AppColors.border, width: 1),
+                    border: Border.all(color: AppColors.outline, width: 1),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Text(
                   s.toUpperCase(),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w900,
                     fontSize: 11,
                     color: AppColors.text,
@@ -2638,7 +2630,7 @@ class _SegmentedPicker extends StatelessWidget {
                 color: value == option
                     ? AppColors.accentBlueDeep
                     : AppColors.bg,
-                border: Border.all(color: AppColors.border, width: 1.5),
+                border: Border.all(color: AppColors.outline, width: 1.5),
                 borderRadius: BorderRadius.circular(AppDimens.radius),
                 boxShadow: value == option
                     ? AppShadows.badge
@@ -2675,14 +2667,14 @@ class _QuickHourChip extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: 8),
           decoration: BoxDecoration(
             color: AppColors.surfaceLow,
-            border: Border.all(color: AppColors.border, width: 1.5),
+            border: Border.all(color: AppColors.outline, width: 1.5),
             borderRadius: BorderRadius.circular(AppDimens.radius),
             boxShadow: AppShadows.badge,
           ),
           child: Text(
             label,
             textAlign: TextAlign.center,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w900,
               color: AppColors.text,
@@ -2724,7 +2716,7 @@ class _BurndownChart extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surface,
-        border: Border.all(color: AppColors.border, width: 2),
+        border: Border.all(color: AppColors.outline, width: 2),
         boxShadow: AppShadows.card,
       ),
       child: Padding(
@@ -2750,7 +2742,7 @@ class _BurndownChart extends StatelessWidget {
                 _MetricTile(
                   label: 'HORAS REALES IMPUTADAS',
                   value: '${totalUsed.toStringAsFixed(1)}h',
-                  bg: const Color(0xFFD6E3FF),
+                  bg: AppColors.infoTint,
                 ),
                 _MetricTile(
                   label: 'HORAS RESTANTES',
@@ -2763,7 +2755,7 @@ class _BurndownChart extends StatelessWidget {
             if (achievements.values.any((v) => v.isNotEmpty)) ...[
               Text(
                 'OBJETIVO: ${achievements['Objetivo']}',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 10.5,
                   fontWeight: FontWeight.w800,
                   color: AppColors.muted,
@@ -2784,7 +2776,7 @@ class _BurndownChart extends StatelessWidget {
     final pct = progressPercent.round();
     return Row(
       children: [
-        const Text(
+        Text(
           'COMPLETADO',
           style: TextStyle(
             fontSize: 10,
@@ -2802,7 +2794,7 @@ class _BurndownChart extends StatelessWidget {
                     height: 16,
                     decoration: BoxDecoration(
                       color: AppColors.bg,
-                      border: Border.all(color: AppColors.border, width: 2),
+                      border: Border.all(color: AppColors.outline, width: 2),
                       borderRadius: BorderRadius.circular(AppDimens.radius),
                     ),
                   ),
@@ -2813,7 +2805,7 @@ class _BurndownChart extends StatelessWidget {
                       height: 16,
                       decoration: BoxDecoration(
                         color: AppColors.accentYellow,
-                        border: Border.all(color: AppColors.border, width: 2),
+                        border: Border.all(color: AppColors.outline, width: 2),
                         borderRadius: BorderRadius.circular(AppDimens.radius),
                       ),
                     ),
@@ -2829,7 +2821,7 @@ class _BurndownChart extends StatelessWidget {
           child: Text(
             '$pct%',
             textAlign: TextAlign.end,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w900,
               color: AppColors.text,
@@ -2846,7 +2838,7 @@ class _BurndownChart extends StatelessWidget {
       children: [
         Row(
           children: [
-            const Expanded(
+            Expanded(
               child: Text(
                 'BURNDOWN • ESTIMADO VS AVANCE',
                 maxLines: 1,
@@ -2896,7 +2888,7 @@ class _MiniLegend extends StatelessWidget {
         const SizedBox(width: 4),
         Text(
           label,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 9,
             fontWeight: FontWeight.w900,
             color: AppColors.muted,
@@ -2925,7 +2917,7 @@ class _MetricTile extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
       decoration: BoxDecoration(
         color: bg,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         boxShadow: AppShadows.badge,
       ),
       child: Column(
@@ -2935,7 +2927,7 @@ class _MetricTile extends StatelessWidget {
             label,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 9,
               fontWeight: FontWeight.w900,
               color: AppColors.muted,
@@ -2947,7 +2939,7 @@ class _MetricTile extends StatelessWidget {
             value,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 15,
               fontWeight: FontWeight.w900,
               color: AppColors.text,

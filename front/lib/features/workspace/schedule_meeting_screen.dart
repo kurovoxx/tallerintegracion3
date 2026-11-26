@@ -6,34 +6,21 @@
 // canónicos de core/theme/app_theme.dart y core/widgets/neobrutalism.dart.
 
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/common_widgets.dart';
 import '../../core/models/social_models.dart';
-import '../../core/services/api_config.dart';
-import '../../core/services/session_manager.dart';
 import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
-import '../auth/google_calendar_service.dart';
-import '../auth/google_drive_service.dart' show LocalPortBusyException;
-
-typedef CalendarConfigLoader = Future<void> Function(String backendBaseUrl);
+import '../groups/group_permission_switch.dart';
 
 class ScheduleMeetingScreen extends StatefulWidget {
-  const ScheduleMeetingScreen({
-    super.key,
-    this.groupId,
-    SocialService? service,
-    GoogleCalendarService? calendarService,
-    CalendarConfigLoader? calendarConfigLoader,
-  }) : _serviceOverride = service,
-       _calendarOverride = calendarService,
-       _calendarConfigLoader = calendarConfigLoader;
+  const ScheduleMeetingScreen({super.key, this.groupId, SocialService? service})
+    : _serviceOverride = service;
 
   final String? groupId;
   final SocialService? _serviceOverride;
-  final GoogleCalendarService? _calendarOverride;
-  final CalendarConfigLoader? _calendarConfigLoader;
 
   @override
   State<ScheduleMeetingScreen> createState() => _ScheduleMeetingScreenState();
@@ -54,33 +41,24 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
   TimeOfDay _selectedTime = const TimeOfDay(hour: 10, minute: 0);
 
   late final SocialService _social;
-  late final GoogleCalendarService _calendar;
   bool _isSubmitting = false;
   String? _createdMeetingId;
   String? _submitError;
   List<MeetingItem> _upcoming = const [];
   bool _loadingUpcoming = false;
-  CalendarStatus? _calStatus;
-  bool _calLoading = false;
-  bool _calConnecting = false;
-  String? _calError;
 
   @override
   void initState() {
     super.initState();
     _social = widget._serviceOverride ?? SocialService();
-    _calendar = widget._calendarOverride ?? GoogleCalendarService();
-    SessionManager.revision.addListener(_sessionChanged);
     if (_isRealGroup) {
       _loadUpcoming();
       _loadMembers();
     }
-    _loadCalendarStatus();
   }
 
   @override
   void dispose() {
-    SessionManager.revision.removeListener(_sessionChanged);
     _titleCtrl.dispose();
     _descCtrl.dispose();
     _linkCtrl.dispose();
@@ -95,25 +73,6 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
       r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
     );
     return id.isNotEmpty && uuid.hasMatch(id);
-  }
-
-  void _sessionChanged() {
-    if (!mounted) return;
-    setState(() {
-      _calStatus = null;
-      _calError = null;
-      _calLoading = false;
-      _calConnecting = false;
-    });
-    _loadCalendarStatus();
-  }
-
-  Future<void> _ensureCalendarConfigured() {
-    final loader = widget._calendarConfigLoader;
-    if (loader != null) return loader(authApiBaseUrl);
-    return GoogleCalendarService.ensureConfigured(
-      backendBaseUrl: authApiBaseUrl,
-    );
   }
 
   /// Próximas reuniones desde GET /groups/:id/workspace.meetings.upcoming.
@@ -171,108 +130,23 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
     }
   }
 
-  /// Estado real de Calendar para la cuenta activa (aislado por JWT,
-  /// igual que Drive). null = sin red/sesión: se conserva el estado previo.
-  Future<void> _loadCalendarStatus() async {
-    if (!mounted) return;
-    final revision = SessionManager.revision.value;
-    setState(() {
-      _calLoading = true;
-      _calError = null;
-    });
-    try {
-      final status = await _calendar.fetchStatus(
-        backendBaseUrl: authApiBaseUrl,
-      );
-      if (!mounted || revision != SessionManager.revision.value) return;
-      setState(() {
-        if (status != null) _calStatus = status;
-        _calError = status == null
-            ? 'No se pudo verificar la conexión con Google Calendar.'
-            : null;
-        _calLoading = false;
-      });
-    } catch (_) {
-      if (mounted && revision == SessionManager.revision.value) {
-        setState(() => _calLoading = false);
+  /// Selecciona a todos los integrantes del grupo que tengan correo disponible
+  /// y los agrega a los invitados de la reunión. Los ya seleccionados no se
+  /// duplican.
+  void _selectAllMembers() {
+    final added = <String>[];
+    for (final member in _members) {
+      final email = member.email?.trim().toLowerCase() ?? '';
+      if (email.isEmpty) continue;
+      if (!_guests.containsKey(email)) {
+        _guests[email] = member.displayLabel;
+        added.add(email);
       }
     }
-  }
-
-  /// Flujo OAuth real: navegador → code → POST connect → status.
-  /// Nunca guarda tokens de Google en el frontend.
-  Future<void> _linkGoogleCalendar() async {
-    if (_calConnecting) return;
-    final revision = SessionManager.revision.value;
-    setState(() {
-      _calConnecting = true;
-      _calError = null;
-    });
-    try {
-      await _ensureCalendarConfigured();
-      if (!mounted || revision != SessionManager.revision.value) return;
-      final auth = await _calendar.getCalendarAuthCode();
-      if (!mounted || revision != SessionManager.revision.value) return;
-      if (auth == null) {
-        setState(() {
-          _calConnecting = false;
-          _calError =
-              'Autorización cancelada. Vuelve a intentarlo si quieres vincular Calendar.';
-        });
-        return;
-      }
-      final result = await _calendar.connectCalendar(
-        backendBaseUrl: authApiBaseUrl,
-        oauthCode: auth.code,
-        redirectUri: auth.redirectUri.isEmpty ? null : auth.redirectUri,
-        expectedSessionRevision: revision,
-      );
-      if (!mounted || revision != SessionManager.revision.value) return;
-      if (!result.ok) {
-        setState(() {
-          _calConnecting = false;
-          _calError = result.message;
-        });
-        return;
-      }
-      final status = await _calendar.fetchStatus(
-        backendBaseUrl: authApiBaseUrl,
-      );
-      if (!mounted || revision != SessionManager.revision.value) return;
+    if (added.isNotEmpty) {
       setState(() {
-        _calConnecting = false;
-        _calStatus = status ?? const CalendarStatus(connected: true);
-        _calError = status == null
-            ? 'Conexión confirmada; no se pudo actualizar el estado remoto.'
-            : null;
+        _guestError = null;
       });
-      if (mounted && (status?.connected ?? false)) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Google Calendar vinculado.')),
-        );
-      }
-    } on LocalPortBusyException catch (e) {
-      if (mounted && revision == SessionManager.revision.value) {
-        setState(() {
-          _calConnecting = false;
-          _calError = e.toString();
-        });
-      }
-    } on StateError catch (e) {
-      if (mounted && revision == SessionManager.revision.value) {
-        setState(() {
-          _calConnecting = false;
-          _calError = e.message;
-        });
-      }
-    } catch (_) {
-      if (mounted && revision == SessionManager.revision.value) {
-        setState(() {
-          _calConnecting = false;
-          _calError =
-              'No se pudo conectar con Google Calendar. Inténtalo nuevamente más tarde.';
-        });
-      }
     }
   }
 
@@ -285,6 +159,18 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
     return '$date · $time';
   }
 
+  Future<void> _openMeetingLink(String link) async {
+    final uri = Uri.tryParse(link);
+    if (uri == null) return;
+    final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (opened || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('No se pudo abrir el enlace de la reunión.'),
+      ),
+    );
+  }
+
   Future<void> _pickDate() async {
     final d = await showDatePicker(
       context: context,
@@ -293,7 +179,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
       lastDate: DateTime.now().add(const Duration(days: 365)),
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
-          colorScheme: const ColorScheme.light(primary: AppColors.border),
+          colorScheme: ColorScheme.light(primary: AppColors.border),
         ),
         child: child!,
       ),
@@ -307,7 +193,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
       initialTime: _selectedTime,
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
-          colorScheme: const ColorScheme.light(primary: AppColors.border),
+          colorScheme: ColorScheme.light(primary: AppColors.border),
         ),
         child: child!,
       ),
@@ -315,8 +201,8 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
     if (t != null) setState(() => _selectedTime = t);
   }
 
-  // POST /groups/:id/meetings {title, description?, scheduled_at}.
-  // Invitados por email; enlace/sala continúa como dato local del formulario.
+  // POST /groups/:id/meetings {title, description?, link?, scheduled_at}.
+  // El enlace viaja en el correo de invitación de los asistentes.
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     if (!_isRealGroup) {
@@ -339,10 +225,12 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
         _selectedTime.minute,
       ).toUtc();
       final desc = _descCtrl.text.trim();
+      final link = _linkCtrl.text.trim();
       final id = await _social.createMeeting(
         groupId: widget.groupId!.trim(),
         title: _titleCtrl.text.trim(),
         description: desc.isEmpty ? null : desc,
+        link: link.isEmpty ? null : link,
         scheduledAtUtc: when,
         attendees: _guests.keys.toList(),
       );
@@ -352,7 +240,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
       await _loadUpcoming();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Reunión agendada.'),
           backgroundColor: AppColors.border,
         ),
@@ -364,6 +252,8 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
             ? 'Ingresa un correo válido.'
             : e.message.contains('too many attendees')
             ? 'Puedes invitar hasta 50 personas.'
+            : e.message.contains('meeting link is too long')
+            ? 'El enlace es demasiado largo (máximo 500 caracteres).'
             : 'No se pudo agendar la reunión.',
       );
     } catch (_) {
@@ -400,7 +290,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                     decoration: BoxDecoration(
                       color: AppColors.surface,
                       border: Border.all(
-                        color: AppColors.border,
+                        color: AppColors.outline,
                         width: AppDimens.borderWidthAction,
                       ),
                       borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -422,7 +312,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                               validator: (v) => (v == null || v.trim().isEmpty)
                                   ? 'Requerido'
                                   : null,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontWeight: FontWeight.w700,
                                 fontSize: 13,
                                 color: AppColors.text,
@@ -439,7 +329,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                               decoration: appInputDecoration(
                                 'Agenda, temas a revisar...',
                               ),
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontWeight: FontWeight.w600,
                                 fontSize: 13,
                                 color: AppColors.text,
@@ -479,7 +369,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                               decoration: appInputDecoration(
                                 'https://meet.google.com/...',
                               ),
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontWeight: FontWeight.w700,
                                 fontSize: 13,
                                 color: AppColors.text,
@@ -487,99 +377,8 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                             ),
                           ),
                           const SizedBox(height: AppDimens.spaceMd),
-                          const AppFieldLabel('GOOGLE CALENDAR'),
-                          const SizedBox(height: AppDimens.spaceSm),
-                          if (_calLoading)
-                            const LinearProgressIndicator()
-                          else if (_calStatus?.connected == true) ...[
-                            Container(
-                              padding: const EdgeInsets.all(AppDimens.spaceMd),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFE7F6E7),
-                                border: Border.all(
-                                  color: AppColors.border,
-                                  width: AppDimens.borderWidth,
-                                ),
-                                borderRadius: BorderRadius.circular(
-                                  AppDimens.radius,
-                                ),
-                              ),
-                              child: Row(
-                                children: [
-                                  const Icon(
-                                    Icons.check_circle_rounded,
-                                    color: AppColors.text,
-                                    size: 18,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        const Text(
-                                          '✓ Google Calendar vinculado',
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w900,
-                                            color: AppColors.text,
-                                          ),
-                                        ),
-                                        if (_calStatus?.externalEmail != null)
-                                          Text(
-                                            _calStatus!.externalEmail!,
-                                            style: const TextStyle(
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w600,
-                                              color: AppColors.muted,
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: AppDimens.spaceSm),
-                            NeobrutalistButton(
-                              label: _calConnecting
-                                  ? 'CONECTANDO...'
-                                  : 'RECONECTAR',
-                              icon: Icons.refresh_rounded,
-                              variant: NeobrutalistButtonVariant.secondary,
-                              expand: true,
-                              onPressed: _calConnecting
-                                  ? null
-                                  : _linkGoogleCalendar,
-                            ),
-                          ] else ...[
-                            NeobrutalistButton(
-                              label: _calConnecting
-                                  ? 'CONECTANDO...'
-                                  : 'VINCULAR CON GOOGLE CALENDAR',
-                              icon: Icons.calendar_today_rounded,
-                              variant: NeobrutalistButtonVariant.info,
-                              expand: true,
-                              borderWidth: AppDimens.borderWidthAction,
-                              onPressed: _calConnecting
-                                  ? null
-                                  : _linkGoogleCalendar,
-                            ),
-                          ],
-                          if (_calError != null) ...[
-                            const SizedBox(height: AppDimens.spaceSm),
-                            Text(
-                              _calError!,
-                              style: const TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.error,
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: AppDimens.spaceMd),
                           const AppFieldLabel('INVITAR MIEMBROS DEL GRUPO'),
-                          const Text(
+                          Text(
                             'Toca un integrante para agregarlo con su correo real. El chip muestra el nombre; internamente se guarda el email.',
                             style: TextStyle(
                               fontSize: 11,
@@ -588,12 +387,15 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                             ),
                           ),
                           const SizedBox(height: AppDimens.spaceSm),
-                          if (_loadingMembers) const LinearProgressIndicator(),
-                          if (_membersError != null) Text(_membersError!),
+                          if (_loadingMembers) const _InkProgressBar(),
+                          if (_membersError != null)
+                            _InlineNotice(text: _membersError!, isError: true),
                           if (!_loadingMembers &&
                               _membersError == null &&
                               _members.isEmpty)
-                            const Text('No hay integrantes disponibles.'),
+                            const _InlineNotice(
+                              text: 'No hay integrantes disponibles.',
+                            ),
                           Wrap(
                             spacing: AppDimens.spaceSm,
                             runSpacing: AppDimens.spaceSm,
@@ -622,9 +424,21 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                                 ),
                             ],
                           ),
+                          const SizedBox(height: AppDimens.spaceMd),
+                          if (_members.isNotEmpty)
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: NeobrutalistButton(
+                                key: const Key('guest-select-all-button'),
+                                label: 'Todos',
+                                icon: Icons.check_circle_rounded,
+                                variant: NeobrutalistButtonVariant.info,
+                                onPressed: _selectAllMembers,
+                              ),
+                            ),
                           const SizedBox(height: AppDimens.spaceXl),
                           const AppFieldLabel('INVITAR POR CORREO (EXTERNO)'),
-                          const Text(
+                          Text(
                             'Solo para alguien fuera del grupo. Si es miembro, selecciónalo arriba.',
                             style: TextStyle(
                               fontSize: 11,
@@ -633,31 +447,78 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                             ),
                           ),
                           const SizedBox(height: AppDimens.spaceSm),
-                          TextField(
-                            controller: _emailCtrl,
-                            decoration: InputDecoration(
-                              labelText: 'Correo del invitado',
-                              errorText: _guestError,
+                          _FieldShell(
+                            child: TextField(
+                              key: const Key('guest-email-field'),
+                              controller: _emailCtrl,
+                              cursorColor: AppColors.text,
+                              decoration:
+                                  appInputDecoration(
+                                    'Correo del invitado',
+                                  ).copyWith(
+                                    prefixIcon: Icon(
+                                      Icons.alternate_email_rounded,
+                                      size: 18,
+                                      color: AppColors.text,
+                                    ),
+                                    // Borde rojo de error sin el texto Material
+                                    // flotante: el mensaje va en _InlineNotice.
+                                    enabledBorder: _guestError == null
+                                        ? null
+                                        : OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              AppDimens.radius,
+                                            ),
+                                            borderSide: BorderSide(
+                                              color: AppColors.error,
+                                              width: AppDimens.borderWidth,
+                                            ),
+                                          ),
+                                  ),
+                              style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13,
+                                color: AppColors.text,
+                              ),
+                              keyboardType: TextInputType.emailAddress,
+                              onSubmitted: (value) => _addGuest(value),
                             ),
-                            keyboardType: TextInputType.emailAddress,
-                            onSubmitted: (value) => _addGuest(value),
                           ),
-                          TextButton(
-                            onPressed: () => _addGuest(_emailCtrl.text),
-                            child: const Text('Añadir invitado'),
+                          if (_guestError != null) ...[
+                            const SizedBox(height: AppDimens.spaceSm),
+                            _InlineNotice(text: _guestError!, isError: true),
+                          ],
+                          const SizedBox(height: AppDimens.spaceMd),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: NeobrutalistButton(
+                              key: const Key('guest-add-button'),
+                              label: 'Añadir invitado',
+                              icon: Icons.add_rounded,
+                              variant: NeobrutalistButtonVariant.info,
+                              onPressed: () => _addGuest(_emailCtrl.text),
+                            ),
                           ),
-                          Wrap(
-                            spacing: 8,
-                            children: [
-                              for (final guest in _guests.entries)
-                                InputChip(
-                                  label: Text(guest.value),
-                                  onDeleted: () =>
-                                      setState(() => _guests.remove(guest.key)),
-                                ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
+                          if (_guests.isNotEmpty) ...[
+                            const SizedBox(height: AppDimens.spaceMd),
+                            AppFieldLabel('INVITADOS (${_guests.length})'),
+                            const SizedBox(height: AppDimens.spaceSm),
+                            Wrap(
+                              spacing: AppDimens.spaceSm,
+                              runSpacing: AppDimens.spaceSm,
+                              children: [
+                                for (final guest in _guests.entries)
+                                  _GuestStickerChip(
+                                    key: Key('guest-chip-${guest.key}'),
+                                    label: guest.value,
+                                    onRemove: () => setState(
+                                      () => _guests.remove(guest.key),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ],
+                          const SizedBox(height: AppDimens.spaceLg),
                           NeobrutalistButton(
                             label: _isSubmitting
                                 ? 'Agendando...'
@@ -676,14 +537,14 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                     Container(
                       padding: const EdgeInsets.all(AppDimens.spaceMd),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFE7F6E7),
+                        color: AppColors.successTint,
                         border: Border.all(
-                          color: AppColors.border,
+                          color: AppColors.outline,
                           width: AppDimens.borderWidth,
                         ),
                         borderRadius: BorderRadius.circular(AppDimens.radius),
                       ),
-                      child: const Text(
+                      child: Text(
                         'Reunión agendada.',
                         style: TextStyle(
                           fontSize: 12,
@@ -698,16 +559,16 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                     Container(
                       padding: const EdgeInsets.all(AppDimens.spaceMd),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFFDE8E8),
+                        color: AppColors.errorTintSoft,
                         border: Border.all(
-                          color: AppColors.border,
+                          color: AppColors.outline,
                           width: AppDimens.borderWidth,
                         ),
                         borderRadius: BorderRadius.circular(AppDimens.radius),
                       ),
                       child: Text(
                         _submitError!,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w700,
                           color: AppColors.text,
@@ -723,12 +584,12 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                       decoration: BoxDecoration(
                         color: AppColors.bg,
                         border: Border.all(
-                          color: AppColors.border,
+                          color: AppColors.outline,
                           width: AppDimens.borderWidth,
                         ),
                         borderRadius: BorderRadius.circular(AppDimens.radius),
                       ),
-                      child: const Text(
+                      child: Text(
                         'Selecciona un grupo para agendar una reunión.',
                         style: TextStyle(
                           fontSize: 11.5,
@@ -751,7 +612,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                         ),
                       )
                     else if (_upcoming.isEmpty)
-                      const Text(
+                      Text(
                         'Aún no hay reuniones agendadas.',
                         style: TextStyle(
                           fontSize: 12,
@@ -767,7 +628,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                           decoration: BoxDecoration(
                             color: AppColors.bg,
                             border: Border.all(
-                              color: AppColors.border,
+                              color: AppColors.outline,
                               width: AppDimens.borderWidth,
                             ),
                             borderRadius: BorderRadius.circular(
@@ -779,7 +640,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                             children: [
                               Text(
                                 m.title,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w800,
                                   color: AppColors.text,
@@ -788,7 +649,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                               const SizedBox(height: 2),
                               Text(
                                 _formatWhen(m.scheduledAt),
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 11.5,
                                   fontWeight: FontWeight.w700,
                                   color: AppColors.mutedStrong,
@@ -801,11 +662,26 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                                   m.description!.trim(),
                                   maxLines: 3,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w600,
                                     color: AppColors.text,
                                     height: 1.35,
+                                  ),
+                                ),
+                              ],
+                              if (m.link != null &&
+                                  m.link!.trim().isNotEmpty) ...[
+                                const SizedBox(height: 6),
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: TextButton.icon(
+                                    onPressed: () => _openMeetingLink(m.link!),
+                                    icon: const Icon(
+                                      Icons.link_rounded,
+                                      size: 16,
+                                    ),
+                                    label: const Text('Abrir enlace'),
                                   ),
                                 ),
                               ],
@@ -823,7 +699,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
   }
 
   Widget _buildHeader(bool isDesktop) {
-    return Column(
+    final titles = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
@@ -831,17 +707,35 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
           style: TextStyle(
             fontSize: isDesktop ? 24 : 20,
             fontWeight: FontWeight.w900,
-            color: AppColors.text,
+            color: AppColors.title,
             letterSpacing: -0.5,
           ),
         ),
         const SizedBox(height: AppDimens.spaceXs),
-        const Text(
+        Text(
           'Elige fecha y hora para reunir al grupo.',
           style: TextStyle(
             fontSize: 12.5,
             fontWeight: FontWeight.w700,
             color: AppColors.mutedStrong,
+          ),
+        ),
+      ],
+    );
+    final groupId = widget.groupId?.trim() ?? '';
+    if (groupId.isEmpty) return titles;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(child: titles),
+        const SizedBox(width: AppDimens.spaceSm),
+        // Solo admins: habilita a todos los miembros a agendar reuniones.
+        Flexible(
+          child: GroupPermissionSwitch(
+            groupId: groupId,
+            permission: GroupPermission.createMeetings,
+            label: 'TODOS PUEDEN AGENDAR',
+            service: widget._serviceOverride,
           ),
         ),
       ],
@@ -871,7 +765,7 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
               decoration: BoxDecoration(
                 color: AppColors.bg,
                 border: Border.all(
-                  color: AppColors.border,
+                  color: AppColors.outline,
                   width: AppDimens.borderWidth,
                 ),
                 borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -886,14 +780,14 @@ class _ScheduleMeetingScreenState extends State<ScheduleMeetingScreen> {
                       value,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w900,
                         fontSize: 13,
                         color: AppColors.text,
                       ),
                     ),
                   ),
-                  const Icon(
+                  Icon(
                     Icons.expand_more_rounded,
                     size: 16,
                     color: AppColors.text,
@@ -917,7 +811,7 @@ class _FieldShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: const BoxDecoration(boxShadow: AppShadows.badge),
+      decoration: BoxDecoration(boxShadow: AppShadows.badge),
       child: child,
     );
   }
@@ -973,7 +867,7 @@ class _MemberStickerChipState extends State<_MemberStickerChip> {
             decoration: BoxDecoration(
               color: selected ? AppColors.accentYellow : AppColors.surface,
               border: Border.all(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidth,
               ),
               borderRadius: BorderRadius.circular(AppDimens.radiusChip),
@@ -994,7 +888,7 @@ class _MemberStickerChipState extends State<_MemberStickerChip> {
                 const SizedBox(width: AppDimens.spaceXs),
                 Text(
                   widget.label.toUpperCase(),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w900,
                     letterSpacing: 0.6,
@@ -1005,6 +899,161 @@ class _MemberStickerChipState extends State<_MemberStickerChip> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Invitado ya añadido: sticker de tinta con su botón de quitar (reemplaza al
+/// `InputChip` Material, que traía píldora redondeada y elevación).
+class _GuestStickerChip extends StatelessWidget {
+  const _GuestStickerChip({
+    super.key,
+    required this.label,
+    required this.onRemove,
+  });
+
+  final String label;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.only(left: AppDimens.spaceMd),
+      decoration: BoxDecoration(
+        color: AppColors.accentYellow,
+        border: Border.all(
+          color: AppColors.outline,
+          width: AppDimens.borderWidth,
+        ),
+        borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+        boxShadow: AppShadows.badge,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.mail_outline_rounded,
+            size: 13,
+            color: AppColors.text,
+          ),
+          const SizedBox(width: AppDimens.spaceXs),
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 0.3,
+                color: AppColors.text,
+              ),
+            ),
+          ),
+          const SizedBox(width: AppDimens.spaceXs),
+          Semantics(
+            button: true,
+            label: 'Quitar invitado $label',
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: GestureDetector(
+                key: const Key('guest-chip-remove'),
+                behavior: HitTestBehavior.opaque,
+                onTap: onRemove,
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    border: Border(
+                      left: BorderSide(
+                        color: AppColors.outline,
+                        width: AppDimens.borderWidth,
+                      ),
+                    ),
+                  ),
+                  child: Icon(
+                    Icons.close_rounded,
+                    size: 14,
+                    color: AppColors.text,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Aviso en línea (error o vacío) con la tipografía del sistema: texto en
+/// negrita sobre caja de tinta, en lugar de `Text` suelto o `errorText`.
+class _InlineNotice extends StatelessWidget {
+  const _InlineNotice({required this.text, this.isError = false});
+
+  final String text;
+  final bool isError;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppDimens.spaceMd,
+        vertical: AppDimens.spaceSm,
+      ),
+      decoration: BoxDecoration(
+        color: isError ? AppColors.surface : AppColors.surfaceLow,
+        border: Border.all(
+          color: isError ? AppColors.error : AppColors.border,
+          width: AppDimens.borderWidth,
+        ),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isError ? Icons.error_outline_rounded : Icons.info_outline_rounded,
+            size: 16,
+            color: isError ? AppColors.errorDeep : AppColors.text,
+          ),
+          const SizedBox(width: AppDimens.spaceSm),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                color: isError ? AppColors.errorDeep : AppColors.text,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Barra de carga de tinta: borde de 2 px y relleno negro, sin el estilo
+/// Material por defecto.
+class _InkProgressBar extends StatelessWidget {
+  const _InkProgressBar();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 10,
+      decoration: BoxDecoration(
+        border: Border.all(
+          color: AppColors.outline,
+          width: AppDimens.borderWidth,
+        ),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+      ),
+      child: LinearProgressIndicator(
+        minHeight: 6,
+        color: AppColors.border,
+        backgroundColor: AppColors.surfaceLow,
       ),
     );
   }

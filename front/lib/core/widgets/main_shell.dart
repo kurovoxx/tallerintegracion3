@@ -1,18 +1,26 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import '../../features/academic/followed_screen.dart';
+import '../../features/academic/grade_calculator_screen.dart';
 import '../../features/academic/attendance_screen.dart';
 import '../../features/academic/courses_screen.dart';
 import '../../features/academic/curriculum_screen.dart';
-import '../../features/academic/grade_calculator_screen.dart';
 import '../../features/academic/profile_screen.dart';
 import '../../features/academic/schedule_screen.dart';
 import '../../features/groups/groups_screen.dart';
+import '../../features/notifications/notification_inbox.dart';
 import '../../features/notes/all_notes_screen.dart';
 import '../models/social_models.dart';
+import '../models/profile_models.dart';
 import '../services/profile_service.dart';
 import '../services/social_service.dart';
 import '../theme/app_theme.dart';
+import 'color_mode_toggle.dart';
 import 'neobrutalism.dart';
+import 'user_avatar.dart';
+import '../../features/academic/public_profile_screen.dart';
 
 /// Shell global neobrutalista y responsivo:
 /// - expandido (> 1024 dp): sidebar 280/72 dp + canvas centrado.
@@ -45,6 +53,11 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   static const int _notesIndex = 5;
   static const int _groupsIndex = 6;
+  static const int _profileIndex = 7;
+  static const int _followedIndex = 8;
+
+  /// true solo cuando se llega al perfil desde la sugerencia de Drive.
+  bool _profileScrollToDrive = false;
 
   late int _selectedIndex;
   bool _isCollapsed = false;
@@ -57,6 +70,11 @@ class _MainShellState extends State<MainShell> {
   Overview? _overview;
   String? _sidebarError;
   bool _loadingSidebar = false;
+  // Puntito rojo de la campana: se refresca al abrir el shell, al cerrar la
+  // bandeja y cada minuto (el backend no expone un contador dedicado).
+  int _unreadNotifications = 0;
+  bool _loadingUnread = false;
+  Timer? _unreadTimer;
 
   @override
   void initState() {
@@ -71,6 +89,11 @@ class _MainShellState extends State<MainShell> {
     SocialService.groupsChanged.addListener(_onGroupsChanged);
     _loadSidebar();
     _loadProfile();
+    _loadUnreadNotifications();
+    _unreadTimer = Timer.periodic(
+      const Duration(minutes: 1),
+      (_) => _loadUnreadNotifications(),
+    );
   }
 
   void _onProfileChanged() {
@@ -81,8 +104,39 @@ class _MainShellState extends State<MainShell> {
     _loadSidebar();
   }
 
+  void _openInbox() async {
+    await showNeobrutalistDialog<void>(
+      context: context,
+      dialog: NotificationInbox(service: _social),
+    );
+    // Marcar leídas o eliminar dentro del diálogo cambia el puntito.
+    if (!mounted) return;
+    await _loadUnreadNotifications();
+  }
+
+  /// Cuenta notificaciones no leídas. Best-effort: un fallo de red no debe
+  /// romper el shell ni mostrar errores en el sidebar.
+  Future<void> _loadUnreadNotifications() async {
+    if (_loadingUnread) return;
+    _loadingUnread = true;
+    try {
+      final items = await _social.myNotifications();
+      final invitations = await _social.listPendingInvitations();
+      if (!mounted) return;
+      final unread = items.where((n) => !n.read).length + invitations.length;
+      if (unread != _unreadNotifications) {
+        setState(() => _unreadNotifications = unread);
+      }
+    } catch (_) {
+      // Silencioso: el indicador se reintenta en el próximo ciclo.
+    } finally {
+      _loadingUnread = false;
+    }
+  }
+
   @override
   void dispose() {
+    _unreadTimer?.cancel();
     ProfileService.current.removeListener(_onProfileChanged);
     SocialService.groupsChanged.removeListener(_onGroupsChanged);
     if (widget._serviceOverride == null) _social.dispose();
@@ -136,10 +190,27 @@ class _MainShellState extends State<MainShell> {
     const ScheduleScreen(),
     const AttendanceScreen(),
     const GradeCalculatorScreen(),
-    AllNotesScreen(key: _notesKey),
+    AllNotesScreen(
+      key: _notesKey,
+      onOpenProfile: _openProfileDrive,
+      driveStatusChecker: _profiles.getDriveStatus,
+    ),
     const GroupsScreen(),
-    ProfileScreen(userData: widget.userData),
+    ProfileScreen(
+      userData: widget.userData,
+      scrollToDrive: _profileScrollToDrive,
+    ),
+    const FollowedScreen(),
   ];
+
+  /// «Ir a mi perfil» desde la sugerencia de Drive en Apuntes: abre el perfil
+  /// y lo desplaza hasta la tarjeta «Google Drive», donde está «Conectar Drive».
+  void _openProfileDrive() {
+    setState(() {
+      _profileScrollToDrive = true;
+      _selectedIndex = _profileIndex;
+    });
+  }
 
   List<_NavItem> get _navItems => const <_NavItem>[
     _NavItem(
@@ -186,6 +257,11 @@ class _MainShellState extends State<MainShell> {
       label: 'Perfil de Usuario',
       section: 'ESPACIO DE TRABAJO GENERAL',
     ),
+    _NavItem(
+      icon: Icons.person_add_rounded,
+      label: 'Seguidos',
+      section: 'ESPACIO DE TRABAJO GENERAL',
+    ),
   ];
 
   /// Selecciona una sección y cierra el drawer si está abierto.
@@ -194,7 +270,10 @@ class _MainShellState extends State<MainShell> {
     if (scaffold != null && scaffold.isDrawerOpen) {
       Navigator.of(context).pop();
     }
-    setState(() => _selectedIndex = index);
+    setState(() {
+      _profileScrollToDrive = false;
+      _selectedIndex = index;
+    });
   }
 
   /// Acción contextual "Nueva Nota" (solo pestaña de Notas): delega el diálogo
@@ -227,13 +306,14 @@ class _MainShellState extends State<MainShell> {
 
   PreferredSizeWidget _buildAppBar({required bool isDesktop}) {
     return AppBar(
-      backgroundColor: AppColors.surface,
+      backgroundColor: AppColors.appBarBg,
+      foregroundColor: AppColors.appBarFg,
       elevation: 0,
       scrolledUnderElevation: 0,
-      shape: const Border(
+      shape: Border(
         bottom: BorderSide(
-          color: AppColors.border,
-          width: AppDimens.borderWidth,
+          color: AppColors.appBarBorder,
+          width: AppThemeController.isUct ? 3 : AppDimens.borderWidth,
         ),
       ),
       leading: Builder(
@@ -242,7 +322,7 @@ class _MainShellState extends State<MainShell> {
             isDesktop
                 ? (_isCollapsed ? Icons.menu_rounded : Icons.menu_open_rounded)
                 : Icons.menu_rounded,
-            color: AppColors.text,
+            color: AppColors.appBarFg,
           ),
           tooltip: isDesktop
               ? (_isCollapsed ? 'Expandir menú' : 'Colapsar menú')
@@ -264,23 +344,23 @@ class _MainShellState extends State<MainShell> {
             decoration: BoxDecoration(
               color: AppColors.accentYellow,
               border: Border.all(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidth,
               ),
               borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
             ),
-            child: const Center(
+            child: Center(
               child: Text(
                 'S',
                 style: TextStyle(
                   fontWeight: FontWeight.w900,
-                  color: AppColors.text,
+                  color: AppColors.onAccent,
                 ),
               ),
             ),
           ),
           const SizedBox(width: AppDimens.spaceSm),
-          const Flexible(
+          Flexible(
             child: Text(
               'SIGMA ACADEMY',
               maxLines: 1,
@@ -288,14 +368,43 @@ class _MainShellState extends State<MainShell> {
               style: TextStyle(
                 fontWeight: FontWeight.w900,
                 fontSize: 16,
-                color: AppColors.text,
+                color: AppColors.appBarFg,
                 letterSpacing: -0.5,
               ),
             ),
           ),
         ],
       ),
-      actions: const <Widget>[SizedBox(width: AppDimens.spaceSm)],
+      actions: <Widget>[
+        // Interruptor de paleta (neobrutalista <-> UCT), como un modo oscuro.
+        const ColorModeToggle(),
+        IconButton(
+          tooltip: 'Notificaciones',
+          onPressed: _openInbox,
+          icon: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Icon(Icons.notifications_rounded, color: AppColors.appBarFg),
+              if (_unreadNotifications > 0)
+                Positioned(
+                  right: -3,
+                  top: -2,
+                  child: Container(
+                    key: const ValueKey('notifications-unread-dot'),
+                    width: 9,
+                    height: 9,
+                    decoration: BoxDecoration(
+                      color: AppColors.error,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: AppColors.appBarBg, width: 1.5),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(width: AppDimens.spaceSm),
+      ],
     );
   }
 
@@ -314,11 +423,11 @@ class _MainShellState extends State<MainShell> {
           duration: AppMotion.expand,
           curve: AppMotion.shell,
           width: width,
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             color: AppColors.surface,
             border: Border(
               right: BorderSide(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidth,
               ),
             ),
@@ -343,8 +452,8 @@ class _MainShellState extends State<MainShell> {
     return Drawer(
       elevation: 0,
       backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-        side: BorderSide(color: AppColors.border, width: AppDimens.borderWidth),
+      shape: RoundedRectangleBorder(
+        side: BorderSide(color: AppColors.outline, width: AppDimens.borderWidth),
       ),
       child: SafeArea(child: _buildSidebarContent(isCollapsed: false)),
     );
@@ -377,7 +486,7 @@ class _MainShellState extends State<MainShell> {
                       ),
                       child: Text(
                         item.section,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w900,
                           color: AppColors.muted,
@@ -397,181 +506,13 @@ class _MainShellState extends State<MainShell> {
             },
           ),
         ),
-        _buildGroupsFooter(isCollapsed: isCollapsed),
-        const Divider(
+        Divider(
           color: AppColors.border,
           thickness: AppDimens.borderWidth,
           height: 1,
         ),
         _buildProfileFooter(isCollapsed: isCollapsed),
       ],
-    );
-  }
-
-  // Barra lateral global: grupos del overview.
-  // Ver back/social/internal/handler/http/view_handler.go:29 y model/views.go.
-  Widget _buildGroupsFooter({required bool isCollapsed}) {
-    if (isCollapsed) {
-      final count = _overview?.groupsCount;
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: Center(
-          child: _loadingSidebar
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : InkWell(
-                  onTap: () => _onSelectPage(_groupsIndex),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppColors.accentYellow,
-                      border: Border.all(
-                        color: AppColors.border,
-                        width: AppDimens.borderWidth,
-                      ),
-                      borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-                    ),
-                    child: Text(
-                      '${count ?? '·'}',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w900,
-                        fontSize: 11,
-                      ),
-                    ),
-                  ),
-                ),
-        ),
-      );
-    }
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: AppColors.bg,
-        border: Border.all(
-          color: AppColors.border,
-          width: AppDimens.borderWidth,
-        ),
-        borderRadius: BorderRadius.circular(AppDimens.radius),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'MIS GRUPOS',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0.6,
-                    color: AppColors.muted,
-                  ),
-                ),
-              ),
-              InkWell(
-                onTap: _loadingSidebar ? null : _loadSidebar,
-                child: const Icon(
-                  Icons.refresh_rounded,
-                  size: 14,
-                  color: AppColors.text,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          if (_loadingSidebar)
-            const Center(
-              child: SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            )
-          else if (_sidebarError != null)
-            Text(
-              _sidebarError!,
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: AppColors.mutedStrong,
-              ),
-            )
-          else if (_overview == null || _overview!.sidebarGroups.isEmpty)
-            const Text(
-              'Sin grupos. Crea uno en Grupos.',
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: AppColors.mutedStrong,
-              ),
-            )
-          else ...[
-            Builder(
-              builder: (context) {
-                final o = _overview!;
-                return Text(
-                  '${o.groupsCount} ${o.groupsCount == 1 ? 'grupo' : 'grupos'} · '
-                  '${o.adminGroupsCount} como admin',
-                  style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.text,
-                  ),
-                );
-              },
-            ),
-            const SizedBox(height: 6),
-            for (final g in _overview!.sidebarGroups.take(5))
-              InkWell(
-                onTap: () => _onSelectPage(_groupsIndex),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.groups_rounded,
-                        size: 13,
-                        color: AppColors.text,
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          g.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.text,
-                          ),
-                        ),
-                      ),
-                      Text(
-                        g.role,
-                        style: const TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.mutedStrong,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-          ],
-        ],
-      ),
     );
   }
 
@@ -595,22 +536,11 @@ class _MainShellState extends State<MainShell> {
         children: <Widget>[
           Row(
             children: <Widget>[
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: AppColors.accentYellow,
-                  border: Border.all(
-                    color: AppColors.border,
-                    width: AppDimens.borderWidth,
-                  ),
-                  borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
-                ),
-                child: const Icon(
-                  Icons.person_rounded,
-                  size: 18,
-                  color: AppColors.text,
-                ),
+              UserAvatar(
+                name: name ?? 'Mi cuenta',
+                size: 36,
+                photoUrl: profile?.photoThumbUrl ?? profile?.photoUrl,
+                borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
               ),
               if (!isCollapsed) ...<Widget>[
                 const SizedBox(width: AppDimens.spaceSm),
@@ -622,7 +552,7 @@ class _MainShellState extends State<MainShell> {
                         name ?? 'Mi cuenta',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontWeight: FontWeight.w900,
                           fontSize: 12,
                           color: AppColors.text,
@@ -633,7 +563,7 @@ class _MainShellState extends State<MainShell> {
                           second,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontWeight: FontWeight.w600,
                             fontSize: 11,
                             color: AppColors.muted,
@@ -672,6 +602,7 @@ class _SidebarTile extends StatelessWidget {
     required this.isSelected,
     required this.isCollapsed,
     required this.onTap,
+    this.showDot = false,
   });
 
   final IconData icon;
@@ -680,8 +611,12 @@ class _SidebarTile extends StatelessWidget {
   final bool isCollapsed;
   final VoidCallback onTap;
 
+  /// Puntito rojo de "hay notificaciones sin leer" sobre el ícono.
+  final bool showDot;
+
   @override
   Widget build(BuildContext context) {
+    final uct = AppThemeController.isUct;
     final tile = ClickCursor(
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
@@ -694,20 +629,72 @@ class _SidebarTile extends StatelessWidget {
             vertical: 10,
           ),
           decoration: BoxDecoration(
-            color: isSelected ? AppColors.accentYellow : Colors.transparent,
-            border: Border.all(
-              color: isSelected ? AppColors.border : Colors.transparent,
-              width: AppDimens.borderWidth,
-            ),
+            color: isSelected ? AppColors.navSelectedBg : Colors.transparent,
+            // UCT: barra dorada a la izquierda; Sigma: contorno + sombra dura.
+            border: uct
+                ? Border(
+                    left: BorderSide(
+                      color: isSelected
+                          ? AppColors.navIndicator
+                          : Colors.transparent,
+                      width: 4,
+                    ),
+                    // Mismo alto que en Sigma (borde de 2 px invisible).
+                    top: const BorderSide(
+                      color: Colors.transparent,
+                      width: AppDimens.borderWidth,
+                    ),
+                    right: const BorderSide(
+                      color: Colors.transparent,
+                      width: AppDimens.borderWidth,
+                    ),
+                    bottom: const BorderSide(
+                      color: Colors.transparent,
+                      width: AppDimens.borderWidth,
+                    ),
+                  )
+                : Border.all(
+                    color: isSelected ? AppColors.border : Colors.transparent,
+                    width: AppDimens.borderWidth,
+                  ),
             borderRadius: BorderRadius.circular(AppDimens.radius),
-            boxShadow: isSelected ? AppShadows.badge : null,
+            boxShadow: isSelected && !uct ? AppShadows.badge : null,
           ),
           child: Row(
             mainAxisAlignment: isCollapsed
                 ? MainAxisAlignment.center
                 : MainAxisAlignment.start,
             children: <Widget>[
-              Icon(icon, size: 20, color: AppColors.text),
+              Stack(
+                clipBehavior: Clip.none,
+                children: <Widget>[
+                  Icon(
+                    icon,
+                    size: 20,
+                    color: isSelected ? AppColors.navSelectedFg : AppColors.text,
+                  ),
+                  if (showDot)
+                    Positioned(
+                      right: -3,
+                      top: -2,
+                      child: Container(
+                        key: const ValueKey('notifications-unread-dot'),
+                        width: 9,
+                        height: 9,
+                        decoration: BoxDecoration(
+                          color: AppColors.error,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: isSelected
+                                ? AppColors.navSelectedBg
+                                : AppColors.surface,
+                            width: 1.5,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
               if (!isCollapsed) ...<Widget>[
                 const SizedBox(width: AppDimens.spaceSm),
                 Expanded(
@@ -720,7 +707,9 @@ class _SidebarTile extends StatelessWidget {
                       fontWeight: isSelected
                           ? FontWeight.w900
                           : FontWeight.w700,
-                      color: AppColors.text,
+                      color: isSelected
+                          ? AppColors.navSelectedFg
+                          : AppColors.text,
                     ),
                   ),
                 ),

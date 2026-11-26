@@ -4,15 +4,23 @@
 // - back/infacadem/internal/model/{curriculum,subject,schedule}.go (tags json)
 // - back/infacadem/internal/handler/http/present.go (horas "15:04:05")
 class AcademicCurriculum {
-  AcademicCurriculum({required this.id, required this.name});
+  AcademicCurriculum({
+    required this.id,
+    required this.name,
+    this.semesterCount = 8,
+  });
 
   final String id;
   final String name;
+  final int semesterCount;
 
   factory AcademicCurriculum.fromJson(Map<String, dynamic> j) {
+    final raw = j['semester_count'];
+    final parsed = raw is int ? raw : int.tryParse('$raw') ?? 8;
     return AcademicCurriculum(
       id: (j['id'] as String?) ?? '',
       name: (j['name'] as String?) ?? '',
+      semesterCount: parsed < 1 ? 8 : (parsed > 20 ? 20 : parsed),
     );
   }
 }
@@ -99,6 +107,7 @@ class AcademicScheduleSlot {
     required this.startTime,
     required this.endTime,
     this.modality,
+    this.room,
   });
 
   final String id;
@@ -111,6 +120,7 @@ class AcademicScheduleSlot {
   final String startTime;
   final String endTime;
   final String? modality;
+  final String? room;
 
   factory AcademicScheduleSlot.fromJson(Map<String, dynamic> j) {
     int day = 0;
@@ -127,6 +137,7 @@ class AcademicScheduleSlot {
       startTime: (j['start_time'] as String?) ?? '',
       endTime: (j['end_time'] as String?) ?? '',
       modality: _opt(j, 'modality'),
+      room: _opt(j, 'room'),
     );
   }
 

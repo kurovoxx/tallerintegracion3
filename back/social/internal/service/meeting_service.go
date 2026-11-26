@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/repository/sqlc"
 )
 
@@ -21,6 +23,8 @@ var (
 	ErrInvalidAttendeeEmail = errors.New("invalid attendee email")
 	// ErrTooManyAttendees acota la lista (Google acepta cientos; 50 es margen sano).
 	ErrTooManyAttendees = errors.New("too many attendees: max 50")
+	// ErrInvalidMeetingLink exige http/https válido en el enlace/sala (opcional).
+	ErrInvalidMeetingLink = errors.New("invalid link: must be an http(s) URL (max 1000 characters)")
 )
 
 // maxAttendees acota los invitados por reunión.
@@ -71,6 +75,8 @@ func (NoopMeetingCreatedNotifier) OnMeetingCreated(ctx context.Context, meeting 
 type MeetingRepo interface {
 	GetGroupByID(ctx context.Context, id pgtype.UUID) (sqlc.SocialGroup, error)
 	IsMember(ctx context.Context, groupID, userID pgtype.UUID) (bool, error)
+	GetMemberRole(ctx context.Context, groupID, userID pgtype.UUID) (string, error)
+	GetMemberPermissions(ctx context.Context, groupID, userID pgtype.UUID) (model.MemberPermissions, error)
 	CreateMeetingWithNotifications(ctx context.Context, arg sqlc.CreateMeetingParams, attendeeEmails []string) (sqlc.SocialMeeting, error)
 	ListMeetingsByGroup(ctx context.Context, groupID pgtype.UUID) ([]sqlc.SocialMeeting, error)
 }
@@ -139,6 +145,30 @@ func parseMeetingDescription(description *string) pgtype.Text {
 	return d
 }
 
+// parseMeetingLink valida y normaliza el enlace/sala de la reunión (opcional).
+// Solo se aceptan URLs http/https; vacío se guarda como NULL.
+func parseMeetingLink(link *string) (pgtype.Text, error) {
+	var l pgtype.Text
+	if link == nil {
+		return l, nil
+	}
+	trimmed := strings.TrimSpace(*link)
+	if trimmed == "" {
+		return l, nil
+	}
+	if len(trimmed) > 1000 {
+		return l, ErrInvalidMeetingLink
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return l, ErrInvalidMeetingLink
+	}
+	if err := l.Scan(trimmed); err != nil {
+		return l, ErrInvalidMeetingLink
+	}
+	return l, nil
+}
+
 func (s *MeetingService) requireMeetingGroup(ctx context.Context, gid pgtype.UUID) error {
 	if _, err := s.repo.GetGroupByID(ctx, gid); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -163,7 +193,7 @@ func (s *MeetingService) requireMembership(ctx context.Context, gid, uid pgtype.
 // CreateMeeting agenda una reunión: creación local síncrona + notificaciones
 // in-app a los miembros (excepto el creador). Las integraciones externas se
 // disparan en background y son best-effort.
-func (s *MeetingService) CreateMeeting(ctx context.Context, groupID, userID, title string, description *string, scheduledAt string, notifyDiscord *bool, attendees []string) (sqlc.SocialMeeting, error) {
+func (s *MeetingService) CreateMeeting(ctx context.Context, groupID, userID, title string, description *string, link *string, scheduledAt string, notifyDiscord *bool, attendees []string) (sqlc.SocialMeeting, error) {
 	title, err := validateTitle(title)
 	if err != nil {
 		return sqlc.SocialMeeting{}, err
@@ -173,6 +203,10 @@ func (s *MeetingService) CreateMeeting(ctx context.Context, groupID, userID, tit
 		return sqlc.SocialMeeting{}, err
 	}
 	emails, err := parseAttendees(attendees)
+	if err != nil {
+		return sqlc.SocialMeeting{}, err
+	}
+	meetingLink, err := parseMeetingLink(link)
 	if err != nil {
 		return sqlc.SocialMeeting{}, err
 	}
@@ -193,14 +227,33 @@ func (s *MeetingService) CreateMeeting(ctx context.Context, groupID, userID, tit
 	if err := s.requireMeetingGroup(ctx, gid); err != nil {
 		return sqlc.SocialMeeting{}, err
 	}
-	if err := s.requireMembership(ctx, gid, uid); err != nil {
+	// Política: agendan los admins y los miembros a quienes un admin delegó
+	// el permiso can_create_meetings.
+	role, err := s.repo.GetMemberRole(ctx, gid, uid)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return sqlc.SocialMeeting{}, ErrForbidden
+		}
 		return sqlc.SocialMeeting{}, err
+	}
+	if role != model.RoleAdmin {
+		perms, err := s.repo.GetMemberPermissions(ctx, gid, uid)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return sqlc.SocialMeeting{}, ErrForbidden
+			}
+			return sqlc.SocialMeeting{}, err
+		}
+		if !perms.CanCreateMeetings {
+			return sqlc.SocialMeeting{}, ErrForbidden
+		}
 	}
 
 	meeting, err := s.repo.CreateMeetingWithNotifications(ctx, sqlc.CreateMeetingParams{
 		GroupID:         gid,
 		Title:           title,
 		Description:     parseMeetingDescription(description),
+		Link:            meetingLink,
 		ScheduledAt:     scheduled,
 		CreatedByUserID: uid,
 		NotifyDiscord:   notify,

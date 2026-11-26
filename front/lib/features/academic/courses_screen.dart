@@ -29,6 +29,48 @@ const List<List<String>> _kScheduleBlocks = [
 
 String _blockLabel(List<String> block) => '${block[0]}–${block[1]}';
 
+String? _realRoom(String? raw) {
+  final value = raw?.trim();
+  if (value == null || value.isEmpty || value.toLowerCase() == 'por asignar') {
+    return null;
+  }
+  return value;
+}
+
+/// Primera sala definida en el resultado del formulario de curso.
+String? _firstScheduleRoom(Map<String, dynamic> result) {
+  final raw = result['schedule_rooms'];
+  if (raw is Map) {
+    for (final value in raw.values) {
+      final room = _realRoom(value as String?);
+      if (room != null) return room;
+    }
+  }
+  return _realRoom(result['room'] as String?);
+}
+
+class _ScheduleEntry {
+  const _ScheduleEntry({required this.label, this.room});
+
+  final String label;
+  final String? room;
+}
+
+/// Horario individual que se desea persistir al editar una materia.
+class _ScheduleDraftRoom {
+  const _ScheduleDraftRoom({
+    required this.day,
+    required this.start,
+    required this.end,
+    this.room,
+  });
+
+  final int day;
+  final String start;
+  final String end;
+  final String? room;
+}
+
 class CoursesScreen extends StatefulWidget {
   const CoursesScreen({super.key});
 
@@ -209,8 +251,11 @@ class _CoursesScreenState extends State<CoursesScreen> {
   void _openDetail(Map<String, dynamic> course) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            CourseDetailScreen(course: course, onRefresh: _refreshCourse),
+        builder: (_) => CourseDetailScreen(
+          course: course,
+          onRefresh: _refreshCourse,
+          onEdit: _showEditCourseDialog,
+        ),
       ),
     );
   }
@@ -227,7 +272,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
   Future<void> _showCreateCourseDialog() async {
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (_) => const _CreateCourseDialog(),
+      builder: (_) => const _CourseDialog(),
     );
 
     if (result == null || !mounted) return;
@@ -254,7 +299,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
     });
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
+      SnackBar(
         content: Text('Curso creado correctamente'),
         backgroundColor: AppColors.border,
       ),
@@ -267,6 +312,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
   /// duplicar: el fan-out verifica por GET antes de reintentar).
   Future<void> _createCourseBackend(Map<String, dynamic> result) async {
     final messenger = ScaffoldMessenger.of(context);
+    final courseRoom = _realRoom(result['room'] as String?);
     String subjectId;
     try {
       subjectId = await _academicApi.createSubject(
@@ -274,7 +320,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
         name: (result['name'] as String?) ?? '',
         code: result['code'] as String?,
         professor: result['professor'] as String?,
-        room: result['room'] as String?,
+        room: courseRoom,
         credits: result['credits'] as int?,
         status: (result['status'] as String?) ?? kSubjectPending,
         semester: 6,
@@ -292,6 +338,10 @@ class _CoursesScreenState extends State<CoursesScreen> {
 
     final failedDays = <String>[];
     final scheduleText = (result['schedule'] as String?) ?? '';
+    final rawRooms = result['schedule_rooms'];
+    final scheduleRooms = rawRooms is Map
+        ? Map<String, String?>.from(rawRooms)
+        : const <String, String?>{};
     if (scheduleText.trim().isNotEmpty && scheduleText != 'Por definir') {
       for (final entry in _splitScheduleEntries(scheduleText)) {
         List<ScheduleDraft> drafts;
@@ -302,11 +352,13 @@ class _CoursesScreenState extends State<CoursesScreen> {
           continue;
         }
         if (drafts.isEmpty) continue;
+        final entryRoom = _realRoom(scheduleRooms[entry.trim()]);
         final res = await _academicApi.createSchedulesFanOut(
           subjectId: subjectId,
           days: drafts.map((d) => d.dayOfWeek).toList(),
           startTime: drafts.first.startTime,
           endTime: drafts.first.endTime,
+          room: entryRoom ?? courseRoom,
         );
         for (final day in res.failed.keys) {
           failedDays.add(dayNumberToLabel(day));
@@ -341,6 +393,238 @@ class _CoursesScreenState extends State<CoursesScreen> {
         backgroundColor: AppColors.border,
       ),
     );
+  }
+
+  /// Mismo formulario que el alta, precargado con los datos del curso.
+  Future<void> _showEditCourseDialog(Map<String, dynamic> course) async {
+    final entries = await _initialScheduleEntries(course);
+    if (!mounted) return;
+
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (_) =>
+          _CourseDialog(initialCourse: course, initialScheduleEntries: entries),
+    );
+    if (result == null || !mounted) return;
+
+    final id = course['id'] as String?;
+    if (id == null || id.isEmpty) return;
+
+    if (_backendMode) {
+      await _updateCourseBackend(id, result);
+      return;
+    }
+
+    final firstRoom = _firstScheduleRoom(result);
+    CoursesService.instance.updateCourse(id, {
+      'name': result['name'],
+      'code': result['code'],
+      'credits': result['credits'],
+      'status': result['status'],
+      'professor': result['professor'],
+      'schedule': result['schedule'],
+      'room': firstRoom ?? 'Por asignar',
+      'progress': _progressForStatus(result['status'] as String),
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Curso actualizado correctamente'),
+        backgroundColor: AppColors.border,
+      ),
+    );
+  }
+
+  int _progressForStatus(String status) {
+    if (status == kSubjectApproved) return 100;
+    if (status == kSubjectPending) return 0;
+    return 15;
+  }
+
+  /// Precarga el horario: desde la API si hay sesión (conserva salas por
+  /// bloque) o desde el texto del curso en modo local.
+  Future<List<_ScheduleEntry>> _initialScheduleEntries(
+    Map<String, dynamic> course,
+  ) async {
+    final subjectId = course['id'] as String?;
+    if (_backendMode && subjectId != null && subjectId.isNotEmpty) {
+      try {
+        final slots = await _academicApi.listSchedules(subjectId);
+        return _scheduleEntriesFromSlots(
+          slots,
+          _realRoom(course['room'] as String?),
+        );
+      } on AcademicApiException {
+        // Si falla, se usa el texto que ya muestra el detalle.
+      }
+    }
+    return _scheduleEntriesFromCourse(course);
+  }
+
+  List<_ScheduleEntry> _scheduleEntriesFromCourse(Map<String, dynamic> course) {
+    final text = (course['schedule'] as String?)?.trim() ?? '';
+    if (text.isEmpty || text == 'Por definir') return const [];
+    final room = _realRoom(course['room'] as String?);
+    return _splitScheduleEntries(text)
+        .map((label) => _ScheduleEntry(label: label, room: room))
+        .toList();
+  }
+
+  List<_ScheduleEntry> _scheduleEntriesFromSlots(
+    List<AcademicScheduleSlot> slots,
+    String? fallbackRoom,
+  ) {
+    final daysByKey = <String, Set<int>>{};
+    final blockByKey = <String, String>{};
+    final roomByKey = <String, String?>{};
+    for (final slot in slots) {
+      final start = hhMmToMinutes(slot.startTime);
+      final end = hhMmToMinutes(slot.endTime);
+      if (start == null || end == null || end <= start) continue;
+      final room = _realRoom(slot.room) ?? fallbackRoom;
+      final block = '${minutesToHhMm(start)}–${minutesToHhMm(end)}';
+      final key = '$block|${room?.toLowerCase() ?? ''}';
+      daysByKey.putIfAbsent(key, () => <int>{}).add(slot.dayOfWeek);
+      blockByKey[key] = block;
+      roomByKey[key] = room;
+    }
+    final keys = daysByKey.keys.toList()
+      ..sort((a, b) => blockByKey[a]!.compareTo(blockByKey[b]!));
+    return keys.map((key) {
+      final days = daysByKey[key]!.toList()
+        ..sort((a, b) => (a == 0 ? 7 : a).compareTo(b == 0 ? 7 : b));
+      return _ScheduleEntry(
+        label: '${days.map(dayNumberToLabel).join(' / ')} · ${blockByKey[key]}',
+        room: roomByKey[key],
+      );
+    }).toList();
+  }
+
+  /// Actualiza la materia y sincroniza sus horarios (la API no tiene
+  /// PATCH de schedule: se borran los que sobran y se crean los nuevos).
+  Future<void> _updateCourseBackend(
+    String subjectId,
+    Map<String, dynamic> result,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final firstRoom = _firstScheduleRoom(result);
+    try {
+      await _academicApi.patchSubject(subjectId, {
+        'name': result['name'],
+        'code': result['code'],
+        'professor': result['professor'] == 'Por asignar'
+            ? ''
+            : result['professor'],
+        'room': firstRoom ?? '',
+        'credits': result['credits'],
+        'status': result['status'],
+      });
+    } on AcademicApiException catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('No se pudo actualizar el curso: ${e.message}'),
+          backgroundColor: AppColors.border,
+        ),
+      );
+      return;
+    }
+
+    final failed = await _syncSchedules(subjectId, result);
+    if (!mounted) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          failed.isEmpty
+              ? 'Curso actualizado correctamente'
+              : 'Curso actualizado, pero fallaron horarios: ${failed.join(', ')}. Verifica y reintenta.',
+        ),
+        backgroundColor: AppColors.border,
+      ),
+    );
+  }
+
+  Future<List<String>> _syncSchedules(
+    String subjectId,
+    Map<String, dynamic> result,
+  ) async {
+    final failed = <String>[];
+    List<AcademicScheduleSlot> current;
+    try {
+      current = await _academicApi.listSchedules(subjectId);
+    } on AcademicApiException catch (e) {
+      return ['no se pudieron leer los horarios (${e.message})'];
+    }
+
+    final scheduleText = (result['schedule'] as String?) ?? '';
+    final rawRooms = result['schedule_rooms'];
+    final scheduleRooms = rawRooms is Map
+        ? Map<String, String?>.from(rawRooms)
+        : const <String, String?>{};
+
+    final desired = <String, _ScheduleDraftRoom>{};
+    if (scheduleText.trim().isNotEmpty && scheduleText != 'Por definir') {
+      for (final entry in _splitScheduleEntries(scheduleText)) {
+        List<ScheduleDraft> drafts;
+        try {
+          drafts = expandScheduleEntry(entry);
+        } on FormatException {
+          failed.add(entry);
+          continue;
+        }
+        final room = _realRoom(scheduleRooms[entry.trim()]);
+        for (final draft in drafts) {
+          final start = _normTime(draft.startTime);
+          final end = _normTime(draft.endTime);
+          final key =
+              '${draft.dayOfWeek}|$start|$end|${room?.toLowerCase() ?? ''}';
+          desired[key] = _ScheduleDraftRoom(
+            day: draft.dayOfWeek,
+            start: start,
+            end: end,
+            room: room,
+          );
+        }
+      }
+    }
+
+    final currentKeys = <String>{};
+    for (final slot in current) {
+      final key =
+          '${slot.dayOfWeek}|${_normTime(slot.startTime)}|${_normTime(slot.endTime)}|${slot.room?.trim().toLowerCase() ?? ''}';
+      currentKeys.add(key);
+      if (desired.containsKey(key)) continue;
+      try {
+        await _academicApi.deleteSchedule(slot.id);
+      } on AcademicApiException catch (e) {
+        failed.add(
+          'eliminar ${dayNumberToLabel(slot.dayOfWeek)} (${e.message})',
+        );
+      }
+    }
+
+    for (final entry in desired.entries) {
+      if (currentKeys.contains(entry.key)) continue;
+      final draft = entry.value;
+      try {
+        await _academicApi.createSchedule(
+          subjectId: subjectId,
+          dayOfWeek: draft.day,
+          startTime: draft.start,
+          endTime: draft.end,
+          room: draft.room,
+        );
+      } on AcademicApiException catch (e) {
+        failed.add('${dayNumberToLabel(draft.day)} (${e.message})');
+      }
+    }
+
+    return failed;
+  }
+
+  String _normTime(String raw) {
+    final minutes = hhMmToMinutes(raw);
+    return minutes == null ? raw.trim() : minutesToHhMm(minutes);
   }
 
   @override
@@ -392,14 +676,14 @@ class _CoursesScreenState extends State<CoursesScreen> {
         Text(
           'MIS CURSOS',
           style: TextStyle(
-            color: AppColors.text,
+            color: AppColors.title,
             fontWeight: FontWeight.w900,
             fontSize: context.isExpanded ? 28 : 22,
             letterSpacing: -0.6,
           ),
         ),
         const SizedBox(height: AppDimens.spaceXs),
-        const Text(
+        Text(
           'Planifica y visualiza tu progreso académico',
           style: TextStyle(
             color: AppColors.mutedStrong,
@@ -486,7 +770,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
 
     final search = TextField(
       onChanged: (v) => setState(() => _searchQuery = v),
-      style: const TextStyle(
+      style: TextStyle(
         fontWeight: FontWeight.w700,
         fontSize: 13,
         color: AppColors.text,
@@ -494,7 +778,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
       textInputAction: TextInputAction.search,
       decoration: appInputDecoration('Buscar por nombre, código o profesor…')
           .copyWith(
-            prefixIcon: const Icon(
+            prefixIcon: Icon(
               Icons.search_rounded,
               color: AppColors.muted,
               size: 20,
@@ -509,7 +793,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
       decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -518,12 +802,12 @@ class _CoursesScreenState extends State<CoursesScreen> {
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
           value: _statusFilter,
-          icon: const Icon(
+          icon: Icon(
             Icons.expand_more_rounded,
             size: 20,
             color: AppColors.text,
           ),
-          style: const TextStyle(
+          style: TextStyle(
             fontWeight: FontWeight.w800,
             fontSize: 13,
             color: AppColors.text,
@@ -630,7 +914,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
       decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -638,9 +922,9 @@ class _CoursesScreenState extends State<CoursesScreen> {
       ),
       child: Column(
         children: [
-          const Icon(Icons.menu_book_rounded, size: 40, color: AppColors.muted),
+          Icon(Icons.menu_book_rounded, size: 40, color: AppColors.muted),
           const SizedBox(height: AppDimens.spaceMd),
-          const Text(
+          Text(
             'AÚN NO TIENES CURSOS',
             textAlign: TextAlign.center,
             style: TextStyle(
@@ -651,7 +935,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
             ),
           ),
           const SizedBox(height: AppDimens.spaceXs),
-          const Text(
+          Text(
             'Agrega tu primer curso para ver unidades, materiales, evaluaciones y asistencia.',
             textAlign: TextAlign.center,
             style: TextStyle(
@@ -679,20 +963,20 @@ class _CoursesScreenState extends State<CoursesScreen> {
       decoration: BoxDecoration(
         color: AppColors.surfaceLow,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
       ),
       child: Column(
         children: [
-          const Icon(
+          Icon(
             Icons.search_off_rounded,
             size: 36,
             color: AppColors.muted,
           ),
           const SizedBox(height: AppDimens.spaceSm),
-          const Text(
+          Text(
             'SIN RESULTADOS',
             style: TextStyle(
               fontWeight: FontWeight.w900,
@@ -707,7 +991,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
                 ? 'No hay cursos que coincidan con los filtros actuales.'
                 : 'No hay cursos para mostrar.',
             textAlign: TextAlign.center,
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w700,
               fontSize: 12,
               color: AppColors.mutedStrong,
@@ -749,7 +1033,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Row(
+            Row(
               children: [
                 SizedBox(
                   width: 18,
@@ -784,7 +1068,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
                     decoration: BoxDecoration(
                       color: AppColors.surfaceLow,
                       border: Border.all(
-                        color: AppColors.border,
+                        color: AppColors.outline,
                         width: AppDimens.borderWidth,
                       ),
                       borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -809,7 +1093,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
           decoration: BoxDecoration(
             color: AppColors.surface,
             border: Border.all(
-              color: AppColors.border,
+              color: AppColors.outline,
               width: AppDimens.borderWidth,
             ),
             borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -818,13 +1102,13 @@ class _CoursesScreenState extends State<CoursesScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
+              Icon(
                 Icons.error_outline_rounded,
                 size: 48,
                 color: AppColors.text,
               ),
               const SizedBox(height: AppDimens.spaceMd),
-              const Text(
+              Text(
                 'NO SE PUDIERON CARGAR TUS CURSOS',
                 textAlign: TextAlign.center,
                 style: TextStyle(
@@ -834,7 +1118,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
                 ),
               ),
               const SizedBox(height: AppDimens.spaceSm),
-              const Text(
+              Text(
                 'Intenta nuevamente en unos segundos.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
@@ -865,10 +1149,12 @@ class CourseDetailScreen extends StatefulWidget {
     super.key,
     required this.course,
     required this.onRefresh,
+    this.onEdit,
   });
 
   final Map<String, dynamic> course;
   final Future<Map<String, dynamic>?> Function(String id) onRefresh;
+  final Future<void> Function(Map<String, dynamic> course)? onEdit;
 
   @override
   State<CourseDetailScreen> createState() => _CourseDetailScreenState();
@@ -887,6 +1173,14 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
       if (updated != null) _course = updated;
       _refreshing = false;
     });
+  }
+
+  Future<void> _edit() async {
+    final onEdit = widget.onEdit;
+    if (onEdit == null) return;
+    await onEdit(_course);
+    if (!mounted) return;
+    await _refresh();
   }
 
   @override
@@ -936,7 +1230,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                     decoration: BoxDecoration(
                       color: AppColors.surface,
                       border: Border.all(
-                        color: AppColors.border,
+                        color: AppColors.outline,
                         width: AppDimens.borderWidthThick,
                       ),
                       borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -954,7 +1248,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                                 children: [
                                   Text(
                                     '${course['code']} · ${course['credits']} CRÉDITOS',
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       fontWeight: FontWeight.w900,
                                       fontSize: 11,
                                       color: AppColors.mutedStrong,
@@ -1011,6 +1305,18 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                         ),
                         const SizedBox(height: AppDimens.spaceLg),
                         _CourseProgress(progress: progress),
+                        if (widget.onEdit != null) ...[
+                          const SizedBox(height: AppDimens.spaceLg),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: NeobrutalistButton(
+                              label: 'Editar curso',
+                              icon: Icons.edit_rounded,
+                              variant: NeobrutalistButtonVariant.secondary,
+                              onPressed: _refreshing ? null : _edit,
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -1039,7 +1345,7 @@ class _CourseProgress extends StatelessWidget {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Text(
+            Text(
               'AVANCE DEL CURSO',
               style: TextStyle(
                 fontWeight: FontWeight.w900,
@@ -1050,7 +1356,7 @@ class _CourseProgress extends StatelessWidget {
             ),
             Text(
               '$progress%',
-              style: const TextStyle(
+              style: TextStyle(
                 fontWeight: FontWeight.w900,
                 fontSize: 12,
                 color: AppColors.text,
@@ -1064,7 +1370,7 @@ class _CourseProgress extends StatelessWidget {
           decoration: BoxDecoration(
             color: AppColors.surfaceLow,
             border: Border.all(
-              color: AppColors.border,
+              color: AppColors.outline,
               width: AppDimens.borderWidth,
             ),
           ),
@@ -1121,7 +1427,7 @@ class _CourseSections extends StatelessWidget {
           (
             icon: Icons.bar_chart_rounded,
             label: 'Ver Evaluaciones',
-            variant: NeobrutalistButtonVariant.accent,
+            variant: NeobrutalistButtonVariant.secondary,
             builder: (_) =>
                 EvaluationsWindow(subjectId: subjectId, subjectName: name),
           ),
@@ -1136,7 +1442,7 @@ class _CourseSections extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text(
+        Text(
           'SECCIONES DEL CURSO',
           style: TextStyle(
             fontWeight: FontWeight.w900,
@@ -1146,7 +1452,7 @@ class _CourseSections extends StatelessWidget {
           ),
         ),
         const SizedBox(height: AppDimens.spaceXs),
-        const Text(
+        Text(
           'Cada sección se abre en su propia ventana.',
           style: TextStyle(
             fontWeight: FontWeight.w700,
@@ -1228,7 +1534,7 @@ class _CourseCard extends StatelessWidget {
                       (course['name'] as String).toUpperCase(),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w900,
                         fontSize: 14.5,
                         color: AppColors.text,
@@ -1239,7 +1545,7 @@ class _CourseCard extends StatelessWidget {
                     const SizedBox(height: AppDimens.spaceXs),
                     Text(
                       '${course['code']} · ${course['credits']} créditos',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w800,
                         fontSize: 11,
                         color: AppColors.mutedStrong,
@@ -1287,7 +1593,7 @@ class _CourseCard extends StatelessWidget {
             decoration: BoxDecoration(
               color: AppColors.surfaceLow,
               border: Border.all(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidth,
               ),
             ),
@@ -1366,7 +1672,7 @@ class _CourseMeta extends StatelessWidget {
             text,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w700,
               fontSize: 11.5,
               color: AppColors.mutedStrong,
@@ -1403,7 +1709,7 @@ class _DetailMeta extends StatelessWidget {
               const SizedBox(width: AppDimens.spaceXs),
               Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w900,
                   fontSize: 10,
                   letterSpacing: 0.5,
@@ -1415,7 +1721,7 @@ class _DetailMeta extends StatelessWidget {
           const SizedBox(height: AppDimens.spaceXs),
           Text(
             value,
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w800,
               fontSize: 13,
               color: AppColors.text,
@@ -1428,39 +1734,52 @@ class _DetailMeta extends StatelessWidget {
   }
 }
 
-/// Diálogo "CREAR NUEVO CURSO" como StatefulWidget dedicado. Los
+/// Formulario de curso como StatefulWidget dedicado. Se reutiliza para
+/// crear y editar: con [initialCourse] precarga los datos existentes. Los
 /// TextEditingController viven en su State (initState) y se liberan en
 /// dispose(), momento en que la ruta del diálogo ya desmontó sus widgets.
 /// Esto evita el assert de ChangeNotifier '_dependents.isEmpty' que ocurría
 /// al disponer los controladores justo después del pop del showDialog.
-class _CreateCourseDialog extends StatefulWidget {
-  const _CreateCourseDialog();
+class _CourseDialog extends StatefulWidget {
+  const _CourseDialog({
+    this.initialCourse,
+    this.initialScheduleEntries = const [],
+  });
+
+  final Map<String, dynamic>? initialCourse;
+  final List<_ScheduleEntry> initialScheduleEntries;
 
   @override
-  State<_CreateCourseDialog> createState() => _CreateCourseDialogState();
+  State<_CourseDialog> createState() => _CourseDialogState();
 }
 
-class _CreateCourseDialogState extends State<_CreateCourseDialog> {
+class _CourseDialogState extends State<_CourseDialog> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _nameCtrl;
   late final TextEditingController _codeCtrl;
   late final TextEditingController _creditsCtrl;
   late final TextEditingController _professorCtrl;
-  late final TextEditingController _scheduleCtrl;
-  late final TextEditingController _roomCtrl;
-  String _status = kSubjectInProgress;
-  // Bloques de horario añadidos, p.ej. 'Lun / Mié · 10:00–11:30'.
-  final List<String> _scheduleEntries = [];
+  late String _status;
+  // Bloques de horario añadidos, p.ej. 'Lun / Mié · 10:00–11:30', con su
+  // sala opcional.
+  late final List<_ScheduleEntry> _scheduleEntries;
+
+  bool get _isEditing => widget.initialCourse != null;
 
   @override
   void initState() {
     super.initState();
-    _nameCtrl = TextEditingController();
-    _codeCtrl = TextEditingController();
-    _creditsCtrl = TextEditingController(text: '5');
-    _professorCtrl = TextEditingController();
-    _scheduleCtrl = TextEditingController();
-    _roomCtrl = TextEditingController();
+    final course = widget.initialCourse;
+    final credits = course?['credits'];
+    final professor = course?['professor'] as String?;
+    _nameCtrl = TextEditingController(text: (course?['name'] as String?) ?? '');
+    _codeCtrl = TextEditingController(text: (course?['code'] as String?) ?? '');
+    _creditsCtrl = TextEditingController(text: '${credits ?? 5}');
+    _professorCtrl = TextEditingController(
+      text: professor == null || professor == 'Por asignar' ? '' : professor,
+    );
+    _status = (course?['status'] as String?) ?? kSubjectInProgress;
+    _scheduleEntries = List<_ScheduleEntry>.of(widget.initialScheduleEntries);
   }
 
   @override
@@ -1469,8 +1788,6 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
     _codeCtrl.dispose();
     _creditsCtrl.dispose();
     _professorCtrl.dispose();
-    _scheduleCtrl.dispose();
-    _roomCtrl.dispose();
     super.dispose();
   }
 
@@ -1484,34 +1801,29 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
       'professor': _professorCtrl.text.trim().isEmpty
           ? 'Por asignar'
           : _professorCtrl.text.trim(),
-      'schedule': _scheduleCtrl.text.trim().isEmpty
+      'schedule': _scheduleEntries.isEmpty
           ? 'Por definir'
-          : _scheduleCtrl.text.trim(),
-      'room': _roomCtrl.text.trim().isEmpty
-          ? 'Por asignar'
-          : _roomCtrl.text.trim(),
+          : _scheduleEntries.map((e) => e.label).join(' · '),
+      'schedule_rooms': <String, String?>{
+        for (final entry in _scheduleEntries) entry.label: entry.room,
+      },
+      'room': 'Por asignar',
     });
-  }
-
-  /// Sincroniza el campo HORARIO con los bloques añadidos.
-  void _syncScheduleText() {
-    _scheduleCtrl.text = _scheduleEntries.join(' · ');
   }
 
   void _removeScheduleEntry(int index) {
     setState(() {
       _scheduleEntries.removeAt(index);
-      _syncScheduleText();
     });
   }
 
   /// Abre el popup compacto de horario (días + bloque) que devuelve la
   /// lista final de entradas añadidas.
   Future<void> _openSchedulePicker() async {
-    final result = await showDialog<List<String>>(
+    final result = await showDialog<List<_ScheduleEntry>>(
       context: context,
       builder: (_) => _SchedulePickerDialog(
-        initialEntries: List<String>.of(_scheduleEntries),
+        initialEntries: List<_ScheduleEntry>.of(_scheduleEntries),
       ),
     );
     if (result == null) return;
@@ -1519,7 +1831,6 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
       _scheduleEntries
         ..clear()
         ..addAll(result);
-      _syncScheduleText();
     });
   }
 
@@ -1531,10 +1842,10 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
         backgroundColor: AppColors.surface,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppDimens.radius),
-          side: const BorderSide(color: AppColors.border, width: 3),
+          side: BorderSide(color: AppColors.outline, width: 3),
         ),
-        title: const Text(
-          'CREAR NUEVO CURSO',
+        title: Text(
+          _isEditing ? 'EDITAR CURSO' : 'CREAR NUEVO CURSO',
           style: TextStyle(
             fontWeight: FontWeight.w900,
             fontSize: 16,
@@ -1552,7 +1863,7 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                 const SizedBox(height: 6),
                 TextFormField(
                   controller: _nameCtrl,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w700,
                     fontSize: 14,
                     color: AppColors.text,
@@ -1575,7 +1886,7 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                           const SizedBox(height: 6),
                           TextFormField(
                             controller: _codeCtrl,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontWeight: FontWeight.w700,
                               fontSize: 13,
                               color: AppColors.text,
@@ -1606,7 +1917,7 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                               FilteringTextInputFormatter.digitsOnly,
                               LengthLimitingTextInputFormatter(2),
                             ],
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontWeight: FontWeight.w700,
                               fontSize: 13,
                               color: AppColors.text,
@@ -1629,7 +1940,7 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                 const SizedBox(height: 6),
                 TextFormField(
                   controller: _professorCtrl,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w700,
                     fontSize: 13,
                     color: AppColors.text,
@@ -1637,12 +1948,12 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                   decoration: appInputDecoration('Prof. Apellido'),
                 ),
                 const SizedBox(height: 12),
-                // Selector compacto: un botón abre el popup de horario
-                // (días + bloque), agregando entradas tipo 'Lun / Mié · 10:00–11:30'
-                // que se sincronizan con el campo HORARIO (sigue siendo editable).
+                // Selector compacto: un botón abre el popup de horario/sala
+                // (días + bloque), agregando entradas tipo
+                // 'Lun / Mié · 10:00–11:30'.
                 Row(
                   children: [
-                    const Text(
+                    Text(
                       'HORARIO SEMANAL',
                       style: TextStyle(
                         fontWeight: FontWeight.w900,
@@ -1657,10 +1968,9 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                         onTap: () {
                           setState(() {
                             _scheduleEntries.clear();
-                            _syncScheduleText();
                           });
                         },
-                        child: const Text(
+                        child: Text(
                           'LIMPIAR',
                           style: TextStyle(
                             fontWeight: FontWeight.w900,
@@ -1673,7 +1983,7 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                 ),
                 const SizedBox(height: 6),
                 NeobrutalistButton(
-                  label: 'SELECCIONAR HORARIO',
+                  label: 'SELECCIONAR HORARIO/SALA',
                   icon: Icons.calendar_month_rounded,
                   variant: NeobrutalistButtonVariant.secondary,
                   expand: true,
@@ -1681,7 +1991,7 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                 ),
                 const SizedBox(height: 8),
                 if (_scheduleEntries.isEmpty)
-                  const Text(
+                  Text(
                     'Elige días y franjas en el popup para armar el horario.',
                     style: TextStyle(
                       fontWeight: FontWeight.w700,
@@ -1696,53 +2006,12 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                     children: [
                       for (var i = 0; i < _scheduleEntries.length; i++)
                         _ScheduleEntryChip(
-                          label: _scheduleEntries[i],
+                          label: _scheduleEntries[i].label,
+                          room: _scheduleEntries[i].room,
                           onDelete: () => _removeScheduleEntry(i),
                         ),
                     ],
                   ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const AppFieldLabel('HORARIO'),
-                          const SizedBox(height: 6),
-                          TextFormField(
-                            controller: _scheduleCtrl,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 13,
-                              color: AppColors.text,
-                            ),
-                            decoration: appInputDecoration('Lun / Mié · 10:00'),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const AppFieldLabel('SALA'),
-                          const SizedBox(height: 6),
-                          TextFormField(
-                            controller: _roomCtrl,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 13,
-                              color: AppColors.text,
-                            ),
-                            decoration: appInputDecoration('CJP11-204'),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
                 const SizedBox(height: 12),
                 const AppFieldLabel('ESTADO'),
                 const SizedBox(height: 6),
@@ -1750,14 +2019,14 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
                   padding: const EdgeInsets.symmetric(horizontal: 10),
                   decoration: BoxDecoration(
                     color: AppColors.bg,
-                    border: Border.all(color: AppColors.border, width: 2),
+                    border: Border.all(color: AppColors.outline, width: 2),
                     borderRadius: BorderRadius.circular(AppDimens.radius),
                   ),
                   child: DropdownButtonHideUnderline(
                     child: DropdownButton<String>(
                       value: _status,
                       isExpanded: true,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w800,
                         fontSize: 13,
                         color: AppColors.text,
@@ -1793,7 +2062,7 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text(
+            child: Text(
               'CANCELAR',
               style: TextStyle(
                 fontWeight: FontWeight.w800,
@@ -1806,14 +2075,14 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.accentYellow,
               foregroundColor: AppColors.text,
-              side: const BorderSide(color: AppColors.border, width: 2),
+              side: BorderSide(color: AppColors.outline, width: 2),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(AppDimens.radius),
               ),
             ),
-            child: const Text(
-              'CREAR RAMO',
-              style: TextStyle(fontWeight: FontWeight.w900),
+            child: Text(
+              _isEditing ? 'GUARDAR CAMBIOS' : 'CREAR RAMO',
+              style: const TextStyle(fontWeight: FontWeight.w900),
             ),
           ),
         ],
@@ -1827,7 +2096,7 @@ class _CreateCourseDialogState extends State<_CreateCourseDialog> {
 /// botón 'AÑADIR BLOQUE' y la lista de bloques ya añadidos. Devuelve la
 /// lista final de entradas cuando se confirma con 'LISTO'.
 class _SchedulePickerDialog extends StatefulWidget {
-  final List<String> initialEntries;
+  final List<_ScheduleEntry> initialEntries;
   const _SchedulePickerDialog({required this.initialEntries});
 
   @override
@@ -1835,24 +2104,27 @@ class _SchedulePickerDialog extends StatefulWidget {
 }
 
 class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
-  late final List<String> _added;
+  late final List<_ScheduleEntry> _added;
   final Set<String> _selectedDays = <String>{};
   String? _selectedBlock;
   late final TextEditingController _manualStartCtrl;
   late final TextEditingController _manualEndCtrl;
+  late final TextEditingController _roomCtrl;
 
   @override
   void initState() {
     super.initState();
-    _added = List<String>.of(widget.initialEntries);
+    _added = List<_ScheduleEntry>.of(widget.initialEntries);
     _manualStartCtrl = TextEditingController();
     _manualEndCtrl = TextEditingController();
+    _roomCtrl = TextEditingController();
   }
 
   @override
   void dispose() {
     _manualStartCtrl.dispose();
     _manualEndCtrl.dispose();
+    _roomCtrl.dispose();
     super.dispose();
   }
 
@@ -1908,11 +2180,14 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
     final preview = _preview;
     if (preview.isEmpty) return;
     setState(() {
-      _added.add(preview);
+      _added.add(
+        _ScheduleEntry(label: preview, room: _realRoom(_roomCtrl.text)),
+      );
       _selectedDays.clear();
       _selectedBlock = null;
       _manualStartCtrl.clear();
       _manualEndCtrl.clear();
+      _roomCtrl.clear();
     });
   }
 
@@ -1928,10 +2203,10 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
         backgroundColor: AppColors.surface,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppDimens.radius),
-          side: const BorderSide(color: AppColors.border, width: 3),
+          side: BorderSide(color: AppColors.outline, width: 3),
         ),
-        title: const Text(
-          'SELECCIONAR HORARIO',
+        title: Text(
+          'SELECCIONAR HORARIO/SALA',
           style: TextStyle(
             fontWeight: FontWeight.w900,
             fontSize: 14,
@@ -1943,7 +2218,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text(
+              Text(
                 'DÍAS',
                 style: TextStyle(
                   fontWeight: FontWeight.w900,
@@ -1974,7 +2249,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                 ],
               ),
               const SizedBox(height: 14),
-              const Text(
+              Text(
                 'BLOQUE / HORA',
                 style: TextStyle(
                   fontWeight: FontWeight.w900,
@@ -1997,7 +2272,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                 ],
               ),
               const SizedBox(height: 10),
-              const Text(
+              Text(
                 'MANUAL (HH:MM)',
                 style: TextStyle(
                   fontWeight: FontWeight.w900,
@@ -2013,7 +2288,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                     child: TextField(
                       controller: _manualStartCtrl,
                       keyboardType: TextInputType.datetime,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w700,
                         fontSize: 13,
                         color: AppColors.text,
@@ -2022,7 +2297,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                       onChanged: (_) => setState(() {}),
                     ),
                   ),
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.symmetric(horizontal: 8),
                     child: Text(
                       '–',
@@ -2037,7 +2312,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                     child: TextField(
                       controller: _manualEndCtrl,
                       keyboardType: TextInputType.datetime,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w700,
                         fontSize: 13,
                         color: AppColors.text,
@@ -2052,13 +2327,34 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                 const SizedBox(height: 6),
                 Text(
                   _manualErrorText()!,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w800,
                     fontSize: 11,
                     color: AppColors.error,
                   ),
                 ),
               ],
+              const SizedBox(height: 10),
+              Text(
+                'SALA DEL BLOQUE (OPCIONAL)',
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 10,
+                  color: AppColors.muted,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              const SizedBox(height: 6),
+              TextField(
+                controller: _roomCtrl,
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                  color: AppColors.text,
+                ),
+                decoration: appInputDecoration('CJP11-204'),
+                onChanged: (_) => setState(() {}),
+              ),
               const SizedBox(height: 14),
               if (_preview.isNotEmpty) ...[
                 Container(
@@ -2068,16 +2364,30 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                   ),
                   decoration: BoxDecoration(
                     color: AppColors.accentYellow,
-                    border: Border.all(color: AppColors.border, width: 2),
+                    border: Border.all(color: AppColors.outline, width: 2),
                     borderRadius: BorderRadius.circular(AppDimens.radius),
                   ),
-                  child: Text(
-                    _preview,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w900,
-                      fontSize: 11,
-                      color: AppColors.text,
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _preview,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          fontSize: 11,
+                          color: AppColors.text,
+                        ),
+                      ),
+                      if (_realRoom(_roomCtrl.text) != null)
+                        Text(
+                          'SALA ${_realRoom(_roomCtrl.text)}',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 10,
+                            color: AppColors.muted,
+                          ),
+                        ),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -2091,7 +2401,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
               ),
               if (_added.isNotEmpty) ...[
                 const SizedBox(height: 14),
-                const Text(
+                Text(
                   'BLOQUES AÑADIDOS',
                   style: TextStyle(
                     fontWeight: FontWeight.w900,
@@ -2107,7 +2417,8 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
                   children: [
                     for (var i = 0; i < _added.length; i++)
                       _ScheduleEntryChip(
-                        label: _added[i],
+                        label: _added[i].label,
+                        room: _added[i].room,
                         onDelete: () => _removeAt(i),
                       ),
                   ],
@@ -2119,7 +2430,7 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text(
+            child: Text(
               'CANCELAR',
               style: TextStyle(
                 fontWeight: FontWeight.w800,
@@ -2131,7 +2442,8 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
             label: 'LISTO',
             icon: Icons.check_rounded,
             variant: NeobrutalistButtonVariant.primary,
-            onPressed: () => Navigator.of(context).pop(List<String>.of(_added)),
+            onPressed: () =>
+                Navigator.of(context).pop(List<_ScheduleEntry>.of(_added)),
           ),
         ],
       ),
@@ -2143,8 +2455,13 @@ class _SchedulePickerDialogState extends State<_SchedulePickerDialog> {
 /// y una 'X' para eliminarla.
 class _ScheduleEntryChip extends StatelessWidget {
   final String label;
+  final String? room;
   final VoidCallback onDelete;
-  const _ScheduleEntryChip({required this.label, required this.onDelete});
+  const _ScheduleEntryChip({
+    required this.label,
+    this.room,
+    required this.onDelete,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -2152,25 +2469,40 @@ class _ScheduleEntryChip extends StatelessWidget {
       padding: const EdgeInsets.only(left: 10, right: 4, top: 6, bottom: 6),
       decoration: BoxDecoration(
         color: AppColors.accentYellow,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radiusChip),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            label,
-            style: const TextStyle(
-              fontWeight: FontWeight.w900,
-              fontSize: 10,
-              color: AppColors.text,
-            ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 10,
+                  color: AppColors.text,
+                ),
+              ),
+              if (_realRoom(room) != null)
+                Text(
+                  'SALA ${_realRoom(room)}',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 9,
+                    color: AppColors.muted,
+                  ),
+                ),
+            ],
           ),
           const SizedBox(width: 4),
           InkWell(
             onTap: onDelete,
             borderRadius: BorderRadius.circular(4),
-            child: const Padding(
+            child: Padding(
               padding: EdgeInsets.all(2),
               child: Icon(Icons.close_rounded, size: 14, color: AppColors.text),
             ),
@@ -2211,7 +2543,7 @@ class _ScheduleDayChip extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(
             color: selected ? AppColors.accentYellow : AppColors.surface,
-            border: Border.all(color: AppColors.border, width: 1.5),
+            border: Border.all(color: AppColors.outline, width: 1.5),
             borderRadius: BorderRadius.circular(AppDimens.radiusChip),
             boxShadow: selected ? null : AppShadows.badge,
           ),

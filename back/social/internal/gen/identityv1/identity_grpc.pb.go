@@ -24,6 +24,7 @@ const (
 	IdentityService_VerifyToken_FullMethodName           = "/identity.v1.IdentityService/VerifyToken"
 	IdentityService_GetOAuthToken_FullMethodName         = "/identity.v1.IdentityService/GetOAuthToken"
 	IdentityService_ReportCalendarRevoked_FullMethodName = "/identity.v1.IdentityService/ReportCalendarRevoked"
+	IdentityService_ResolvePublicProfile_FullMethodName  = "/identity.v1.IdentityService/ResolvePublicProfile"
 )
 
 // IdentityServiceClient is the client API for IdentityService service.
@@ -74,6 +75,11 @@ type IdentityServiceClient interface {
 	// Avisa que Google rechazó el token de Calendar (401/403) para marcar
 	// revoked_at. Idempotente y sin fuga de existencia: sin fila también es OK.
 	ReportCalendarRevoked(ctx context.Context, in *ReportCalendarRevokedRequest, opts ...grpc.CallOption) (*ReportCalendarRevokedResponse, error)
+	// H-05: resuelve identity.users.public_id al UUID interno. Solo para
+	// servicios internos autorizados (x-internal-key); el UUID nunca se expone
+	// en la respuesta HTTP pública de Notes. Formato inválido = InvalidArgument;
+	// inexistente = NotFound; fallo de BD = Internal.
+	ResolvePublicProfile(ctx context.Context, in *ResolvePublicProfileRequest, opts ...grpc.CallOption) (*ResolvePublicProfileResponse, error)
 }
 
 type identityServiceClient struct {
@@ -134,6 +140,16 @@ func (c *identityServiceClient) ReportCalendarRevoked(ctx context.Context, in *R
 	return out, nil
 }
 
+func (c *identityServiceClient) ResolvePublicProfile(ctx context.Context, in *ResolvePublicProfileRequest, opts ...grpc.CallOption) (*ResolvePublicProfileResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolvePublicProfileResponse)
+	err := c.cc.Invoke(ctx, IdentityService_ResolvePublicProfile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // IdentityServiceServer is the server API for IdentityService service.
 // All implementations must embed UnimplementedIdentityServiceServer
 // for forward compatibility.
@@ -182,6 +198,11 @@ type IdentityServiceServer interface {
 	// Avisa que Google rechazó el token de Calendar (401/403) para marcar
 	// revoked_at. Idempotente y sin fuga de existencia: sin fila también es OK.
 	ReportCalendarRevoked(context.Context, *ReportCalendarRevokedRequest) (*ReportCalendarRevokedResponse, error)
+	// H-05: resuelve identity.users.public_id al UUID interno. Solo para
+	// servicios internos autorizados (x-internal-key); el UUID nunca se expone
+	// en la respuesta HTTP pública de Notes. Formato inválido = InvalidArgument;
+	// inexistente = NotFound; fallo de BD = Internal.
+	ResolvePublicProfile(context.Context, *ResolvePublicProfileRequest) (*ResolvePublicProfileResponse, error)
 	mustEmbedUnimplementedIdentityServiceServer()
 }
 
@@ -206,6 +227,9 @@ func (UnimplementedIdentityServiceServer) GetOAuthToken(context.Context, *GetOAu
 }
 func (UnimplementedIdentityServiceServer) ReportCalendarRevoked(context.Context, *ReportCalendarRevokedRequest) (*ReportCalendarRevokedResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportCalendarRevoked not implemented")
+}
+func (UnimplementedIdentityServiceServer) ResolvePublicProfile(context.Context, *ResolvePublicProfileRequest) (*ResolvePublicProfileResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResolvePublicProfile not implemented")
 }
 func (UnimplementedIdentityServiceServer) mustEmbedUnimplementedIdentityServiceServer() {}
 func (UnimplementedIdentityServiceServer) testEmbeddedByValue()                         {}
@@ -318,6 +342,24 @@ func _IdentityService_ReportCalendarRevoked_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _IdentityService_ResolvePublicProfile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolvePublicProfileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IdentityServiceServer).ResolvePublicProfile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IdentityService_ResolvePublicProfile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IdentityServiceServer).ResolvePublicProfile(ctx, req.(*ResolvePublicProfileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // IdentityService_ServiceDesc is the grpc.ServiceDesc for IdentityService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -344,6 +386,10 @@ var IdentityService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportCalendarRevoked",
 			Handler:    _IdentityService_ReportCalendarRevoked_Handler,
+		},
+		{
+			MethodName: "ResolvePublicProfile",
+			Handler:    _IdentityService_ResolvePublicProfile_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -39,7 +39,7 @@ func TestMeetingCalendarFlow_Conectado_PersisteEventID(t *testing.T) {
 	svc, store, cli, gid, admin, _ := calendarFlowSetup("tok-cal")
 	waitNotification := observeMeetingNotification(t, svc)
 
-	m, err := svc.CreateMeeting(context.Background(), gid, admin, "Reunión flujo cal", nil, "2026-09-25T15:00:00Z", nil, nil)
+	m, err := svc.CreateMeeting(context.Background(), gid, admin, "Reunión flujo cal", nil, nil, "2026-09-25T15:00:00Z", nil, nil)
 	if err != nil {
 		t.Fatalf("crear no debe fallar: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestMeetingCalendarFlow_SinConexion_CreadaIgual(t *testing.T) {
 	svc := NewMeetingService(store, notifier)
 	waitNotification := observeMeetingNotification(t, svc)
 
-	m, err := svc.CreateMeeting(context.Background(), gid, admin, "Sin calendar", nil, "2026-09-25T15:00:00Z", nil, nil)
+	m, err := svc.CreateMeeting(context.Background(), gid, admin, "Sin calendar", nil, nil, "2026-09-25T15:00:00Z", nil, nil)
 	if err != nil {
 		t.Fatalf("sin conexión igual debe crear (201): %v", err)
 	}
@@ -90,7 +90,7 @@ func TestMeetingCalendarFlow_ErrorGoogle_CreadaIgual(t *testing.T) {
 	waitNotification := observeMeetingNotification(t, svc)
 	cli.CreateErr = &calendar.CalendarError{Code: 500, Message: "boom"}
 
-	m, err := svc.CreateMeeting(context.Background(), gid, admin, "Google caído", nil, "2026-09-25T15:00:00Z", nil, nil)
+	m, err := svc.CreateMeeting(context.Background(), gid, admin, "Google caído", nil, nil, "2026-09-25T15:00:00Z", nil, nil)
 	if err != nil {
 		t.Fatalf("con Google caído igual debe crear (201): %v", err)
 	}

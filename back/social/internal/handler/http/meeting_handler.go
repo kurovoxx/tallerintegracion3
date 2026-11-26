@@ -22,10 +22,11 @@ func NewMeetingHandler(svc *service.MeetingService) *MeetingHandler {
 }
 
 // POST /groups/{id}/meetings — contrato: agentApiContract.md sección 5
-// Body: {title, description?, scheduled_at} → 201 {meeting_id}
+// Body: {title, description?, link?, scheduled_at} → 201 {meeting_id}
 type CreateMeetingRequest struct {
 	Title         string   `json:"title" binding:"required,max=300"`
 	Description   *string  `json:"description"`
+	Link          *string  `json:"link" binding:"omitempty,max=1000"`
 	ScheduledAt   string   `json:"scheduled_at" binding:"required"`
 	NotifyDiscord *bool    `json:"notify_discord"`
 	Attendees     []string `json:"attendees"`
@@ -60,6 +61,7 @@ func (h *MeetingHandler) CreateMeeting(c *gin.Context) {
 		userID,
 		req.Title,
 		req.Description,
+		req.Link,
 		req.ScheduledAt,
 		req.NotifyDiscord,
 		req.Attendees,
@@ -79,7 +81,8 @@ func (h *MeetingHandler) CreateMeeting(c *gin.Context) {
 			errors.Is(err, service.ErrScheduledAtRequired),
 			errors.Is(err, service.ErrInvalidScheduledAt),
 			errors.Is(err, service.ErrInvalidAttendeeEmail),
-			errors.Is(err, service.ErrTooManyAttendees):
+			errors.Is(err, service.ErrTooManyAttendees),
+			errors.Is(err, service.ErrInvalidMeetingLink):
 			fail(c, "CreateMeeting", http.StatusBadRequest, "invalid_body", err.Error())
 		default:
 			log.Printf("CreateMeeting internal error: %v", err)
@@ -133,6 +136,11 @@ func (h *MeetingHandler) ListMeetings(c *gin.Context) {
 			s := m.Description.String
 			desc = &s
 		}
+		var link *string
+		if m.Link.Valid {
+			s := m.Link.String
+			link = &s
+		}
 		var scheduled string
 		if m.ScheduledAt.Valid {
 			scheduled = m.ScheduledAt.Time.UTC().Format(time.RFC3339)
@@ -142,6 +150,7 @@ func (h *MeetingHandler) ListMeetings(c *gin.Context) {
 			"group_id":     uuidToString(m.GroupID),
 			"title":        m.Title,
 			"description":  desc,
+			"link":         link,
 			"scheduled_at": scheduled,
 			"created_by":   uuidToString(m.CreatedByUserID),
 		})

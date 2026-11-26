@@ -73,6 +73,73 @@ func (r *SavedRepository) ListByUser(ctx context.Context, db DBTX, userID string
 	return out, rows.Err()
 }
 
+// CountByNotes devuelve los saves_count de toda la página en una consulta.
+// Los apuntes sin guardados no aparecen en el mapa (0 implícito).
+func (r *SavedRepository) CountByNotes(ctx context.Context, db DBTX, noteIDs []string) (map[string]int, error) {
+	out := make(map[string]int, len(noteIDs))
+	if len(noteIDs) == 0 {
+		return out, nil
+	}
+	if db == nil {
+		db = r.pool
+	}
+	rows, err := db.Query(ctx, `SELECT note_id, count(*) FROM notes.saved_notes WHERE note_id = ANY($1::uuid[]) GROUP BY note_id`, noteIDs)
+	if err != nil {
+		return nil, fmt.Errorf("count saved by notes: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var noteID string
+		var count int
+		if err := rows.Scan(&noteID, &count); err != nil {
+			return nil, fmt.Errorf("scan saved count: %w", err)
+		}
+		out[noteID] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("count saved rows: %w", err)
+	}
+	return out, nil
+}
+
+// ExistsByNotes resuelve en una sola consulta qué apuntes de la página guardó
+// el usuario (evita N+1 al listar).
+func (r *SavedRepository) ExistsByNotes(ctx context.Context, db DBTX, userID string, noteIDs []string) (map[string]bool, error) {
+	out := make(map[string]bool, len(noteIDs))
+	if len(noteIDs) == 0 {
+		return out, nil
+	}
+	if db == nil {
+		db = r.pool
+	}
+	rows, err := db.Query(ctx, `SELECT note_id FROM notes.saved_notes WHERE user_id = $1 AND note_id = ANY($2::uuid[])`, userID, noteIDs)
+	if err != nil {
+		return nil, fmt.Errorf("exists saved by notes: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var noteID string
+		if err := rows.Scan(&noteID); err != nil {
+			return nil, fmt.Errorf("scan saved note_id: %w", err)
+		}
+		out[noteID] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("exists saved rows: %w", err)
+	}
+	return out, nil
+}
+
+// CountByNote devuelve cuántos usuarios tienen guardado el apunte (saves_count).
+func (r *SavedRepository) CountByNote(ctx context.Context, db DBTX, noteID string) (int, error) {
+	if db == nil {
+		db = r.pool
+	}
+	var cnt int
+	err := db.QueryRow(ctx, `SELECT count(*) FROM notes.saved_notes WHERE note_id=$1`, noteID).Scan(&cnt)
+	return cnt, err
+}
+
 func isUniqueViolation(err error) bool {
 	if err == nil {
 		return false

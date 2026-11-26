@@ -35,9 +35,10 @@ type SocialHTTPAdapter struct {
 }
 
 var (
-	_ SocialResolver       = (*SocialHTTPAdapter)(nil)
-	_ GroupMemberDirectory = (*SocialHTTPAdapter)(nil)
-	_ MemberUserIDs        = (*SocialHTTPAdapter)(nil)
+	_ SocialResolver          = (*SocialHTTPAdapter)(nil)
+	_ GroupMemberDirectory    = (*SocialHTTPAdapter)(nil)
+	_ MemberUserIDs           = (*SocialHTTPAdapter)(nil)
+	_ SharePermissionResolver = (*SocialHTTPAdapter)(nil)
 )
 
 // errSocialNotFound marca un 404 del servicio Social sin filtrar detalles.
@@ -68,8 +69,24 @@ func NewHTTPSocialMemberDirectory(baseURL string, timeout time.Duration) GroupMe
 }
 
 type socialMember struct {
-	UserID string `json:"user_id"`
-	Role   string `json:"role"`
+	UserID        string `json:"user_id"`
+	Role          string `json:"role"`
+	CanShareNotes bool   `json:"can_share_notes"`
+}
+
+// CanShareNotes indica si el miembro tiene delegado el permiso de compartir
+// apuntes en el grupo (los admins se resuelven aparte con IsAdmin).
+func (a *SocialHTTPAdapter) CanShareNotes(ctx context.Context, userID, groupID string) (bool, error) {
+	members, err := a.listMembers(ctx, groupID)
+	if err != nil {
+		return false, err
+	}
+	for _, member := range members {
+		if member.UserID == userID {
+			return member.CanShareNotes, nil
+		}
+	}
+	return false, nil
 }
 
 func (a *SocialHTTPAdapter) IsMember(ctx context.Context, userID, groupID string) (bool, error) {

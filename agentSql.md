@@ -23,8 +23,19 @@ CREATE TABLE identity.users (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     email varchar(255) NOT NULL UNIQUE,
     password_hash varchar(255) NOT NULL,
+    -- Identificador público compartible (60 bits, Crockford Base32). Se
+    -- genera en PostgreSQL con pgcrypto; nunca reemplaza la UUID interna.
+    public_id text NOT NULL DEFAULT identity.generate_unique_public_id()
+        CONSTRAINT users_public_id_key UNIQUE
+        CONSTRAINT users_public_id_format
+            CHECK (public_id ~ '^[0-9a-hj-km-np-tv-z]{12}$'),
     created_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- Funciones usadas por el DEFAULT y por la migración 006_public_profile_id.sql:
+-- identity.generate_public_id() toma 60 bits de gen_random_bytes(8) y los
+-- codifica en 12 símbolos; identity.generate_unique_public_id() reintenta ante
+-- colisión. Requiere CREATE EXTENSION IF NOT EXISTS pgcrypto.
 
 CREATE TABLE identity.refresh_tokens (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -194,6 +205,10 @@ CREATE TABLE notes.notes (
 CREATE INDEX idx_notes_user_id ON notes.notes(user_id);
 CREATE INDEX idx_notes_subject_id ON notes.notes(subject_id);
 CREATE INDEX idx_notes_visibility ON notes.notes(visibility);
+-- Migración 006: un usuario solo puede tener un clon vivo por apunte origen.
+CREATE UNIQUE INDEX uq_notes_user_forked_from
+    ON notes.notes(user_id, forked_from_note_id)
+    WHERE forked_from_note_id IS NOT NULL;
 
 -- Archivos adjuntos (imágenes, PDF, etc), también alojados en el Drive del
 -- autor. is_inline distingue si ya está referenciado dentro del Markdown del
@@ -207,10 +222,16 @@ CREATE TABLE notes.note_attachments (
     file_name varchar(300),
     file_size_bytes int,
     is_inline boolean NOT NULL DEFAULT false,
+    -- Migración 006: adjunto del original del que se copió (NULL si lo subió
+    -- el autor). Hace idempotente la copia de adjuntos.
+    copied_from_attachment_id uuid,
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_note_attachments_note_id ON notes.note_attachments(note_id);
+CREATE UNIQUE INDEX uq_note_attachments_copy_source
+    ON notes.note_attachments(note_id, copied_from_attachment_id)
+    WHERE copied_from_attachment_id IS NOT NULL;
 
 -- Referencia (no copia): "guardar" un apunte de otro usuario para verlo después.
 -- Si el original se borra, la fila desaparece sola (CASCADE) sin lógica especial.
@@ -273,6 +294,8 @@ CREATE TABLE social.groups (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name varchar(200) NOT NULL,
     description text,
+    photo_url text, -- data URL recortada por el cliente o URL http(s)
+    photo_thumb_url text, -- miniatura 96x96 para tarjetas de grupo
     owner_user_id uuid NOT NULL,
     notes_restricted_to_staff boolean NOT NULL DEFAULT false,
     invite_token uuid NOT NULL DEFAULT gen_random_uuid() UNIQUE,

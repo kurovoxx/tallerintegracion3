@@ -11,6 +11,10 @@ const pillanCertificateSha256 = String.fromEnvironment(
       'd68cbdf6646dc6e49c17d01d0282a6d214c6acd9d2845278ef89701a0200ec7e',
 );
 
+// Hosts del Ingress de Pillán que sirven el "Fake Certificate":
+// el front/gateway y el microservicio IA.
+const pillanHosts = {'ti3-brojas.dev.censei.cl', 'ia-hlepio.dev.censei.cl'};
+
 bool isTrustedPillanCertificate(
   X509Certificate cert,
   String host,
@@ -18,7 +22,7 @@ bool isTrustedPillanCertificate(
   String fingerprints = pillanCertificateSha256,
 }) {
   final now = DateTime.now();
-  return host == 'ti3-brojas.dev.censei.cl' &&
+  return pillanHosts.contains(host) &&
       port == 443 &&
       !now.isBefore(cert.startValidity) &&
       now.isBefore(cert.endValidity) &&

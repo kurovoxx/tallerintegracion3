@@ -30,6 +30,10 @@ class _FakeMembersApi {
   final List<String> actions = <String>[];
   bool? lastKickCleanup;
   bool? lastBanCleanup;
+  Map<String, dynamic>? lastPermissions;
+
+  /// Permisos habilitados para todo el grupo (GET /groups/:id/permissions).
+  Map<String, bool> groupDefaults = <String, bool>{};
 
   http.Response _json(int code, Object body) => http.Response(
     jsonEncode(body),
@@ -51,6 +55,9 @@ class _FakeMembersApi {
     if (req.method == 'GET' && p.endsWith('/groups/$_gid/members')) {
       return _json(200, members);
     }
+    if (req.method == 'GET' && p.endsWith('/groups/$_gid/permissions')) {
+      return _json(200, groupDefaults);
+    }
     if (req.method == 'POST' && p.endsWith('/kick')) {
       actions.add('kick');
       lastKickCleanup = _cleanupOf(req);
@@ -62,6 +69,23 @@ class _FakeMembersApi {
       lastBanCleanup = _cleanupOf(req);
       members.removeWhere((m) => p.contains(m['user_id'].toString()));
       return http.Response('', 204);
+    }
+    if (req.method == 'PATCH' && p.endsWith('/permissions')) {
+      final body = jsonDecode(req.body) as Map<String, dynamic>;
+      lastPermissions = body;
+      actions.add('permissions');
+      // Mismo criterio que el backend: false desmarca el permiso propio y, si el
+      // grupo lo habilita para todos, lo deniega para este integrante.
+      for (final m in members) {
+        if (!p.contains(m['user_id'].toString())) continue;
+        body.forEach((key, value) {
+          if (value is! bool) return;
+          m[key] = value;
+          m['deny_${key.substring('can_'.length)}'] =
+              !value && groupDefaults[key] == true;
+        });
+      }
+      return _json(200, body);
     }
     if (req.method == 'PATCH' && p.endsWith('/role')) {
       final role = (jsonDecode(req.body) as Map)['role'];
@@ -91,6 +115,7 @@ _FakeMembersApi _seed() => _FakeMembersApi(<Map<String, dynamic>>[
     'role': 'admin',
     'display_name': 'Ana Admin',
     'email': 'ana@example.com',
+    'public_id': 'a8kp92mqwx7r',
     'joined_at': '2026-01-01T00:00:00Z',
   },
   {
@@ -167,6 +192,39 @@ void main() {
     expect(find.text('FICHA DE INTEGRANTE'), findsOneWidget);
     expect(find.text('CORREO'), findsOneWidget);
     expect(find.text('ROL'), findsOneWidget);
+  });
+
+  testWidgets('la ficha muestra el código público y nunca el UUID interno', (
+    tester,
+  ) async {
+    SessionManager.saveSession(_jwtFor(_memberId), {'id': 'x'});
+    final api = _seed();
+    final service = SocialService(client: MockClient(api.handle));
+    addTearDown(service.dispose);
+
+    await _pump(tester, service);
+    // Ana (ordenada primero) trae public_id.
+    await tester.tap(find.text('VER').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('CÓDIGO DE PERFIL'), findsOneWidget);
+    expect(find.text('a8kp92mqwx7r'), findsOneWidget);
+    expect(find.text('ID'), findsNothing);
+    expect(find.textContaining(_adminId), findsNothing);
+    expect(find.textContaining(_adminId.substring(0, 8)), findsNothing);
+    // Se mantiene el resto de la ficha.
+    expect(find.text('Ana Admin'), findsWidgets);
+    expect(find.text('ana@example.com'), findsWidgets);
+    await tester.tap(find.text('CERRAR'));
+    await tester.pumpAndSettle();
+
+    // Beto no tiene public_id resuelto: «No disponible», nunca su UUID.
+    await tester.tap(find.text('VER').last);
+    await tester.pumpAndSettle();
+    expect(find.text('No disponible'), findsOneWidget);
+    expect(find.textContaining(_memberId), findsNothing);
+    expect(find.textContaining(_memberId.substring(0, 8)), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('expulsar con limpieza (por defecto) envía cleanup=true', (
@@ -283,4 +341,76 @@ void main() {
     expect(find.text('EXPULSAR'), findsNothing);
     expect(find.text('HACER ADMIN'), findsNothing);
   });
+
+  testWidgets(
+    'permiso de todo el grupo: chip efectivo y checkbox editable',
+    (tester) async {
+      SessionManager.saveSession(_jwtFor(_adminId), {'id': 'x'});
+      final api = _seed()..groupDefaults = {'can_create_meetings': true};
+      final service = SocialService(client: MockClient(api.handle));
+      addTearDown(service.dispose);
+
+      await _pump(tester, service);
+
+      // El miembro no tiene permiso propio, pero el grupo lo habilita.
+      expect(find.text('REUNIONES'), findsOneWidget);
+      expect(find.text('NOTAS'), findsNothing);
+
+      await tester.tap(find.text('PERMISOS'));
+      await tester.pumpAndSettle();
+      // Aviso de debug preexistente: ListTile sobre el fondo del diálogo.
+      while (tester.takeException() != null) {}
+
+      expect(
+        find.text(
+          'Habilitado para todo el grupo (puedes quitarlo a este integrante)',
+        ),
+        findsOneWidget,
+      );
+      final meetings = tester.widget<CheckboxListTile>(
+        find.widgetWithText(CheckboxListTile, 'Crear reuniones'),
+      );
+      expect(meetings.value, isTrue);
+      // Habilitado por el grupo, pero se puede retirar a este integrante.
+      expect(meetings.onChanged, isNotNull);
+      final notes = tester.widget<CheckboxListTile>(
+        find.widgetWithText(CheckboxListTile, 'Enviar notas al grupo'),
+      );
+      expect(notes.value, isFalse);
+      expect(notes.onChanged, isNotNull);
+    },
+  );
+
+  testWidgets(
+    'permiso de grupo: quitarlo a un integrante envía false y quita el chip',
+    (tester) async {
+      SessionManager.saveSession(_jwtFor(_adminId), {'id': 'x'});
+      final api = _seed()..groupDefaults = {'can_create_meetings': true};
+      final service = SocialService(client: MockClient(api.handle));
+      addTearDown(service.dispose);
+
+      await _pump(tester, service);
+      expect(find.text('REUNIONES'), findsOneWidget);
+
+      await tester.tap(find.text('PERMISOS'));
+      await tester.pumpAndSettle();
+      while (tester.takeException() != null) {}
+
+      // Desmarcar el permiso heredado y guardar.
+      await tester.tap(find.widgetWithText(CheckboxListTile, 'Crear reuniones'));
+      await tester.pumpAndSettle();
+      while (tester.takeException() != null) {}
+      await tester.tap(find.text('GUARDAR'));
+      await tester.pumpAndSettle();
+      while (tester.takeException() != null) {}
+
+      expect(api.actions, contains('permissions'));
+      expect(api.lastPermissions?['can_create_meetings'], isFalse);
+      // Solo se envía lo que cambió: notas y kanban siguen como estaban.
+      expect(api.lastPermissions?.containsKey('can_share_notes'), isFalse);
+      expect(api.lastPermissions?.containsKey('can_edit_kanban'), isFalse);
+      // El permiso ya no aplica a este integrante.
+      expect(find.text('REUNIONES'), findsNothing);
+    },
+  );
 }

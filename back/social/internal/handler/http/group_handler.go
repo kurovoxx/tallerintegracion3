@@ -4,10 +4,12 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/middleware"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/service"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/utils"
 )
@@ -25,6 +27,7 @@ func NewGroupHandler(svc *service.GroupService) *GroupHandler {
 func (h *GroupHandler) RegisterRoutes(r gin.IRoutes) {
 	r.POST("/groups", h.Create)
 	r.GET("/groups/me", h.ListMy)
+	r.POST("/groups/join", h.JoinByCode)
 	r.GET("/groups/:id", h.Get)
 	r.POST("/groups/:id/join", h.Join)
 	r.POST("/groups/:id/invite/regenerate", h.RegenerateInvite)
@@ -32,14 +35,22 @@ func (h *GroupHandler) RegisterRoutes(r gin.IRoutes) {
 	r.POST("/groups/:id/members/:user_id/kick", h.KickMember)
 	r.POST("/groups/:id/members/:user_id/ban", h.BanMember)
 	r.PATCH("/groups/:id/members/:user_id/role", h.ChangeRole)
+	r.PATCH("/groups/:id/members/:user_id/permissions", h.SetMemberPermissions)
+	r.GET("/groups/:id/permissions", h.GetMemberDefaults)
+	r.PATCH("/groups/:id/permissions", h.SetMemberDefaults)
 	r.POST("/groups/:id/transfer-admin", h.TransferAdmin)
 	r.POST("/groups/:id/leave", h.LeaveGroup)
+	r.PATCH("/groups/:id", h.EditGroup)
 	// La sucesión por borrado de cuenta es solo gRPC (Social.AccountDeletionCleanup).
 }
 
 // respondGroupError traduce los errores de dominio de grupos a HTTP.
 // forbiddenMsg personaliza el texto del 403 según la acción.
 func respondGroupError(c *gin.Context, err error, forbiddenMsg string) {
+	if se, ok := err.(*service.ServiceError); ok {
+		utils.RespondError(c, utils.StatusForCode(se.Code), se.Code, se.Message)
+		return
+	}
 	status, msg := http.StatusInternalServerError, "Error interno del servidor"
 	switch {
 	case errors.Is(err, service.ErrUnauthorized):
@@ -82,6 +93,16 @@ type createGroupRequest struct {
 	Description *string `json:"description"`
 }
 
+// PATCH /groups/:id
+// Body: {name, description?, photo_url?, photo_thumb_url?} — solo admins.
+// photo_url/photo_thumb_url aceptan data URLs o URLs http(s); "" borra la foto.
+type updateGroupRequest struct {
+	Name          string  `json:"name" binding:"required"`
+	Description   *string `json:"description"`
+	PhotoURL      *string `json:"photo_url"`
+	PhotoThumbURL *string `json:"photo_thumb_url"`
+}
+
 func (h *GroupHandler) Create(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
@@ -100,6 +121,43 @@ func (h *GroupHandler) Create(c *gin.Context) {
 	}
 	// Contrato: 201 {group_id}
 	c.JSON(http.StatusCreated, gin.H{"group_id": group.ID})
+}
+
+// PATCH /groups/:id
+// Edita nombre, descripción y foto del grupo. Solo admins.
+func (h *GroupHandler) EditGroup(c *gin.Context) {
+	userID, ok := requireUser(c)
+	if !ok {
+		return
+	}
+
+	var req updateGroupRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Request inválido: " + err.Error()})
+		return
+	}
+
+	update := model.GroupUpdate{
+		Name:             req.Name,
+		Description:      req.Description,
+		PhotoURL:         req.PhotoURL,
+		PhotoThumbURL:    req.PhotoThumbURL,
+		UpdatePhotoURL:   req.PhotoURL != nil,
+		UpdatePhotoThumb: req.PhotoThumbURL != nil,
+	}
+	group, err := h.svc.UpdateGroup(c.Request.Context(), c.Param("id"), userID, update)
+	if err != nil {
+		respondGroupError(c, err, "Acceso denegado: solo los administradores pueden editar el grupo")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":              group.ID,
+		"name":            group.Name,
+		"description":     group.Description,
+		"photo_url":       group.PhotoURL,
+		"photo_thumb_url": group.PhotoThumbURL,
+	})
 }
 
 func handleServiceError(c *gin.Context, err error) {
@@ -163,6 +221,34 @@ func (h *GroupHandler) Join(c *gin.Context) {
 	c.Status(http.StatusCreated)
 }
 
+// JoinByCode maneja POST /groups/join {invite_token}: unión con un solo
+// código, sin pedir el id del grupo. 201 si se creó la membresía y 200 si
+// el usuario ya era miembro; ambos con {group_id, name, already_member}.
+// Errores iguales a /groups/:id/join: 400 sin código, 404 código inválido o
+// reemplazado, 403 usuario baneado. POST /groups/:id/join se mantiene para
+// clientes anteriores.
+func (h *GroupHandler) JoinByCode(c *gin.Context) {
+	userID, ok := requireUser(c)
+	if !ok {
+		return
+	}
+	var req joinGroupRequest
+	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.InviteToken) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invite_token requerido"})
+		return
+	}
+	res, err := h.svc.JoinByInviteCode(c.Request.Context(), req.InviteToken, userID)
+	if err != nil {
+		respondGroupError(c, err, "Acceso denegado")
+		return
+	}
+	status := http.StatusCreated
+	if res.AlreadyMember {
+		status = http.StatusOK
+	}
+	c.JSON(status, res)
+}
+
 // RegenerateInvite maneja POST /groups/{id}/invite/regenerate
 func (h *GroupHandler) RegenerateInvite(c *gin.Context) {
 	userID, ok := requireUser(c)
@@ -178,15 +264,26 @@ func (h *GroupHandler) RegenerateInvite(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"new_invite_token": newToken})
 }
 
-// ListMembers maneja GET /groups/{id}/members
-// Responde miembros con display_name/email cuando Identity los resuelve
-// (campos omitidos si no, backward-compatible).
+// ListMembers maneja GET /groups/{id}/members?limit=N
+// Responde miembros con display_name/email/photo_thumb_url cuando Identity los
+// resuelve (campos omitidos si no, backward-compatible). limit es opcional.
 func (h *GroupHandler) ListMembers(c *gin.Context) {
 	userID, ok := requireUser(c)
 	if !ok {
 		return
 	}
-	members, err := h.svc.ListMembersEnriched(c.Request.Context(), c.Param("id"), userID)
+	// limit es opcional: la vista previa pide solo los avatares visibles; la
+	// pestaña MIEMBROS omite el parámetro y recibe la lista completa.
+	limit := 0
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > 200 {
+			utils.RespondError(c, http.StatusBadRequest, utils.ErrBadRequest, "limit debe ser un entero entre 1 y 200")
+			return
+		}
+		limit = n
+	}
+	members, err := h.svc.ListMembersEnrichedLimit(c.Request.Context(), c.Param("id"), userID, limit)
 	if err != nil {
 		respondGroupError(c, err, "Acceso denegado: debes ser miembro del grupo para ver los integrantes")
 		return
@@ -253,6 +350,76 @@ func (h *GroupHandler) ChangeRole(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusOK)
+}
+
+// PATCH /groups/{id}/members/{user_id}/permissions
+// Body: {can_share_notes?, can_create_meetings?, can_edit_kanban?} (parcial).
+// Solo admins; el objetivo debe ser un miembro común. 200 con los permisos resultantes.
+type setPermissionsRequest struct {
+	CanShareNotes     *bool `json:"can_share_notes"`
+	CanCreateMeetings *bool `json:"can_create_meetings"`
+	CanEditKanban     *bool `json:"can_edit_kanban"`
+}
+
+func (h *GroupHandler) SetMemberPermissions(c *gin.Context) {
+	adminID, ok := requireUser(c)
+	if !ok {
+		return
+	}
+	var req setPermissionsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Body inválido: se esperan booleanos can_share_notes, can_create_meetings, can_edit_kanban"})
+		return
+	}
+	perms, err := h.svc.SetMemberPermissions(c.Request.Context(), c.Param("id"), adminID, c.Param("user_id"), model.MemberPermissionsUpdate{
+		CanShareNotes:     req.CanShareNotes,
+		CanCreateMeetings: req.CanCreateMeetings,
+		CanEditKanban:     req.CanEditKanban,
+	})
+	if err != nil {
+		respondGroupError(c, err, "Acceso denegado: solo admins pueden delegar permisos")
+		return
+	}
+	c.JSON(http.StatusOK, perms)
+}
+
+// GET /groups/{id}/permissions — permisos habilitados para todos los miembros
+// (cualquier miembro puede consultarlos). 200 {can_share_notes, can_create_meetings, can_edit_kanban}.
+func (h *GroupHandler) GetMemberDefaults(c *gin.Context) {
+	userID, ok := requireUser(c)
+	if !ok {
+		return
+	}
+	perms, err := h.svc.GetMemberDefaults(c.Request.Context(), c.Param("id"), userID)
+	if err != nil {
+		respondGroupError(c, err, "Acceso denegado: no perteneces a este grupo")
+		return
+	}
+	c.JSON(http.StatusOK, perms)
+}
+
+// PATCH /groups/{id}/permissions — solo admins. Body parcial igual que el de
+// permisos por miembro; habilita/retira el permiso para TODOS los miembros.
+func (h *GroupHandler) SetMemberDefaults(c *gin.Context) {
+	adminID, ok := requireUser(c)
+	if !ok {
+		return
+	}
+	var req setPermissionsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Body inválido: se esperan booleanos can_share_notes, can_create_meetings, can_edit_kanban"})
+		return
+	}
+	perms, err := h.svc.SetMemberDefaults(c.Request.Context(), c.Param("id"), adminID, model.MemberPermissionsUpdate{
+		CanShareNotes:     req.CanShareNotes,
+		CanCreateMeetings: req.CanCreateMeetings,
+		CanEditKanban:     req.CanEditKanban,
+	})
+	if err != nil {
+		respondGroupError(c, err, "Acceso denegado: solo admins pueden cambiar los permisos del grupo")
+		return
+	}
+	c.JSON(http.StatusOK, perms)
 }
 
 type transferAdminRequest struct {

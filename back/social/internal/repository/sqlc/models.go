@@ -65,6 +65,7 @@ type SocialMeeting struct {
 	GroupID               pgtype.UUID
 	Title                 string
 	Description           pgtype.Text
+	Link                  pgtype.Text
 	ScheduledAt           pgtype.Timestamptz
 	CreatedByUserID       pgtype.UUID
 	NotifyDiscord         bool

@@ -141,8 +141,10 @@ func (c *GRPCClient) GetUser(ctx context.Context, id string) (*service.UserPubli
 		return nil, fmt.Errorf("identity grpc: get user: %w", err)
 	}
 	return &service.UserPublic{
-		UserID:      resp.GetUserId(),
-		Email:       resp.GetEmail(),
-		DisplayName: resp.DisplayName,
+		UserID:        resp.GetUserId(),
+		Email:         resp.GetEmail(),
+		DisplayName:   resp.DisplayName,
+		PhotoThumbURL: resp.PhotoThumbUrl,
+		PublicID:      resp.PublicId,
 	}, nil
 }

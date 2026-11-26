@@ -1,6 +1,7 @@
 package http
 
 import (
+	"time"
 	"errors"
 	"github.com/gin-gonic/gin"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/middleware"
@@ -94,4 +95,29 @@ func (h *SprintHandler) writeSheet(c *gin.Context, update bool) {
 		return
 	}
 	c.JSON(status, gin.H{"data": sheetJSON(sheet)})
+}
+
+// SprintRemaining maneja GET /groups/:id/sprint-sheets/remaining: tiempo
+// restante de cada sprint con fechas (base de la notificación de fin de sprint).
+func (h *SprintHandler) SprintRemaining(c *gin.Context) {
+	uid, ok := middleware.GetUserID(c)
+	if !ok {
+		c.Status(401)
+		return
+	}
+	items, err := h.svc.SprintTimeRemaining(c.Request.Context(), c.Param("id"), uid, time.Now())
+	if err != nil {
+		sheetError(c, err)
+		return
+	}
+	data := make([]gin.H, 0, len(items))
+	for _, it := range items {
+		row := sheetJSON(it.Sheet)
+		row["state"] = it.State
+		row["days_remaining"] = it.DaysRemaining
+		row["notify"] = it.Notify
+		row["message"] = it.Message
+		data = append(data, row)
+	}
+	c.JSON(200, gin.H{"data": data})
 }

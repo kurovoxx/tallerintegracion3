@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/drive"
+	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/identity"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/repository"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/utils"
@@ -370,6 +371,42 @@ func isRetryableDriveError(err error) bool {
 // llamada, 5xx, 429 y errores no tipados de red son AMBIGUOS (el archivo pudo
 // haberse creado) y NO se limpian; la fila se conserva para la reconciliación
 // idempotente (FindFileByNoteID / cola de reconciliación).
+// copyWorkTimeout acota el trabajo de una copia una vez iniciada (Drive con
+// reintentos + adjuntos + PostgreSQL), independiente de la petición HTTP.
+// copyStaleAfter es el plazo tras el cual un clon que sigue 'pending_drive'
+// se considera interrumpido y puede retomarse.
+const (
+	copyWorkTimeout = 2 * time.Minute
+	copyStaleAfter  = copyWorkTimeout + time.Minute
+)
+
+// copyIsStale: clon 'pending_drive' cuyo intento ya no puede seguir vivo.
+func copyIsStale(n *model.Note) bool {
+	if n == nil || n.SyncStatus != "pending_drive" {
+		return false
+	}
+	return time.Since(n.UpdatedAt) > copyStaleAfter
+}
+
+// requireDriveAccess confirma que el usuario tiene Google Drive conectado
+// cuando el cliente puede comprobarlo sin tocar la API de Drive (cliente real
+// vía Identity). Sin conexión: 403 drive_not_connected. Identity caído: 503,
+// nunca un falso «no conectado». El cliente mock no exige Drive.
+func (s *NoteService) requireDriveAccess(ctx context.Context, userID string) error {
+	checker, ok := s.drive.(drive.AccessChecker)
+	if !ok {
+		return nil
+	}
+	if err := checker.CheckAccess(ctx, userID); err != nil {
+		if drive.IsOAuthError(err) {
+			return newServiceError(utils.ErrDriveNotConnected)
+		}
+		log.Printf("notes: no se pudo comprobar la conexión de Drive del usuario %s: %v", userID, err)
+		return ErrDriveUnavailable
+	}
+	return nil
+}
+
 func driveFailureIsDefinitive(err error) bool {
 	if err == nil {
 		return false
@@ -425,7 +462,17 @@ type NoteStore interface {
 	// misma fila en lugar de duplicarla.
 	Create(ctx context.Context, noteID string, userID string, subjectID *string, title string, externalFileID *string, visibility string, forkedFrom *string, syncStatus string) (*model.Note, error)
 	GetByID(ctx context.Context, id string) (*model.Note, error)
+	// GetByUserAndForkedFrom devuelve el clon vivo del usuario para ese apunte
+	// origen, o nil si no existe. Sirve para rechazar la segunda copia (409
+	// already_copied) y para reintentar un clon failed_sync.
+	GetByUserAndForkedFrom(ctx context.Context, userID, forkedFromNoteID string) (*model.Note, error)
 	ListByUser(ctx context.Context, userID, cursor string, limit int) ([]*model.Note, string, error)
+	// ListPublicByUser lista solo apuntes públicos del autor indicado con el
+	// cursor keyset (created_at DESC, id DESC). El store debe rechazar
+	// (devolver lista vacía) cursores que no sean públicos, no tengan archivo
+	// Drive o no pertenezcan al autor, sin relajar los filtros
+	// visibility='public' y external_file_id IS NOT NULL.
+	ListPublicByUser(ctx context.Context, userID, cursor string, limit int) ([]*model.PublicNote, string, error)
 	// Update aplica el cambio de metadata con versionado optimista: solo muta
 	// si la fila sigue en expectedVersion; si otro writer la cambió devuelve
 	// repository.ErrConflict (o un error equivalente del store).
@@ -453,6 +500,13 @@ type NoteStore interface {
 
 type AttachmentStore interface {
 	Create(ctx context.Context, noteID, externalFileID, fileURL, fileType string, fileName *string, fileSize *int, isInline bool) (*model.Attachment, error)
+	// CreateCopy registra el adjunto clonado con su procedencia. Debe ser
+	// idempotente: si (noteID, copiedFromAttachmentID) ya existe, devuelve la
+	// fila existente en lugar de duplicarla.
+	CreateCopy(ctx context.Context, noteID, externalFileID, fileURL, fileType string, fileName *string, fileSize *int, isInline bool, copiedFromAttachmentID string) (*model.Attachment, error)
+	// GetByNoteAndSource recupera el adjunto clonado de un adjunto origen, o
+	// nil si aún no se copió.
+	GetByNoteAndSource(ctx context.Context, noteID, sourceAttachmentID string) (*model.Attachment, error)
 	GetByID(ctx context.Context, id string) (*model.Attachment, error)
 	ListByNote(ctx context.Context, noteID string) ([]*model.Attachment, error)
 	Delete(ctx context.Context, id string) error
@@ -463,6 +517,11 @@ type SavedStore interface {
 	Save(ctx context.Context, userID, noteID string) (*model.SavedNote, error)
 	Exists(ctx context.Context, userID, noteID string) (bool, error)
 	Delete(ctx context.Context, userID, noteID string) error
+	// ListByUser devuelve todos los guardados del usuario (más recientes
+	// primero), incluidos los de apuntes ya borrados por su autor.
+	ListByUser(ctx context.Context, userID string) ([]*model.SavedNote, error)
+	// CountByNote es el saves_count exacto del apunte.
+	CountByNote(ctx context.Context, noteID string) (int, error)
 }
 
 type LikeStore interface {
@@ -500,6 +559,13 @@ type SharedStore interface {
 	WithNoteLock(ctx context.Context, noteID string, fn func(context.Context) error) error
 }
 
+// PublicProfileResolver resuelve el public_id de Identity al UUID interno.
+// El adaptador gRPC vive en back/notes/internal/identity; los tests inyectan
+// dobles en memoria. Nil => 503 en el endpoint que lo necesita.
+type PublicProfileResolver interface {
+	ResolvePublicProfile(ctx context.Context, publicID string) (string, error)
+}
+
 // SocialResolver verifica pertenencia/membership y seguidores. En producción se
 // inyecta el adaptador HTTP a Social (SocialHTTPAdapter); los resolvers en
 // memoria/noop solo se usan en tests.
@@ -507,6 +573,13 @@ type SocialResolver interface {
 	IsMember(ctx context.Context, userID, groupID string) (bool, error)
 	IsAdmin(ctx context.Context, userID, groupID string) (bool, error)
 	GetFollowersCount(ctx context.Context, userID string) (int, error)
+}
+
+// SharePermissionResolver es opcional: lo implementan los resolvers que saben si
+// un miembro común recibió de un admin el permiso para compartir apuntes en el
+// grupo (can_share_notes). Sin él, solo los admins comparten.
+type SharePermissionResolver interface {
+	CanShareNotes(ctx context.Context, userID, groupID string) (bool, error)
 }
 
 // noopSocialResolver es el fallback de construcción cuando no se inyecta un
@@ -534,6 +607,11 @@ type NoteService struct {
 	drive           drive.Client
 	social          SocialResolver
 	members         GroupMemberDirectory
+	// publicProfiles resuelve public_id (H-05). Independiente de Drive.
+	publicProfiles PublicProfileResolver
+	// authorPublicIDs resuelve UUID de autor -> código público para mostrarlo
+	// en los listados (guardados y públicos). Nil => se omite el código.
+	authorPublicIDs AuthorPublicIDResolver
 	// driveEmails resuelve el correo de la cuenta Google Drive de cada miembro
 	// (restricted). Si es nil, se usa members.ListMemberEmails (fallback previo).
 	driveEmails DriveEmailDirectory
@@ -580,6 +658,12 @@ func NewNoteService(notes NoteStore, attachments AttachmentStore, saved SavedSto
 		social:      social,
 		members:     NewNoopMemberDirectory(),
 	}
+}
+
+// SetPublicProfileResolver inyecta el cliente Identity que resuelve el
+// public_id del perfil público. No depende de STORAGE_MODE.
+func (s *NoteService) SetPublicProfileResolver(r PublicProfileResolver) {
+	s.publicProfiles = r
 }
 
 // SetMemberDirectory inyecta el directorio de correos de miembros usado por el
@@ -962,7 +1046,8 @@ func (s *NoteService) Get(ctx context.Context, requesterID string, noteID string
 		return nil, ErrInternalDatabase
 	}
 	if note == nil {
-		return nil, notFoundNote()
+		// 410 si el autor la borró y el solicitante podía verla; 404 si no.
+		return nil, s.missingNoteError(ctx, requesterID, noteID)
 	}
 	// Zero-knowledge: nota privada de otro autor sin share vigente o sin
 	// membresía en los grupos restricted => 404 idéntico al inexistente
@@ -1029,6 +1114,88 @@ func (s *NoteService) ListMy(ctx context.Context, userID string, cursor string, 
 		notes = []*model.Note{}
 	}
 	return notes, next, nil
+}
+
+// ListPublicByPublicID: GET /public-users/:public_id/notes.
+// Resuelve el public_id a UUID vía Identity (gRPC interno) y lista los apuntes
+// visibility='public' con external_file_id no nulo del autor, con el cursor
+// keyset (created_at DESC, id DESC).
+//   - public_id con formato inválido o inexistente → 404 genérico.
+//   - perfil privado: sus apuntes públicos siguen listándose para cualquier
+//     usuario autenticado (la visibilidad del perfil solo oculta sus datos en
+//     Auth); los apuntes privados nunca aparecen.
+//   - Identity caído, sin clave interna o respuesta inválida → 503.
+//   - autor válido sin apuntes listables → 200 con lista vacía.
+//   - cursor mal formado → 400; cursor inexistente, privado, sin archivo o de
+//     otro autor → lista vacía (fail-closed; nunca reinicia la paginación).
+//
+// Límite: 20 por defecto, 100 máximo; valores fuera de rango se normalizan.
+func (s *NoteService) ListPublicByPublicID(ctx context.Context, requesterID, rawPublicID, cursor string, limit int) ([]*model.PublicProfileNoteView, string, error) {
+	if strings.TrimSpace(requesterID) == "" {
+		return nil, "", newServiceError(utils.ErrUnauthorized)
+	}
+	publicID := utils.NormalizePublicID(rawPublicID)
+	if !utils.ValidatePublicID(publicID) {
+		return nil, "", newServiceErrorMsg(utils.ErrNotFound, "usuario no encontrado")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if cursor != "" && !utils.ValidateUUID(cursor) {
+		return nil, "", newServiceErrorMsg(utils.ErrBadRequest, "cursor inválido")
+	}
+	if s.publicProfiles == nil {
+		return nil, "", newServiceError(utils.ErrServiceUnavailable)
+	}
+	// La visibilidad del perfil no filtra este listado (decisión del equipo):
+	// un perfil privado oculta sus datos en Auth, no sus apuntes públicos.
+	userID, err := s.publicProfiles.ResolvePublicProfile(ctx, publicID)
+	if err != nil {
+		switch {
+		case errors.Is(err, identity.ErrNotFound), errors.Is(err, identity.ErrInvalid):
+			return nil, "", newServiceErrorMsg(utils.ErrNotFound, "usuario no encontrado")
+		default:
+			log.Printf("notes: no se pudo resolver public_id vía Identity: %v", err)
+			return nil, "", newServiceError(utils.ErrServiceUnavailable)
+		}
+	}
+	if !utils.ValidateUUID(userID) {
+		log.Printf("notes: Identity devolvió un user_id no UUID para public_id resuelto")
+		return nil, "", newServiceError(utils.ErrServiceUnavailable)
+	}
+	notes, next, err := s.observedNotesListPublicByUser(ctx, userID, cursor, limit)
+	if err != nil {
+		return nil, "", ErrInternalDatabase
+	}
+	targets := make([]interactionTarget, 0, len(notes))
+	for _, n := range notes {
+		targets = append(targets, interactionTarget{id: n.ID, likesCount: n.LikesCount})
+	}
+	stats, err := s.interactionsForTargets(ctx, requesterID, targets)
+	if err != nil {
+		return nil, "", err
+	}
+	out := make([]*model.PublicProfileNoteView, 0, len(notes))
+	for _, n := range notes {
+		st := stats[n.ID]
+		out = append(out, &model.PublicProfileNoteView{
+			ID:         n.ID,
+			Title:      n.Title,
+			SubjectID:  n.SubjectID,
+			Visibility: n.Visibility,
+			LikesCount: st.LikesCount,
+			SavesCount: st.SavesCount,
+			IsLiked:    st.IsLiked,
+			IsSaved:    st.IsSaved,
+			IsOwn:      n.UserID == requesterID,
+			CreatedAt:  n.CreatedAt,
+			UpdatedAt:  n.UpdatedAt,
+		})
+	}
+	return out, next, nil
 }
 
 // Update: solo autor, actualiza título/visibilidad en PG, contenido en Drive si
@@ -1657,7 +1824,7 @@ func (s *NoteService) Save(ctx context.Context, userID string, noteID string) (*
 		return nil, ErrInternalDatabase
 	}
 	if note == nil {
-		return nil, notFoundNote()
+		return nil, s.missingNoteError(ctx, userID, noteID)
 	}
 	// Zero-knowledge: privada sin acceso => 404 (nunca 403) para no revelar
 	// la existencia del recurso.
@@ -1667,6 +1834,13 @@ func (s *NoteService) Save(ctx context.Context, userID string, noteID string) (*
 	}
 	if !allowed {
 		return nil, notFoundNote()
+	}
+	// El autor no puede guardar su propio apunte (ya vive en «Mis apuntes»).
+	// Se valida aquí, después del control de acceso, para que la regla no
+	// dependa de que el cliente oculte el botón. Los guardados propios que ya
+	// existían se conservan y pueden quitarse con Unsave.
+	if note.UserID == userID {
+		return nil, newServiceError(utils.ErrCannotSaveOwn)
 	}
 	// Idempotencia del bookmark sin inspeccionar strings del storage: se
 	// pre-consulta Exists y, ante fallo del Save (carrera), se re-valida el
@@ -1688,8 +1862,17 @@ func (s *NoteService) Save(ctx context.Context, userID string, noteID string) (*
 	return saved, nil
 }
 
+// Unsave quita un guardado. Es idempotente (quitar algo no guardado responde
+// igual que quitarlo) y funciona aunque el apunte original ya no exista: es
+// la única acción permitida sobre un guardado "no disponible".
 func (s *NoteService) Unsave(ctx context.Context, userID string, noteID string) error {
-	return s.saved.Delete(ctx, userID, noteID)
+	if !utils.ValidateUUID(noteID) {
+		return notFoundNote()
+	}
+	if err := s.saved.Delete(ctx, userID, noteID); err != nil {
+		return ErrInternalDatabase
+	}
+	return nil
 }
 
 // Copy: clona apunte de tercero, crea metadata en PG con sync_status='pending_drive',
@@ -1717,7 +1900,9 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 	// encontrada"), nunca 403 ni note_unavailable, para no filtrar existencia
 	// ni estado del recurso.
 	if orig == nil {
-		return nil, notFoundNote()
+		// Apunte borrado por su autor: 410 "ya no está disponible" para quien
+		// lo tenía guardado o era público; 404 en cualquier otro caso.
+		return nil, s.missingNoteError(ctx, userID, noteID)
 	}
 	allowed, err := s.hasReadAccess(ctx, orig, userID)
 	if err != nil {
@@ -1729,6 +1914,25 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 	if orig.ExternalFileID == nil || strings.TrimSpace(*orig.ExternalFileID) == "" {
 		return nil, notFoundNote()
 	}
+
+	// 0.0 La copia vive en el Drive de quien copia: sin una conexión de Drive
+	// usable no se puede completar. Se comprueba ANTES de reclamar la clave de
+	// idempotencia o insertar el clon, para no dejar una fila 'failed_sync'
+	// sin archivo (apunte «copiado» pero ilegible). Va después de los
+	// controles de existencia y permisos, que conservan su zero-knowledge.
+	if err := s.requireDriveAccess(ctx, userID); err != nil {
+		return nil, err
+	}
+
+	// 0.0.1 A partir de aquí la copia ya no depende de que el cliente siga
+	// esperando: si la app cierra la pantalla o la conexión, el contexto de la
+	// petición se cancelaba a mitad de CopyFile y también fallaba marcar el
+	// clon como 'failed_sync', dejándolo en 'pending_drive' para siempre (y
+	// bloqueado como «ya copiado»). Se conservan los valores del contexto
+	// (trazas) y se acota el trabajo con copyWorkTimeout.
+	var cancelWork context.CancelFunc
+	ctx, cancelWork = context.WithTimeout(context.WithoutCancel(ctx), copyWorkTimeout)
+	defer cancelWork()
 
 	// 0. Reclamar la clave de idempotencia durable antes de crear fila/archivo:
 	// misma clave + mismo origen => replay del clon ya creado; misma clave +
@@ -1769,6 +1973,35 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 		}()
 	}
 
+	// 0.1 Un usuario solo puede tener un clon vivo por apunte origen
+	// (uq_notes_user_forked_from, migración 006). El replay de la MISMA clave
+	// ya retornó arriba; aquí distinguimos el reintento reutilizable
+	// (failed_sync) de una copia ya completada o en curso (409 already_copied).
+	existing, err := s.observedNotesGetByUserAndForkedFrom(ctx, userID, noteID)
+	if err != nil {
+		return nil, ErrInternalDatabase
+	}
+	if existing != nil && existing.ID != newNoteID {
+		switch {
+		case existing.SyncStatus == "failed_sync", copyIsStale(existing):
+			// El intento anterior dejó la fila (y quizá el .md huérfano), o
+			// quedó 'pending_drive' más allá de lo que puede durar una copia
+			// (proceso interrumpido): reutilizarla permite retomarla sin
+			// duplicar el apunte (findOrphanDriveFile evita el archivo doble).
+			newNoteID = existing.ID
+			recoveredFromCrash = true
+			pgInserted = true
+		case existing.SyncStatus == "pending_drive":
+			// Otra petición la está copiando ahora: no se duplica ni se
+			// informa como copiada todavía.
+			log.Printf("notes: copy nota %s: usuario %s ya tiene una copia en curso (%s)", noteID, userID, existing.ID)
+			return nil, newServiceError(utils.ErrCopyInProgress)
+		default:
+			log.Printf("notes: copy nota %s: usuario %s ya tiene el clon %s (%s)", noteID, userID, existing.ID, existing.SyncStatus)
+			return nil, newServiceError(utils.ErrAlreadyCopied)
+		}
+	}
+
 	// 1. Insertar metadata en PG con sync_status='pending_drive' ANTES de copiar en Drive.
 	// Reset SubjectID for the clone to prevent unauthorized access (auditoría:
 	// el subjectID del original nunca se hereda al clon). Si el intento anterior
@@ -1787,6 +2020,11 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 	if newNote == nil {
 		newNote, err = s.observedNotesCreate(ctx, newNoteID, userID, nilSubject, orig.Title, nil, "private", &orig.ID, "pending_drive")
 		if err != nil {
+			// Carrera entre dos copias concurrentes del mismo apunte: el índice
+			// único uq_notes_user_forked_from rechaza la segunda inserción.
+			if errors.Is(err, repository.ErrAlreadyCopied) {
+				return nil, newServiceError(utils.ErrAlreadyCopied)
+			}
 			return nil, ErrInternalDatabase
 		}
 		pgInserted = true
@@ -1813,6 +2051,9 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 		if findErr != nil {
 			_ = s.observedNotesUpdateSyncStatus(ctx, newNote.ID, "failed_sync")
 			log.Printf("notes: copy retry clon %s: no se pudo verificar el huérfano en Drive: %v", newNote.ID, findErr)
+			if drive.IsOAuthError(findErr) {
+				return nil, newServiceError(utils.ErrDriveNotConnected)
+			}
 			return nil, ErrDriveUnavailable
 		}
 		newFileID = found
@@ -1826,13 +2067,24 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 		})
 		cancelCopy()
 		if err != nil {
-			// Drive falló: marcar nota como failed_sync para reconciliación
-			_ = s.observedNotesUpdateSyncStatus(ctx, newNote.ID, "failed_sync")
-			// (a) OAuth de la cuenta del clonador ausente/revocado: 403 genérico,
-			//     el problema está en su propio Drive, no en el origen.
+			// Rechazo definitivo (OAuth ausente/revocado, 4xx): el archivo NO
+			// se creó. Si el clon nació en esta petición se elimina la fila
+			// (como en Create) para no dejar un apunte sin contenido; sin fila
+			// la clave de idempotencia se libera. Fallo ambiguo (red, timeout,
+			// 5xx) o clon heredado: queda 'failed_sync', reintentable.
+			if driveFailureIsDefinitive(err) && !recoveredFromCrash {
+				if delErr := s.notes.Delete(ctx, newNote.ID); delErr == nil {
+					pgInserted = false
+				} else {
+					log.Printf("notes: copy nota %s: no se pudo limpiar el clon %s sin archivo: %v", noteID, newNote.ID, delErr)
+					_ = s.observedNotesUpdateSyncStatus(ctx, newNote.ID, "failed_sync")
+				}
+			} else {
+				_ = s.observedNotesUpdateSyncStatus(ctx, newNote.ID, "failed_sync")
+			}
 			if drive.IsOAuthError(err) {
 				log.Printf("notes: copy nota %s: cuenta del clonador sin OAuth vigente: %v", noteID, err)
-				return nil, newServiceErrorMsg(utils.ErrForbidden, "Conecte o renueve su Google Drive")
+				return nil, newServiceError(utils.ErrDriveNotConnected)
 			}
 			// (b) El archivo origen no es legible (borrado o permisos revocados):
 			//     zero-knowledge absoluto, mismo notFoundNote que una nota
@@ -1858,6 +2110,20 @@ func (s *NoteService) Copy(ctx context.Context, userID string, noteID string, id
 			_ = s.observedNotesEnqueueDriveOperation(ctx, "delete_file", newNote.ID, "", newFileID, userID, map[string]any{"reason": "copy_orphan_failed"})
 			log.Printf("[CRITICAL_UNRECONCILED] notes: copy fileID duplicado, compensación falló (file %s): %v", newFileID, compErr)
 		}
+		return nil, ErrDriveUnavailable
+	}
+
+	// 2.1 Copiar físicamente los adjuntos al Drive del copiador y reescribir
+	// las referencias `attachment:<uuid>` del Markdown clonado. Se ejecuta antes
+	// de marcar 'synced': si falla, la nota queda failed_sync y el retry
+	// reutiliza la fila y los adjuntos ya copiados (idempotente).
+	if err := s.copyAttachmentsAndRewrite(ctx, userID, orig.UserID, orig.ID, newNote.ID, newFileID); err != nil {
+		_ = s.observedNotesUpdateSyncStatus(ctx, newNote.ID, "failed_sync")
+		if drive.IsOAuthError(err) {
+			log.Printf("notes: copy nota %s: adjuntos sin OAuth vigente del clonador: %v", noteID, err)
+			return nil, newServiceError(utils.ErrDriveNotConnected)
+		}
+		log.Printf("notes: copy nota %s: fallo al copiar adjuntos del clon %s: %v", noteID, newNote.ID, err)
 		return nil, ErrDriveUnavailable
 	}
 
@@ -1909,7 +2175,7 @@ func (s *NoteService) Like(ctx context.Context, userID string, noteID string) er
 		return ErrInternalDatabase
 	}
 	if note == nil {
-		return newServiceErrorMsg(utils.ErrNotFound, "nota no encontrada")
+		return s.missingNoteError(ctx, userID, noteID)
 	}
 	// Check access before likes so neither existence nor a previous like leaks.
 	allowed, err := s.hasReadAccess(ctx, note, userID)
@@ -1994,12 +2260,38 @@ func (s *NoteService) shareLocked(ctx context.Context, ownerID string, noteID st
 	if !isMember {
 		return nil, newServiceError(utils.ErrForbidden)
 	}
-	isAdmin, _ := s.social.IsAdmin(ctx, ownerID, groupID)
+	// Política: comparten los admins del grupo y los miembros a quienes un
+	// admin delegó el permiso can_share_notes.
+	isAdmin, err := s.social.IsAdmin(ctx, ownerID, groupID)
+	if err != nil {
+		return nil, ErrInternalDatabase
+	}
+	if !isAdmin {
+		allowed := false
+		if pr, ok := s.social.(SharePermissionResolver); ok {
+			allowed, err = pr.CanShareNotes(ctx, ownerID, groupID)
+			if err != nil {
+				return nil, ErrInternalDatabase
+			}
+		}
+		if !allowed {
+			return nil, newServiceErrorMsg(utils.ErrForbidden, "solo los administradores del grupo (o miembros con permiso) pueden compartir apuntes")
+		}
+	}
 	followers, _ := s.social.GetFollowersCount(ctx, ownerID)
 
 	previous, err := s.shared.ListByNote(ctx, noteID)
 	if err != nil {
 		return nil, ErrInternalDatabase
+	}
+	// Un solo vínculo por (nota, grupo): compartir dos veces en el mismo grupo
+	// es 409 already_shared (también con otro access_mode: para cambiarlo hay
+	// que retirar el share y volver a compartir). La comprobación corre bajo
+	// WithNoteLock y la BD la respalda con UNIQUE (note_id, group_id).
+	for _, sh := range previous {
+		if sh.GroupID == groupID {
+			return nil, newServiceError(utils.ErrAlreadyShared)
+		}
 	}
 	candidate := &model.SharedNote{NoteID: noteID, GroupID: groupID, AccessMode: accessMode}
 	shares := make([]*model.SharedNote, 0, len(previous)+1)
@@ -2015,6 +2307,9 @@ func (s *NoteService) shareLocked(ctx context.Context, ownerID string, noteID st
 	// 1) BD primero: intención durable del share ('pending') y de los permisos.
 	shared, err := s.observedSharedCreate(ctx, noteID, groupID, isAdmin, accessMode, followers)
 	if err != nil {
+		if errors.Is(err, repository.ErrAlreadyShared) {
+			return nil, newServiceError(utils.ErrAlreadyShared)
+		}
 		return nil, ErrInternalDatabase
 	}
 	// 2) Sincronizar Drive; ante fallo queda 'failed' y el reconciliador converge.

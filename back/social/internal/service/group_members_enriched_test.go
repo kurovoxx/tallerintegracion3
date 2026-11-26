@@ -42,8 +42,9 @@ func TestListMembersEnriched_ConNombres(t *testing.T) {
 	g := newGroup(t, svc, uAdmin)
 	joinAs(t, svc, store, g.ID, uMember)
 	name := "Miembro Uno"
+	thumb := "data:image/png;base64,thumb"
 	svc.SetUserDirectory(&fakeUserDirectory{data: map[string]UserPublic{
-		uMember: {UserID: uMember, Email: "member@example.com", DisplayName: &name},
+		uMember: {UserID: uMember, Email: "member@example.com", DisplayName: &name, PhotoThumbURL: &thumb},
 	}})
 
 	ms, err := svc.ListMembersEnriched(ctx, g.ID, uAdmin)
@@ -63,10 +64,44 @@ func TestListMembersEnriched_ConNombres(t *testing.T) {
 			if m.Email == nil || *m.Email != "member@example.com" {
 				t.Fatalf("email no enriquecido: %+v", m)
 			}
+			if m.PhotoThumbURL == nil || *m.PhotoThumbURL != "data:image/png;base64,thumb" {
+				t.Fatalf("photo_thumb_url no enriquecido: %+v", m)
+			}
 		}
 	}
 	if !found {
 		t.Fatalf("miembro no encontrado en %+v", ms)
+	}
+}
+
+// La ficha de integrante muestra el código público: el listado lo entrega
+// cuando Identity lo resuelve y lo omite (nunca lo sustituye por el UUID)
+// cuando no.
+func TestListMembersEnriched_PublicID(t *testing.T) {
+	svc, store := newTestSvc()
+	g := newGroup(t, svc, uAdmin)
+	joinAs(t, svc, store, g.ID, uMember)
+	pid := "a8kp92mqwx7r"
+	blank := "   "
+	svc.SetUserDirectory(&fakeUserDirectory{data: map[string]UserPublic{
+		uMember: {UserID: uMember, PublicID: &pid},
+		uAdmin:  {UserID: uAdmin, PublicID: &blank},
+	}})
+	ms, err := svc.ListMembersEnriched(ctx, g.ID, uMember)
+	if err != nil {
+		t.Fatalf("enriquecido: %v", err)
+	}
+	for _, m := range ms {
+		switch m.UserID {
+		case uMember:
+			if m.PublicID == nil || *m.PublicID != pid {
+				t.Fatalf("public_id no enriquecido: %+v", m)
+			}
+		case uAdmin:
+			if m.PublicID != nil {
+				t.Fatalf("public_id vacío debe omitirse: %+v", m)
+			}
+		}
 	}
 }
 

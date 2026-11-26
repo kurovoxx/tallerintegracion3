@@ -32,12 +32,29 @@ func main() {
 	if cfg.DatabaseURL == "" {
 		log.Print("DB no configurada (DATABASE_URL vacío): /health/db responderá 503")
 	} else {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		// Espera a que Postgres acepte conexiones (retry con backoff lineal).
+		// Al desplegar en k8s el contenedor puede arrancar antes que Postgres;
+		// sin esto fallaría al primer intento y quedaría sin pool.
 		var err error
-		pool, err = repository.NewPool(ctx, cfg.DatabaseURL)
-		cancel()
+		const maxDBIntents = 30
+		for i := 0; i < maxDBIntents; i++ {
+			ctxInt, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			pool, err = repository.NewPool(ctxInt, cfg.DatabaseURL)
+			if err == nil {
+				err = pool.Ping(ctxInt)
+			}
+			cancel()
+			if err == nil {
+				break
+			}
+			if pool != nil {
+				pool.Close()
+			}
+			log.Printf("infacadem: esperando a Postgres (intento %d/%d): %v", i+1, maxDBIntents, err)
+			time.Sleep(time.Duration(i+1) * time.Second)
+		}
 		if err != nil {
-			log.Printf("advertencia: no se pudo conectar a Postgres: %v", err)
+			log.Printf("advertencia: no se pudo conectar a Postgres tras %d intentos: %v", maxDBIntents, err)
 			pool = nil
 		} else {
 			log.Println("PostgreSQL conectado OK (pgxpool Ping)")

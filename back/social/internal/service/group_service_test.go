@@ -216,6 +216,93 @@ func TestJoin(t *testing.T) {
 	})
 }
 
+func TestJoinByInviteCode(t *testing.T) {
+	svc, store := newTestSvc()
+	g := newGroup(t, svc, uAdmin)
+	other := newGroup(t, svc, uStrang)
+	tok := tokenOf(t, store, g.ID)
+
+	t.Run("solo el código identifica al grupo y crea la membresía", func(t *testing.T) {
+		res, err := svc.JoinByInviteCode(ctx, tok, uMember)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.GroupID != g.ID || res.Name != g.Name || res.AlreadyMember {
+			t.Fatalf("resultado inesperado: %+v", res)
+		}
+		if roleOf(t, store, g.ID, uMember) != model.RoleMember {
+			t.Fatal("debe entrar como member")
+		}
+		if roleOf(t, store, other.ID, uMember) != "" {
+			t.Fatal("no debe unirse a otro grupo")
+		}
+	})
+	t.Run("acepta espacios y mayúsculas", func(t *testing.T) {
+		res, err := svc.JoinByInviteCode(ctx, "  "+strings.ToUpper(tok)+"	", uMember)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !res.AlreadyMember || res.GroupID != g.ID {
+			t.Fatalf("resultado inesperado: %+v", res)
+		}
+	})
+	t.Run("ya miembro: idempotente y no degrada al admin", func(t *testing.T) {
+		res, err := svc.JoinByInviteCode(ctx, tok, uAdmin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !res.AlreadyMember {
+			t.Fatal("debe informar que ya era miembro")
+		}
+		if roleOf(t, store, g.ID, uAdmin) != model.RoleAdmin {
+			t.Fatal("un admin no debe degradarse al reingresar")
+		}
+		if members, _ := svc.ListMembers(ctx, g.ID, uAdmin); len(members) != 2 {
+			t.Fatalf("no debe duplicar membresías: %d", len(members))
+		}
+	})
+	t.Run("código inexistente", func(t *testing.T) {
+		_, err := svc.JoinByInviteCode(ctx, "dddddddd-0000-4000-8000-000000000001", uOther)
+		wantErr(t, err, ErrInvalidInviteToken)
+	})
+	t.Run("el id del grupo no sirve como código", func(t *testing.T) {
+		_, err := svc.JoinByInviteCode(ctx, g.ID, uOther)
+		wantErr(t, err, ErrInvalidInviteToken)
+	})
+	t.Run("código mal formado o vacío", func(t *testing.T) {
+		for _, c := range []string{"", "   ", "no-es-un-uuid", g.ID + " " + tok} {
+			_, err := svc.JoinByInviteCode(ctx, c, uOther)
+			wantErr(t, err, ErrInvalidInviteToken)
+		}
+	})
+	t.Run("sin usuario", func(t *testing.T) {
+		_, err := svc.JoinByInviteCode(ctx, tok, "")
+		wantErr(t, err, ErrUnauthorized)
+	})
+	t.Run("código regenerado invalida el anterior", func(t *testing.T) {
+		nuevo, err := svc.RegenerateInvite(ctx, g.ID, uAdmin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = svc.JoinByInviteCode(ctx, tok, uOther)
+		wantErr(t, err, ErrInvalidInviteToken)
+		if _, err := svc.JoinByInviteCode(ctx, nuevo, uOther); err != nil {
+			t.Fatalf("el código nuevo debe servir: %v", err)
+		}
+		tok = nuevo
+	})
+	t.Run("baneado no puede volver con el código", func(t *testing.T) {
+		if err := svc.BanMember(ctx, g.ID, uAdmin, uOther, false, ""); err != nil {
+			t.Fatal(err)
+		}
+		_, err := svc.JoinByInviteCode(ctx, tok, uOther)
+		wantErr(t, err, ErrBanned)
+		if roleOf(t, store, g.ID, uOther) != "" {
+			t.Fatal("el baneado no debe quedar como miembro")
+		}
+	})
+}
+
 func TestRegenerateInvite(t *testing.T) {
 	svc, store := newTestSvc()
 	g := newGroup(t, svc, uAdmin)
@@ -272,6 +359,9 @@ func TestGetGroup(t *testing.T) {
 		if v.InviteToken != "" {
 			t.Fatal("el invite_token no debe filtrarse a miembros")
 		}
+		if v.MemberCount != 2 {
+			t.Fatalf("member_count = %d, se esperaba 2", v.MemberCount)
+		}
 		raw, _ := json.Marshal(v)
 		if strings.Contains(string(raw), tok) || strings.Contains(string(raw), "invite_token") {
 			t.Fatalf("el JSON no debe incluir el token: %s", raw)
@@ -307,6 +397,15 @@ func TestListMembers(t *testing.T) {
 		}
 		if len(ms) != 2 || ms[0].UserID != uAdmin || ms[1].UserID != uMember {
 			t.Fatalf("orden inesperado: %+v", ms)
+		}
+	})
+	t.Run("limit recorta antes de enriquecer", func(t *testing.T) {
+		ms, err := svc.ListMembersLimit(ctx, g.ID, uMember, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ms) != 1 || ms[0].UserID != uAdmin {
+			t.Fatalf("limit inesperado: %+v", ms)
 		}
 	})
 	t.Run("no miembro recibe forbidden", func(t *testing.T) {

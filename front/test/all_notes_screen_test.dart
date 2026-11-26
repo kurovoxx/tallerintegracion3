@@ -64,6 +64,37 @@ void main() {
     }
   }
 
+  testWidgets(
+    'pegar un enlace con UUID muestra el aviso y abre el buscador solo con el ID',
+    (tester) async {
+      const id = '0f8e2c1a-5b6d-4c7e-9a8b-1c2d3e4f5a6b';
+      await pumpNotes(tester, const Size(1440, 900));
+      expect(find.byKey(const Key('notes-id-search-hint')), findsNothing);
+
+      // Texto normal: sin aviso.
+      await tester.enterText(find.byType(TextField).first, 'integrales');
+      await tester.pump();
+      expect(find.byKey(const Key('notes-id-search-hint')), findsNothing);
+
+      // URL completa con el UUID (en mayúsculas): el aviso aparece al instante.
+      await tester.enterText(
+        find.byType(TextField).first,
+        'https://ti3-brojas.dev.censei.cl/notes/${id.toUpperCase()}?ref=chat',
+      );
+      await tester.pump();
+      expect(find.byKey(const Key('notes-id-search-hint')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('notes-id-search-hint')));
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(milliseconds: 400));
+      final field = tester.widget<TextField>(
+        find.byKey(const Key('note-id-search-field')),
+      );
+      expect(field.controller!.text, id);
+      await tester.pump(const Duration(seconds: 1));
+    },
+  );
+
   testWidgets('renderiza y alterna la vista de la grilla en desktop', (
     tester,
   ) async {
@@ -131,9 +162,10 @@ void main() {
 
     final sheet = find.byType(DraggableScrollableSheet);
     expect(sheet, findsOneWidget);
-    // El editor se acota a un ancho máximo legible en ultra-wide (920 dp) en
-    // lugar de estirarse al 100 % de la ventana junto al sidebar.
-    expect(tester.getSize(sheet).width, 920);
+    // El sheet ocupa casi todo el ancho (margen de 24 dp por lado) para que
+    // el modo edición tenga editor + vista previa amplios; la lectura se
+    // centra dentro a 920 dp.
+    expect(tester.getSize(sheet).width, 1440 - 48);
     expect(find.text('AMPLIAR'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -507,7 +539,10 @@ void main() {
           .map((field) => field.controller?.text ?? '')
           .firstWhere((value) => value.contains('attachment-pending://'));
       expect(resourcesFromMarkdown(markdown).single['type'], 'image');
-      await tester.tap(find.text('foto'));
+      // A 1440 px el editor muestra además la vista previa en vivo (que
+      // también pinta "foto"); el chip de REFERENCIAS va después en el árbol.
+      expect(find.byKey(const Key('live-editor-split')), findsOneWidget);
+      await tester.tap(find.text('foto').last);
       await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.textContaining('Archivo preparado'), findsWidgets);

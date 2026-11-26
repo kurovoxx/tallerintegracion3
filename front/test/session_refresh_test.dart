@@ -429,4 +429,51 @@ void main() {
     expect(AuthService.refreshPath, '/auth/refresh');
     expect(AuthService.logoutPath, '/auth/logout');
   });
+
+  // Gate de confirmación (EMAIL_VERIFICATION_REQUIRED=true): el backend
+  // responde 401 email_not_verified al refresh. Debe seguir siendo un rechazo
+  // definitivo: una sola renovación, una sola expiración y sin reintentos.
+  test('refresh 401 email_not_verified cierra la sesión una vez, sin bucle', () async {
+    await SessionManager.saveSession('access-viejo', {
+      'id': 'u',
+    }, refreshToken: 'refresh-sin-confirmar');
+    final backend = AuthService(
+      client: MockClient(
+        (_) async => _json({
+          'error': {
+            'code': 'email_not_verified',
+            'message': 'Confirma tu correo para iniciar sesión.',
+          },
+        }, 401),
+      ),
+    );
+    addTearDown(backend.dispose);
+    var refreshCalls = 0;
+    AuthedHttp.refreshOverride = (token) {
+      refreshCalls++;
+      return backend.refresh(token);
+    };
+    var expiredCalls = 0;
+    SessionManager.onSessionExpired = () async {
+      expiredCalls++;
+    };
+    addTearDown(() {
+      SessionManager.onSessionExpired = null;
+    });
+    var attempts = 0;
+
+    final res = await AuthedHttp.run(() async {
+      attempts++;
+      return _json({
+        'error': {'code': 'token_expired', 'message': 'expirado'},
+      }, 401);
+    });
+
+    expect(res.statusCode, 401);
+    expect(refreshCalls, 1);
+    expect(attempts, 1);
+    expect(expiredCalls, 1);
+    expect(SessionManager.token, isNull);
+    expect(SessionManager.refreshToken, isNull);
+  });
 }

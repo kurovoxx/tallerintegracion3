@@ -183,8 +183,11 @@ func testSocialRoutes(t *testing.T, s *stack) {
 		if sheetID == "" {
 			t.Fatal("hoja sin ID")
 		}
-		s.request(t, "POST", base+"/sprint-sheets", member.token, map[string]string{"name": "Sprint siguiente", "period_start": "2026-10-26", "period_end": "2026-11-01"}, 201, nil)
-		s.request(t, "PATCH", base+"/sprint-sheets/"+sheetID, member.token, map[string]string{"name": "Sprint actualizado", "period_end": "2026-10-26"}, 200, &sheet)
+		// Política: solo admins modifican el sprint; el miembro recibe 403.
+		s.request(t, "POST", base+"/sprint-sheets", member.token, map[string]string{"name": "Sprint siguiente", "period_start": "2026-10-26", "period_end": "2026-11-01"}, 403, nil)
+		s.request(t, "PATCH", base+"/sprint-sheets/"+sheetID, member.token, map[string]string{"name": "Sprint actualizado", "period_end": "2026-10-26"}, 403, nil)
+		s.request(t, "POST", base+"/sprint-sheets", owner.token, map[string]string{"name": "Sprint siguiente", "period_start": "2026-10-26", "period_end": "2026-11-01"}, 201, nil)
+		s.request(t, "PATCH", base+"/sprint-sheets/"+sheetID, owner.token, map[string]string{"name": "Sprint actualizado", "period_end": "2026-10-26"}, 200, &sheet)
 		var sheets struct{ Data []item }
 		s.request(t, "GET", base+"/sprint-sheets", member.token, nil, 200, &sheets)
 		found := false
@@ -201,13 +204,15 @@ func testSocialRoutes(t *testing.T, s *stack) {
 
 		var task struct{ Data item }
 		taskBody := map[string]any{"title": "Ejecutar E2E", "assigned_to": member.id, "sheet_id": sheetID, "priority": "media", "status": "sin_empezar", "estimated_hours": 4.5}
-		s.request(t, "POST", base+"/sprint-sheet", member.token, taskBody, 201, &task)
+		s.request(t, "POST", base+"/sprint-sheet", member.token, taskBody, 403, nil)
+		s.request(t, "POST", base+"/sprint-sheet", owner.token, taskBody, 201, &task)
 		taskID := task.Data.ID
 		if taskID == "" || task.Data.SheetID != sheetID || task.Data.AssignedTo != member.id {
 			t.Fatalf("tarea sprint creada: %+v", task)
 		}
 		taskURL := base + "/sprint-sheet/" + taskID
-		s.request(t, "PATCH", taskURL, member.token, map[string]any{"title": "E2E en curso", "status": "en_proceso", "priority": "alta", "estimated_hours": 6.5}, 200, &task)
+		s.request(t, "PATCH", taskURL, member.token, map[string]any{"title": "E2E en curso"}, 403, nil)
+		s.request(t, "PATCH", taskURL, owner.token, map[string]any{"title": "E2E en curso", "status": "en_proceso", "priority": "alta", "estimated_hours": 6.5}, 200, &task)
 		var tasks struct{ Data []item }
 		s.request(t, "GET", base+"/sprint-sheet?sheet_id="+sheetID+"&status=en_proceso&priority=alta", owner.token, nil, 200, &tasks)
 		if len(tasks.Data) != 1 || tasks.Data[0].ID != taskID || tasks.Data[0].Title != "E2E en curso" || tasks.Data[0].EstimatedHours != 6.5 {
@@ -272,13 +277,15 @@ func testSocialRoutes(t *testing.T, s *stack) {
 		if len(todos.Data) != 0 {
 			t.Fatalf("TODO sigue listado después del delete: %+v", todos)
 		}
-		s.request(t, "DELETE", taskURL, member.token, nil, 200, nil)
+		s.request(t, "DELETE", taskURL, member.token, nil, 403, nil)
+		s.request(t, "DELETE", taskURL, owner.token, nil, 200, nil)
 		s.request(t, "GET", base+"/sprint-sheet", member.token, nil, 200, &tasks)
 		if len(tasks.Data) != 0 {
 			t.Fatalf("tarea sprint sigue listada después del delete: %+v", tasks)
 		}
 		s.request(t, "GET", hoursURL, member.token, nil, 404, nil)
-		s.request(t, "DELETE", base+"/sprint-sheets/"+sheetID, member.token, nil, 200, nil)
+		s.request(t, "DELETE", base+"/sprint-sheets/"+sheetID, member.token, nil, 403, nil)
+		s.request(t, "DELETE", base+"/sprint-sheets/"+sheetID, owner.token, nil, 200, nil)
 		s.request(t, "GET", base+"/sprint-sheets", member.token, nil, 200, &sheets)
 		for _, sh := range sheets.Data {
 			if sh.ID == sheetID {
@@ -315,11 +322,13 @@ func testSocialRoutes(t *testing.T, s *stack) {
 		var meeting struct {
 			ID string `json:"meeting_id"`
 		}
-		s.request(t, "POST", base+"/meetings", member.token, meetingBody, 201, &meeting)
+		// Política: solo admins agendan reuniones.
+		s.request(t, "POST", base+"/meetings", member.token, meetingBody, 403, nil)
+		s.request(t, "POST", base+"/meetings", owner.token, meetingBody, 201, &meeting)
 		var meetings struct {
 			Data []struct{ ID, Title string }
 		}
-		s.request(t, "GET", base+"/meetings", owner.token, nil, 200, &meetings)
+		s.request(t, "GET", base+"/meetings", member.token, nil, 200, &meetings)
 		if meeting.ID == "" || len(meetings.Data) != 1 || meetings.Data[0].ID != meeting.ID || meetings.Data[0].Title != meetingBody["title"] {
 			t.Fatalf("reunión creada/listada: %+v, %+v", meeting, meetings)
 		}
@@ -340,20 +349,20 @@ func testSocialRoutes(t *testing.T, s *stack) {
 				ReadAt    *string `json:"read_at"`
 			}
 		}
-		s.request(t, "GET", s.social+"/notifications/me", owner.token, nil, 200, &notifications)
+		s.request(t, "GET", s.social+"/notifications/me", member.token, nil, 200, &notifications)
 		if len(notifications.Data) != 1 || notifications.Data[0].MeetingID != meeting.ID || notifications.Data[0].Read {
 			t.Fatalf("fan-out de notificaciones: %+v", notifications)
 		}
 		notificationID := notifications.Data[0].ID
 		s.request(t, "POST", s.social+"/notifications/"+notificationID+"/read", outsider.token, nil, 404, nil)
-		s.request(t, "POST", s.social+"/notifications/"+notificationID+"/read", member.token, nil, 404, nil)
-		s.request(t, "POST", s.social+"/notifications/"+notificationID+"/read", owner.token, nil, 200, nil)
 		s.request(t, "POST", s.social+"/notifications/"+notificationID+"/read", owner.token, nil, 404, nil)
-		s.request(t, "GET", s.social+"/notifications/me", owner.token, nil, 200, &notifications)
+		s.request(t, "POST", s.social+"/notifications/"+notificationID+"/read", member.token, nil, 200, nil)
+		s.request(t, "POST", s.social+"/notifications/"+notificationID+"/read", member.token, nil, 404, nil)
+		s.request(t, "GET", s.social+"/notifications/me", member.token, nil, 200, &notifications)
 		if len(notifications.Data) != 1 || !notifications.Data[0].Read || notifications.Data[0].ReadAt == nil {
 			t.Fatalf("lectura no persistida: %+v", notifications)
 		}
-		s.request(t, "GET", s.social+"/notifications/me", member.token, nil, 200, &notifications)
+		s.request(t, "GET", s.social+"/notifications/me", owner.token, nil, 200, &notifications)
 		if len(notifications.Data) != 0 {
 			t.Fatalf("se notificó al creador de la reunión (regla 4.8): %+v", notifications)
 		}

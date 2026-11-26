@@ -1,0 +1,90 @@
+name: build-windows
+
+# Compila el front Flutter para Windows (.exe) y genera el instalador con
+# Inno Setup. Los defaults de lib/core/services/api_config.dart apuntan al
+# cluster Pillán; para otro backend usar el input `api_origin` (dart-define).
+# Artefactos: carpeta Release (zip portable) + TallerIntegracion-Setup-<ver>.exe.
+# Con un tag `v*` adjunta ambos a la Release de GitHub.
+on:
+  push:
+    branches: [Development]
+    paths: ["front/**", ".github/workflows/build-windows.yml"]
+    tags: ["v*"]
+  pull_request:
+    paths: ["front/windows/**", ".github/workflows/build-windows.yml"]
+  workflow_dispatch:
+    inputs:
+      api_origin:
+        description: "Origen del backend (ej: https://ti3-brojas.dev.censei.cl). Vacío = defaults del front."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: front
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Versión de la app
+        id: ver
+        run: |
+          $v = (Select-String -Path pubspec.yaml -Pattern '^version:\s*(\d+\.\d+\.\d+)').Matches[0].Groups[1].Value
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - run: flutter config --enable-windows-desktop
+      - run: flutter pub get
+      - run: flutter analyze --no-fatal-infos --no-fatal-warnings
+      - run: flutter test
+
+      - name: Build Windows (release)
+        run: |
+          $defs = @()
+          if ("${{ inputs.api_origin }}" -ne "") {
+            $o = "${{ inputs.api_origin }}".TrimEnd('/')
+            $defs += "--dart-define=API_BASE_URL=$o/api-auth", "--dart-define=NOTES_BASE_URL=$o/api-notes",
+                     "--dart-define=SOCIAL_BASE_URL=$o/api-social", "--dart-define=ACADEMIC_BASE_URL=$o/api-academic"
+          }
+          flutter build windows --release @defs
+
+      - name: Instalador (Inno Setup)
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; }
+          $src = (Resolve-Path build\windows\x64\runner\Release).Path
+          & $iscc "/DAppVersion=${{ steps.ver.outputs.version }}" "/DSourceDir=$src" windows\installer\setup.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC falló" }
+
+      - name: Zip portable
+        run: Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath TallerIntegracion-windows-portable.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: front/windows/installer/Output/*.exe
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-portable
+          path: front/TallerIntegracion-windows-portable.zip
+          if-no-files-found: error
+
+      - name: Adjuntar a la Release (tags v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            front/windows/installer/Output/*.exe
+            front/TallerIntegracion-windows-portable.zip

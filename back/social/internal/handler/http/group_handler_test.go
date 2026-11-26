@@ -175,6 +175,9 @@ func TestGetGroupHidesInviteTokenFromNonAdmins(t *testing.T) {
 	if strings.Contains(w.Body.String(), "invite_token") || strings.Contains(w.Body.String(), tok) {
 		t.Fatalf("el miembro no debe ver el token: %s", w.Body)
 	}
+	if got, _ := decode(t, w)["member_count"].(float64); got != 2 {
+		t.Fatalf("member_count = %v, se esperaba 2: %s", got, w.Body)
+	}
 
 	expect(t, e.do(http.MethodGet, "/groups/"+gid, hStrang, nil), http.StatusForbidden)
 	expect(t, e.do(http.MethodGet, "/groups/dddddddd-0000-4000-8000-000000000001", hAdmin, nil), http.StatusNotFound)
@@ -197,6 +200,42 @@ func TestJoinContract(t *testing.T) {
 	// baneado -> 403
 	expect(t, e.do(http.MethodPost, "/groups/"+gid+"/members/"+hMember+"/ban", hAdmin, nil), http.StatusNoContent)
 	expect(t, e.do(http.MethodPost, "/groups/"+gid+"/join", hMember, map[string]string{"invite_token": tok}), http.StatusForbidden)
+}
+
+func TestJoinByCodeContract(t *testing.T) {
+	e := newEnv()
+	gid := e.createGroup(t, hAdmin)
+	tok := e.inviteToken(t, gid)
+
+	// Solo el código: 201 con el grupo identificado.
+	w := e.do(http.MethodPost, "/groups/join", hMember, map[string]string{"invite_token": tok})
+	expect(t, w, http.StatusCreated)
+	body := decode(t, w)
+	if body["group_id"] != gid || body["name"] != "Grupo" || body["already_member"] != false {
+		t.Fatalf("contrato {group_id,name,already_member} incumplido: %s", w.Body)
+	}
+	// Repetir: 200 y already_member=true, sin duplicar.
+	w = e.do(http.MethodPost, "/groups/join", hMember, map[string]string{"invite_token": " " + strings.ToUpper(tok) + " "})
+	expect(t, w, http.StatusOK)
+	if decode(t, w)["already_member"] != true {
+		t.Fatalf("debe informar already_member: %s", w.Body)
+	}
+	// El id del grupo, códigos inexistentes y mal formados -> 404 (nunca 500).
+	expect(t, e.do(http.MethodPost, "/groups/join", hOther, map[string]string{"invite_token": gid}), http.StatusNotFound)
+	expect(t, e.do(http.MethodPost, "/groups/join", hOther, map[string]string{"invite_token": "dddddddd-0000-4000-8000-000000000001"}), http.StatusNotFound)
+	expect(t, e.do(http.MethodPost, "/groups/join", hOther, map[string]string{"invite_token": "basura"}), http.StatusNotFound)
+	// Sin body o código vacío -> 400.
+	expect(t, e.do(http.MethodPost, "/groups/join", hOther, nil), http.StatusBadRequest)
+	expect(t, e.do(http.MethodPost, "/groups/join", hOther, map[string]string{"invite_token": "  "}), http.StatusBadRequest)
+	// Sin JWT -> 401.
+	expect(t, e.do(http.MethodPost, "/groups/join", "", map[string]string{"invite_token": tok}), http.StatusUnauthorized)
+	// Baneado -> 403.
+	expect(t, e.do(http.MethodPost, "/groups/"+gid+"/members/"+hMember+"/ban", hAdmin, nil), http.StatusNoContent)
+	expect(t, e.do(http.MethodPost, "/groups/join", hMember, map[string]string{"invite_token": tok}), http.StatusForbidden)
+	// La ruta no choca con /groups/:id: GET /groups/join no es un grupo.
+	expect(t, e.do(http.MethodGet, "/groups/join", hAdmin, nil), http.StatusNotFound)
+	// Compatibilidad: el formato antiguo (id + código) sigue funcionando.
+	expect(t, e.do(http.MethodPost, "/groups/"+gid+"/join", hOther, map[string]string{"invite_token": tok}), http.StatusCreated)
 }
 
 func TestRegenerateInviteContract(t *testing.T) {
@@ -228,6 +267,16 @@ func TestMembersContract(t *testing.T) {
 	if len(ms) != 2 || ms[0]["user_id"] != hAdmin || ms[0]["role"] != "admin" || ms[1]["role"] != "member" || ms[0]["joined_at"] == nil {
 		t.Fatalf("contrato [{user_id,role,joined_at}] incumplido: %s", w.Body)
 	}
+	w = e.do(http.MethodGet, "/groups/"+gid+"/members?limit=1", hMember, nil)
+	expect(t, w, http.StatusOK)
+	ms = nil
+	_ = json.Unmarshal(w.Body.Bytes(), &ms)
+	if len(ms) != 1 || ms[0]["user_id"] != hAdmin {
+		t.Fatalf("limit=1 debe devolver solo el primer miembro: %s", w.Body)
+	}
+	expect(t, e.do(http.MethodGet, "/groups/"+gid+"/members?limit=0", hMember, nil), http.StatusBadRequest)
+	expect(t, e.do(http.MethodGet, "/groups/"+gid+"/members?limit=201", hMember, nil), http.StatusBadRequest)
+	expect(t, e.do(http.MethodGet, "/groups/"+gid+"/members?limit=abc", hMember, nil), http.StatusBadRequest)
 	expect(t, e.do(http.MethodGet, "/groups/"+gid+"/members", hStrang, nil), http.StatusForbidden)
 	expect(t, e.do(http.MethodGet, "/groups/basura/members", hAdmin, nil), http.StatusNotFound)
 }
@@ -337,4 +386,137 @@ func TestBannedUserIsolationEndToEnd(t *testing.T) {
 	}
 	expect(t, e.do(http.MethodGet, "/groups/"+gid, hMember, nil), http.StatusForbidden)
 	expect(t, e.do(http.MethodGet, "/groups/"+gid+"/members", hMember, nil), http.StatusForbidden)
+}
+
+func groupPhotoDataURL(payload int) string {
+	return "data:image/png;base64," + strings.Repeat("A", payload)
+}
+
+func errorCode(t *testing.T, w *httptest.ResponseRecorder) string {
+	t.Helper()
+	body := decode(t, w)
+	errBody, _ := body["error"].(map[string]any)
+	code, _ := errBody["code"].(string)
+	return code
+}
+
+func TestEditGroupPhotoContract(t *testing.T) {
+	e := newEnv()
+	gid := e.createGroup(t, hAdmin)
+	e.join(t, gid, hMember)
+
+	photo := groupPhotoDataURL(4000)
+	thumb := groupPhotoDataURL(2000)
+
+	// Solo admin puede editar (incluida la foto).
+	edit := map[string]any{
+		"name":            "Grupo con foto",
+		"photo_url":       photo,
+		"photo_thumb_url": thumb,
+	}
+	expect(t, e.do(http.MethodPatch, "/groups/"+gid, hMember, edit), http.StatusForbidden)
+	expect(t, e.do(http.MethodPatch, "/groups/"+gid, hStrang, edit), http.StatusForbidden)
+
+	w := e.do(http.MethodPatch, "/groups/"+gid, hAdmin, edit)
+	expect(t, w, http.StatusOK)
+	body := decode(t, w)
+	if body["name"] != "Grupo con foto" || body["photo_url"] != photo || body["photo_thumb_url"] != thumb {
+		t.Fatalf("respuesta de edición incompleta: %s", w.Body)
+	}
+
+	// GET /groups/:id expone la foto completa y la miniatura a los miembros.
+	w = e.do(http.MethodGet, "/groups/"+gid, hMember, nil)
+	expect(t, w, http.StatusOK)
+	got := decode(t, w)
+	if got["photo_url"] != photo || got["photo_thumb_url"] != thumb {
+		t.Fatalf("GET no devuelve las fotos: %s", w.Body)
+	}
+
+	// La vista de grupos (tarjetas) solo lleva la miniatura.
+	cards, err := e.store.ListMyGroupsDetailed(context.Background(), hAdmin)
+	if err != nil || len(cards) != 1 {
+		t.Fatalf("ListMyGroupsDetailed: %v %d", err, len(cards))
+	}
+	if cards[0].PhotoThumbURL == nil || *cards[0].PhotoThumbURL != thumb {
+		t.Fatalf("la tarjeta debe usar photo_thumb_url: %+v", cards[0])
+	}
+
+	// Un PATCH sin campos de foto no las toca.
+	w = e.do(http.MethodPatch, "/groups/"+gid, hAdmin, map[string]any{"name": "Solo nombre"})
+	expect(t, w, http.StatusOK)
+	body = decode(t, w)
+	if body["photo_url"] != photo || body["photo_thumb_url"] != thumb {
+		t.Fatalf("un PATCH sin fotos no debe borrarlas: %s", w.Body)
+	}
+
+	// photo_url="" borra la foto y su miniatura para no dejar un recorte viejo.
+	w = e.do(http.MethodPatch, "/groups/"+gid, hAdmin, map[string]any{"name": "Sin foto", "photo_url": ""})
+	expect(t, w, http.StatusOK)
+	body = decode(t, w)
+	if body["photo_url"] != nil || body["photo_thumb_url"] != nil {
+		t.Fatalf("photo_url vacío debe borrar ambas fotos: %s", w.Body)
+	}
+}
+
+func TestEditGroupPhotoValidation(t *testing.T) {
+	e := newEnv()
+	gid := e.createGroup(t, hAdmin)
+
+	cases := []struct {
+		name string
+		body map[string]any
+		code string
+	}{
+		{
+			name: "foto completa excesiva",
+			body: map[string]any{
+				"name":      "Grupo",
+				"photo_url": groupPhotoDataURL(2_000_000),
+			},
+			code: "invalid_photo_url",
+		},
+		{
+			name: "miniatura excesiva",
+			body: map[string]any{
+				"name":            "Grupo",
+				"photo_thumb_url": groupPhotoDataURL(120_000),
+			},
+			code: "invalid_photo_thumb_url",
+		},
+		{
+			name: "data URL que no es imagen",
+			body: map[string]any{
+				"name":      "Grupo",
+				"photo_url": "data:text/plain;base64,AAAA",
+			},
+			code: "invalid_photo_url",
+		},
+		{
+			name: "URL remota demasiado larga",
+			body: map[string]any{
+				"name":      "Grupo",
+				"photo_url": "https://cdn.example/" + strings.Repeat("a", 500),
+			},
+			code: "invalid_photo_url",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := e.do(http.MethodPatch, "/groups/"+gid, hAdmin, tc.body)
+			expect(t, w, http.StatusBadRequest)
+			if got := errorCode(t, w); got != tc.code {
+				t.Fatalf("code = %q, se esperaba %q: %s", got, tc.code, w.Body)
+			}
+		})
+	}
+
+	// El grupo sigue sin foto tras los intentos inválidos.
+	g, err := e.store.GetByID(context.Background(), gid)
+	if err != nil || g == nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if g.PhotoURL != nil || g.PhotoThumbURL != nil {
+		t.Fatalf("no debe persistir una foto inválida: %+v", g)
+	}
 }

@@ -5,7 +5,7 @@
 - Headers: `Authorization: Bearer <access_token>`. `:id` UUID.
 
 ## Res
-- `200`: `{"id":"...","user_id":"...","name":"...","created_at":"..."}`.
+- `200`: `{"id":"...","user_id":"...","name":"...","semester_count":8,"created_at":"..."}`.
 - `400`: `{"error":{"code":"invalid_uuid","message":"..."}}` (UUID malformado; convención documentada en `service/errors.go`).
 - `401`: `{"error":{"code":"unauthorized|invalid_token|token_expired","message":"..."}}`.
 - `404`: `{"error":{"code":"not_found","message":"..."}}` (no existe o es ajena; nunca 403).

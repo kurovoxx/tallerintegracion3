@@ -1,0 +1,49 @@
+name: test-migrations
+
+# Valida que todas las migraciones versionadas (back/*/db/migrations/*.sql)
+# apliquen limpiamente contra una Postgres efímera. Si falla cualquiera,
+# el workflow se detiene: es el gate de deploy antes de build-images.
+on:
+  push:
+    branches: [Development]
+    paths:
+      - "back/**/db/migrations/**"
+      - "docker/postgres/init.sql"
+      - ".github/workflows/test-migrations.yml"
+  pull_request:
+    branches: [Development]
+    paths:
+      - "back/**/db/migrations/**"
+      - "docker/postgres/init.sql"
+      - ".github/workflows/test-migrations.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validar migraciones de todos los servicios
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres?sslmode=disable
+        run: |
+          chmod +x scripts/validate-migrations.sh
+          scripts/validate-migrations.sh

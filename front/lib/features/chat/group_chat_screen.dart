@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/models/social_models.dart';
 import '../../core/services/chat_service.dart';
@@ -252,16 +253,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 decoration: BoxDecoration(
                   color: AppColors.surface,
                   border: Border.all(
-                    color: AppColors.border,
+                    color: AppColors.outline,
                     width: AppDimens.borderWidth,
                   ),
                   borderRadius: BorderRadius.circular(AppDimens.radius),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: AppColors.border,
-                      offset: Offset(3, 3),
-                      blurRadius: 0,
-                    ),
+                  boxShadow: [
+                    AppShadows.hard3,
                   ],
                 ),
                 child: _buildBody(),
@@ -282,7 +279,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       ),
       child: Row(
         children: [
-          const Expanded(
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -310,7 +307,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
               color: AppColors.bg,
-              border: Border.all(color: AppColors.border, width: 2),
+              border: Border.all(color: AppColors.outline, width: 2),
               borderRadius: BorderRadius.circular(20),
             ),
             child: Row(
@@ -323,7 +320,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 const SizedBox(width: 6),
                 Text(
                   live ? 'EN LÍNEA' : 'DESCONECTADO',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.w900,
                     color: AppColors.text,
@@ -354,7 +351,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(
+                Icon(
                   Icons.forum_outlined,
                   size: 40,
                   color: AppColors.mutedStrong,
@@ -365,7 +362,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                       ? 'El chat no está disponible en este momento.'
                       : _message,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                     color: AppColors.mutedStrong,
@@ -386,7 +383,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           children: [
             Expanded(
               child: _messages.isEmpty
-                  ? const Center(
+                  ? Center(
                       child: Text(
                         'Aún no hay mensajes. Escribe el primero.',
                         textAlign: TextAlign.center,
@@ -405,7 +402,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                           _MessageBubble(message: _messages[i]),
                     ),
             ),
-            const Divider(color: AppColors.border, thickness: 2, height: 1),
+            Divider(color: AppColors.border, thickness: 2, height: 1),
             _buildInput(),
           ],
         );
@@ -421,30 +418,40 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             child: Container(
               decoration: BoxDecoration(
                 color: AppColors.bg,
-                border: Border.all(color: AppColors.border, width: 2),
-                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: AppColors.outline, width: 2),
+                borderRadius: BorderRadius.circular(16),
               ),
-              child: TextField(
-                controller: _controller,
-                textInputAction: TextInputAction.send,
-                onSubmitted: (_) => _send(),
-                decoration: const InputDecoration(
-                  hintText: 'Escribe un mensaje...',
-                  hintStyle: TextStyle(
-                    color: AppColors.muted,
+              // Multilínea: Enter envía, Shift+Enter inserta salto. Así los
+              // saltos pegados (p. ej. arte Braille) llegan como '\n' reales.
+              child: CallbackShortcuts(
+                bindings: {
+                  const SingleActivator(LogicalKeyboardKey.enter): _send,
+                  const SingleActivator(LogicalKeyboardKey.numpadEnter): _send,
+                },
+                child: TextField(
+                  controller: _controller,
+                  minLines: 1,
+                  maxLines: 6,
+                  keyboardType: TextInputType.multiline,
+                  textInputAction: TextInputAction.newline,
+                  decoration: InputDecoration(
+                    hintText: 'Escribe un mensaje...',
+                    hintStyle: TextStyle(
+                      color: AppColors.muted,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                  ),
+                  style: TextStyle(
                     fontWeight: FontWeight.w600,
                     fontSize: 13,
+                    color: AppColors.text,
                   ),
-                  border: InputBorder.none,
-                  contentPadding: EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
-                ),
-                style: const TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13,
-                  color: AppColors.text,
                 ),
               ),
             ),
@@ -458,7 +465,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
               height: 44,
               decoration: BoxDecoration(
                 color: AppColors.accentYellow,
-                border: Border.all(color: AppColors.border, width: 2),
+                border: Border.all(color: AppColors.outline, width: 2),
                 shape: BoxShape.circle,
               ),
               child: _sending
@@ -466,7 +473,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                       padding: EdgeInsets.all(12),
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
-                  : const Icon(
+                  : Icon(
                       Icons.send_rounded,
                       size: 18,
                       color: AppColors.text,
@@ -499,6 +506,19 @@ class _MessageBubble extends StatelessWidget {
     return t.substring(0, 1).toUpperCase();
   }
 
+  /// Mensaje mayoritariamente Braille (U+2800–28FF) o caracteres de
+  /// caja/bloque (U+2500–259F): se renderiza como arte, no como prosa.
+  static bool _isBlockArt(String text) {
+    final runes = text.runes.where((r) => r > 32).toList();
+    if (runes.length < 20) return false;
+    final art = runes
+        .where(
+          (r) => (r >= 0x2800 && r <= 0x28FF) || (r >= 0x2500 && r <= 0x259F),
+        )
+        .length;
+    return art / runes.length > 0.6;
+  }
+
   static String _timeOf(DateTime when) {
     final l = when.toLocal();
     return '${l.hour.toString().padLeft(2, '0')}:${l.minute.toString().padLeft(2, '0')}';
@@ -509,6 +529,8 @@ class _MessageBubble extends StatelessWidget {
     final mine = message.isMine;
     // Identidad consistente: "Tú" para propios, display_name real ajeno.
     final who = mine ? 'Tú' : message.authorName;
+    // Separadores Unicode de línea/párrafo y CR se tratan como '\n'.
+    final body = message.text.replaceAll(RegExp('\r\n?| | '), '\n');
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
@@ -519,7 +541,7 @@ class _MessageBubble extends StatelessWidget {
         ),
         decoration: BoxDecoration(
           color: mine ? AppColors.accentYellow : AppColors.bg,
-          border: Border.all(color: AppColors.border, width: 2),
+          border: Border.all(color: AppColors.outline, width: 2),
           borderRadius: BorderRadius.circular(16),
         ),
         child: Column(
@@ -535,7 +557,7 @@ class _MessageBubble extends StatelessWidget {
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
                     color: mine ? AppColors.border : AppColors.accentYellow,
-                    border: Border.all(color: AppColors.border, width: 1.5),
+                    border: Border.all(color: AppColors.outline, width: 1.5),
                     borderRadius: BorderRadius.circular(11),
                   ),
                   child: Text(
@@ -553,7 +575,7 @@ class _MessageBubble extends StatelessWidget {
                     who,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.w900,
                       color: AppColors.mutedStrong,
@@ -563,7 +585,7 @@ class _MessageBubble extends StatelessWidget {
                 const SizedBox(width: 6),
                 Text(
                   _timeOf(message.createdAt),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 9,
                     fontWeight: FontWeight.w600,
                     color: AppColors.muted,
@@ -572,15 +594,34 @@ class _MessageBubble extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 4),
-            Text(
-              message.text,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: AppColors.text,
-                height: 1.35,
+            if (_isBlockArt(body))
+              // Arte Braille/bloques: sin reflow, filas pegadas y sin negrita
+              // sintética; si no cabe, se achica en vez de partirse.
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  body,
+                  softWrap: false,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w400,
+                    color: AppColors.text,
+                    height: 1.0,
+                    letterSpacing: 0,
+                  ),
+                ),
+              )
+            else
+              Text(
+                body,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.text,
+                  height: 1.35,
+                ),
               ),
-            ),
           ],
         ),
       ),

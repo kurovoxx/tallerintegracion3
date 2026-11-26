@@ -3,7 +3,7 @@
 ## Req
 - Método: `POST`, ruta: `/subjects/:id/schedules` (protegida, `back/infacadem/cmd/server/main.go:122`).
 - Headers: `Authorization: Bearer <access_token>`, `Content-Type: application/json`.
-- Body: `{"day_of_week":2,"start_time":"10:00","end_time":"11:30"}` (`day_of_week` 0-6 requerido; horas `"HH:MM"` o `"HH:MM:SS"`, `end_time > start_time`; opcional `modality` varchar libre, `""` = NULL).
+- Body: `{"day_of_week":2,"start_time":"10:00","end_time":"11:30","room":"Lab-3"}` (`day_of_week` 0-6 requerido; horas `"HH:MM"` o `"HH:MM:SS"`, `end_time > start_time`; opcionales `modality` y `room` varchar libre; vacío/whitespace = NULL, `room` se recorta con `TrimSpace`). Si se omite `room`, el front usa la sala del curso como fallback (no lo resuelve el backend).
 
 ## Res
 - `201`: `{"id":"<uuid>"}`.
@@ -22,5 +22,7 @@
 
 ## Tests
 - `back/infacadem/internal/handler/http/academic_handler_test.go`: `TestHandler_SinToken_401`, `TestHandler_FlujoCompleto`, `TestHandler_CrossUser_404`, `TestHandler_Validaciones_400` (día 7/-1/ausente, end==start, end<start, hora mala).
+- `back/infacadem/internal/handler/http/subject_fields_test.go`: `TestHandler_ScheduleRoom_Roundtrip` (POST con `"room":"  Lab-3 "` y sin room; GET devuelve `"room":"Lab-3"` y `"room":null`).
 - `back/infacadem/internal/service/academic_service_test.go`: `TestSchedule_CRUD_Validaciones`.
-- `back/infacadem/internal/service/academic_integration_test.go`: `TestAcademicIntegration_CRUDCascada`.
+- `back/infacadem/internal/service/subject_fields_test.go`: `TestSchedule_Room_Create` (trim, propagación al repo y room vacío/whitespace → NULL).
+- `back/infacadem/internal/service/academic_integration_test.go`: `TestAcademicIntegration_CRUDCascada` (room persistida contra Postgres real).

@@ -1,4 +1,4 @@
-# GET /auth/account-deletion
+# `GET /auth/account-deletion`
 
 Consulta el estado actual del proceso de borrado de cuenta para el usuario autenticado (incluso si la cuenta ya está bloqueada).
 

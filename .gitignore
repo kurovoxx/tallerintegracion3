@@ -11,4 +11,11 @@ CLAUDE.md
 
 # Reportes generados por scripts/load-test.sh
 reports/
+
+# Paquetes .deb generados por scripts/build-linux-deb.sh
+/dist/
 __pycache__/
+backups/
+
+# Maqueta temporal de la Propuesta 3 UCT (no forma parte del build)
+maqueta_propuesta3_uct.html

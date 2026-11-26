@@ -366,27 +366,21 @@ func TestCopyDstWithoutOAuthRejectedNoRecord(t *testing.T) {
 		t.Fatal("esperaba 403 destino sin OAuth")
 	}
 	se, ok := err.(*ServiceError)
-	if !ok || se.Code != "forbidden" {
-		t.Fatalf("esperaba forbidden, got %v", err)
+	if !ok || se.Code != "drive_not_connected" {
+		t.Fatalf("esperaba drive_not_connected, got %v", err)
 	}
 	if driveMock.FileCount() != beforeFiles {
 		t.Fatalf("copy fallida no debe crear archivos, antes=%d ahora=%d", beforeFiles, driveMock.FileCount())
 	}
-	// La nota de clon existe pero con sync_status='failed_sync'
-	if countNotes(noteStore) != beforeNotes+1 {
-		t.Fatalf("copy fallida debe crear fila con failed_sync, antes=%d ahora=%d", beforeNotes, countNotes(noteStore))
+	// Sin Drive del clonador la copia se rechaza ANTES de insertar: antes
+	// quedaba una fila 'failed_sync' sin archivo que el cliente mostraba como
+	// apunte copiado pero ilegible.
+	if countNotes(noteStore) != beforeNotes {
+		t.Fatalf("copy rechazada no debe crear fila, antes=%d ahora=%d", beforeNotes, countNotes(noteStore))
 	}
-	// Verificar que la nota extra tiene failed_sync
-	allNotes, _, _ := noteStore.ListByUser(ctx, copier, "", 10)
-	found := false
-	for _, n := range allNotes {
-		if n.SyncStatus == "failed_sync" && n.Title == "Origen OAuth" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("nota de clon debe quedar en failed_sync para reconciliación")
+	mine, _, _ := noteStore.ListByUser(ctx, copier, "", 10)
+	if len(mine) != 0 {
+		t.Fatalf("el clonador no debe tener apuntes tras el rechazo: %d", len(mine))
 	}
 }
 
@@ -446,21 +440,11 @@ func TestCopySourceMissingNoRecordNoOrphan(t *testing.T) {
 	if driveMock.FileCount() != beforeFiles {
 		t.Fatalf("copy fallida no debe crear archivos, antes=%d ahora=%d", beforeFiles, driveMock.FileCount())
 	}
-	// La nota de clon existe pero con sync_status='failed_sync'
-	if countNotes(noteStore) != beforeNotes+1 {
-		t.Fatalf("copy fallida debe crear fila con failed_sync, antes=%d ahora=%d", beforeNotes, countNotes(noteStore))
-	}
-	// Verificar que la nota extra tiene failed_sync
-	allNotes, _, _ := noteStore.ListByUser(ctx, copier, "", 10)
-	found := false
-	for _, n := range allNotes {
-		if n.SyncStatus == "failed_sync" && n.Title == "Origen frágil" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("nota de clon debe quedar en failed_sync para reconciliación")
+	// Rechazo definitivo de Drive (origen 404): el archivo no se creó, así que
+	// el clon recién insertado se elimina; antes quedaba una fila
+	// 'failed_sync' sin archivo que la app mostraba como copia ilegible.
+	if countNotes(noteStore) != beforeNotes {
+		t.Fatalf("copy rechazada no debe dejar fila, antes=%d ahora=%d", beforeNotes, countNotes(noteStore))
 	}
 }
 

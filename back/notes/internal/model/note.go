@@ -33,16 +33,38 @@ type Note struct {
 	Content *string `json:"content,omitempty"`
 }
 
+// PublicNote es la fila mínima de un apunte público de un autor (base de
+// GET /public-users/:public_id/notes).
+// Excluye deliberadamente external_file_id, sync_status, forked_from_note_id,
+// content (Markdown) y cualquier identificador interno de Drive: el listado
+// público solo alimenta tarjetas/resúmenes. La consulta del repositorio
+// selecciona únicamente estas columnas.
+type PublicNote struct {
+	ID         string    `json:"id"`
+	UserID     string    `json:"user_id"`
+	SubjectID  *string   `json:"subject_id,omitempty"`
+	Title      string    `json:"title"`
+	Visibility string    `json:"visibility"`
+	LikesCount int       `json:"likes_count"`
+	Version    int64     `json:"version"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
 type Attachment struct {
-	ID             string    `json:"id"`
-	NoteID         string    `json:"note_id"`
-	ExternalFileID string    `json:"external_file_id"`
-	FileURL        string    `json:"file_url"`
-	FileType       string    `json:"file_type"`
-	FileName       *string   `json:"file_name,omitempty"`
-	FileSizeBytes  *int      `json:"file_size_bytes,omitempty"`
-	IsInline       bool      `json:"is_inline"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID             string  `json:"id"`
+	NoteID         string  `json:"note_id"`
+	ExternalFileID string  `json:"external_file_id"`
+	FileURL        string  `json:"file_url"`
+	FileType       string  `json:"file_type"`
+	FileName       *string `json:"file_name,omitempty"`
+	FileSizeBytes  *int    `json:"file_size_bytes,omitempty"`
+	IsInline       bool    `json:"is_inline"`
+	// CopiedFromAttachmentID es la procedencia lógica cuando esta fila nació
+	// al copiar un apunte. No se expone en la API: solo se usa para
+	// idempotencia/trazabilidad interna del copiado.
+	CopiedFromAttachmentID *string   `json:"-"`
+	CreatedAt              time.Time `json:"created_at"`
 }
 
 type SavedNote struct {
@@ -50,6 +72,105 @@ type SavedNote struct {
 	UserID  string    `json:"user_id"`
 	NoteID  string    `json:"note_id"`
 	SavedAt time.Time `json:"saved_at"`
+}
+
+// NoteTombstone es la lápida de un apunte borrado (notes.note_tombstones):
+// metadata mínima para distinguir "eliminado por el autor" (410) de "nunca
+// existió" (404) y para titular los guardados que quedaron huérfanos.
+type NoteTombstone struct {
+	NoteID      string    `json:"note_id"`
+	OwnerUserID string    `json:"owner_user_id"`
+	Title       string    `json:"title"`
+	SubjectID   *string   `json:"subject_id,omitempty"`
+	Visibility  string    `json:"visibility"`
+	DeletedAt   time.Time `json:"deleted_at"`
+}
+
+// NoteInteractions son los contadores exactos y el estado del solicitante
+// sobre un apunte (likes y guardados).
+type NoteInteractions struct {
+	NoteID     string `json:"note_id"`
+	LikesCount int    `json:"likes_count"`
+	SavesCount int    `json:"saves_count"`
+	IsLiked    bool   `json:"is_liked"`
+	IsSaved    bool   `json:"is_saved"`
+}
+
+// Motivos por los que un guardado deja de estar disponible.
+const (
+	UnavailableDeleted  = "deleted"   // el autor borró el apunte
+	UnavailableNoAccess = "no_access" // el autor lo volvió privado / retiró el share
+)
+
+// SavedNoteView es un elemento de GET /notes/saved: el guardado más la
+// metadata del apunte original. Si el original ya no es accesible,
+// IsAvailable=false y UnavailableReason explica por qué; la referencia se
+// conserva para que el usuario pueda quitarla de sus guardados.
+//
+// AuthorID (UUID interno del autor) NO se serializa: solo se usa en el
+// servidor (filtros author_id/scope, is_own y resolución del código
+// público). El autor se identifica en la API por author_public_id.
+type SavedNoteView struct {
+	SavedID           string     `json:"saved_id"`
+	NoteID            string     `json:"note_id"`
+	SavedAt           time.Time  `json:"saved_at"`
+	IsAvailable       bool       `json:"is_available"`
+	UnavailableReason string     `json:"unavailable_reason,omitempty"`
+	Title             string     `json:"title"`
+	AuthorID          string     `json:"-"`
+	SubjectID         *string    `json:"subject_id,omitempty"`
+	Visibility        string     `json:"visibility,omitempty"`
+	LikesCount        int        `json:"likes_count"`
+	SavesCount        int        `json:"saves_count"`
+	IsLiked           bool       `json:"is_liked"`
+	IsSaved           bool       `json:"is_saved"`
+	IsOwn             bool       `json:"is_own"`
+	UpdatedAt         *time.Time `json:"updated_at,omitempty"`
+	DeletedAt         *time.Time `json:"deleted_at,omitempty"`
+
+	// AuthorPublicID es el código público del autor (Identity). Es lo que la
+	// interfaz muestra; se omite si Identity no lo pudo resolver.
+	AuthorPublicID string `json:"author_public_id,omitempty"`
+}
+
+// PublicNoteView es un elemento de GET /notes/public: apunte público de otro
+// usuario con sus contadores y el estado del solicitante. UserID (UUID interno
+// del autor) NO se serializa; el autor se identifica por author_public_id.
+type PublicNoteView struct {
+	ID         string    `json:"id"`
+	UserID     string    `json:"-"`
+	Title      string    `json:"title"`
+	SubjectID  *string   `json:"subject_id,omitempty"`
+	Visibility string    `json:"visibility"`
+	LikesCount int       `json:"likes_count"`
+	SavesCount int       `json:"saves_count"`
+	IsLiked    bool      `json:"is_liked"`
+	IsSaved    bool      `json:"is_saved"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+
+	// AuthorPublicID es el código público del autor; ver SavedNoteView.
+	AuthorPublicID string `json:"author_public_id,omitempty"`
+}
+
+// PublicProfileNoteView es un elemento de GET /public-users/:public_id/notes.
+// Omite deliberadamente user_id (UUID interno) y cualquier identificador de
+// Drive: el autor solo se identifica por el public_id de la ruta.
+type PublicProfileNoteView struct {
+	ID         string    `json:"id"`
+	Title      string    `json:"title"`
+	SubjectID  *string   `json:"subject_id,omitempty"`
+	Visibility string    `json:"visibility"`
+	LikesCount int       `json:"likes_count"`
+	SavesCount int       `json:"saves_count"`
+	IsLiked    bool      `json:"is_liked"`
+	IsSaved    bool      `json:"is_saved"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+
+	// IsOwn indica que el solicitante es el autor (p. ej. al buscar su propio
+	// código): la interfaz oculta «Guardar» sin conocer el UUID.
+	IsOwn bool `json:"is_own"`
 }
 
 type NoteLike struct {

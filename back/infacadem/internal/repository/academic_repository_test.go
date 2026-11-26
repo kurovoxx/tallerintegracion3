@@ -55,6 +55,7 @@ CREATE TABLE academic.curricula (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id uuid NOT NULL,
     name varchar(200) NOT NULL,
+    semester_count int NOT NULL DEFAULT 8 CHECK (semester_count BETWEEN 1 AND 20),
     created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE academic.subjects (
@@ -79,6 +80,7 @@ CREATE TABLE academic.schedules (
     start_time time NOT NULL,
     end_time time NOT NULL,
     modality varchar(50),
+    room varchar(100),
     CHECK (end_time > start_time)
 );
 CREATE TABLE academic.contents (
@@ -204,6 +206,16 @@ func TestRepository_Curricula(t *testing.T) {
 	if upd, _ := r.UpdateName(ctx, c.ID, repoUserB, "Hack"); upd != nil {
 		t.Fatal("update ajeno nil")
 	}
+	if c.SemesterCount != 8 {
+		t.Fatalf("semester_count default: %d", c.SemesterCount)
+	}
+	updCount, err := r.UpdateSemesterCount(ctx, c.ID, repoUserA, 12)
+	if err != nil || updCount == nil || updCount.SemesterCount != 12 {
+		t.Fatalf("update semester_count: %+v %v", updCount, err)
+	}
+	if upd, _ := r.UpdateSemesterCount(ctx, c.ID, repoUserB, 10); upd != nil {
+		t.Fatal("update semester_count ajeno nil")
+	}
 	deleted, err := r.Delete(ctx, c.ID, repoUserB)
 	if err != nil || deleted {
 		t.Fatalf("delete ajeno false: %v %v", deleted, err)
@@ -291,14 +303,18 @@ func TestRepository_Schedules(t *testing.T) {
 	start, _ := timeParseHM("08:00")
 	end, _ := timeParseHM("09:30")
 	mod := "Cátedra"
-	h, err := r.Create(ctx, repoUserA, mat, 1, start, end, &mod)
+	room := "Lab-3"
+	h, err := r.Create(ctx, repoUserA, mat, 1, start, end, &mod, &room)
 	if err != nil || h == nil || h.DayOfWeek != 1 {
 		t.Fatalf("create: %+v %v", h, err)
 	}
 	if h.Modality == nil || *h.Modality != "Cátedra" {
 		t.Fatalf("modality: %+v", h)
 	}
-	if h2, _ := r.Create(ctx, repoUserB, mat, 1, start, end, nil); h2 != nil {
+	if h.Room == nil || *h.Room != "Lab-3" {
+		t.Fatalf("room: %+v", h)
+	}
+	if h2, _ := r.Create(ctx, repoUserB, mat, 1, start, end, nil, nil); h2 != nil {
 		t.Fatal("materia ajena nil")
 	}
 	list, owned, err := r.ListBySubject(ctx, mat, repoUserA)
@@ -550,7 +566,7 @@ func TestRepository_Cascadas(t *testing.T) {
 	mat := mustSubject(t, pool, repoUserA, curA, "S")
 	start, _ := timeParseHM("08:00")
 	end, _ := timeParseHM("09:00")
-	if _, err := NewScheduleRepository(pool).Create(ctx, repoUserA, mat, 1, start, end, nil); err != nil {
+	if _, err := NewScheduleRepository(pool).Create(ctx, repoUserA, mat, 1, start, end, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	score := 50

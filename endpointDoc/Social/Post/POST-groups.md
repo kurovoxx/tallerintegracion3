@@ -1,19 +1,30 @@
-# POST /groups
+# `POST /groups`
 
-Crea un grupo y registra al creador como administrador (microservicio `social`).
 
 ## Req
-- Método: `POST`, ruta: `/groups` (protegida con JWT `Bearer`; `back/social/cmd/server/main.go:224`).
-- Headers: `Content-Type: application/json`, `Authorization: Bearer <access_token>`.
-- Body (`createGroupRequest`, `internal/handler/http/group_handler.go:80-83`): `{"name":"Grupo de estudio","description":"opcional"}`.
-- `name` requerido, no vacío tras recortar, máx. 200 bytes (`group_service.go:141`). `description` opcional (vacía = `nil`).
+
+- `POST /groups`, dentro del grupo HTTP protegido con JWT; registro: `back/social/internal/handler/http/group_handler.go:25-36` y middleware en `back/social/cmd/server/main.go:272-275`.
+- `Authorization`: Bearer <JWT>; JSON: name requerido y description opcional. name se normaliza y no puede quedar vacío; máximo 200 bytes. No se acepta owner_user_id del cliente.
+- Ejemplo: {"name":"Grupo demo","description":"Estudio"}.
 
 ## Res
-- `201`: `{"group_id":"<uuid>"}` (no devuelve el objeto completo).
-- `400`: JSON inválido o nombre inválido. `401`: sin token o token inválido (middleware). `500`: `internal`.
+
+- `201`: {"group_id":"<uuid>"}.
+- 400 si el JSON/nombre es inválido; 401 sin JWT; 500 ante error interno. Los errores de Create usan el envelope común {"error":{"code":"...","message":"..."}}.
+- PostgreSQL inserta grupo y membresía inicial admin en una transacción. El alta de canal Stream es best-effort y no revierte el grupo.
+
+## Invocación (Front / Otros Servicios)
+
+- `_GroupsScreenState._openCreateSheet` confirma el formulario, llama a `createGroup` y vuelve a cargar la lista (`front/lib/features/groups/groups_screen.dart:123-159`).
+- `SocialService.createGroup` envía POST con JWT, valida `201`, extrae `group_id` y notifica el cambio (`front/lib/core/services/social_service.dart:95-125`).
+- No se encontró invocación de producción desde otro microservicio.
 
 ## Flujo
-- `GroupHandler.Create` (`internal/handler/http/group_handler.go:85`) lee el JSON y saca el `userID` del contexto (nunca del body) → `GroupService.Create` (`internal/service/group_service.go:141`: normaliza y valida) → `GroupRepository.CreateWithOwner` (`INSERT INTO social.groups` + membresía `admin` en una transacción, `internal/repository/group_repository.go:26`). Notificación Stream best-effort, no revierte el grupo.
+
+1. `main()` instala `GroupHandler.RegisterRoutes` bajo JWT (`back/social/cmd/server/main.go:271-275`; `back/social/internal/handler/http/group_handler.go:23-38`).
+2. `GroupHandler.Create` obtiene el user ID del JWT, valida el body y llama al servicio (`back/social/internal/handler/http/group_handler.go:85-103`).
+3. `GroupService.Create` normaliza y valida los datos; `GroupRepository.CreateWithOwner` guarda el grupo y su membresía de admin en una transacción (`back/social/internal/service/group_service.go:212-238`; `back/social/internal/repository/group_repository.go:23-58`).
+4. El handler responde `201` con `group_id`; la notificación de canal Stream se ejecuta best-effort (`back/social/internal/handler/http/group_handler.go:96-103`; `back/social/internal/service/group_service.go:233-235`). `_openCreateSheet` recarga la lista tras éxito (`front/lib/features/groups/groups_screen.dart:123-159`).
 
 ## Front
 - Cliente: `SocialService.createGroup` (`front/lib/core/services/social_service.dart:96`); envía `name` y `description` (solo si no está vacía), ambos con `trim()`.
@@ -22,6 +33,7 @@ Crea un grupo y registra al creador como administrador (microservicio `social`).
 - UI: snackbar `Grupo creado.` o `No se pudo crear el grupo.`.
 
 ## Tests
-- `internal/handler/http/group_handler_test.go`: `TestCreateGroupContract` (201, 400, 401).
-- `internal/service/group_service_test.go`: `TestCreate` (validaciones con dobles).
-- `internal/handler/http/groups_postgres_e2e_test.go`: `TestGroupsPostgresE2E_MembershipLifecycle` (creación por HTTP real + rol `admin` verificado por SQL).
+
+- `back/social/internal/handler/http/group_handler_test.go:131`, `TestCreateGroupContract`.
+- `back/social/internal/service/group_service_test.go` incluye validaciones de Create.
+- `back/social/internal/handler/http/groups_postgres_e2e_test.go:28`, `TestGroupsPostgresE2E_MembershipLifecycle` verifica ruta y persistencia. Suite con base PostgreSQL configurada.

@@ -160,6 +160,15 @@ func TestHandler_FlujoCompleto(t *testing.T) {
 	if w := f.do(t, "PATCH", "/curricula/"+curID, `{"name":"Malla v2"}`, tok); w.Code != 200 || !strings.Contains(w.Body.String(), "Malla v2") {
 		t.Fatalf("patch: %d %s", w.Code, w.Body.String())
 	}
+	if w := f.do(t, "PATCH", "/curricula/"+curID, `{"semester_count":12}`, tok); w.Code != 200 || !strings.Contains(w.Body.String(), `"semester_count":12`) {
+		t.Fatalf("patch semester_count: %d %s", w.Code, w.Body.String())
+	}
+	if w := f.do(t, "PATCH", "/curricula/"+curID, `{"semester_count":0}`, tok); w.Code != 400 || !strings.Contains(w.Body.String(), "invalid_semester_count") {
+		t.Fatalf("patch semester_count inválido: %d %s", w.Code, w.Body.String())
+	}
+	if w := f.do(t, "PATCH", "/curricula/"+curID, `{}`, tok); w.Code != 400 {
+		t.Fatalf("patch vacío: %d %s", w.Code, w.Body.String())
+	}
 
 	w = f.do(t, "POST", "/curricula/"+curID+"/subjects", `{"name":"Cálculo","status":"approved","average_decimal_places":1}`, tok)
 	if w.Code != 201 {

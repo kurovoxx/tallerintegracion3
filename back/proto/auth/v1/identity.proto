@@ -58,6 +58,12 @@ service IdentityService {
   // Avisa que Google rechazó el token de Calendar (401/403) para marcar
   // revoked_at. Idempotente y sin fuga de existencia: sin fila también es OK.
   rpc ReportCalendarRevoked(ReportCalendarRevokedRequest) returns (ReportCalendarRevokedResponse);
+
+  // H-05: resuelve identity.users.public_id al UUID interno. Solo para
+  // servicios internos autorizados (x-internal-key); el UUID nunca se expone
+  // en la respuesta HTTP pública de Notes. Formato inválido = InvalidArgument;
+  // inexistente = NotFound; fallo de BD = Internal.
+  rpc ResolvePublicProfile(ResolvePublicProfileRequest) returns (ResolvePublicProfileResponse);
 }
 
 // Proveedor OAuth (identity.oauth_connections.provider).
@@ -76,13 +82,23 @@ message GetUserResponse {
   string email = 2;
   // Ausente si el usuario no tiene nombre público (model.PublicUser).
   optional string display_name = 3;
+  // Miniatura de la foto de perfil (data URL o URL remota corta). Ausente si
+  // el usuario no tiene foto o aún no generó su miniatura.
+  optional string photo_thumb_url = 4;
+  // Código público del perfil (identity.users.public_id, 12 caracteres
+  // Crockford Base32). Es el único identificador que los consumidores pueden
+  // mostrar en la interfaz en lugar del UUID interno. Ausente si no existe.
+  optional string public_id = 5;
 }
 
-// Usuario público (model.PublicUser): solo user_id/email/display_name.
+// Usuario público (model.PublicUser): solo datos no sensibles.
 message User {
   string user_id = 1;
   string email = 2;
   optional string display_name = 3;
+  optional string photo_thumb_url = 4;
+  // Código público del perfil (ver GetUserResponse.public_id).
+  optional string public_id = 5;
 }
 
 message LookupUsersRequest {
@@ -128,3 +144,13 @@ message ReportCalendarRevokedRequest {
 
 // Vacía a propósito: la operación es idempotente y no filtra existencia.
 message ReportCalendarRevokedResponse {}
+
+message ResolvePublicProfileRequest {
+  // 12 caracteres Crockford Base32 en minúsculas; se normaliza a minúsculas.
+  string public_id = 1;
+}
+
+message ResolvePublicProfileResponse {
+  // UUID interno de identity.users. Uso exclusivo servicio-a-servicio.
+  string user_id = 1;
+}

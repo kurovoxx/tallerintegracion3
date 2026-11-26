@@ -3,7 +3,7 @@
 ## Req
 - Método: `POST`, ruta: `/curricula` (protegida, `back/infacadem/cmd/server/main.go:110`).
 - Headers: `Authorization: Bearer <access_token>`, `Content-Type: application/json`.
-- Body: `{"name":"Malla 2026"}` (1-200 caracteres).
+- Body: `{"name":"Malla 2026"}` (1-200 caracteres). La malla nace con `semester_count = 8` (ajustable luego por `PATCH /curricula/{id}`).
 
 ## Res
 - `201`: `{"id":"<uuid>"}`.

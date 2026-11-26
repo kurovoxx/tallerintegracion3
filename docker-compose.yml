@@ -16,6 +16,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    # Sin esto, al reiniciar el PC Docker levanta los servicios (unless-stopped)
+    # pero no la base: quedan sin DB y nginx devuelve HTML en vez de JSON.
+    restart: unless-stopped
     networks:
       - ti3-net
 
@@ -38,6 +41,12 @@ services:
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USERNAME: ${SMTP_USERNAME:-sigmaacademy.noreply@gmail.com}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-Sigma Academy}
+      SMTP_TLS_MODE: ${SMTP_TLS_MODE:-starttls}
+      EMAIL_VERIFICATION_REQUIRED: ${EMAIL_VERIFICATION_REQUIRED:-false}
+      EMAIL_VERIFICATION_URL: ${EMAIL_VERIFICATION_URL:-}
+      EMAIL_VERIFICATION_TTL: ${EMAIL_VERIFICATION_TTL:-24h}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI}
@@ -142,6 +151,27 @@ services:
       - notes
       - social
       - infacadem
+    networks:
+      - ti3-net
+    restart: unless-stopped
+
+  ai:
+    build:
+      context: ./back/ai
+      dockerfile: Dockerfile
+    container_name: ti3-ai
+    ports:
+      - "8084:8084" # HTTP (Gin): microservicio IA
+    environment:
+      PORT: 8084
+      AI_PORT: 8084
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-me}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://postgres:esomeprazol2002@postgres:5432/postgres?sslmode=disable}
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - ti3-net
     restart: unless-stopped

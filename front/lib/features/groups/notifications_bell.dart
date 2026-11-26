@@ -4,6 +4,7 @@ import '../../core/models/social_models.dart';
 import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import '../../core/widgets/group_invitation_notifications.dart';
 
 /// Campanita de notificaciones para el header de grupos (tarea 3_5_14).
 /// Muestra badge con no-leídas y abre el diálogo; al cerrar, recarga el conteo.
@@ -61,8 +62,9 @@ class _NotificationsBellState extends State<NotificationsBell> {
     final seq = ++_refreshSeq;
     try {
       final items = await _service.myNotifications();
+      final invitations = await _service.listPendingInvitations();
       if (!mounted || seq != _refreshSeq) return;
-      _unread.value = _countUnread(items);
+      _unread.value = _countUnread(items) + invitations.length;
     } catch (_) {
       // Silencioso: sin sesión o backend caído, la campana no estorba.
     }
@@ -72,8 +74,11 @@ class _NotificationsBellState extends State<NotificationsBell> {
     if (_entry != null) return;
     final box = context.findRenderObject() as RenderBox?;
     final overlay = Overlay.of(context);
-    final position = box?.localToGlobal(Offset.zero) ?? Offset.zero;
-    final size = box?.size ?? const Size(48, 48);
+    // Coordenadas relativas al overlay (no a la pantalla) para anclar exacto.
+    final overlayBox = overlay.context.findRenderObject() as RenderBox?;
+    final anchor = box == null
+        ? Rect.zero
+        : box.localToGlobal(Offset.zero, ancestor: overlayBox) & box.size;
 
     void close() {
       if (_entry == null) return;
@@ -84,7 +89,7 @@ class _NotificationsBellState extends State<NotificationsBell> {
     final entry = OverlayEntry(
       builder: (_) => _NotificationsPopup(
         service: _service,
-        anchorTop: position.dy + size.height + 4,
+        anchor: anchor,
         unread: _unread,
         onClose: close,
       ),
@@ -114,12 +119,12 @@ class _NotificationsBellState extends State<NotificationsBell> {
                 padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                 decoration: BoxDecoration(
                   color: AppColors.error,
-                  border: Border.all(color: AppColors.border, width: 2),
+                  border: Border.all(color: AppColors.outline, width: 2),
                   borderRadius: BorderRadius.circular(AppDimens.radiusChip),
                 ),
                 child: Text(
                   _unread.value > 9 ? '9+' : '${_unread.value}',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.w900,
                     color: AppColors.surface,
@@ -135,108 +140,209 @@ class _NotificationsBellState extends State<NotificationsBell> {
 
 /// Popup anclado bajo la campana (tarea 3_5_14). Se cierra tocando fuera o
 /// con la X; al cerrar, la campana recarga el badge.
-class _NotificationsPopup extends StatelessWidget {
+///
+/// Se alinea al borde derecho de la campana (se despliega hacia la izquierda,
+/// sin tapar "Nuevo grupo"), con una flecha apuntando al centro de la campana
+/// y entrada/salida fade + scale de [AppMotion.medium].
+class _NotificationsPopup extends StatefulWidget {
   const _NotificationsPopup({
     required this.service,
-    required this.anchorTop,
+    required this.anchor,
     required this.unread,
     required this.onClose,
   });
 
   final SocialService service;
-  final double anchorTop;
+
+  /// Rect de la campana en coordenadas del overlay.
+  final Rect anchor;
   final ValueNotifier<int> unread;
   final VoidCallback onClose;
 
   @override
+  State<_NotificationsPopup> createState() => _NotificationsPopupState();
+}
+
+class _NotificationsPopupState extends State<_NotificationsPopup>
+    with SingleTickerProviderStateMixin {
+  static const double _arrowSize = 12;
+  static const double _gap = 10;
+  static const double _margin = 12;
+
+  late final AnimationController _ctrl = AnimationController(
+    vsync: this,
+    duration: AppMotion.medium,
+  )..forward();
+  late final Animation<double> _curve = CurvedAnimation(
+    parent: _ctrl,
+    curve: AppMotion.standard,
+    reverseCurve: Curves.easeInCubic,
+  );
+  bool _closing = false;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  /// Anima la salida y recién entonces quita el overlay.
+  Future<void> _dismiss() async {
+    if (_closing) return;
+    _closing = true;
+    await _ctrl.reverse();
+    widget.onClose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final width = MediaQuery.sizeOf(context).width;
-    final popupWidth = (width - 32).clamp(0.0, 340.0);
+    final screen = MediaQuery.sizeOf(context);
+    final popupWidth = (screen.width - _margin * 2).clamp(0.0, 340.0);
+    final anchor = widget.anchor;
+    // Borde derecho del popup = borde derecho de la campana (acotado a la
+    // pantalla); si no cabe hacia la izquierda, se corre lo justo.
+    final right = (screen.width - anchor.right).clamp(
+      _margin,
+      (screen.width - popupWidth - _margin).clamp(_margin, double.infinity),
+    );
+    final left = screen.width - right - popupWidth;
+    final top = anchor.bottom + _gap;
+    // Flecha centrada en la campana, nunca fuera del popup.
+    final arrowLeft = (anchor.center.dx - left - _arrowSize / 2).clamp(
+      _arrowSize,
+      (popupWidth - _arrowSize * 2).clamp(_arrowSize, double.infinity),
+    );
+    final maxHeight = (screen.height - top - _margin).clamp(160.0, 440.0);
+
     return Stack(
       children: [
         GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: onClose,
+          onTap: _dismiss,
           child: const SizedBox.expand(),
         ),
         Positioned(
-          top: anchorTop,
-          right: 12,
-          child: Material(
-            type: MaterialType.transparency,
-            child: Container(
-              width: popupWidth,
-              constraints: const BoxConstraints(maxHeight: 440),
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                border: Border.all(
-                  color: AppColors.border,
-                  width: AppDimens.borderWidth,
-                ),
-                borderRadius: BorderRadius.circular(AppDimens.radius),
-                boxShadow: AppShadows.card,
+          top: top - _arrowSize / 2 - 1,
+          left: left,
+          width: popupWidth,
+          child: FadeTransition(
+            opacity: _curve,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.94, end: 1).animate(_curve),
+              // Crece desde la flecha (debajo de la campana).
+              alignment: Alignment(
+                ((arrowLeft + _arrowSize / 2) / popupWidth) * 2 - 1,
+                -1,
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(14, 10, 4, 10),
-                    child: Row(
-                      children: [
-                        const Expanded(
-                          child: Text(
-                            'NOTIFICACIONES',
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: 0.6,
-                              color: AppColors.text,
-                              decoration: TextDecoration.none,
+              child: Material(
+                type: MaterialType.transparency,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    // Flecha: cuadrado girado 45° pintado antes del cuerpo;
+                    // el cuerpo (opaco) tapa su mitad inferior y solo asoma
+                    // el pico con borde de tinta.
+                    Positioned(
+                      top: 0,
+                      left: arrowLeft,
+                      child: Transform.rotate(
+                        angle: 0.785398, // 45°
+                        child: Container(
+                          width: _arrowSize,
+                          height: _arrowSize,
+                          decoration: BoxDecoration(
+                            color: AppColors.surface,
+                            border: Border.all(
+                              color: AppColors.outline,
+                              width: AppDimens.borderWidth,
                             ),
                           ),
                         ),
-                        ValueListenableBuilder<int>(
-                          valueListenable: unread,
-                          builder: (context, count, _) {
-                            if (count <= 0) return const SizedBox.shrink();
-                            return Padding(
-                              padding: const EdgeInsets.only(
-                                right: AppDimens.spaceSm,
-                              ),
-                              child: NeobrutalistBadge(
-                                label: count > 9
-                                    ? '9+ nuevas'
-                                    : (count == 1
-                                          ? '1 nueva'
-                                          : '$count nuevas'),
-                                tone: NeobrutalistTone.accent,
-                                compact: true,
-                              ),
-                            );
-                          },
-                        ),
-                        NeobrutalistIconButton(
-                          icon: Icons.close_rounded,
-                          tooltip: 'Cerrar',
-                          size: 34,
-                          onPressed: onClose,
-                        ),
-                      ],
+                      ),
                     ),
-                  ),
-                  Container(height: 2, color: AppColors.border),
-                  Flexible(
-                    child: _NotificationsList(
-                      service: service,
-                      onUnreadChanged: (count) => unread.value = count,
+                    Padding(
+                      padding: const EdgeInsets.only(top: _arrowSize / 2 + 1),
+                      child: _buildBody(maxHeight),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildBody(double maxHeight) {
+    final unread = widget.unread;
+    final service = widget.service;
+    final onClose = _dismiss;
+    return Container(
+      constraints: BoxConstraints(maxHeight: maxHeight),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border: Border.all(
+          color: AppColors.outline,
+          width: AppDimens.borderWidth,
+        ),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+        // Sombra más profunda: despega el popover del fondo.
+        boxShadow: AppShadows.dialog,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 10, 4, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'NOTIFICACIONES',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.6,
+                      color: AppColors.text,
+                      decoration: TextDecoration.none,
+                    ),
+                  ),
+                ),
+                ValueListenableBuilder<int>(
+                  valueListenable: unread,
+                  builder: (context, count, _) {
+                    if (count <= 0) return const SizedBox.shrink();
+                    return Padding(
+                      padding: const EdgeInsets.only(right: AppDimens.spaceSm),
+                      child: NeobrutalistBadge(
+                        label: count > 9
+                            ? '9+ nuevas'
+                            : (count == 1 ? '1 nueva' : '$count nuevas'),
+                        tone: NeobrutalistTone.accent,
+                        compact: true,
+                      ),
+                    );
+                  },
+                ),
+                NeobrutalistIconButton(
+                  icon: Icons.close_rounded,
+                  tooltip: 'Cerrar',
+                  size: 34,
+                  onPressed: onClose,
+                ),
+              ],
+            ),
+          ),
+          Container(height: 2, color: AppColors.outline),
+          Flexible(
+            child: _NotificationsList(
+              service: service,
+              onUnreadChanged: (count) => unread.value = count,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -260,6 +366,7 @@ class _NotificationsListState extends State<_NotificationsList> {
   String? _error;
   // Cargas superpuestas (marcar varias seguidas): solo vale la última.
   int _loadSeq = 0;
+  int _pendingInvitations = 0;
   // Ids con POST /read en vuelo: un doble toque no repite la petición.
   final Set<String> _marking = <String>{};
 
@@ -280,7 +387,7 @@ class _NotificationsListState extends State<_NotificationsList> {
       if (!mounted || seq != _loadSeq) return;
       final unique = _dedupeById(items);
       setState(() => _items = unique);
-      widget.onUnreadChanged?.call(_countUnread(unique));
+      widget.onUnreadChanged?.call(_countUnread(unique) + _pendingInvitations);
     } on SocialApiException catch (e) {
       if (!mounted || seq != _loadSeq) return;
       setState(() => _error = e.message);
@@ -302,7 +409,7 @@ class _NotificationsListState extends State<_NotificationsList> {
         for (final item in _items) item.id == n.id ? item.asRead() : item,
       ];
     });
-    widget.onUnreadChanged?.call(_countUnread(_items));
+    widget.onUnreadChanged?.call(_countUnread(_items) + _pendingInvitations);
     try {
       await widget.service.markNotificationRead(n.id);
     } catch (_) {
@@ -328,83 +435,87 @@ class _NotificationsListState extends State<_NotificationsList> {
       );
     }
 
-    if (_error != null) {
-      return Padding(
-        padding: const EdgeInsets.all(AppDimens.spaceXl),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(
-              Icons.cloud_off_rounded,
-              size: 28,
-              color: AppColors.muted,
-            ),
-            const SizedBox(height: AppDimens.spaceSm),
-            Text(
-              _error!,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: AppColors.mutedStrong,
-              ),
-            ),
-            const SizedBox(height: AppDimens.spaceMd),
-            NeobrutalistButton(
-              label: 'Reintentar',
-              icon: Icons.refresh_rounded,
-              variant: NeobrutalistButtonVariant.secondary,
-              onPressed: _load,
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (_items.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.all(AppDimens.spaceXl),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.notifications_none_rounded,
-              size: 28,
-              color: AppColors.muted,
-            ),
-            SizedBox(height: AppDimens.spaceSm),
-            Text(
-              'SIN NOTIFICACIONES',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 0.4,
-                color: AppColors.text,
-              ),
-            ),
-            SizedBox(height: AppDimens.spaceXs),
-            Text(
-              'Aquí verás los recordatorios de tus reuniones.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w700,
-                color: AppColors.mutedStrong,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return ListView.builder(
+    return ListView(
       shrinkWrap: true,
       padding: const EdgeInsets.all(AppDimens.spaceSm),
-      itemCount: _items.length,
-      itemBuilder: (context, i) => _NotificationTile(
-        notification: _items[i],
-        onTap: () => _markRead(_items[i]),
-      ),
+      children: [
+        GroupInvitationNotifications(
+          service: widget.service,
+          onPendingCountChanged: (count) {
+            _pendingInvitations = count;
+            widget.onUnreadChanged?.call(
+              _countUnread(_items) + _pendingInvitations,
+            );
+          },
+        ),
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.all(AppDimens.spaceXl),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.cloud_off_rounded, color: AppColors.muted),
+                const SizedBox(height: AppDimens.spaceSm),
+                Text(
+                  _error!,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.mutedStrong,
+                  ),
+                ),
+                const SizedBox(height: AppDimens.spaceMd),
+                NeobrutalistButton(
+                  label: 'Reintentar',
+                  icon: Icons.refresh_rounded,
+                  variant: NeobrutalistButtonVariant.secondary,
+                  onPressed: _load,
+                ),
+              ],
+            ),
+          )
+        else if (_items.isEmpty && _pendingInvitations == 0)
+          Padding(
+            padding: EdgeInsets.all(AppDimens.spaceXl),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.notifications_none_rounded,
+                  size: 28,
+                  color: AppColors.muted,
+                ),
+                SizedBox(height: AppDimens.spaceSm),
+                Text(
+                  'SIN NOTIFICACIONES',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.4,
+                    color: AppColors.text,
+                  ),
+                ),
+                SizedBox(height: AppDimens.spaceXs),
+                Text(
+                  'Aquí verás invitaciones y recordatorios de reuniones.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.mutedStrong,
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          for (var i = 0; i < _items.length; i++)
+            _NotificationTile(
+              notification: _items[i],
+              onTap: () => _markRead(_items[i]),
+            ),
+      ],
     );
   }
 }
@@ -439,11 +550,11 @@ class _NotificationTile extends StatelessWidget {
             decoration: BoxDecoration(
               color: unread ? AppColors.surface : AppColors.surfaceLow,
               border: Border.all(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidth,
               ),
               borderRadius: BorderRadius.circular(AppDimens.radius),
-              boxShadow: unread ? const [AppShadows.hard2] : null,
+              boxShadow: unread ? [AppShadows.hard2] : null,
             ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -474,7 +585,7 @@ class _NotificationTile extends StatelessWidget {
                       const SizedBox(height: AppDimens.spaceXs),
                       Text(
                         _formatWhen(notification.scheduledAt),
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
                           color: AppColors.mutedStrong,

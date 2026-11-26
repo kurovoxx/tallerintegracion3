@@ -35,7 +35,7 @@ La prioridad se aplica al estado actual del proyecto y no significa que una func
 
 ### SHOULD
 
-**RN-IDENT-09.** La visibilidad del perfil admite los valores `public` y `private`. La configuración debe mantenerse persistida aunque el flujo completo de consulta pública de perfiles no se encuentre implementado todavía.
+**RN-IDENT-09.** La visibilidad del perfil admite los valores `public` y `private`. Al buscar un perfil por su código, uno `public` muestra nombre, foto, descripción, correo, teléfono y universidad; uno `private` muestra a terceros **solo nombre y foto** (`GET /profile/public/:public_id` responde `200` sin los demás campos, que Auth descarta antes del handler). El dueño ve siempre todos sus datos. Sus apuntes públicos siguen visibles (RN-PERFIL-06). *(Actualizado en `feat/mejoras-perfiles-y-apuntes`: antes un perfil privado ajeno respondía `404` y correo, teléfono y descripción nunca se exponían.)*
 
 ---
 
@@ -48,6 +48,14 @@ La prioridad se aplica al estado actual del proyecto y no significa que una func
 **RN-PERFIL-02.** La actualización del perfil es parcial: los campos que no son enviados deben conservar su valor anterior.
 
 **RN-PERFIL-03.** Un request inválido debe rechazarse antes de persistir cambios parciales no deseados.
+
+**RN-PERFIL-05.** El perfil público (`GET /profile/public/:public_id`) expone únicamente `public_id`, `display_name`, `photo_url`, `institution` y `visibility`. `photo_url` solo se entrega si es una imagen subida desde la app (data URL `data:image/...;base64,`); una URL remota se devuelve como `null`, para que la app de quien consulta no contacte a servidores ajenos. La descripción del perfil es privada. Nunca se devuelven `user_id`, `email`, `phone`, `description`, tokens ni datos internos. Todas las respuestas incluyen `Cache-Control: private, no-store`, también las emitidas por el middleware de autenticación (401, 423 y 503).
+
+**RN-PERFIL-06.** La visibilidad del perfil y la de los apuntes son independientes (decisión aprobada por el Scrum Master). Un perfil `private` oculta sus datos a otros usuarios, pero sus apuntes marcados como `public` siguen listándose en `GET /public-users/:public_id/notes` para cualquier usuario autenticado. Los apuntes privados nunca aparecen. La app muestra «Perfil privado» junto a esos apuntes.
+
+**RN-PERFIL-07.** `identity.users.public_id` es un identificador público de 12 caracteres Crockford Base32 en minúsculas (`^[0-9a-hj-km-np-tv-z]{12}$`, 60 bits), único, no nulo y generado por PostgreSQL (migración `006_public_profile_id.sql`). Es lo único que se comparte y lo que la app muestra en lugar del UUID (ficha de integrante de un grupo y autor de apuntes guardados y públicos). El botón «Compartir perfil» de Mi Perfil copia **solo el código** (nunca un enlace ni el UUID interno). «Buscar perfil» («Ingresa el código del perfil que deseas buscar») acepta únicamente el código (sin distinguir mayúsculas ni espacios alrededor) y rechaza cualquier enlace —incluidos los antiguos `sigma-academy://perfil/...`—, UUID internos, nombres, correos y teléfonos. No convierte `l`/`o` a `1`/`0` ni busca por datos personales.
+
+**RN-PERFIL-08.** `GET /profile/public/:public_id` responde `404` para un `public_id` inválido o inexistente (un perfil privado responde `200` solo con nombre y foto, RN-IDENT-09); `GET /public-users/:public_id/notes` responde `404` solo para un `public_id` inválido o inexistente. Ambos responden `503` cuando Identity no puede resolver el perfil. Un autor válido sin apuntes públicos devuelve `200` con lista vacía; un fallo de infraestructura nunca se disfraza de lista vacía.
 
 ### SHOULD
 
@@ -107,9 +115,15 @@ La prioridad se aplica al estado actual del proyecto y no significa que una func
 
 **RN-NOTES-13.** Las actualizaciones de una nota deben protegerse frente a modificaciones antiguas que intenten sobrescribir silenciosamente una versión más reciente.
 
+**RN-NOTES-19.** El listado de apuntes de un perfil (`GET /public-users/:public_id/notes`) devuelve exclusivamente notas con `visibility='public'` **y** `external_file_id` no nulo. Nunca incluye notas privadas, aunque estén compartidas por grupo o enlace. El DTO no expone el UUID del autor, `external_file_id`, `sync_status`, `forked_from_note_id` ni contenido Markdown.
+
+**RN-NOTES-20.** Ese listado se pagina por cursor con orden estable `created_at DESC, id DESC`, límite por defecto 20 y máximo 100. El cursor debe pertenecer a una nota pública con archivo Drive del mismo autor; un cursor inexistente, privado, sin archivo o de otro autor no devuelve resultados ni permite saltarse los filtros. Un cursor mal formado responde `400`.
+
+**RN-NOTES-21.** Copiar un apunte copia también sus adjuntos (imágenes y PDF) al Drive de quien copia y reescribe sus referencias `attachment:<uuid>`; la copia no depende de los archivos del autor. Un usuario solo puede tener una copia viva de cada apunte: la segunda responde `409 already_copied`.
+
 ### SHOULD
 
-**RN-NOTES-14.** Un usuario puede guardar una referencia a una nota accesible de otro usuario. El acceso debe volver a comprobarse cuando la referencia sea utilizada.
+**RN-NOTES-14.** Un usuario puede guardar una referencia a una nota accesible de otro usuario. El acceso debe volver a comprobarse cuando la referencia sea utilizada. El autor **no** puede guardar su propio apunte: `POST /notes/{id}/save` responde `409 cannot_save_own_note` (regla del backend; la app además oculta «Guardar»). Los guardados propios anteriores a esta regla se conservan y pueden quitarse.
 
 **RN-NOTES-15.** Si la nota original de una referencia guardada deja de existir, la referencia también deja de estar disponible.
 

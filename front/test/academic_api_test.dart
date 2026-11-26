@@ -45,6 +45,33 @@ void main() {
     expect(all.single.id, 'm1');
   });
 
+  test(
+    'updateCurriculumSemesterCount hace PATCH y parsea semester_count',
+    () async {
+      final api = await apiWith(
+        MockClient((request) async {
+          expect(request.method, 'PATCH');
+          expect(request.url.servicePath, '/curricula/m1');
+          expect(request.headers['Authorization'], 'Bearer jwt-test');
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          expect(body['semester_count'], 12);
+          return http.Response(
+            jsonEncode({
+              'id': 'm1',
+              'user_id': 'u',
+              'name': 'Malla 2026',
+              'semester_count': 12,
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }),
+      );
+      final updated = await api.updateCurriculumSemesterCount('m1', 12);
+      expect(updated.semesterCount, 12);
+    },
+  );
+
   test('createSubject envía code/credits y devuelve id', () async {
     final api = await apiWith(
       MockClient((request) async {
@@ -86,11 +113,25 @@ void main() {
       days: drafts.map((d) => d.dayOfWeek).toList(),
       startTime: '10:00',
       endTime: '11:30',
+      room: ' Lab-3 ',
     );
     expect(res.hasFailures, isFalse);
     expect(res.createdIds, ['h1', 'h2']);
     expect(posts.map((p) => p['day_of_week']), [1, 3]);
     expect(posts.first['start_time'], '10:00');
+    expect(posts.map((p) => p['room']), ['Lab-3', 'Lab-3']);
+  });
+
+  test('deleteSchedule hace DELETE y acepta 204', () async {
+    final api = await apiWith(
+      MockClient((request) async {
+        expect(request.method, 'DELETE');
+        expect(request.url.servicePath, '/schedules/h1');
+        expect(request.headers['Authorization'], 'Bearer jwt-test');
+        return http.Response('', 204);
+      }),
+    );
+    await api.deleteSchedule('h1');
   });
 
   test(
@@ -204,8 +245,19 @@ void main() {
       'day_of_week': 3,
       'start_time': '10:00:00',
       'end_time': '11:30:00',
+      'room': 'Lab-3',
     });
     expect(hhMmToMinutes(slot.startTime), 600);
     expect(slot.modality, isNull);
+    expect(slot.room, 'Lab-3');
+    final blankRoom = AcademicScheduleSlot.fromJson({
+      'id': 'h2',
+      'subject_id': 's1',
+      'day_of_week': 4,
+      'start_time': '10:00',
+      'end_time': '11:30',
+      'room': '   ',
+    });
+    expect(blankRoom.room, isNull);
   });
 }

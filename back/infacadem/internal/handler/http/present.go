@@ -40,6 +40,7 @@ type scheduleResponse struct {
 	StartTime string  `json:"start_time"`
 	EndTime   string  `json:"end_time"`
 	Modality  *string `json:"modality"`
+	Room      *string `json:"room"`
 }
 
 type absenceResponse struct {
@@ -87,6 +88,7 @@ func toScheduleResponse(s model.Schedule) scheduleResponse {
 		StartTime: s.StartTime.Format("15:04:05"),
 		EndTime:   s.EndTime.Format("15:04:05"),
 		Modality:  s.Modality,
+		Room:      s.Room,
 	}
 }
 

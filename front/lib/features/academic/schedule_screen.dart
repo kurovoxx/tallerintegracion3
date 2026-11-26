@@ -47,7 +47,7 @@ const double _kMinZoom = 0.55;
 const double _kMaxZoom = 1.80;
 const double _kZoomStep = 0.15;
 
-const List<Color> _kSubjectPalette = [
+List<Color> get _kSubjectPalette => [
   AppColors.accentYellow,
   AppColors.subjectBlue,
   AppColors.subjectMint,
@@ -298,7 +298,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
               dayOfWeek: slot.dayOfWeek,
               startMinutes: start,
               endMinutes: end,
-              room: s.room ?? 'Por asignar',
+              room: slot.room ?? s.room ?? 'Por asignar',
               professor: s.professor ?? 'Por asignar',
               modality: slot.modality ?? 'Cátedra',
             ),
@@ -475,7 +475,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
               Text(
                 'HORARIO SEMESTRAL',
                 style: TextStyle(
-                  color: AppColors.text,
+                  color: AppColors.title,
                   fontWeight: FontWeight.w900,
                   fontSize: compact ? 24 : 30,
                   letterSpacing: -0.5,
@@ -558,7 +558,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
               ? _buildDaySelector(scrollable: false, compact: false)
               : Text(
                   'Matriz completa · ${_displayedDays.length} columnas',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontFamily: 'monospace',
                     fontSize: 11,
                     fontWeight: FontWeight.w800,
@@ -682,9 +682,9 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
       mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min,
       children: [
         if (expand) ...[
-          const Icon(Icons.zoom_in_rounded, size: 16, color: AppColors.text),
+          Icon(Icons.zoom_in_rounded, size: 16, color: AppColors.text),
           const SizedBox(width: AppDimens.spaceSm),
-          const Text(
+          Text(
             'ZOOM',
             style: TextStyle(
               fontSize: 10.5,
@@ -711,7 +711,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
           decoration: BoxDecoration(
             color: AppColors.bg,
             border: Border.all(
-              color: AppColors.border,
+              color: AppColors.outline,
               width: AppDimens.borderWidth,
             ),
             borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -719,7 +719,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
           ),
           child: Text(
             '$percentage%',
-            style: const TextStyle(
+            style: TextStyle(
               fontFamily: 'monospace',
               fontSize: 11.5,
               fontWeight: FontWeight.w900,
@@ -753,13 +753,13 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 
   BoxDecoration get _panelDecoration => BoxDecoration(
     color: AppColors.surface,
-    border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+    border: Border.all(color: AppColors.outline, width: AppDimens.borderWidth),
     borderRadius: BorderRadius.circular(AppDimens.radius),
     boxShadow: AppShadows.card,
   );
 
   BoxDecoration get _matrixFrame => BoxDecoration(
-    border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+    border: Border.all(color: AppColors.outline, width: AppDimens.borderWidth),
   );
 
   Widget _buildWeekPanel() {
@@ -1039,10 +1039,10 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   }) {
     return Container(
       decoration: withLeftBorder
-          ? const BoxDecoration(
+          ? BoxDecoration(
               border: Border(
                 left: BorderSide(
-                  color: AppColors.border,
+                  color: AppColors.outline,
                   width: AppDimens.borderWidth,
                 ),
               ),
@@ -1185,7 +1185,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     return Container(
       height: 300,
       decoration: _panelDecoration,
-      child: const Center(
+      child: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1232,13 +1232,13 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
+              Icon(
                 Icons.error_outline_rounded,
                 size: 44,
                 color: AppColors.error,
               ),
               const SizedBox(height: AppDimens.spaceMd),
-              const Text(
+              Text(
                 'NO SE PUDO CARGAR TU HORARIO',
                 textAlign: TextAlign.center,
                 style: TextStyle(
@@ -1249,7 +1249,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                 ),
               ),
               const SizedBox(height: AppDimens.spaceSm),
-              const Text(
+              Text(
                 'Revisa tu conexión e inténtalo nuevamente.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
@@ -1385,7 +1385,7 @@ class _DayGrid extends StatelessWidget {
                   left: 0,
                   right: 0,
                   height: AppDimens.borderWidth,
-                  child: const ColoredBox(color: AppColors.border),
+                  child: ColoredBox(color: AppColors.border),
                 ),
               for (int i = 0; i < totalHours; i++)
                 Positioned(
@@ -1497,7 +1497,7 @@ class _ClassBlockState extends State<_ClassBlock> {
             decoration: BoxDecoration(
               color: widget.color,
               border: Border.all(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidth,
               ),
               borderRadius: BorderRadius.circular(AppDimens.radiusChip),
@@ -1612,7 +1612,7 @@ class _MiniTag extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radiusChip),
         boxShadow: AppShadows.badge,
       ),
@@ -1624,7 +1624,7 @@ class _MiniTag extends StatelessWidget {
           maxLines: 1,
           softWrap: false,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 9,
             fontWeight: FontWeight.w900,
             letterSpacing: 0.4,
@@ -1645,7 +1645,7 @@ class _NowRule extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const SizedBox(height: 3, child: ColoredBox(color: AppColors.error));
+    return SizedBox(height: 3, child: ColoredBox(color: AppColors.error));
   }
 }
 
@@ -1660,13 +1660,13 @@ class _NowBadge extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
       decoration: BoxDecoration(
         color: AppColors.error,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radiusChip),
         boxShadow: AppShadows.badge,
       ),
       child: Text(
         'AHORA $time',
-        style: const TextStyle(
+        style: TextStyle(
           fontFamily: 'monospace',
           fontSize: 9.5,
           fontWeight: FontWeight.w900,
@@ -1695,16 +1695,16 @@ class _HourRail extends StatelessWidget {
         Container(
           height: _kDayHeaderHeight,
           alignment: Alignment.center,
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             color: AppColors.surfaceLow,
             border: Border(
               bottom: BorderSide(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidth,
               ),
             ),
           ),
-          child: const Text(
+          child: Text(
             'HRS',
             style: TextStyle(
               fontSize: 11,
@@ -1732,7 +1732,7 @@ class _HourRail extends StatelessWidget {
                   left: 0,
                   right: 0,
                   height: AppDimens.borderWidth,
-                  child: const ColoredBox(color: AppColors.border),
+                  child: ColoredBox(color: AppColors.border),
                 ),
               for (int i = 0; i < totalHours; i++)
                 Positioned(
@@ -1745,7 +1745,7 @@ class _HourRail extends StatelessWidget {
                     ),
                     decoration: BoxDecoration(
                       color: AppColors.surface,
-                      border: Border.all(color: AppColors.border, width: 1.5),
+                      border: Border.all(color: AppColors.outline, width: 1.5),
                       borderRadius: BorderRadius.circular(AppDimens.radiusChip),
                       boxShadow: AppShadows.badge,
                     ),
@@ -1793,9 +1793,9 @@ class _DayHeaderCell extends StatelessWidget {
         color: isToday
             ? AppColors.accentYellow
             : (active ? AppColors.surfaceLow : AppColors.surface),
-        border: const Border(
+        border: Border(
           bottom: BorderSide(
-            color: AppColors.border,
+            color: AppColors.outline,
             width: AppDimens.borderWidth,
           ),
         ),
@@ -1808,7 +1808,7 @@ class _DayHeaderCell extends StatelessWidget {
               label,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w900,
                 letterSpacing: 0.5,
@@ -1822,7 +1822,7 @@ class _DayHeaderCell extends StatelessWidget {
               dateLabel,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 fontFamily: 'monospace',
                 fontSize: 10.5,
                 fontWeight: FontWeight.w800,
@@ -1838,7 +1838,7 @@ class _DayHeaderCell extends StatelessWidget {
                 color: AppColors.errorDeep,
                 borderRadius: BorderRadius.circular(AppDimens.radiusChip),
               ),
-              child: const Text(
+              child: Text(
                 'HOY',
                 style: TextStyle(
                   fontSize: 7.5,
@@ -1878,7 +1878,7 @@ class _EmptyDayStamp extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppColors.surface,
           border: Border.all(
-            color: AppColors.border,
+            color: AppColors.outline,
             width: AppDimens.borderWidth,
           ),
           borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -1887,13 +1887,13 @@ class _EmptyDayStamp extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(
+            Icon(
               Icons.event_available_rounded,
               size: 30,
               color: AppColors.text,
             ),
             const SizedBox(height: AppDimens.spaceSm),
-            const Text(
+            Text(
               'SIN CLASES PROGRAMADAS',
               style: TextStyle(
                 fontSize: 12.5,
@@ -1942,11 +1942,11 @@ class _SheetHeader extends StatelessWidget {
         horizontal: AppDimens.spaceLg,
         vertical: AppDimens.spaceMd,
       ),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: AppColors.surfaceLow,
         border: Border(
           bottom: BorderSide(
-            color: AppColors.border,
+            color: AppColors.outline,
             width: AppDimens.borderWidth,
           ),
         ),
@@ -1957,12 +1957,12 @@ class _SheetHeader extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
             decoration: BoxDecoration(
               color: AppColors.surface,
-              border: Border.all(color: AppColors.border, width: 1.5),
+              border: Border.all(color: AppColors.outline, width: 1.5),
               borderRadius: BorderRadius.circular(AppDimens.radiusChip),
             ),
             child: Text(
               index.toUpperCase(),
-              style: const TextStyle(
+              style: TextStyle(
                 fontFamily: 'monospace',
                 fontSize: 9.5,
                 fontWeight: FontWeight.w900,
@@ -1981,7 +1981,7 @@ class _SheetHeader extends StatelessWidget {
               title.toUpperCase(),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12.5,
                 fontWeight: FontWeight.w900,
                 letterSpacing: 0.6,
@@ -2015,7 +2015,7 @@ class _StampTag extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppColors.surface,
           border: Border.all(
-            color: AppColors.border,
+            color: AppColors.outline,
             width: AppDimens.borderWidth,
           ),
           borderRadius: BorderRadius.circular(AppDimens.radiusChip),
@@ -2033,7 +2033,7 @@ class _StampTag extends StatelessWidget {
                 label.toUpperCase(),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 9.5,
                   fontWeight: FontWeight.w900,
                   letterSpacing: 0.8,
@@ -2059,7 +2059,7 @@ class _SheetStamp extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radiusChip),
         boxShadow: AppShadows.badge,
       ),
@@ -2067,7 +2067,7 @@ class _SheetStamp extends StatelessWidget {
         label.toUpperCase(),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: const TextStyle(
+        style: TextStyle(
           fontFamily: 'monospace',
           fontSize: 9.5,
           fontWeight: FontWeight.w900,
@@ -2145,7 +2145,7 @@ class _MatrixChipState extends State<_MatrixChip> {
                   ? AppColors.accentYellow
                   : (_hovered ? AppColors.surfaceLow : AppColors.surface),
               border: Border.all(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidth,
               ),
               borderRadius: BorderRadius.circular(AppDimens.radiusChip),
@@ -2163,7 +2163,7 @@ class _MatrixChipState extends State<_MatrixChip> {
                       color: widget.active
                           ? AppColors.errorDeep
                           : AppColors.error,
-                      border: Border.all(color: AppColors.border, width: 1),
+                      border: Border.all(color: AppColors.outline, width: 1),
                       borderRadius: BorderRadius.circular(2),
                     ),
                   ),
@@ -2220,7 +2220,7 @@ class _ClassDetailDialog extends StatelessWidget {
           decoration: BoxDecoration(
             color: AppColors.surface,
             border: Border.all(
-              color: AppColors.border,
+              color: AppColors.outline,
               width: AppDimens.borderWidthThick,
             ),
             borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -2234,9 +2234,9 @@ class _ClassDetailDialog extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(18, 16, 12, 16),
                 decoration: BoxDecoration(
                   color: color,
-                  border: const Border(
+                  border: Border(
                     bottom: BorderSide(
-                      color: AppColors.border,
+                      color: AppColors.outline,
                       width: AppDimens.borderWidth,
                     ),
                   ),
@@ -2249,7 +2249,7 @@ class _ClassDetailDialog extends StatelessWidget {
                         children: [
                           Text(
                             session.code.toUpperCase(),
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontFamily: 'monospace',
                               fontSize: 10.5,
                               fontWeight: FontWeight.w900,
@@ -2260,7 +2260,7 @@ class _ClassDetailDialog extends StatelessWidget {
                           const SizedBox(height: AppDimens.spaceXs),
                           Text(
                             session.subjectName.toUpperCase(),
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.w900,
                               letterSpacing: -0.3,
@@ -2331,7 +2331,7 @@ class _ClassDetailDialog extends StatelessWidget {
                         ],
                       ),
                       const SizedBox(height: AppDimens.spaceXl),
-                      const Divider(
+                      Divider(
                         color: AppColors.border,
                         thickness: AppDimens.borderWidth,
                         height: AppDimens.borderWidth,
@@ -2345,7 +2345,7 @@ class _ClassDetailDialog extends StatelessWidget {
                   ),
                 ),
               ),
-              const Divider(
+              Divider(
                 color: AppColors.border,
                 thickness: AppDimens.borderWidth,
                 height: AppDimens.borderWidth,
@@ -2402,7 +2402,7 @@ class _DetailRow extends StatelessWidget {
             width: 74,
             child: Text(
               label.toUpperCase(),
-              style: const TextStyle(
+              style: TextStyle(
                 fontFamily: 'monospace',
                 fontSize: 10,
                 fontWeight: FontWeight.w900,

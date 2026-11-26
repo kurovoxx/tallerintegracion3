@@ -35,6 +35,9 @@ func (f *boomCurricula) ListByUser(ctx context.Context, u string) ([]model.Curri
 func (f *boomCurricula) UpdateName(ctx context.Context, id, u, n string) (*model.Curriculum, error) {
 	return nil, f.e
 }
+func (f *boomCurricula) UpdateSemesterCount(ctx context.Context, id, u string, count int) (*model.Curriculum, error) {
+	return nil, f.e
+}
 func (f *boomCurricula) Delete(ctx context.Context, id, u string) (bool, error) {
 	return false, f.e
 }
@@ -62,7 +65,7 @@ func (f *boomSubjects) CountsByCurricula(ctx context.Context, u string) (map[str
 
 type boomSchedules struct{ e error }
 
-func (f *boomSchedules) Create(ctx context.Context, u, s string, d int, st, en time.Time, mod *string) (*model.Schedule, error) {
+func (f *boomSchedules) Create(ctx context.Context, u, s string, d int, st, en time.Time, mod, room *string) (*model.Schedule, error) {
 	return nil, f.e
 }
 

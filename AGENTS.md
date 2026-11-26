@@ -40,7 +40,7 @@ go vet ./...
 go test ./... -count=1
 go test ./internal/service/ -run TestName -count=1     # single test
 ```
-Integration tests are opt-in via env and skip otherwise: `AUTH_TEST_DATABASE_URL`, `PASSWORD_RESET_TEST_DATABASE_URL`, `NOTES_TEST_DATABASE_URL`, `SOCIAL_TEST_DATABASE_URL`, `ACADEMIC_TEST_DATABASE_URL`. Auth integration/repo tests create/drop schema `identity` — use a dedicated DB (CI uses `auth_test`) and run with `-p 1`. CI: `test-auth.yml` (auth; unit = `go test ./... -skip 'TestAuthIntegration_|TestE2E_|TestPasswordResetRepository'`, e2e = `-run 'TestE2E_'`), `test-social-groups.yml` (full social suite with Postgres, `-race -p 1`), `test-cross-services.yml` (`-tags=crossservice` E2E Auth+Notes+Social as processes, needs `CROSS_SERVICE_TEST_DATABASE_URL` ending in `_test`), `grpc-ci.yml` (buf generate + breaking check).
+Integration tests are opt-in via env and skip otherwise: `AUTH_TEST_DATABASE_URL`, `PASSWORD_RESET_TEST_DATABASE_URL`, `NOTES_TEST_DATABASE_URL`, `SOCIAL_TEST_DATABASE_URL`, `ACADEMIC_TEST_DATABASE_URL`. Auth integration/repo tests create/drop schema `identity` — use a dedicated DB (CI uses `auth_test`) and run with `-p 1`. CI: `test-auth.yml` (auth; unit = `go test ./... -skip 'TestAuthIntegration_|TestE2E_|TestPasswordResetRepository'`, e2e = `-run 'TestE2E_'`), `test-social-groups.yml` (full social suite with Postgres, `-race -p 1`), `test-cross-services.yml` (`-tags=crossservice` E2E Auth+Notes+Social as processes, needs `CROSS_SERVICE_TEST_DATABASE_URL` ending in `_test`), `grpc-ci.yml` (buf generate + breaking check), `build-linux-deb.yml` (Flutter Linux: .deb como artifact y en la Release de tags `v*`).
 
 sqlc (social): `cd back/social && sqlc generate`.
 
@@ -58,6 +58,7 @@ flutter test                            # single: flutter test test/api_config_t
 flutter analyze
 dart run build_runner build             # regenerate Drift app_database.g.dart
 flutter run -d chrome --dart-define=API_BASE_URL=http://localhost:8085 --dart-define=NOTES_BASE_URL=http://localhost:8082 --dart-define=SOCIAL_BASE_URL=http://localhost:8083 --dart-define=ACADEMIC_BASE_URL=http://localhost:8087
+./scripts/build-linux-deb.sh                 # .deb en dist/ (requiere dpkg-deb; CI: build-linux-deb.yml)
 ```
 Front defaults point at the Pillán cluster, not localhost (`lib/core/services/api_config.dart`); override with `--dart-define` (see `front/.env.local.example`). Paths starting with `/` are resolved against the web origin (nginx proxy) or Pillán on native.
 

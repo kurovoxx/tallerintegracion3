@@ -1,0 +1,116 @@
+name: build-linux-deb
+
+# Compila Sigma Academy para Linux y genera el .deb.
+# - push a Development: deja el .deb como artifact descargable.
+# - tags v*: adjunta el .deb y SHA256SUMS a la Release de GitHub.
+# - PR: valida el empaquetado cuando cambian archivos del paquete.
+on:
+  push:
+    branches: [Development]
+    tags: ["v*"]
+    paths:
+      - "front/**"
+      - "scripts/build-linux-deb.sh"
+      - ".github/workflows/build-linux-deb.yml"
+  pull_request:
+    paths:
+      - "front/linux/**"
+      - "front/pubspec.yaml"
+      - "front/pubspec.lock"
+      - "front/web/icons/**"
+      - "scripts/build-linux-deb.sh"
+      - ".github/workflows/build-linux-deb.yml"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versión Debian (ej. 1.0.1+2). Vacío = la de front/pubspec.yaml."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  linux-deb:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependencias del sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev \
+            dpkg-dev desktop-file-utils
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Habilitar Linux desktop
+        run: flutter config --enable-linux-desktop
+
+      - name: Dependencias Dart
+        working-directory: front
+        run: flutter pub get
+
+      - name: Compilar y empaquetar
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+          MAINTAINER: "Sigma Academy <sigma-academy@users.noreply.github.com>"
+        run: ./scripts/build-linux-deb.sh
+
+      - name: Validar e instalar el paquete
+        run: |
+          set -euo pipefail
+          DEB="$(ls -1 dist/sigma-academy_*_amd64.deb | head -n1)"
+          test -n "$DEB"
+          dpkg-deb --info "$DEB"
+
+          rm -rf /tmp/deb-check
+          mkdir -p /tmp/deb-check
+          dpkg-deb -x "$DEB" /tmp/deb-check
+          desktop-file-validate /tmp/deb-check/usr/share/applications/*.desktop
+          test -x /tmp/deb-check/opt/sigma-academy/taller_integracion_front
+          test -L /tmp/deb-check/usr/bin/sigma-academy
+
+          # Instalación real (sin GUI) para comprobar dependencias y rutas.
+          cp "$DEB" /tmp/sigma-academy.deb
+          sudo apt-get install -y /tmp/sigma-academy.deb
+          dpkg -s sigma-academy
+          test -x /usr/bin/sigma-academy
+          sudo apt-get remove -y sigma-academy
+
+          sha256sum dist/*.deb > dist/SHA256SUMS
+          cat dist/SHA256SUMS
+
+      - name: Verificar versión del tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          DEB_VERSION="$(dpkg-deb -f dist/*.deb Version)"
+          if [ "$TAG_VERSION" != "$DEB_VERSION" ] && [ "$TAG_VERSION" != "${DEB_VERSION%%+*}" ]; then
+            echo "::error::El tag v$TAG_VERSION no coincide con la versión del .deb ($DEB_VERSION). Actualizá front/pubspec.yaml antes de taggear."
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-deb
+          path: |
+            dist/*.deb
+            dist/SHA256SUMS
+          if-no-files-found: error
+
+      - name: Adjuntar a la Release (tags v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.deb
+            dist/SHA256SUMS
+          fail_on_unmatched_files: true

@@ -12,13 +12,22 @@ Da "me gusta" a una nota legible. Inserta la fila en `notes.note_likes` e increm
 
 ## Res
 
-**201 Created**, sin body (`note_handler.go:689`).
+**201 Created** con contadores (`NoteHandler.Like` → `respondInteractions`).
+
+```json
+{ "note_id": "…", "likes_count": 1, "saves_count": 0, "is_liked": true, "is_saved": false }
+```
+
+El body son los contadores exactos tras la escritura (igual que [`GET /notes/{id}/stats`](../Get/GET-notes-id-stats.md)). Si releerlos fallara, se responde `201` sin body: la escritura ya quedó hecha.
+
+**Idempotencia:** repetir la operación nunca duplica la fila ni el contador (`UNIQUE` en BD + comprobación previa + revalidación tras carrera). La repetición responde el `409` del contrato (`agentApiContract2.md` §3); el cliente debe tratarlo como "ya estaba en ese estado".
 
 **Errores**
 
 | HTTP | `error.code` | Condición |
 | --- | --- | --- |
 | 404 | `not_found` "nota no encontrada" | No existe o es privada sin acceso (`note_service.go:1911-1921`) |
+| 410 | `note_deleted` "Apunte no disponible (eliminado por el autor)" | El autor lo borró y era público o el solicitante lo tenía guardado (`missingNoteError`, `service/saved_interactions.go`) |
 | 409 | `already_liked` "Nota ya likeada" | El usuario ya dio like (comprobación previa o carrera revalidada) (`L1922-1934`) |
 | 500 | `internal_error` | Fallo de Postgres o de Social al comprobar membresía |
 | 401 / 423 / 503 | ver [COMUN §2](../COMUN-notes.md#2-autenticación-http) | Middleware |
@@ -40,7 +49,7 @@ Nota: el UPDATE cambia `updated_at` pero **no** `version`.
 3. `NoteService.Like` (`note_service.go:1903`): `GetByID`, `hasReadAccess` (Social `IsMember` por gRPC para shares `restricted`), `LikeStore.Exists` (`service/store_pg.go:101`), `LikeStore.LikeAtomic` (`store_pg.go:104` → `like_repository.go:69`).
 4. Respuesta 201.
 
-Finalmente devuelve `201` sin body; hoy ningún cliente de producción consume ese resultado, aunque el nuevo `likes_count` se refleja en `GET /notes/:id`, `GET /notes/me` y en el orden de `GET /groups/:id/notes`.
+Finalmente devuelve `201` con `{note_id, likes_count, saves_count, is_liked, is_saved}`; hoy ningún cliente de producción consume ese resultado, aunque el nuevo `likes_count` se refleja en `GET /notes/:id`, `GET /notes/me` y en el orden de `GET /groups/:id/notes`.
 
 ## Tests
 

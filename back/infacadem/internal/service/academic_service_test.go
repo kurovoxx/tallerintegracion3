@@ -25,7 +25,7 @@ func newFakeCurricula() *fakeCurricula { return &fakeCurricula{items: map[string
 func (f *fakeCurricula) Create(_ context.Context, userID, name string) (*model.Curriculum, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	c := &model.Curriculum{ID: uuid.NewString(), UserID: userID, Name: name, CreatedAt: time.Now()}
+	c := &model.Curriculum{ID: uuid.NewString(), UserID: userID, Name: name, SemesterCount: 8, CreatedAt: time.Now()}
 	f.items[c.ID] = c
 	cp := *c
 	return &cp, nil
@@ -58,6 +58,17 @@ func (f *fakeCurricula) UpdateName(_ context.Context, id, userID, name string) (
 	defer f.mu.Unlock()
 	if c, ok := f.items[id]; ok && c.UserID == userID {
 		c.Name = name
+		cp := *c
+		return &cp, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeCurricula) UpdateSemesterCount(_ context.Context, id, userID string, count int) (*model.Curriculum, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if c, ok := f.items[id]; ok && c.UserID == userID {
+		c.SemesterCount = count
 		cp := *c
 		return &cp, nil
 	}
@@ -217,7 +228,7 @@ func (f *fakeSchedules) ownedSubjectLocked(subjectID, userID string) bool {
 	return ok && c.UserID == userID
 }
 
-func (f *fakeSchedules) Create(_ context.Context, userID, subjectID string, day int, start, end time.Time, modality *string) (*model.Schedule, error) {
+func (f *fakeSchedules) Create(_ context.Context, userID, subjectID string, day int, start, end time.Time, modality, room *string) (*model.Schedule, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sub.mu.Lock()
@@ -225,7 +236,7 @@ func (f *fakeSchedules) Create(_ context.Context, userID, subjectID string, day 
 	if !f.ownedSubjectLocked(subjectID, userID) {
 		return nil, nil
 	}
-	s := &model.Schedule{ID: uuid.NewString(), SubjectID: subjectID, DayOfWeek: day, StartTime: start, EndTime: end, Modality: modality}
+	s := &model.Schedule{ID: uuid.NewString(), SubjectID: subjectID, DayOfWeek: day, StartTime: start, EndTime: end, Modality: modality, Room: room}
 	f.items[s.ID] = s
 	cp := *s
 	return &cp, nil
@@ -337,6 +348,26 @@ func TestCurriculum_CRUD(t *testing.T) {
 	} else {
 		mustCode(t, err, "not_found")
 	}
+	if c.SemesterCount != defaultSemesterCount {
+		t.Fatalf("semester_count default: %d", c.SemesterCount)
+	}
+
+	updCount, err := svc.UpdateSemesterCount(ctx, userA, c.ID, 12)
+	if err != nil || updCount.SemesterCount != 12 {
+		t.Fatalf("update semester_count: %+v %v", updCount, err)
+	}
+	for _, bad := range []int{0, 21} {
+		if _, err := svc.UpdateSemesterCount(ctx, userA, c.ID, bad); err == nil {
+			t.Fatalf("semester_count %d debe ser 400", bad)
+		} else {
+			mustCode(t, err, "invalid_semester_count")
+		}
+	}
+	if _, err := svc.UpdateSemesterCount(ctx, userB, c.ID, 10); err == nil {
+		t.Fatal("update semester_count ajeno debe ser 404")
+	} else {
+		mustCode(t, err, "not_found")
+	}
 
 	if err := svc.Delete(ctx, userB, c.ID); err == nil {
 		t.Fatal("delete ajeno debe ser 404")
@@ -430,7 +461,7 @@ func TestSchedule_CRUD_Validaciones(t *testing.T) {
 	malla, _ := NewCurriculumService(cur).Create(ctx, userA, "Malla")
 	mat, _ := subSvc.Create(ctx, userA, malla.ID, SubjectInput{Name: strPtr("Física")})
 
-	s, err := schSvc.Create(ctx, userA, mat.ID, 1, "08:00", "09:30", nil)
+	s, err := schSvc.Create(ctx, userA, mat.ID, 1, "08:00", "09:30", nil, nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -438,28 +469,28 @@ func TestSchedule_CRUD_Validaciones(t *testing.T) {
 		t.Fatalf("horas: %+v", s)
 	}
 	for _, day := range []int{-1, 7} {
-		if _, err := schSvc.Create(ctx, userA, mat.ID, day, "08:00", "09:00", nil); err == nil {
+		if _, err := schSvc.Create(ctx, userA, mat.ID, day, "08:00", "09:00", nil, nil); err == nil {
 			t.Fatalf("day %d debe ser 400", day)
 		} else {
 			mustCode(t, err, "invalid_day_of_week")
 		}
 	}
-	if _, err := schSvc.Create(ctx, userA, mat.ID, 1, "09:00", "09:00", nil); err == nil {
+	if _, err := schSvc.Create(ctx, userA, mat.ID, 1, "09:00", "09:00", nil, nil); err == nil {
 		t.Fatal("end==start debe ser 400")
 	} else {
 		mustCode(t, err, "invalid_time_range")
 	}
-	if _, err := schSvc.Create(ctx, userA, mat.ID, 1, "10:00", "09:00", nil); err == nil {
+	if _, err := schSvc.Create(ctx, userA, mat.ID, 1, "10:00", "09:00", nil, nil); err == nil {
 		t.Fatal("end<start debe ser 400")
 	} else {
 		mustCode(t, err, "invalid_time_range")
 	}
-	if _, err := schSvc.Create(ctx, userA, mat.ID, 1, "mañana", "09:00", nil); err == nil {
+	if _, err := schSvc.Create(ctx, userA, mat.ID, 1, "mañana", "09:00", nil, nil); err == nil {
 		t.Fatal("formato malo debe ser 400")
 	} else {
 		mustCode(t, err, "invalid_time_format")
 	}
-	if _, err := schSvc.Create(ctx, userB, mat.ID, 1, "08:00", "09:00", nil); err == nil {
+	if _, err := schSvc.Create(ctx, userB, mat.ID, 1, "08:00", "09:00", nil, nil); err == nil {
 		t.Fatal("materia ajena debe ser 404")
 	} else {
 		mustCode(t, err, "not_found")

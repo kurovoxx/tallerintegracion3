@@ -7,7 +7,7 @@ Devuelve la metadata de Postgres y el contenido Markdown descargado del Drive de
 - **Registro:** `back/notes/cmd/server/main.go:210` → `protected.GET("/notes/:id", h.Get)`. Handler `back/notes/internal/handler/http/note_handler.go:199-251` (`Get`).
 - **Autenticación:** `RequireAuth` (`main.go:192`). Ver [COMUN §2](../COMUN-notes.md#2-autenticación-http).
 - **Permiso de lectura** (`hasReadAccess`, `back/notes/internal/service/note_service.go:617-642`): autor, o nota `public`, o nota `private` con algún share `link`, o con un share `restricted` en un grupo del que el solicitante es miembro (Social `IsMember`).
-- **Path:** `id` UUID obligatorio. No UUID → 404 `not_found` (`validateNoteID`, `note_handler.go:144-150`).
+- **Path:** `id` UUID obligatorio. Se normaliza (minúsculas, sin espacios) antes de validar, para que un ID pegado en mayúsculas encuentre el mismo apunte. No UUID → 404 `not_found` (`validateNoteID`).
 - **Query:** ninguna. **Body:** no tiene.
 
 ## Res
@@ -28,6 +28,10 @@ Devuelve la metadata de Postgres y el contenido Markdown descargado del Drive de
   "external_file_id": "1AbCdriveFileId",
   "drive_url": "https://drive.google.com/file/d/1AbCdriveFileId/view",
   "content": "# Matrices\n",
+  "saves_count": 2,
+  "is_liked": false,
+  "is_saved": true,
+  "is_own": false,
   "attachments": []
 }
 ```
@@ -38,6 +42,8 @@ Devuelve la metadata de Postgres y el contenido Markdown descargado del Drive de
 | `title`, `visibility` | Metadata (`public` \| `private`) |
 | `likes_count` | Contador mantenido por like/unlike |
 | `version` | Versión para el bloqueo optimista de PATCH |
+| `saves_count`, `is_liked`, `is_saved` | Contadores exactos y estado del solicitante (`NoteService.Interactions`); se omiten solo si su lectura falla |
+| `is_own` | `true` si el solicitante es el autor |
 | `created_at`, `updated_at` | RFC3339 en UTC |
 | `subject_id` | Solo si existe (`L226-228`) |
 | `external_file_id`, `drive_url` | ID del `.md` en Drive y enlace web construido a partir de él; solo si existe (`L229-233`). En la práctica siempre está en un 200, porque sin archivo el servicio responde 404 |
@@ -52,6 +58,7 @@ No incluye `sync_status` (sí lo incluye el RPC).
 | HTTP | `error.code` | Condición |
 | --- | --- | --- |
 | 404 | `not_found` "nota no encontrada" | `id` no UUID, la nota no existe en Postgres, o es privada y el solicitante no tiene acceso. Ambos casos son indistinguibles a propósito (`note_service.go:957-976`) |
+| 410 | `note_deleted` "Apunte no disponible (eliminado por el autor)" | La fila no existe pero hay lápida en `notes.note_tombstones` y el apunte era público o el solicitante lo tenía guardado. Para el propio autor o un privado ajeno se mantiene el 404 |
 | 404 | `note_unavailable` "Nota no disponible en almacenamiento remoto" | La nota existe y es legible, pero no tiene `external_file_id`, o Drive responde 404/403, o el **autor** perdió su conexión OAuth (`L979-1005`) |
 | 502 | `internal_error` "Servicio de almacenamiento no disponible" | Drive caído o timeout (`L1006`) |
 | 500 | `internal_error` "Error interno" | Fallo de Postgres, de Social al comprobar membresía (`L632-635`), o al listar adjuntos (`note_handler.go:240-244`) |
@@ -70,6 +77,7 @@ No existe un 403 en esta ruta: un OAuth revocado del autor se convierte en `note
 2. **Abrir nota compartida en un grupo** — `GroupNotesTab`.
    - Acción: botón **Abrir** de una nota compartida → `_openNote` (`front/lib/features/groups/group_notes_tab.dart:100-104`).
    - Cliente: `NotesSharingService.getNoteContent` (`front/lib/core/services/notes_sharing_service.dart:283-308`): `GET {notesApiBaseUrl}/notes/<id>` con `Authorization: Bearer` (`L113-126`), timeout 15 s. Usa `title`, `content` y `attachments`; no escribe en Drift.
+- **Buscador por ID (Flutter):** `NotesApi.getNote` (`front/lib/features/notes/notes_api.dart`) acepta el UUID solo o un enlace `.../notes/<id>` (`extractNoteId`) y lo usa `NoteIdSearchScreen` (`front/lib/features/notes/note_id_search_screen.dart`), abierta desde el botón **Buscar por ID** de "Todas las notas" o desde el aviso que aparece al pegar un ID en la búsqueda general. Muestra el apunte, "Sin resultados" (404: no existe o no tienes permiso, indistinguibles) o "Apunte no disponible" (410 `note_deleted`).
 - **Otros microservicios:** No se encontró invocación en el código revisado.
 - **Tests/scripts:** `scripts/test-notes-e2e.py:104-105,149`.
 
@@ -88,6 +96,8 @@ Finalmente devuelve `200` con metadata, `content` y `attachments`, y la pantalla
 
 | Archivo:línea | Prueba | Qué comprueba | Tipo |
 | --- | --- | --- | --- |
+| `back/notes/internal/handler/http/note_search_by_id_test.go` | `TestSearchByID*` | Búsqueda por ID: público ajeno (200 con contadores, ID en mayúsculas), privado sin permiso = inexistente (404 idéntico), borrado y guardado (410), mal formado (404) | Unitaria |
+| `front/test/note_id_search_test.dart` | `extractNoteId` + widget | Extracción del ID y estados de la pantalla (resultado, 404, 410, ID inválido) | Widget |
 | `back/notes/internal/handler/http/note_handler_test.go:144` | `TestHandlerGetNotFound404` | Nota inexistente → 404 | Unitaria |
 | `note_handler_test.go:158` | `TestHandlerGetWithDriveResilienceAlternative` | Respuesta ante fallos de Drive | Unitaria (Drive mock) |
 | `note_handler_test.go:215` | `TestHandlerPrivateAccessNotFound` | Privada ajena → 404 | Unitaria |

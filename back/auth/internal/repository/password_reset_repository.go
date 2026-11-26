@@ -10,7 +10,18 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-type PasswordResetRepository struct{ pool *pgxpool.Pool }
+type PasswordResetRepository struct {
+	pool *pgxpool.Pool
+	// markEmailVerified: un restablecimiento exitoso también confirma el
+	// correo (el código llegó a esa dirección). Solo se activa si la
+	// migración 007 está aplicada (EnableEmailVerification); si no, el
+	// restablecimiento funciona igual que antes.
+	markEmailVerified bool
+}
+
+// EnableEmailVerification hace que Complete fije email_verified_at (si
+// estaba NULL) en la misma sentencia que cambia la contraseña.
+func (r *PasswordResetRepository) EnableEmailVerification() { r.markEmailVerified = true }
 
 func NewPasswordResetRepository(pool *pgxpool.Pool) *PasswordResetRepository {
 	return &PasswordResetRepository{pool: pool}
@@ -56,7 +67,13 @@ func (r *PasswordResetRepository) Complete(ctx context.Context, email, code, pas
 		}
 		return false, tx.Commit(ctx)
 	}
-	if _, err = tx.Exec(ctx, `UPDATE identity.users SET password_hash = $2 WHERE id = $1`, userID, passwordHash); err != nil {
+	updateUser := `UPDATE identity.users SET password_hash = $2 WHERE id = $1`
+	if r.markEmailVerified {
+		// Misma sentencia y transacción que el cambio de contraseña: o se
+		// aplican ambos o ninguno. COALESCE conserva una fecha previa.
+		updateUser = `UPDATE identity.users SET password_hash = $2, email_verified_at = COALESCE(email_verified_at, now()) WHERE id = $1`
+	}
+	if _, err = tx.Exec(ctx, updateUser, userID, passwordHash); err != nil {
 		return false, err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE identity.refresh_tokens SET revoked = true WHERE user_id = $1 AND NOT revoked`, userID); err != nil {

@@ -45,7 +45,7 @@ func TestSprintAssignee_DebeSerMiembro(t *testing.T) {
 	if _, err := svc.CreateSprintTask(context.Background(), gid, admin, "", "T", stranger, "", "", nil); err != ErrAssigneeNotMember {
 		t.Fatalf("asignado extraño debe dar ErrAssigneeNotMember, got %v", err)
 	}
-	created, err := svc.CreateSprintTask(context.Background(), gid, member, "", "T", member, "", "", nil)
+	created, err := svc.CreateSprintTask(context.Background(), gid, admin, "", "T", member, "", "", nil)
 	if err != nil {
 		t.Fatalf("asignado miembro no debe fallar: %v", err)
 	}

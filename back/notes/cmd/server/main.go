@@ -21,6 +21,7 @@ import (
 	notesv1 "github.com/kurovoxx/tallerintegracion3/back/notes/internal/gen/notesv1/v1"
 	grpcHandler "github.com/kurovoxx/tallerintegracion3/back/notes/internal/handler/grpc"
 	httpHandler "github.com/kurovoxx/tallerintegracion3/back/notes/internal/handler/http"
+	notesIdentity "github.com/kurovoxx/tallerintegracion3/back/notes/internal/identity"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/interceptor"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/middleware"
 	"github.com/kurovoxx/tallerintegracion3/back/notes/internal/repository"
@@ -33,9 +34,6 @@ func main() {
 	cfg := config.Load()
 	log.Printf("config notes: DATABASE_URL set=%v PORT=%s STORAGE=%s", cfg.DatabaseURL != "", cfg.Port, cfg.StorageMode)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
 	if cfg.DatabaseURL == "" {
 		log.Println("notes: DATABASE_URL vacío — levantando con stores en memoria (modo mock)")
 		if strings.EqualFold(strings.TrimSpace(cfg.StorageMode), "drive") {
@@ -45,21 +43,42 @@ func main() {
 		return
 	}
 
-	p, err := repository.NewPool(ctx, cfg.DatabaseURL)
+	// Espera a que Postgres acepte conexiones (retry con backoff lineal).
+	// Al desplegar en k8s el contenedor puede arrancar antes que Postgres;
+	// sin esto el servicio muere con log.Fatalf al primer intento.
+	var p *pgxpool.Pool
+	var err error
+	const maxDBIntents = 30
+	for i := 0; i < maxDBIntents; i++ {
+		ctxInt, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		p, err = repository.NewPool(ctxInt, cfg.DatabaseURL)
+		if err == nil {
+			err = p.Ping(ctxInt)
+		}
+		cancel()
+		if err == nil {
+			break
+		}
+		if p != nil {
+			p.Close()
+		}
+		log.Printf("notes: esperando a Postgres (intento %d/%d): %v", i+1, maxDBIntents, err)
+		time.Sleep(time.Duration(i+1) * time.Second)
+	}
 	if err != nil {
-		log.Fatalf("No se pudo conectar a Postgres: %v", err)
+		log.Fatalf("notes: no se pudo conectar a Postgres tras %d intentos: %v", maxDBIntents, err)
 	}
 	defer p.Close()
 	log.Println("Postgres conectado OK (notes)")
 	var cnt int
-	if err := p.QueryRow(ctx, "select count(*) from notes.notes").Scan(&cnt); err != nil {
+	if err := p.QueryRow(context.Background(), "select count(*) from notes.notes").Scan(&cnt); err != nil {
 		log.Printf("check notes.notes: %v (schema puede no existir aún)", err)
 	} else {
 		log.Printf("DB check: notes.notes count=%d", cnt)
 	}
 	// Sin estas tablas el gate rechaza toda petición autenticada (503) y el
 	// borrado de cuenta queda pending para siempre: mejor no arrancar.
-	if err := repository.VerifyAccountDeletionSchema(ctx, p); err != nil {
+	if err := repository.VerifyAccountDeletionSchema(context.Background(), p); err != nil {
 		log.Fatalf("%v", err)
 	}
 	runServer(p, selectDriveClient(p, cfg), cfg)
@@ -102,6 +121,37 @@ func newGRPCDriveClient(cfg *config.Config) drive.Client {
 	})
 }
 
+// injectIdentityProfiles inyecta el cliente Identity de perfiles: resuelve
+// public_id → UUID (listado por perfil) y UUID de autor → código público
+// (listados de guardados y públicos). Sin IDENTITY_GRPC_ADDR no inyecta nada.
+func injectIdentityProfiles(svc *service.NoteService, cfg *config.Config) {
+	client := newPublicProfileResolver(cfg)
+	if client == nil {
+		return
+	}
+	svc.SetPublicProfileResolver(client)
+	svc.SetAuthorPublicIDResolver(client)
+}
+
+// newPublicProfileResolver construye el cliente Identity que resuelve
+// public_id → UUID. Es independiente de STORAGE_MODE: se inyecta siempre, y si
+// Identity no está disponible cada llamada falla con 503 sin tumbar Notes.
+func newPublicProfileResolver(cfg *config.Config) *notesIdentity.PublicProfileClient {
+	addr := strings.TrimSpace(cfg.IdentityGRPCAddr)
+	if addr == "" {
+		return nil
+	}
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Fatalf("notes: IDENTITY_GRPC_ADDR inválida %q: %v", addr, err)
+	}
+	if strings.TrimSpace(cfg.InternalAPIKey) == "" {
+		log.Println("notes: sin INTERNAL_API_KEY, Identity rechazará ResolvePublicProfile")
+	}
+	trackGRPCConn(conn)
+	return notesIdentity.NewPublicProfileClient(identityv1.NewIdentityServiceClient(conn), cfg.InternalAPIKey, cfg.SocialTimeout)
+}
+
 // grpcConns son las conexiones gRPC compartidas (vida del proceso).
 var grpcConns []*grpc.ClientConn
 
@@ -126,6 +176,7 @@ func runServer(pool *pgxpool.Pool, driveClient drive.Client, cfg *config.Config)
 	defer deletionRepo.Close()
 	social, members := newSocialAdapters(cfg)
 	svc := service.NewNoteService(noteStore, attStore, savedStore, likeStore, sharedStore, driveClient, social)
+	injectIdentityProfiles(svc, cfg)
 	svc.SetAccountDeletionRepository(deletionRepo)
 	// Directorio de correos para share restricted: adaptador HTTP real a Social
 	// (o memoria solo con DEV_SEED_SOCIAL explícito).
@@ -149,8 +200,20 @@ func runServerMemory(driveClient drive.Client, cfg *config.Config) {
 	social, members := newSocialAdapters(cfg)
 
 	svc := service.NewNoteService(noteStore, attStore, savedStore, likeStore, sharedStore, driveClient, social)
+	injectIdentityProfiles(svc, cfg)
 	svc.SetMemberDirectory(members)
 	startServers(svc, cfg, nil)
+}
+
+// socialGRPCWithPermissions completa el adaptador gRPC con la consulta de
+// permisos delegados (CanShareNotes) vía HTTP interno.
+type socialGRPCWithPermissions struct {
+	*service.SocialGRPCAdapter
+	perms *service.SocialHTTPAdapter
+}
+
+func (s *socialGRPCWithPermissions) CanShareNotes(ctx context.Context, userID, groupID string) (bool, error) {
+	return s.perms.CanShareNotes(ctx, userID, groupID)
 }
 
 // newSocialAdapters inyecta los adaptadores de Social: clientes HTTP reales
@@ -164,7 +227,13 @@ func newSocialAdapters(cfg *config.Config) (service.SocialResolver, service.Grou
 			log.Fatalf("notes: SOCIAL_GRPC_ADDR inválida: %v", err)
 		}
 		log.Printf("notes: adaptadores Social gRPC activados (addr=%s timeout=%s)", cfg.SocialGRPCAddr, cfg.SocialTimeout)
-		return adapter, adapter
+		// El permiso delegado can_share_notes no existe en el proto gRPC: se
+		// consulta por el endpoint HTTP interno de Social.
+		withPerms := &socialGRPCWithPermissions{
+			SocialGRPCAdapter: adapter,
+			perms:             service.NewSocialHTTPAdapter(cfg.SocialServiceURL, cfg.SocialTimeout, cfg.InternalAPIKey),
+		}
+		return withPerms, withPerms
 	}
 	adapter := service.NewSocialHTTPAdapter(cfg.SocialServiceURL, cfg.SocialTimeout, cfg.InternalAPIKey)
 	log.Printf("notes: adaptadores Social HTTP activados (base=%s timeout=%s)", cfg.SocialServiceURL, cfg.SocialTimeout)
@@ -193,6 +262,8 @@ func newHTTPRouter(svc *service.NoteService, cfg *config.Config, authMw *middlew
 	{
 		protected.POST("/notes", h.Create)
 		protected.GET("/notes/me", h.ListMy)
+		protected.GET("/notes/saved", h.ListSaved)
+		protected.GET("/notes/public", h.ListPublic)
 		protected.POST("/notes/unshare-all", h.UnshareAll)
 		protected.POST("/notes/reconcile", h.Reconcile)
 		protected.POST("/notes/upload", h.UploadFile)
@@ -201,6 +272,8 @@ func newHTTPRouter(svc *service.NoteService, cfg *config.Config, authMw *middlew
 		protected.GET("/notes/:id/attachments/:attachmentId/content", h.AttachmentContent)
 		protected.DELETE("/notes/:id/attachments/:attachmentId", h.DeleteAttachment)
 		protected.POST("/notes/:id/save", h.Save)
+		protected.DELETE("/notes/:id/save", h.Unsave)
+		protected.GET("/notes/:id/stats", h.Stats)
 		protected.POST("/notes/:id/copy", h.Copy)
 		protected.POST("/notes/:id/like", h.Like)
 		protected.DELETE("/notes/:id/like", h.Unlike)
@@ -211,6 +284,12 @@ func newHTTPRouter(svc *service.NoteService, cfg *config.Config, authMw *middlew
 		protected.DELETE("/notes/shared/:sharedNoteId", h.Unshare)
 		protected.GET("/groups/:id/notes", h.ListGroupNotes)
 	}
+	// Apuntes públicos de un perfil por public_id (resuelto vía Identity gRPC;
+	// sin exponer el UUID interno). PrivateNoStore va antes de RequireAuth para que
+	// también los 401/423/503 lleven Cache-Control: private, no-store.
+	publicProfileNotes := r.Group("")
+	publicProfileNotes.Use(middleware.PrivateNoStore(), authMw.RequireAuth())
+	publicProfileNotes.GET("/public-users/:public_id/notes", h.ListPublicByPublicID)
 	return r
 }
 

@@ -49,25 +49,43 @@ func main() {
 	cfg := config.Load()
 	log.Printf("config social: DATABASE_URL set=%v PORT=%s", cfg.DatabaseURL != "", cfg.Port)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	pool, err := repository.NewPool(ctx, cfg.DatabaseURL)
+	// Espera a que Postgres acepte conexiones (retry con backoff lineal).
+	// Al desplegar en k8s el contenedor puede arrancar antes que Postgres;
+	// sin esto el servicio muere con log.Fatalf al primer intento.
+	var pool *pgxpool.Pool
+	var err error
+	const maxDBIntents = 30
+	for i := 0; i < maxDBIntents; i++ {
+		ctxInt, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		pool, err = repository.NewPool(ctxInt, cfg.DatabaseURL)
+		if err == nil {
+			err = pool.Ping(ctxInt)
+		}
+		cancel()
+		if err == nil {
+			break
+		}
+		if pool != nil {
+			pool.Close()
+		}
+		log.Printf("social: esperando a Postgres (intento %d/%d): %v", i+1, maxDBIntents, err)
+		time.Sleep(time.Duration(i+1) * time.Second)
+	}
 	if err != nil {
-		log.Fatalf("No se pudo conectar a Postgres: %v", err)
+		log.Fatalf("social: no se pudo conectar a Postgres tras %d intentos: %v", maxDBIntents, err)
 	}
 	defer pool.Close()
 	log.Println("Postgres conectado OK (social)")
 
 	var cnt int
-	if err := pool.QueryRow(ctx, "select count(*) from social.groups").Scan(&cnt); err != nil {
+	if err := pool.QueryRow(context.Background(), "select count(*) from social.groups").Scan(&cnt); err != nil {
 		log.Printf("check social.groups: %v (schema puede no existir aún — corre agentSql.md)", err)
 	} else {
 		log.Printf("DB check: social.groups count=%d", cnt)
 	}
 	// Sin estas tablas el gate rechaza toda petición autenticada (503) y el
 	// borrado de cuenta queda pending para siempre: mejor no arrancar.
-	if err := repository.VerifyAccountDeletionSchema(ctx, pool); err != nil {
+	if err := repository.VerifyAccountDeletionSchema(context.Background(), pool); err != nil {
 		log.Fatalf("%v", err)
 	}
 
@@ -129,6 +147,11 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	meetingH := httpHandler.NewMeetingHandler(meetingSvc)
 	notifH := httpHandler.NewNotificationHandler(service.NewNotificationService(meetingRepo))
 
+	// Invitaciones a grupos.
+	groupInviteRepo := repository.NewGroupInvitationRepository(pool)
+	groupInviteSvc := service.NewGroupInvitationService(groupInviteRepo)
+	groupInviteH := httpHandler.NewGroupInvitationHandler(groupInviteSvc)
+
 	streamTokenSvc := service.NewStreamTokenServiceWithKey(streamRepo, cfg.StreamSecret, cfg.StreamAPIKey)
 	// Sincronización server-side de membresía del canal al emitir tokens:
 	// MockClient en modo mock (sin red), RESTClient en modo real.
@@ -140,7 +163,7 @@ func runServer(pool *pgxpool.Pool, cfg *config.Config) {
 	viewSvc := service.NewViewService(groupSvc, todoSvc, sprintSvc, meetingSvc)
 	viewH := httpHandler.NewViewHandler(groupSvc, viewSvc)
 
-	startGin(groupSvc, todoH, sprintH, hoursH, meetingH, notifH, discordH, viewH, streamH, deletionRepo, pool, cfg)
+	startGin(groupSvc, todoH, sprintH, hoursH, meetingH, notifH, discordH, viewH, streamH, groupInviteH, deletionRepo, pool, cfg)
 }
 
 // startGRPC sirve SocialService (membresía/admin/limpieza) para Notes e
@@ -228,7 +251,7 @@ func streamNotifierFor(cfg *config.Config, streamRepo *repository.StreamReposito
 	)
 }
 
-func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, meetingH *httpHandler.MeetingHandler, notifH *httpHandler.NotificationHandler, discordH *httpHandler.DiscordHandler, viewH *httpHandler.ViewHandler, streamH *httpHandler.StreamHandler, deletionGate middleware.AccountAccessGate, pool *pgxpool.Pool, cfg *config.Config) {
+func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sprintH *httpHandler.SprintHandler, hoursH *httpHandler.HoursHandler, meetingH *httpHandler.MeetingHandler, notifH *httpHandler.NotificationHandler, discordH *httpHandler.DiscordHandler, viewH *httpHandler.ViewHandler, streamH *httpHandler.StreamHandler, groupInviteH *httpHandler.GroupInvitationHandler, deletionGate middleware.AccountAccessGate, pool *pgxpool.Pool, cfg *config.Config) {
 	validator := &middleware.SimpleHS256Validator{
 		Secret:   []byte(cfg.JWTSecret),
 		Issuer:   "apuntes-auth",
@@ -279,6 +302,7 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 		protected.PATCH("/groups/:id/todo/:taskId", todoH.UpdateTodo)
 		protected.DELETE("/groups/:id/todo/:taskId", todoH.DeleteTodo)
 		protected.GET("/groups/:id/sprint-sheets", sprintH.ListSheets)
+		protected.GET("/groups/:id/sprint-sheets/remaining", sprintH.SprintRemaining)
 		protected.POST("/groups/:id/sprint-sheets", sprintH.CreateSheet)
 		protected.PATCH("/groups/:id/sprint-sheets/:sheetId", sprintH.UpdateSheet)
 		protected.DELETE("/groups/:id/sprint-sheets/:sheetId", sprintH.DeleteSheet)
@@ -292,6 +316,8 @@ func startGin(groupSvc *service.GroupService, todoH *httpHandler.TodoHandler, sp
 		protected.GET("/groups/:id/meetings", meetingH.ListMeetings)
 		protected.GET("/notifications/me", notifH.ListMine)
 		protected.POST("/notifications/:id/read", notifH.MarkRead)
+		protected.DELETE("/notifications/:id", notifH.Delete)
+		groupInviteH.RegisterRoutes(protected)
 		protected.GET("/groups/:id/stream-token", streamH.Token)
 		discordH.RegisterRoutes(protected)
 	}

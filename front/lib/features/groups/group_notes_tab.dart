@@ -4,19 +4,32 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/services/notes_sharing_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import 'group_permission_switch.dart';
 import '../notes/attachment_resources.dart';
 import '../notes/authenticated_attachment_image.dart';
+import '../notes/latex_support.dart';
+import '../notes/note_interaction_bar.dart';
+import '../notes/note_markdown_body.dart';
+import '../notes/notes_api.dart' show NoteInteractions, NotesApi;
 
 /// Pestaña "NOTAS" de la vista de grupo: lista y abre las notas compartidas
 /// con el grupo, permite compartir una nota propia eligiendo modo
 /// (link/restricted) y dejar de compartir. Diseño Neo-Brutalism y estados de
 /// carga/error/vacío explícitos con refresco tras cada mutación.
 class GroupNotesTab extends StatefulWidget {
-  const GroupNotesTab({super.key, this.groupId, NotesSharingService? service})
-    : _serviceOverride = service;
+  const GroupNotesTab({
+    super.key,
+    this.groupId,
+    NotesSharingService? service,
+    NotesApi? notesApi,
+  }) : _serviceOverride = service,
+       _notesApiOverride = notesApi;
 
   final String? groupId;
   final NotesSharingService? _serviceOverride;
+
+  /// Cliente de likes (`POST/DELETE /notes/:id/like`); inyectable en pruebas.
+  final NotesApi? _notesApiOverride;
 
   @override
   State<GroupNotesTab> createState() => _GroupNotesTabState();
@@ -24,6 +37,7 @@ class GroupNotesTab extends StatefulWidget {
 
 class _GroupNotesTabState extends State<GroupNotesTab> {
   late final NotesSharingService _service;
+  late final NotesApi _notesApi;
 
   bool _loading = false;
   String? _error;
@@ -40,16 +54,50 @@ class _GroupNotesTabState extends State<GroupNotesTab> {
   void initState() {
     super.initState();
     _service = widget._serviceOverride ?? NotesSharingService();
+    _notesApi = widget._notesApiOverride ?? NotesApi();
     _load();
   }
 
   @override
   void dispose() {
     if (widget._serviceOverride == null) _service.dispose();
+    if (widget._notesApiOverride == null) _notesApi.dispose();
     super.dispose();
   }
 
   String get _groupId => widget.groupId?.trim() ?? '';
+
+  NoteInteractions _likeStateOf(SharedGroupNote note) => NoteInteractions(
+    noteId: note.noteId,
+    likesCount: note.likesCount,
+    isLiked: note.isLiked,
+  );
+
+  /// Adopta el like confirmado por el servidor en la nota de la lista, para
+  /// que tarjeta y visor muestren siempre el mismo contador y corazón.
+  void _applyLike(NoteInteractions confirmed) {
+    if (!mounted) return;
+    setState(() {
+      _notes = [
+        for (final n in _notes)
+          n.noteId == confirmed.noteId
+              ? n.copyWith(
+                  likesCount: confirmed.likesCount,
+                  isLiked: confirmed.isLiked,
+                )
+              : n,
+      ];
+    });
+  }
+
+  /// Botón de like (sin guardar: en el grupo solo se pide reaccionar).
+  Widget _likeButton(SharedGroupNote note) => NoteLikeSaveBar(
+    api: _notesApi,
+    initial: _likeStateOf(note),
+    compact: true,
+    showSave: false,
+    onChanged: _applyLike,
+  );
 
   void _snack(String message, {bool error = false}) {
     if (!mounted) return;
@@ -119,7 +167,15 @@ class _GroupNotesTabState extends State<GroupNotesTab> {
         title: content.title,
         cancelLabel: 'Cerrar',
         maxWidth: 760,
-        content: _NoteViewer(content: content),
+        content: _NoteViewer(
+          content: content,
+          likeButton: _likeButton(
+            _notes.firstWhere(
+              (n) => n.noteId == note.noteId,
+              orElse: () => note,
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -147,7 +203,10 @@ class _GroupNotesTabState extends State<GroupNotesTab> {
     }
     final choice = await showNeobrutalistDialog<_ShareChoice>(
       context: context,
-      dialog: _ShareNoteDialog(notes: mine),
+      dialog: _ShareNoteDialog(
+        notes: mine,
+        alreadyShared: _notes.map((n) => n.noteId).toSet(),
+      ),
     );
     if (choice == null || !mounted) return;
     try {
@@ -212,7 +271,7 @@ class _GroupNotesTabState extends State<GroupNotesTab> {
       child: Column(
         children: [
           _header(),
-          const Divider(
+          Divider(
             color: AppColors.border,
             thickness: AppDimens.borderWidth,
             height: 1,
@@ -239,7 +298,7 @@ class _GroupNotesTabState extends State<GroupNotesTab> {
           final compact = constraints.maxWidth < 420 || textScale > 1.3;
           return Row(
             children: [
-              const Icon(
+              Icon(
                 Icons.description_rounded,
                 size: 16,
                 color: AppColors.text,
@@ -255,6 +314,17 @@ class _GroupNotesTabState extends State<GroupNotesTab> {
                     fontSize: 12,
                     letterSpacing: 0.5,
                   ),
+                ),
+              ),
+              const SizedBox(width: AppDimens.spaceSm),
+              // Solo admins: habilita a todos los miembros a compartir notas.
+              Flexible(
+                child: GroupPermissionSwitch(
+                  groupId: _groupId,
+                  permission: GroupPermission.shareNotes,
+                  label: compact
+                      ? 'TODOS COMPARTEN'
+                      : 'TODOS PUEDEN COMPARTIR NOTAS',
                 ),
               ),
               const SizedBox(width: AppDimens.spaceSm),
@@ -367,7 +437,7 @@ class _GroupNotesTabState extends State<GroupNotesTab> {
               note.title,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 15,
                 fontWeight: FontWeight.w900,
                 color: AppColors.text,
@@ -385,18 +455,16 @@ class _GroupNotesTabState extends State<GroupNotesTab> {
                       ? NeobrutalistTone.info
                       : NeobrutalistTone.neutral,
                 ),
-                NeobrutalistBadge(
-                  label: '${note.likesCount} likes',
-                  tone: NeobrutalistTone.accent,
-                  icon: Icons.favorite_rounded,
-                ),
               ],
             ),
             const SizedBox(height: AppDimens.spaceMd),
             Wrap(
               spacing: AppDimens.spaceSm,
               runSpacing: AppDimens.spaceSm,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
+                // Like real (antes un badge estático "N likes").
+                _likeButton(note),
                 NeobrutalistButton(
                   label: 'Abrir',
                   icon: Icons.open_in_new_rounded,
@@ -430,9 +498,12 @@ class _GroupNotesTabState extends State<GroupNotesTab> {
 /// Visor neobrutalista del contenido de una nota compartida + sus recursos
 /// adjuntos (`attachment:<id>` resueltos con los adjuntos reales).
 class _NoteViewer extends StatelessWidget {
-  const _NoteViewer({required this.content});
+  const _NoteViewer({required this.content, this.likeButton});
 
   final SharedNoteContent content;
+
+  /// Botón de like de la nota (mismo estado que la tarjeta de la lista).
+  final Widget? likeButton;
 
   Future<void> _openDrive(String url) async {
     final uri = Uri.tryParse(url.trim());
@@ -444,25 +515,57 @@ class _NoteViewer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Misma sanitización que el editor personal: neutraliza comandos LaTeX
+    // bloqueados (\href, \html*, \new*...) aunque la nota venga de otro
+    // cliente que no la haya saneado al guardar.
+    final markdown = sanitizeNoteMarkdown(content.content);
     final real = attachmentResources(content.noteId, content.attachments);
-    final fromMarkdown = resourcesFromMarkdown(content.content);
+    final fromMarkdown = resourcesFromMarkdown(markdown);
     final resources = mergeAttachmentResources(real, fromMarkdown);
+    // Las imágenes referenciadas en el cuerpo ya se pintan en línea; abajo
+    // solo se listan PDFs/documentos y las imágenes que el texto no cita.
+    final listed = resources
+        .where((r) {
+          if (r['type'] != 'image') return true;
+          final id = r['attachment_id'] as String? ?? '';
+          final url = r['url'] as String? ?? '';
+          final inBody =
+              (id.isNotEmpty && markdown.contains(id)) ||
+              (url.isNotEmpty && markdown.contains(url));
+          return !inBody;
+        })
+        .toList(growable: false);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SelectableText(
-          content.content.isEmpty ? '(sin contenido)' : content.content,
-          style: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: AppColors.text,
-            height: 1.4,
+        if (likeButton != null) ...[
+          Align(alignment: Alignment.centerLeft, child: likeButton),
+          const SizedBox(height: AppDimens.spaceMd),
+        ],
+        if (markdown.trim().isEmpty)
+          Text(
+            '(sin contenido)',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: AppColors.mutedStrong,
+            ),
+          )
+        else
+          // Motor compartido con el visor personal y la vista pública:
+          // Markdown (#, listas, código...) + LaTeX ($...$, $$...$$) + imágenes
+          // por el endpoint autenticado de adjuntos.
+          NoteMarkdownBody(
+            key: const Key('group-note-markdown'),
+            content: markdown,
+            resources: resources,
+            imageBaseUrl: NotesSharingService.baseUrl,
+            onOpenResource: (r) => _openDrive(r['url'] as String? ?? ''),
           ),
-        ),
-        if (resources.isNotEmpty) ...[
+        if (listed.isNotEmpty) ...[
           const SizedBox(height: AppDimens.spaceLg),
-          const Divider(
+          Divider(
             color: AppColors.border,
             thickness: AppDimens.borderWidth,
             height: 1,
@@ -477,7 +580,7 @@ class _NoteViewer extends StatelessWidget {
             ),
           ),
           const SizedBox(height: AppDimens.spaceSm),
-          ...resources.map(_resourceTile),
+          ...listed.map(_resourceTile),
         ],
       ],
     );
@@ -498,7 +601,7 @@ class _NoteViewer extends StatelessWidget {
           decoration: BoxDecoration(
             color: AppColors.surfaceLow,
             border: Border.all(
-              color: AppColors.border,
+              color: AppColors.outline,
               width: AppDimens.borderWidth,
             ),
             borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -527,7 +630,7 @@ class _NoteViewer extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppColors.surface,
           border: Border.all(
-            color: AppColors.border,
+            color: AppColors.outline,
             width: AppDimens.borderWidth,
           ),
           borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -575,16 +678,24 @@ class _ShareChoice {
 
 /// Diálogo neobrutalista para elegir la nota propia y el modo de compartición.
 class _ShareNoteDialog extends StatefulWidget {
-  const _ShareNoteDialog({required this.notes});
+  const _ShareNoteDialog({required this.notes, this.alreadyShared = const {}});
 
   final List<MyNoteSummary> notes;
+
+  /// Notas que ya tienen vínculo con este grupo. Se marcan "YA COMPARTIDA":
+  /// el backend responde 409 already_shared si se intenta de nuevo.
+  final Set<String> alreadyShared;
 
   @override
   State<_ShareNoteDialog> createState() => _ShareNoteDialogState();
 }
 
 class _ShareNoteDialogState extends State<_ShareNoteDialog> {
-  late String _noteId = widget.notes.first.noteId;
+  /// Primera nota que aún no está en el grupo; null si todas ya lo están.
+  late String? _noteId = widget.notes
+      .where((n) => !widget.alreadyShared.contains(n.noteId))
+      .map((n) => n.noteId)
+      .firstOrNull;
   String _accessMode = NotesSharingService.accessModeLink;
 
   @override
@@ -594,8 +705,11 @@ class _ShareNoteDialogState extends State<_ShareNoteDialog> {
       cancelLabel: 'Cancelar',
       confirmLabel: 'Compartir',
       closeOnConfirm: false,
-      onConfirm: () =>
-          Navigator.of(context).pop(_ShareChoice(_noteId, _accessMode)),
+      // Sin nota seleccionable (todas ya compartidas) el botón queda inactivo.
+      onConfirm: _noteId == null
+          ? null
+          : () =>
+                Navigator.of(context).pop(_ShareChoice(_noteId!, _accessMode)),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -616,46 +730,91 @@ class _ShareNoteDialogState extends State<_ShareNoteDialog> {
               itemCount: widget.notes.length,
               itemBuilder: (_, i) {
                 final n = widget.notes[i];
-                final selected = n.noteId == _noteId;
+                // YA COMPARTIDA: tile deshabilitado, no se puede marcar
+                // (el backend respondería 409 already_shared).
+                final disabled = widget.alreadyShared.contains(n.noteId);
+                final selected = !disabled && n.noteId == _noteId;
                 return Padding(
                   padding: const EdgeInsets.only(bottom: AppDimens.spaceSm),
-                  child: GestureDetector(
-                    onTap: () => setState(() => _noteId = n.noteId),
-                    child: Container(
-                      padding: const EdgeInsets.all(AppDimens.spaceMd),
-                      decoration: BoxDecoration(
-                        color: selected
-                            ? AppColors.accentYellow
-                            : AppColors.surface,
-                        border: Border.all(
-                          color: AppColors.border,
-                          width: AppDimens.borderWidth,
-                        ),
-                        borderRadius: BorderRadius.circular(AppDimens.radius),
-                        boxShadow: selected ? AppShadows.badge : null,
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            selected
-                                ? Icons.radio_button_checked_rounded
-                                : Icons.radio_button_unchecked_rounded,
-                            size: 18,
-                            color: AppColors.text,
-                          ),
-                          const SizedBox(width: AppDimens.spaceSm),
-                          Expanded(
-                            child: Text(
-                              n.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w800,
-                                fontSize: 13,
-                              ),
+                  child: Semantics(
+                    key: Key('share-note-tile-${n.noteId}'),
+                    enabled: !disabled,
+                    selected: selected,
+                    child: MouseRegion(
+                      cursor: disabled
+                          ? SystemMouseCursors.forbidden
+                          : SystemMouseCursors.click,
+                      child: GestureDetector(
+                        onTap: disabled
+                            ? null
+                            : () => setState(() => _noteId = n.noteId),
+                        child: Container(
+                          padding: const EdgeInsets.all(AppDimens.spaceMd),
+                          decoration: BoxDecoration(
+                            color: disabled
+                                ? AppColors.surfaceLow
+                                : selected
+                                ? AppColors.accentYellow
+                                : AppColors.surface,
+                            border: Border.all(
+                              color: AppColors.outline,
+                              width: AppDimens.borderWidth,
                             ),
+                            borderRadius: BorderRadius.circular(
+                              AppDimens.radius,
+                            ),
+                            boxShadow: selected ? AppShadows.badge : null,
                           ),
-                        ],
+                          child: Row(
+                            children: [
+                              Icon(
+                                disabled
+                                    ? Icons.block_rounded
+                                    : selected
+                                    ? Icons.radio_button_checked_rounded
+                                    : Icons.radio_button_unchecked_rounded,
+                                size: 18,
+                                color: disabled
+                                    ? AppColors.mutedStrong
+                                    : AppColors.text,
+                              ),
+                              const SizedBox(width: AppDimens.spaceSm),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      n.title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                        fontSize: 13,
+                                        color: disabled
+                                            ? AppColors.mutedStrong
+                                            : AppColors.text,
+                                      ),
+                                    ),
+                                    // Debajo del título (no al lado): en 360 px
+                                    // con texto al 200 % la fila desbordaba.
+                                    if (disabled)
+                                      const Padding(
+                                        padding: EdgeInsets.only(
+                                          top: AppDimens.spaceXs,
+                                        ),
+                                        child: NeobrutalistBadge(
+                                          label: 'Ya compartida',
+                                          tone: NeobrutalistTone.pending,
+                                          compact: true,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -714,7 +873,7 @@ class _ShareNoteDialogState extends State<_ShareNoteDialog> {
             _accessMode == NotesSharingService.accessModeLink
                 ? 'Cualquiera con el enlace del grupo puede verla.'
                 : 'Solo los miembros del grupo acceden (permisos por correo).',
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w600,
               color: AppColors.muted,

@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../../core/models/profile_models.dart';
 import '../../core/models/social_models.dart';
+import '../../core/services/profile_service.dart';
 import '../../core/services/session_manager.dart';
 import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import '../../core/widgets/user_avatar.dart';
 import 'cleanup_shared_notes_checkbox.dart';
 
 /// Pestaña "MIEMBROS" del grupo: lista integrantes con su rol, permite ver su
@@ -24,22 +27,32 @@ class GroupMembersTab extends StatefulWidget {
 
 class _GroupMembersTabState extends State<GroupMembersTab> {
   late final SocialService _service;
+  late final ProfileService _profileService;
 
   bool _loading = false;
   String? _error;
   List<GroupMember> _members = const [];
   String? _busyUserId;
+  Map<String, bool> _followingStatus = {}; // userId -> following
+
+  /// Permisos habilitados para TODO el grupo (switch de admin en cada pestaña).
+  /// Se suman al permiso propio de cada miembro: efectivo = propio OR grupo.
+  GroupMemberDefaults _groupDefaults = const GroupMemberDefaults();
 
   @override
   void initState() {
     super.initState();
     _service = widget._serviceOverride ?? SocialService();
+    _profileService = widget._serviceOverride == null
+        ? ProfileService()
+        : ProfileService();
     _load();
   }
 
   @override
   void dispose() {
     if (widget._serviceOverride == null) _service.dispose();
+    _profileService.dispose();
     super.dispose();
   }
 
@@ -77,7 +90,11 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
       _error = null;
     });
     try {
-      final members = await _service.listMembers(gid);
+      final results = await Future.wait<Object>([
+        _service.listMembers(gid),
+        _fetchGroupDefaults(gid),
+      ]);
+      final members = results[0] as List<GroupMember>;
       members.sort((a, b) {
         if (a.role != b.role) return a.role == 'admin' ? -1 : 1;
         return a.displayLabel.toLowerCase().compareTo(
@@ -87,8 +104,10 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
       if (!mounted) return;
       setState(() {
         _members = members;
+        _groupDefaults = results[1] as GroupMemberDefaults;
         _loading = false;
       });
+      _loadFollowStatuses();
     } on SocialApiException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -104,16 +123,69 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
     }
   }
 
-  String _initials(GroupMember m) {
-    final label = m.displayLabel.trim();
-    final parts = label.split(RegExp(r'\s+')).where((p) => p.isNotEmpty);
-    if (parts.length >= 2) {
-      return '${parts.first[0]}${parts.elementAt(1)[0]}'.toUpperCase();
+  /// Permisos del grupo, best-effort: si falla (p. ej. Social sin actualizar)
+  /// se asume que no hay nada habilitado para todos.
+  Future<GroupMemberDefaults> _fetchGroupDefaults(String gid) async {
+    try {
+      return await _service.getGroupPermissions(gid);
+    } catch (_) {
+      return const GroupMemberDefaults();
     }
-    if (label.isNotEmpty) {
-      return label.substring(0, label.length >= 2 ? 2 : 1).toUpperCase();
+  }
+
+  /// Carga el estado de follow de cada miembro que tenga código público.
+  Future<void> _loadFollowStatuses() async {
+    if (!mounted) return;
+    final updates = <String, bool>{};
+    for (final m in _members) {
+      final pid = m.publicId?.trim();
+      if (pid == null || pid.isEmpty) continue;
+      try {
+        final status = await _profileService.getFollowStatus(pid);
+        if (!mounted) return;
+        updates[pid] = status.following;
+        // Mapear por userId para el UI
+        _followingStatus[m.userId] = status.following;
+      } catch (_) {
+        // No bloquea la lista si falla el estado de follow de un miembro.
+      }
     }
-    return '??';
+    if (!mounted) return;
+    setState(() => _followingStatus = {..._followingStatus, ...updates});
+  }
+
+  /// Alterna seguir/dejar de seguir a un miembro del grupo.
+  Future<void> _toggleFollowMember(GroupMember m) async {
+    final pid = m.publicId?.trim();
+    if (pid == null || pid.isEmpty) {
+      _snack('Este integrante no tiene código de perfil disponible.');
+      return;
+    }
+    final currentlyFollowing = _followingStatus[m.userId] ?? false;
+    setState(() {
+      _followingStatus = Map<String, bool>.from(_followingStatus)
+        ..[m.userId] = !currentlyFollowing;
+    });
+    try {
+      if (currentlyFollowing) {
+        await _profileService.unfollowUser(pid);
+      } else {
+        await _profileService.followUser(pid);
+      }
+      if (!mounted) return;
+      _snack(
+        currentlyFollowing ? 'Has dejado de seguir a ${m.displayLabel}.'
+            : 'Ahora sigues a ${m.displayLabel}.',
+      );
+    } catch (_) {
+      if (!mounted) return;
+      // Revertir el cambio optimista en caso de error.
+      setState(() {
+        _followingStatus = Map<String, bool>.from(_followingStatus)
+          ..[m.userId] = currentlyFollowing;
+      });
+      _snack('No se pudo actualizar el seguimiento.', error: true);
+    }
   }
 
   Future<void> _showInfo(GroupMember m) async {
@@ -127,7 +199,10 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _field('Nombre', m.displayLabel),
-            _field('Correo', m.email?.trim().isNotEmpty == true ? m.email! : '—'),
+            _field(
+              'Correo',
+              m.email?.trim().isNotEmpty == true ? m.email! : '—',
+            ),
             _field('Rol', m.role == 'admin' ? 'Admin' : 'Miembro'),
             _field(
               'Se unió',
@@ -135,7 +210,13 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
                   ? '${m.joinedAt!.toLocal()}'.split('.').first
                   : '—',
             ),
-            _field('ID', m.userId, mono: true),
+            // Código público del perfil (el mismo que se usa en «Buscar
+            // perfil»); nunca el identificador interno.
+            _field(
+              'Código de perfil',
+              m.publicId ?? 'No disponible',
+              mono: m.publicId != null,
+            ),
           ],
         ),
       ),
@@ -150,7 +231,7 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
         children: [
           Text(
             label.toUpperCase(),
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w900,
               letterSpacing: 0.5,
@@ -172,11 +253,9 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
     );
   }
 
-  Future<void> _confirmModeration(
-    GroupMember m, {
-    required bool ban,
-  }) async {
-    var cleanupSharedNotes = true; // Marcada por defecto; el usuario puede quitarla.
+  Future<void> _confirmModeration(GroupMember m, {required bool ban}) async {
+    var cleanupSharedNotes =
+        true; // Marcada por defecto; el usuario puede quitarla.
     final cleanup = await showNeobrutalistDialog<bool>(
       context: context,
       dialog: NeobrutalistDialog(
@@ -199,8 +278,7 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
               const SizedBox(height: AppDimens.spaceMd),
               CleanupSharedNotesCheckbox(
                 value: cleanupSharedNotes,
-                onChanged: (v) =>
-                    setDialogState(() => cleanupSharedNotes = v),
+                onChanged: (v) => setDialogState(() => cleanupSharedNotes = v),
               ),
             ],
           ),
@@ -222,6 +300,98 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
               userId: m.userId,
               cleanupSharedNotes: cleanup,
             ),
+    );
+  }
+
+  static Widget get _inheritedNote => Text(
+    'Habilitado para todo el grupo (puedes quitarlo a este integrante)',
+    style: TextStyle(
+      fontSize: 11,
+      fontWeight: FontWeight.w700,
+      color: AppColors.mutedStrong,
+    ),
+  );
+
+  // Diálogo de permisos delegados (PATCH permissions): el admin elige qué
+  // puede hacer el miembro además de leer y chatear.
+  Future<void> _editPermissions(GroupMember m) async {
+    // El admin pudo cambiar un switch de grupo desde otra pestaña: refrescar.
+    final inherited = await _fetchGroupDefaults(_groupId);
+    if (!mounted) return;
+    setState(() => _groupDefaults = inherited);
+    // Permiso efectivo de partida: propio OR grupo, salvo retiro individual.
+    final initialShare = m.sharesNotesWith(inherited);
+    final initialMeetings = m.createsMeetingsWith(inherited);
+    final initialKanban = m.editsKanbanWith(inherited);
+    var share = initialShare;
+    var meetings = initialMeetings;
+    var kanban = initialKanban;
+    final result = await showNeobrutalistDialog<(bool, bool, bool)>(
+      context: context,
+      dialog: NeobrutalistDialog(
+        title: 'Permisos de ${m.displayLabel}',
+        cancelLabel: 'Cancelar',
+        confirmLabel: 'Guardar',
+        confirmVariant: NeobrutalistButtonVariant.accent,
+        closeOnConfirm: false,
+        onConfirm: () => Navigator.of(context).pop((share, meetings, kanban)),
+        content: StatefulBuilder(
+          builder: (ctx, setDialogState) => Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Los admins pueden todo. Aquí eliges qué más puede hacer este miembro.',
+              ),
+              const SizedBox(height: AppDimens.spaceSm),
+              // Lo habilitado para todo el grupo aparece marcado, pero sigue
+              // siendo editable: desmarcarlo lo retira solo a este miembro.
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text('Enviar notas al grupo'),
+                subtitle: inherited.canShareNotes ? _inheritedNote : null,
+                value: share,
+                onChanged: (v) => setDialogState(() => share = v ?? false),
+              ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text('Crear reuniones'),
+                subtitle: inherited.canCreateMeetings ? _inheritedNote : null,
+                value: meetings,
+                onChanged: (v) => setDialogState(() => meetings = v ?? false),
+              ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text('Modificar el kanban'),
+                subtitle: inherited.canEditKanban ? _inheritedNote : null,
+                value: kanban,
+                onChanged: (v) => setDialogState(() => kanban = v ?? false),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (result == null || !mounted) return;
+    final (s, mt, k) = result;
+    if (s == initialShare && mt == initialMeetings && k == initialKanban) {
+      return;
+    }
+    // Solo se envían los permisos que cambiaron: el backend deduce si hay que
+    // denegarlos a este miembro o basta con retirar el permiso propio.
+    await _perform(
+      m,
+      'Permisos de ${m.displayLabel} actualizados.',
+      () => _service.setMemberPermissions(
+        groupId: _groupId,
+        userId: m.userId,
+        canShareNotes: s == initialShare ? null : s,
+        canCreateMeetings: mt == initialMeetings ? null : mt,
+        canEditKanban: k == initialKanban ? null : k,
+      ),
     );
   }
 
@@ -255,10 +425,8 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
         '¿Transferir tu rol de admin a $name? Pasarás a ser miembro y perderás '
             'los permisos de gestión.',
         'Administración transferida a $name.',
-        () => _service.transferAdmin(
-          groupId: _groupId,
-          newAdminUserId: m.userId,
-        ),
+        () =>
+            _service.transferAdmin(groupId: _groupId, newAdminUserId: m.userId),
       ),
     };
     final ok = await showNeobrutalistDialog<bool>(
@@ -306,7 +474,7 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
       child: Column(
         children: [
           _header(),
-          const Divider(
+          Divider(
             color: AppColors.border,
             thickness: AppDimens.borderWidth,
             height: 1,
@@ -326,7 +494,7 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
       ),
       child: Row(
         children: [
-          const Icon(Icons.group_rounded, size: 16, color: AppColors.text),
+          Icon(Icons.group_rounded, size: 16, color: AppColors.text),
           const SizedBox(width: AppDimens.spaceSm),
           Expanded(
             child: Text(
@@ -423,7 +591,7 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
                           m.email!,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
                             color: AppColors.muted,
@@ -446,6 +614,25 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
                               label: 'Tú',
                               tone: NeobrutalistTone.info,
                             ),
+                          if (!isAdmin && m.sharesNotesWith(_groupDefaults))
+                            const NeobrutalistBadge(
+                              label: 'Notas',
+                              tone: NeobrutalistTone.neutral,
+                              icon: Icons.note_add_rounded,
+                            ),
+                          if (!isAdmin &&
+                              m.createsMeetingsWith(_groupDefaults))
+                            const NeobrutalistBadge(
+                              label: 'Reuniones',
+                              tone: NeobrutalistTone.neutral,
+                              icon: Icons.event_rounded,
+                            ),
+                          if (!isAdmin && m.editsKanbanWith(_groupDefaults))
+                            const NeobrutalistBadge(
+                              label: 'Kanban',
+                              tone: NeobrutalistTone.neutral,
+                              icon: Icons.view_kanban_rounded,
+                            ),
                         ],
                       ),
                     ],
@@ -464,6 +651,20 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
                   NeobrutalistButtonVariant.secondary,
                   () => _showInfo(m),
                 ),
+                // Seguir / dejar de seguir (solo si no es uno mismo y tiene código de perfil)
+                if (!isMe && m.publicId?.trim().isNotEmpty == true)
+                  _action(
+                    _followingStatus[m.userId] == true ? 'Siguiendo' : 'Seguir',
+                    _followingStatus[m.userId] == true
+                        ? Icons.person_remove_rounded
+                        : Icons.person_add_rounded,
+                    _followingStatus[m.userId] == true
+                        ? NeobrutalistButtonVariant.secondary
+                        : NeobrutalistButtonVariant.info,
+                    _busyUserId == m.userId
+                        ? null
+                        : () => _toggleFollowMember(m),
+                  ),
                 // Social rechaza (400 target_is_admin) expulsar o banear a
                 // otro admin: primero hay que quitarle el rol.
                 if (_isAdmin && !isMe && isAdmin)
@@ -474,6 +675,12 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
                     busy ? null : () => _confirmRole(m, action: 'demote'),
                   ),
                 if (_isAdmin && !isMe && !isAdmin) ...[
+                  _action(
+                    'Permisos',
+                    Icons.tune_rounded,
+                    NeobrutalistButtonVariant.accent,
+                    busy ? null : () => _editPermissions(m),
+                  ),
                   _action(
                     'Hacer admin',
                     Icons.add_moderator_rounded,
@@ -527,24 +734,16 @@ class _GroupMembersTabState extends State<GroupMembersTab> {
 
   Widget _avatar(GroupMember m) {
     final isAdmin = m.role == 'admin';
-    return Container(
-      width: 44,
-      height: 44,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: isAdmin ? AppColors.accentBlueDeep : AppColors.surfaceLow,
-        border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
-        borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
-        boxShadow: AppShadows.badge,
-      ),
-      child: Text(
-        _initials(m),
-        style: TextStyle(
-          fontWeight: FontWeight.w900,
-          fontSize: 15,
-          color: isAdmin ? AppColors.surface : AppColors.text,
-        ),
-      ),
+    return UserAvatar(
+      name: m.displayLabel,
+      photoUrl: m.photoThumbUrl,
+      size: 44,
+      backgroundColor: isAdmin
+          ? AppColors.accentBlueDeep
+          : AppColors.surfaceLow,
+      foregroundColor: isAdmin ? AppColors.surface : AppColors.text,
+      borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
+      boxShadow: AppShadows.badge,
     );
   }
 }

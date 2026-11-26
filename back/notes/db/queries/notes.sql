@@ -85,3 +85,23 @@ DELETE FROM notes.shared_notes WHERE group_id=$1 AND note_id IN (SELECT id FROM 
 
 -- name: HasAnyShare :one
 SELECT EXISTS(SELECT 1 FROM notes.shared_notes WHERE note_id=$1);
+
+-- ---------------------------------------------------------------------------
+-- Guardados y likes (migración 004). Notes no genera código con sqlc: estas
+-- queries son la referencia de las que ejecutan a mano
+-- internal/repository/{saved,like,note}_repository.go.
+-- ---------------------------------------------------------------------------
+
+-- name: ListSavedNotesByUser :many
+SELECT id, user_id, note_id, saved_at FROM notes.saved_notes
+WHERE user_id = $1 ORDER BY saved_at DESC;
+
+-- name: CountSavesByNote :one
+SELECT count(*) FROM notes.saved_notes WHERE note_id = $1;
+
+-- name: CountLikesByNote :one
+SELECT count(*) FROM notes.note_likes WHERE note_id = $1;
+
+-- name: GetNoteTombstone :one
+SELECT note_id, owner_user_id, title, subject_id, visibility, deleted_at
+FROM notes.note_tombstones WHERE note_id = $1;

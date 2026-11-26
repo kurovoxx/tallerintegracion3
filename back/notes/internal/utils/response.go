@@ -42,12 +42,31 @@ const (
 	ErrAlreadyLiked      = "already_liked"
 	ErrNotLiked          = "not_liked"
 	ErrNoteUnavailable   = "note_unavailable"
+	// ErrNoteDeleted: el autor borró el apunte (lápida en notes.note_tombstones).
+	// Se responde 410 Gone solo a quien podía verlo (público o guardado).
+	ErrNoteDeleted = "note_deleted"
+	// ErrAlreadyShared: la nota ya está compartida en ese grupo (409).
+	ErrAlreadyShared = "already_shared"
+	// ErrAlreadyCopied: el usuario ya tiene un clon vivo de ese apunte (409).
+	ErrAlreadyCopied = "already_copied"
+	// ErrDriveNotConnected: la operación necesita el Google Drive propio y la
+	// cuenta no lo tiene conectado (o la conexión ya no es válida) (403).
+	ErrDriveNotConnected = "drive_not_connected"
+	// ErrCopyInProgress: ya hay una copia de ese apunte en curso para el
+	// usuario (409); no es una copia terminada.
+	ErrCopyInProgress = "copy_in_progress"
+	// ErrCannotSaveOwn: el autor intenta guardar su propio apunte (409). Sus
+	// apuntes ya están en «Mis apuntes»; guardarlos no tiene sentido.
+	ErrCannotSaveOwn     = "cannot_save_own_note"
 	ErrFileTooLarge      = "file_too_large"
 	ErrInvalidAccessMode = "invalid_access_mode"
 	ErrRateLimited       = "rate_limited"
 	// ErrUnsupportedMediaType: el contenido real del archivo no pertenece a la
 	// whitelist estricta de adjuntos (image/jpeg, image/png, application/pdf).
 	ErrUnsupportedMediaType = "unsupported_media_type"
+	// ErrServiceUnavailable: una dependencia servicio-a-servicio (Identity) no
+	// respondió; el cliente puede reintentar más tarde.
+	ErrServiceUnavailable = "service_unavailable"
 )
 
 func MessageForCode(code string) string {
@@ -74,12 +93,26 @@ func MessageForCode(code string) string {
 		return "Nota ya likeada"
 	case ErrNoteUnavailable:
 		return "Nota no disponible en almacenamiento remoto"
+	case ErrNoteDeleted:
+		return "Apunte no disponible (eliminado por el autor)"
+	case ErrAlreadyShared:
+		return "Este apunte ya está compartido en este grupo"
+	case ErrAlreadyCopied:
+		return "Ya copiaste este apunte a tus apuntes"
+	case ErrDriveNotConnected:
+		return "Para copiar apuntes de otros usuarios necesitas conectar tu Google Drive"
+	case ErrCopyInProgress:
+		return "Ya estamos copiando este apunte; aparecerá en tus apuntes al terminar"
+	case ErrCannotSaveOwn:
+		return "No puedes guardar tus propios apuntes"
 	case ErrFileTooLarge:
 		return "Archivo muy grande"
 	case ErrRateLimited:
 		return "Demasiadas solicitudes"
 	case ErrUnsupportedMediaType:
 		return "Tipo de archivo no permitido"
+	case ErrServiceUnavailable:
+		return "Servicio no disponible temporalmente"
 	default:
 		return "Error"
 	}
@@ -91,18 +124,22 @@ func StatusForCode(code string) int {
 		return http.StatusBadRequest
 	case ErrUnauthorized, ErrInvalidToken, ErrTokenExpired:
 		return http.StatusUnauthorized
-	case ErrForbidden:
+	case ErrForbidden, ErrDriveNotConnected:
 		return http.StatusForbidden
 	case ErrNotFound, ErrNoteUnavailable:
 		return http.StatusNotFound
-	case ErrConflict, ErrAlreadySaved, ErrAlreadyLiked:
+	case ErrConflict, ErrAlreadySaved, ErrAlreadyLiked, ErrAlreadyShared, ErrAlreadyCopied, ErrCannotSaveOwn, ErrCopyInProgress:
 		return http.StatusConflict
+	case ErrNoteDeleted:
+		return http.StatusGone
 	case ErrFileTooLarge, ErrPayloadTooLarge:
 		return http.StatusRequestEntityTooLarge
 	case ErrUnsupportedMediaType:
 		return http.StatusUnsupportedMediaType
 	case ErrRateLimited:
 		return http.StatusTooManyRequests
+	case ErrServiceUnavailable:
+		return http.StatusServiceUnavailable
 	default:
 		return http.StatusInternalServerError
 	}

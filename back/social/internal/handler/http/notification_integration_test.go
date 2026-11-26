@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -64,8 +65,10 @@ func (e *notifPGEnv) groupWithMeeting(t *testing.T, admin, member string) (gid, 
 	if err := e.groups.JoinWithInviteToken(context.Background(), g.ID, full.InviteToken, member); err != nil {
 		t.Fatalf("join: %v", err)
 	}
+	// Fecha relativa (no fija) para que el test no caduque con el tiempo.
+	proxima := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)
 	w := doMartinReq(e.router, http.MethodPost, "/groups/"+g.ID+"/meetings", admin, map[string]any{
-		"title": "PG-Reunión", "scheduled_at": "2026-11-20T15:00:00Z",
+		"title": "PG-Reunión", "scheduled_at": proxima,
 	})
 	expect(t, w, http.StatusCreated)
 	mid, _ = decode(t, w)["meeting_id"].(string)

@@ -359,7 +359,7 @@ class _AccountDeletionDialogState extends State<AccountDeletionDialog> {
           ),
         ),
         const SizedBox(height: AppDimens.spaceMd),
-        const Text(
+        Text(
           'Tu cuenta se eliminará de forma definitiva y no podrás recuperarla '
           'ni volver a iniciar sesión con ella.',
           style: _bodyStyle,
@@ -398,7 +398,7 @@ class _AccountDeletionDialogState extends State<AccountDeletionDialog> {
             textCapitalization: TextCapitalization.characters,
             textInputAction: TextInputAction.done,
             onSubmitted: (_) => _submit(),
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w900,
               letterSpacing: 0.5,
               color: AppColors.text,
@@ -432,7 +432,7 @@ class _AccountDeletionDialogState extends State<AccountDeletionDialog> {
           ),
         ),
         const SizedBox(height: AppDimens.spaceMd),
-        const Text(
+        Text(
           'La eliminación comenzó y tu cuenta ya está bloqueada: no se puede '
           'usar ni volver a iniciar sesión. Aún falta que Social y Notes '
           'confirmen la limpieza; el servidor la reintenta automáticamente.',
@@ -553,14 +553,14 @@ class _AccountDeletionDialogState extends State<AccountDeletionDialog> {
   }
 }
 
-const TextStyle _bodyStyle = TextStyle(
+TextStyle get _bodyStyle => TextStyle(
   fontSize: 14,
   fontWeight: FontWeight.w700,
   color: AppColors.text,
   height: 1.4,
 );
 
-const TextStyle _secondaryStyle = TextStyle(
+TextStyle get _secondaryStyle => TextStyle(
   fontSize: 13,
   fontWeight: FontWeight.w700,
   color: AppColors.mutedStrong,
@@ -605,7 +605,7 @@ class _StatusLine extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppColors.surfaceLow,
           border: Border.all(
-            color: AppColors.border,
+            color: AppColors.outline,
             width: AppDimens.borderWidth,
           ),
           borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -619,7 +619,7 @@ class _StatusLine extends StatelessWidget {
             Expanded(
               child: Text(
                 text,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w800,
                   color: AppColors.text,

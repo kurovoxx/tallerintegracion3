@@ -44,7 +44,7 @@ String _weekdayLabel(DateTime d) {
   return labels[d.weekday - 1];
 }
 
-const TextStyle _headerStyle = TextStyle(
+TextStyle get _headerStyle => TextStyle(
   fontWeight: FontWeight.w900,
   fontSize: 11,
   letterSpacing: 0.5,
@@ -302,12 +302,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
           color: AppColors.bg,
-          border: Border.all(color: AppColors.border, width: 2),
+          border: Border.all(color: AppColors.outline, width: 2),
           borderRadius: BorderRadius.circular(AppDimens.radius),
         ),
         child: Text(
           label,
-          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: AppColors.muted),
+          style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: AppColors.muted),
         ),
       ),
     );
@@ -416,7 +416,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       }
     });
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Configuración guardada correctamente'), backgroundColor: AppColors.border),
+      SnackBar(content: Text('Configuración guardada correctamente'), backgroundColor: AppColors.border),
     );
   }
 
@@ -481,7 +481,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
             child: Container(
               decoration: BoxDecoration(
                 color: AppColors.surface,
-                border: const Border(top: BorderSide(color: AppColors.border, width: AppDimens.borderWidth)),
+                border: Border(top: BorderSide(color: AppColors.outline, width: AppDimens.borderWidth)),
                 borderRadius: BorderRadius.vertical(top: Radius.circular(AppDimens.radius * 2)),
               ),
               padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
@@ -492,7 +492,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                   children: [
                     Center(child: Container(width: 44, height: 5, decoration: BoxDecoration(color: AppColors.muted.withOpacity(0.6), borderRadius: BorderRadius.circular(4)))),
                     const SizedBox(height: 16),
-                    Text('REGISTRAR INASISTENCIA · ${(subject['name'] as String).toUpperCase()}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: AppColors.text)),
+                    Text('REGISTRAR INASISTENCIA · ${(subject['name'] as String).toUpperCase()}', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: AppColors.text)),
                     const SizedBox(height: 18),
                     const AppFieldLabel('FECHA DE LA INASISTENCIA'),
                     const SizedBox(height: 6),
@@ -513,16 +513,16 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
                         decoration: BoxDecoration(
                           color: AppColors.bg,
-                          border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+                          border: Border.all(color: AppColors.outline, width: AppDimens.borderWidth),
                           borderRadius: BorderRadius.circular(AppDimens.radius),
                         ),
                         child: Row(
                           children: [
-                            const Icon(Icons.calendar_month_rounded, size: 18, color: AppColors.text),
+                            Icon(Icons.calendar_month_rounded, size: 18, color: AppColors.text),
                             const SizedBox(width: 10),
-                            Text(_formatDateFull(selectedDate), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14, color: AppColors.text)),
+                            Text(_formatDateFull(selectedDate), style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14, color: AppColors.text)),
                             const Spacer(),
-                            const Icon(Icons.expand_more_rounded, size: 20, color: AppColors.muted),
+                            Icon(Icons.expand_more_rounded, size: 20, color: AppColors.muted),
                           ],
                         ),
                       ),
@@ -530,32 +530,32 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                     const SizedBox(height: 16),
                     Container(
                       padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(color: AppColors.bg, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius)),
+                      decoration: BoxDecoration(color: AppColors.bg, border: Border.all(color: AppColors.outline, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius)),
                       child: Row(
                         children: [
                           Checkbox(
                             value: justified,
                             activeColor: AppColors.accentYellow,
                             checkColor: AppColors.text,
-                            side: const BorderSide(color: AppColors.border, width: 2),
+                            side: BorderSide(color: AppColors.outline, width: 2),
                             onChanged: (v) => setSheet(() => justified = v ?? false),
                           ),
                           const SizedBox(width: 4),
-                          const Expanded(child: Text('MARCAR COMO JUSTIFICADA', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.text))),
+                          Expanded(child: Text('MARCAR COMO JUSTIFICADA', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.text))),
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(color: justified ? const Color(0xFFD6E3FF) : const Color(0xFFFFDAD6), border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(4)),
+                            decoration: BoxDecoration(color: justified ? AppColors.infoTint : AppColors.errorTint, border: Border.all(color: AppColors.outline, width: 1.5), borderRadius: BorderRadius.circular(4)),
                             child: Text(justified ? 'JUSTIFICADA' : 'INJUSTIFICADA', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w900)),
                           ),
                         ],
                       ),
                     ),
                     const SizedBox(height: 8),
-                    const Text('Las faltas justificadas NO restan porcentaje de asistencia.', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.muted)),
+                    Text('Las faltas justificadas NO restan porcentaje de asistencia.', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.muted)),
                     const SizedBox(height: 22),
                     Row(
                       children: [
-                        Expanded(child: OutlinedButton(onPressed: () => Navigator.of(ctx2).pop(), style: OutlinedButton.styleFrom(side: const BorderSide(color: AppColors.border, width: 2), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppDimens.radius)), padding: const EdgeInsets.symmetric(vertical: 14)), child: const Text('CANCELAR', style: TextStyle(fontWeight: FontWeight.w900, color: AppColors.text)))),
+                        Expanded(child: OutlinedButton(onPressed: () => Navigator.of(ctx2).pop(), style: OutlinedButton.styleFrom(side: BorderSide(color: AppColors.outline, width: 2), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppDimens.radius)), padding: const EdgeInsets.symmetric(vertical: 14)), child: Text('CANCELAR', style: TextStyle(fontWeight: FontWeight.w900, color: AppColors.text)))),
                         const SizedBox(width: 12),
                         Expanded(child: SubmitButton(text: 'REGISTRAR', onPressed: () => Navigator.of(ctx2).pop({'date': selectedDate, 'justified': justified}))),
                       ],
@@ -624,7 +624,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(just ? 'Inasistencia justificada registrada' : 'Inasistencia registrada', style: const TextStyle(fontWeight: FontWeight.w700, color: Colors.white)),
+          content: Text(just ? 'Inasistencia justificada registrada' : 'Inasistencia registrada', style: TextStyle(fontWeight: FontWeight.w700, color: AppColors.onPrimary)),
           backgroundColor: AppColors.border,
         ),
       );
@@ -688,7 +688,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       minAttendancePct: minPct,
       newAbsences: updatedAbs,
     );
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Registro eliminado'), backgroundColor: AppColors.border));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Registro eliminado'), backgroundColor: AppColors.border));
   }
 
   void _saveConfig(String subjectId) {
@@ -754,9 +754,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('CONTROL DE INASISTENCIAS', style: TextStyle(color: AppColors.text, fontWeight: FontWeight.w900, fontSize: isDesktop ? 26 : 20, letterSpacing: -0.5)),
+              Text('CONTROL DE INASISTENCIAS', style: TextStyle(color: AppColors.title, fontWeight: FontWeight.w900, fontSize: isDesktop ? 26 : 20, letterSpacing: -0.5)),
               const SizedBox(height: 3),
-              const Text('Monitoreo detallado del registro de asistencia y límites permitidos por asignatura.', style: TextStyle(color: AppColors.muted, fontWeight: FontWeight.w700, fontSize: 12.5)),
+              Text('Monitoreo detallado del registro de asistencia y límites permitidos por asignatura.', style: TextStyle(color: AppColors.muted, fontWeight: FontWeight.w700, fontSize: 12.5)),
             ],
           ),
         ),
@@ -792,7 +792,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         // Filtros superiores (replica pmn: semestre + programa + filtro rápido)
         Container(
           padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(3, 3), blurRadius: 0)]),
+          decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.outline, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: [AppShadows.hard3]),
           child: Wrap(
             spacing: 16,
             runSpacing: 14,
@@ -822,7 +822,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                 const AppFieldLabel('FILTRO RÁPIDO'),
                 const SizedBox(height: 6),
                 Container(
-                  decoration: BoxDecoration(border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius)),
+                  decoration: BoxDecoration(border: Border.all(color: AppColors.outline, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius)),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
                     _FilterChip(label: 'Todos', active: _filterMode == 'todos', onTap: () => setState(() => _filterMode = 'todos')),
                     _FilterChip(label: 'Críticos', active: _filterMode == 'criticos', onTap: () => setState(() => _filterMode = 'criticos'), isLast: true),
@@ -833,9 +833,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                 height: 42,
                 child: ElevatedButton.icon(
                   onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Filtros aplicados'), backgroundColor: AppColors.border));
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Filtros aplicados'), backgroundColor: AppColors.border));
                   },
-                  style: ElevatedButton.styleFrom(backgroundColor: AppColors.accentBlue, foregroundColor: Colors.white, side: const BorderSide(color: AppColors.border, width: 2), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppDimens.radius)), elevation: 0),
+                  style: ElevatedButton.styleFrom(backgroundColor: AppColors.accentBlue, foregroundColor: AppColors.onPrimary, side: BorderSide(color: AppColors.outline, width: 2), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppDimens.radius)), elevation: 0),
                   icon: const Icon(Icons.filter_alt_rounded, size: 18),
                   label: const Text('FILTRAR', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12)),
                 ),
@@ -865,25 +865,25 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         const SizedBox(height: 16),
         // Tabla Historial — responsiva mobile/desktop
         Container(
-          decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(4, 4), blurRadius: 0)]),
+          decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.outline, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: [AppShadows.hard4]),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                decoration: const BoxDecoration(color: AppColors.accentYellow, border: Border(bottom: BorderSide(color: AppColors.border, width: AppDimens.borderWidth)), borderRadius: BorderRadius.vertical(top: Radius.circular(AppDimens.radius - 1))),
+                decoration: BoxDecoration(color: AppColors.accentYellow, border: Border(bottom: BorderSide(color: AppColors.outline, width: AppDimens.borderWidth)), borderRadius: BorderRadius.vertical(top: Radius.circular(AppDimens.radius - 1))),
                 child: Row(
                   children: [
-                    const Expanded(child: Text('HISTORIAL DE FALTAS', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: AppColors.text))),
+                    Expanded(child: Text('HISTORIAL DE FALTAS', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: AppColors.text))),
                     InkWell(
-                      onTap: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Exportando historial...'), backgroundColor: AppColors.border)),
-                      child: Row(children: const [Icon(Icons.download_rounded, size: 16, color: AppColors.text), SizedBox(width: 4), Text('EXPORTAR', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: AppColors.text, decoration: TextDecoration.underline))]),
+                      onTap: () => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Exportando historial...'), backgroundColor: AppColors.border)),
+                      child: Row(children: [Icon(Icons.download_rounded, size: 16, color: AppColors.text), SizedBox(width: 4), Text('EXPORTAR', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: AppColors.text, decoration: TextDecoration.underline))]),
                     ),
                   ],
                 ),
               ),
               if (filteredAbsences.isEmpty)
-                const Padding(padding: EdgeInsets.all(24), child: Center(child: Text('SIN REGISTROS PARA EL FILTRO SELECCIONADO', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: AppColors.muted))))
+                Padding(padding: EdgeInsets.all(24), child: Center(child: Text('SIN REGISTROS PARA EL FILTRO SELECCIONADO', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: AppColors.muted))))
               else if (isMobile)
                 Padding(
                   padding: const EdgeInsets.all(12),
@@ -911,10 +911,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
               // Footer paginación mock
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: const BoxDecoration(border: Border(top: BorderSide(color: AppColors.border, width: 2))),
+                decoration: BoxDecoration(border: Border(top: BorderSide(color: AppColors.outline, width: 2))),
                 child: Row(
                   children: [
-                    Text('Mostrando ${filteredAbsences.take(8).length} de ${filteredAbsences.length} registros', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppColors.muted)),
+                    Text('Mostrando ${filteredAbsences.take(8).length} de ${filteredAbsences.length} registros', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppColors.muted)),
                     const Spacer(),
                     _PageButton(icon: Icons.chevron_left_rounded, enabled: false, onTap: () {}),
                     const SizedBox(width: 4),
@@ -933,13 +933,13 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         // Listado rápido de asignaturas con asistencia
         Container(
           padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(3, 3), blurRadius: 0)]),
+          decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.outline, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: [AppShadows.hard3]),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text('ASISTENCIA POR ASIGNATURA', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppColors.text)),
+            Text('ASISTENCIA POR ASIGNATURA', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppColors.text)),
             const SizedBox(height: 4),
-            const Divider(color: AppColors.border, thickness: AppDimens.borderWidth, height: 18),
+            Divider(color: AppColors.border, thickness: AppDimens.borderWidth, height: 18),
             if (filteredSubjects.isEmpty)
-              const Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Text('Ninguna asignatura en estado crítico', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppColors.muted)))
+              Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Text('Ninguna asignatura en estado crítico', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppColors.muted)))
             else
               ...filteredSubjects.map((s) {
                 final absList = s['absences'] as List? ?? _absences.where((a) => a['subject_id'] == s['id']).toList();
@@ -952,17 +952,17 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                 return Container(
                   margin: const EdgeInsets.only(bottom: 10),
                   padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(color: isCrit ? const Color(0xFFFFE1DE) : AppColors.bg, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius)),
+                  decoration: BoxDecoration(color: isCrit ? AppColors.errorTint : AppColors.bg, border: Border.all(color: AppColors.outline, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius)),
                   child: Row(
                     children: [
                       Expanded(
                         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text((s['name'] as String).toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12.5, color: AppColors.text)),
+                          Text((s['name'] as String).toUpperCase(), style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12.5, color: AppColors.text)),
                           const SizedBox(height: 2),
-                          Text('${s['code']} · ${s['total_classes'] == null ? 'Sin config.' : '${s['total_classes']} clases'} · Mín ${minPct.round()}%', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppColors.muted)),
+                          Text('${s['code']} · ${s['total_classes'] == null ? 'Sin config.' : '${s['total_classes']} clases'} · Mín ${minPct.round()}%', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppColors.muted)),
                           const SizedBox(height: 6),
                           Row(children: [
-                            Container(width: 90, height: 8, decoration: BoxDecoration(border: Border.all(color: AppColors.border, width: 1.5)), child: pct == null ? Container(color: AppColors.muted.withOpacity(0.2)) : FractionallySizedBox(alignment: Alignment.centerLeft, widthFactor: (pct / 100).clamp(0, 1), child: Container(color: isCrit ? AppColors.error : AppColors.accentYellow))),
+                            Container(width: 90, height: 8, decoration: BoxDecoration(border: Border.all(color: AppColors.outline, width: 1.5)), child: pct == null ? Container(color: AppColors.muted.withOpacity(0.2)) : FractionallySizedBox(alignment: Alignment.centerLeft, widthFactor: (pct / 100).clamp(0, 1), child: Container(color: isCrit ? AppColors.error : AppColors.accentYellow))),
                             const SizedBox(width: 8),
                             Text(pct == null ? 'No configurado' : '${pct.round()}% asistencia', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: pct == null ? AppColors.muted : (isCrit ? AppColors.error : AppColors.text))),
                           ]),
@@ -977,7 +977,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                       InkWell(
                         onTap: () => _openSubjectDetail(s['id'] as String),
                         borderRadius: BorderRadius.circular(4),
-                        child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8), decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(4)), child: const Text('VER', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: Colors.white))),
+                        child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8), decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(4)), child: Text('VER', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: AppColors.onPrimary))),
                       ),
                     ],
                   ),
@@ -1002,14 +1002,14 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         // Cabecera de la tabla
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             color: AppColors.surface,
             border: Border(
-              bottom: BorderSide(color: AppColors.border, width: 2),
+              bottom: BorderSide(color: AppColors.outline, width: 2),
             ),
           ),
           child: Row(
-            children: const [
+            children: [
               SizedBox(width: 80, child: Text('FECHA', style: _headerStyle)),
               Expanded(flex: 4, child: Text('ASIGNATURA', style: _headerStyle)),
               Expanded(flex: 2, child: Text('TIPO', style: _headerStyle)),
@@ -1023,8 +1023,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
           itemCount: records.length,
-          separatorBuilder: (_, __) => const Divider(
-            color: Color(0xFFE2DDD4),
+          separatorBuilder: (_, __) => Divider(
+            color: AppColors.track,
             height: 1,
             thickness: 1,
           ),
@@ -1049,7 +1049,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                       width: 80,
                       child: Text(
                         dateStr,
-                        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppColors.text),
+                        style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppColors.text),
                       ),
                     ),
                     // Asignatura
@@ -1057,7 +1057,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                       flex: 4,
                       child: Text(
                         subjectName,
-                        style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13.5, color: AppColors.text),
+                        style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13.5, color: AppColors.text),
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
@@ -1066,7 +1066,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                       flex: 2,
                       child: Text(
                         typeStr,
-                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppColors.muted),
+                        style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppColors.muted),
                       ),
                     ),
                     // Badge Estado (Centrado en su columna)
@@ -1076,8 +1076,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                           decoration: BoxDecoration(
-                            color: isJustified ? const Color(0xFFD6E3FF) : const Color(0xFFFFDAD6),
-                            border: Border.all(color: AppColors.border, width: 1.5),
+                            color: isJustified ? AppColors.infoTint : AppColors.errorTint,
+                            border: Border.all(color: AppColors.outline, width: 1.5),
                             borderRadius: BorderRadius.circular(4),
                           ),
                           child: Text(
@@ -1085,7 +1085,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                             style: TextStyle(
                               fontSize: 10,
                               fontWeight: FontWeight.w900,
-                              color: isJustified ? const Color(0xFF003399) : const Color(0xFF990000),
+                              color: isJustified ? AppColors.infoInk : AppColors.errorInk,
                               letterSpacing: 0.3,
                             ),
                           ),
@@ -1137,9 +1137,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     if (subject == null) {
       return Container(
         padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(4, 4), blurRadius: 0)]),
+        decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.outline, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: [AppShadows.hard4]),
         child: Column(children: [
-          const Text('ASIGNATURA NO ENCONTRADA', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: AppColors.text)),
+          Text('ASIGNATURA NO ENCONTRADA', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: AppColors.text)),
           const SizedBox(height: 10),
           SubmitButton(text: 'VOLVER AL RESUMEN', onPressed: _backToGeneral),
         ]),
@@ -1164,23 +1164,23 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
           borderRadius: BorderRadius.circular(AppDimens.radius),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0)]),
-            child: Row(mainAxisSize: MainAxisSize.min, children: const [Icon(Icons.arrow_back_rounded, size: 16, color: AppColors.text), SizedBox(width: 6), Text('VOLVER AL RESUMEN GENERAL', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.text))]),
+            decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.outline, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: [AppShadows.hard2]),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.arrow_back_rounded, size: 16, color: AppColors.text), SizedBox(width: 6), Text('VOLVER AL RESUMEN GENERAL', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.text))]),
           ),
         ),
         const SizedBox(height: 14),
         Text('CONTROL DE INASISTENCIAS · ${(subject['name'] as String).toUpperCase()}', style: TextStyle(fontWeight: FontWeight.w900, fontSize: isDesktop ? 18 : 15, color: AppColors.text, letterSpacing: -0.3)),
-        const Divider(color: AppColors.border, thickness: 4, height: 20),
+        Divider(color: AppColors.border, thickness: 4, height: 20),
         _backendSummaryLine(subjectId),
         // Configuración del curso — siempre arriba
         Container(
           padding: EdgeInsets.all(isDesktop ? 20 : 16),
-          decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(4, 4), blurRadius: 0)]),
+          decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.outline, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: [AppShadows.hard4]),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Row(children: [const Expanded(child: Text('CONFIGURACIÓN DEL CURSO', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppColors.text))), Container(width: 36, height: 36, decoration: BoxDecoration(color: AppColors.bg, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius)), child: const Icon(Icons.settings_rounded, size: 18, color: AppColors.text))]),
-              const Divider(color: AppColors.border, thickness: 2, height: 20),
+              Row(children: [Expanded(child: Text('CONFIGURACIÓN DEL CURSO', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppColors.text))), Container(width: 36, height: 36, decoration: BoxDecoration(color: AppColors.bg, border: Border.all(color: AppColors.outline, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius)), child: Icon(Icons.settings_rounded, size: 18, color: AppColors.text))]),
+              Divider(color: AppColors.border, thickness: 2, height: 20),
               Wrap(
                 spacing: 24,
                 runSpacing: 16,
@@ -1196,7 +1196,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                           onPressed: () => setState(() => config['daysPerWeek'] = ((config['daysPerWeek'] as int) - 1).clamp(1, 7)),
                         ),
                         const SizedBox(width: 8),
-                        Container(width: 64, height: 40, alignment: Alignment.center, decoration: BoxDecoration(color: AppColors.bg, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius)), child: Text('${config['daysPerWeek']}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: AppColors.text))),
+                        Container(width: 64, height: 40, alignment: Alignment.center, decoration: BoxDecoration(color: AppColors.bg, border: Border.all(color: AppColors.outline, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius)), child: Text('${config['daysPerWeek']}', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: AppColors.text))),
                         const SizedBox(width: 8),
                         _SquareIconButton(
                           icon: Icons.add_rounded,
@@ -1215,7 +1215,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                         child: TextFormField(
                           initialValue: '${config['weeks']}',
                           keyboardType: TextInputType.number,
-                          style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: AppColors.text),
+                          style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: AppColors.text),
                           decoration: appInputDecoration('16'),
                           onChanged: (v) {
                             final n = int.tryParse(v);
@@ -1230,7 +1230,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Row(children: [
                         const Expanded(child: AppFieldLabel('MÍNIMO ASISTENCIA')),
-                        Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(4)), child: Text('$minPct%', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: Colors.white))),
+                        Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(4)), child: Text('$minPct%', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.onPrimary))),
                       ]),
                       Slider(
                         value: minPct.toDouble(),
@@ -1250,7 +1250,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                 alignment: Alignment.centerRight,
                 child: ElevatedButton(
                   onPressed: () => _saveConfig(subjectId),
-                  style: ElevatedButton.styleFrom(backgroundColor: AppColors.accentYellow, foregroundColor: AppColors.text, side: const BorderSide(color: AppColors.border, width: 2), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppDimens.radius)), elevation: 0, padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14)),
+                  style: ElevatedButton.styleFrom(backgroundColor: AppColors.accentYellow, foregroundColor: AppColors.text, side: BorderSide(color: AppColors.outline, width: 2), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppDimens.radius)), elevation: 0, padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14)),
                   child: const Text('GUARDAR CONFIGURACIÓN', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12)),
                 ),
               ),
@@ -1268,49 +1268,49 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
               width: colWidth,
               child: Container(
                 padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(color: AppColors.border, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(4, 4), blurRadius: 0)]),
+                decoration: BoxDecoration(color: AppColors.border, border: Border.all(color: AppColors.outline, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: [AppShadows.hard4]),
                 child: Column(
                   children: [
-                    const Align(alignment: Alignment.centerLeft, child: Text('ESTADO ACTUAL', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: Colors.white, letterSpacing: 0.4))),
+                    Align(alignment: Alignment.centerLeft, child: Text('ESTADO ACTUAL', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppColors.onPrimary, letterSpacing: 0.4))),
                     const SizedBox(height: 16),
                     Container(
                       width: 160,
                       height: 160,
                       decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: AppColors.accentYellow, width: 8), color: AppColors.border),
-                      child: Center(child: Text(pctLabel, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 44, color: AppColors.accentYellow))),
+                      child: Center(child: Text(pctLabel, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 44, color: AppColors.accentYellow))),
                     ),
                     const SizedBox(height: 16),
                     Transform.rotate(
                       angle: -0.02,
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                        decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0)]),
+                        decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.outline, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: [AppShadows.hard2]),
                         child: Column(children: [
                           if (pct == null)
-                            const Text('NO CONFIGURADO', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: AppColors.muted))
+                            Text('NO CONFIGURADO', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: AppColors.muted))
                           else if (remaining == null)
-                            const Text('SIN LÍMITE CONFIGURADO', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppColors.text))
+                            Text('SIN LÍMITE CONFIGURADO', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppColors.text))
                           else if (remaining < 0)
-                            const Text('REPROBADO POR ASISTENCIA', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppColors.error))
+                            Text('REPROBADO POR ASISTENCIA', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppColors.error))
                           else
                             Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                              const Text('Te quedan ', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppColors.text)),
-                              Text('$remaining', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 22, color: AppColors.error)),
-                              const Text(' faltas', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppColors.text)),
+                              Text('Te quedan ', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppColors.text)),
+                              Text('$remaining', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 22, color: AppColors.error)),
+                              Text(' faltas', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppColors.text)),
                             ]),
                           const SizedBox(height: 2),
-                          Text(pct == null ? 'Define total de clases' : 'antes de reprobar por asistencia', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 10, color: AppColors.muted)),
+                          Text(pct == null ? 'Define total de clases' : 'antes de reprobar por asistencia', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 10, color: AppColors.muted)),
                         ]),
                       ),
                     ),
                     const SizedBox(height: 12),
-                    Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), decoration: BoxDecoration(color: AppColors.muted.withOpacity(0.25), border: Border.all(color: Colors.white.withOpacity(0.5), width: 1), borderRadius: BorderRadius.circular(4)), child: Text('$minPct% REQUERIDO', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: Colors.white))),
+                    Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), decoration: BoxDecoration(color: AppColors.muted.withOpacity(0.25), border: Border.all(color: AppColors.onPrimary.withOpacity(0.5), width: 1), borderRadius: BorderRadius.circular(4)), child: Text('$minPct% REQUERIDO', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: AppColors.onPrimary))),
                     const SizedBox(height: 16),
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton.icon(
                         onPressed: () => _showRegisterAbsenceSheet(subjectId),
-                        style: ElevatedButton.styleFrom(backgroundColor: AppColors.error, foregroundColor: Colors.white, side: const BorderSide(color: Colors.white, width: 2), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppDimens.radius)), elevation: 0, padding: const EdgeInsets.symmetric(vertical: 16)),
+                        style: ElevatedButton.styleFrom(backgroundColor: AppColors.error, foregroundColor: AppColors.onPrimary, side: BorderSide(color: AppColors.surface, width: 2), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppDimens.radius)), elevation: 0, padding: const EdgeInsets.symmetric(vertical: 16)),
                         icon: const Icon(Icons.add_circle_rounded, size: 20),
                         label: const Text('REGISTRAR INASISTENCIA', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13)),
                       ),
@@ -1319,8 +1319,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                       const SizedBox(height: 12),
                       Container(
                         padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(color: AppColors.accentYellow, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius)),
-                        child: const Row(children: [Icon(Icons.warning_amber_rounded, size: 18, color: AppColors.text), SizedBox(width: 8), Expanded(child: Text('Configura total_classes para calcular asistencia', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 11, color: AppColors.text)))]),
+                        decoration: BoxDecoration(color: AppColors.accentYellow, border: Border.all(color: AppColors.outline, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius)),
+                        child: Row(children: [Icon(Icons.warning_amber_rounded, size: 18, color: AppColors.text), SizedBox(width: 8), Expanded(child: Text('Configura total_classes para calcular asistencia', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 11, color: AppColors.text)))]),
                       ),
                     ],
                   ],
@@ -1330,20 +1330,20 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
             SizedBox(
               width: colWidth,
               child: Container(
-                decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(4, 4), blurRadius: 0)]),
+                decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.outline, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: [AppShadows.hard4]),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                      decoration: const BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.vertical(top: Radius.circular(AppDimens.radius - 1))),
+                      decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.vertical(top: Radius.circular(AppDimens.radius - 1))),
                       child: Row(children: [
-                        const Expanded(child: Text('HISTORIAL DE FALTAS', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: Colors.white))),
-                        Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: Colors.white, border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(4)), child: Text('TOTAL ${subjectAbsences.length}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: AppColors.text))),
+                        Expanded(child: Text('HISTORIAL DE FALTAS', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppColors.onPrimary))),
+                        Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.outline, width: 1.5), borderRadius: BorderRadius.circular(4)), child: Text('TOTAL ${subjectAbsences.length}', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: AppColors.text))),
                       ]),
                     ),
                     if (subjectAbsences.isEmpty)
-                      const Padding(padding: EdgeInsets.all(24), child: Center(child: Text('SIN INASISTENCIAS REGISTRADAS', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: AppColors.muted))))
+                      Padding(padding: EdgeInsets.all(24), child: Center(child: Text('SIN INASISTENCIAS REGISTRADAS', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: AppColors.muted))))
                     else
                       Padding(
                         padding: const EdgeInsets.all(12),
@@ -1353,19 +1353,19 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                             return Container(
                               margin: const EdgeInsets.only(bottom: 8),
                               padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(color: AppColors.bg, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius)),
+                              decoration: BoxDecoration(color: AppColors.bg, border: Border.all(color: AppColors.outline, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius)),
                               child: Row(
                                 children: [
                                   Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                    decoration: BoxDecoration(color: AppColors.border, border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(4)),
-                                    child: Text('${d.day.toString().padLeft(2, '0')} ${_monthShort(d.month)}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: Colors.white)),
+                                    decoration: BoxDecoration(color: AppColors.border, border: Border.all(color: AppColors.outline, width: 1.5), borderRadius: BorderRadius.circular(4)),
+                                    child: Text('${d.day.toString().padLeft(2, '0')} ${_monthShort(d.month)}', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.onPrimary)),
                                   ),
                                   const SizedBox(width: 12),
                                   Expanded(
                                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                      Text(_weekdayLabel(d), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppColors.text)),
-                                      Text((a['type'] as String).toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 10, color: AppColors.muted)),
+                                      Text(_weekdayLabel(d), style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppColors.text)),
+                                      Text((a['type'] as String).toUpperCase(), style: TextStyle(fontWeight: FontWeight.w800, fontSize: 10, color: AppColors.muted)),
                                     ]),
                                   ),
                                   InkWell(
@@ -1373,7 +1373,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                                     borderRadius: BorderRadius.circular(4),
                                     child: Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                                      decoration: BoxDecoration(color: (a['justified'] as bool) ? const Color(0xFFD6E3FF) : const Color(0xFFFFDAD6), border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(4)),
+                                      decoration: BoxDecoration(color: (a['justified'] as bool) ? AppColors.infoTint : AppColors.errorTint, border: Border.all(color: AppColors.outline, width: 1.5), borderRadius: BorderRadius.circular(4)),
                                       child: Text((a['justified'] as bool) ? 'JUST.' : 'INJUST.', style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w900)),
                                     ),
                                   ),
@@ -1413,8 +1413,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   Widget _buildLoadingCard() {
     return Container(
       height: 260,
-      decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(4, 4), blurRadius: 0)]),
-      child: const Center(child: CircularProgressIndicator(color: AppColors.text)),
+      decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.outline, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: [AppShadows.hard4]),
+      child: Center(child: CircularProgressIndicator(color: AppColors.text)),
     );
   }
 
@@ -1423,11 +1423,11 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.error_outline_rounded, size: 48, color: AppColors.text),
+          Icon(Icons.error_outline_rounded, size: 48, color: AppColors.text),
           const SizedBox(height: 12),
-          const Text('NO SE PUDO CARGAR ASISTENCIA', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: AppColors.text)),
+          Text('NO SE PUDO CARGAR ASISTENCIA', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: AppColors.text)),
           const SizedBox(height: 8),
-          const Text('Revisa tu conexión e intenta nuevamente.', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.muted)),
+          Text('Revisa tu conexión e intenta nuevamente.', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.muted)),
           const SizedBox(height: 18),
           SizedBox(width: 200, child: SubmitButton(text: 'REINTENTAR', onPressed: _loadData)),
         ]),
@@ -1466,9 +1466,9 @@ class _MobileAbsenceCard extends StatelessWidget {
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           color: AppColors.surface,
-          border: Border.all(color: AppColors.border, width: 2),
+          border: Border.all(color: AppColors.outline, width: 2),
           borderRadius: BorderRadius.circular(AppDimens.radius),
-          boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(3, 3), blurRadius: 0)],
+          boxShadow: [AppShadows.hard3],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1477,15 +1477,15 @@ class _MobileAbsenceCard extends StatelessWidget {
               children: [
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(color: AppColors.bg, border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(4)),
-                  child: Text('$dd/$mm', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.text)),
+                  decoration: BoxDecoration(color: AppColors.bg, border: Border.all(color: AppColors.outline, width: 1.5), borderRadius: BorderRadius.circular(4)),
+                  child: Text('$dd/$mm', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.text)),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(color: justified ? const Color(0xFFD6E3FF) : const Color(0xFFFFDAD6), border: Border.all(color: AppColors.border, width: 1.5), borderRadius: BorderRadius.circular(4)),
-                    child: Text(justified ? 'JUSTIFICADA' : 'INJUSTIFICADA', textAlign: TextAlign.center, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: AppColors.text)),
+                    decoration: BoxDecoration(color: justified ? AppColors.infoTint : AppColors.errorTint, border: Border.all(color: AppColors.outline, width: 1.5), borderRadius: BorderRadius.circular(4)),
+                    child: Text(justified ? 'JUSTIFICADA' : 'INJUSTIFICADA', textAlign: TextAlign.center, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: AppColors.text)),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -1493,9 +1493,9 @@ class _MobileAbsenceCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 10),
-            Text(subjectName, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppColors.text)),
+            Text(subjectName, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppColors.text)),
             const SizedBox(height: 4),
-            Text(type, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppColors.muted)),
+            Text(type, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppColors.muted)),
           ],
         ),
       ),
@@ -1518,7 +1518,7 @@ class _SquareIconButton extends StatelessWidget {
         width: 42,
         height: 42,
         alignment: Alignment.center,
-        decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0)]),
+        decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.outline, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: [AppShadows.hard2]),
         child: Icon(icon, size: 18, color: AppColors.text),
       ),
     );
@@ -1536,14 +1536,14 @@ class _DropdownField extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(color: AppColors.bg, border: Border.all(color: AppColors.border, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(2, 2), blurRadius: 0)]),
+      decoration: BoxDecoration(color: AppColors.bg, border: Border.all(color: AppColors.outline, width: 2), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: [AppShadows.hard2]),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
           value: value,
           isExpanded: true,
-          icon: const Icon(Icons.expand_more_rounded, size: 20, color: AppColors.text),
-          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12.5, color: AppColors.text),
-          items: items.map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12.5, color: AppColors.text)))).toList(),
+          icon: Icon(Icons.expand_more_rounded, size: 20, color: AppColors.text),
+          style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12.5, color: AppColors.text),
+          items: items.map((e) => DropdownMenuItem(value: e, child: Text(e, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12.5, color: AppColors.text)))).toList(),
           onChanged: (v) {
             if (v != null) onChanged(v);
           },
@@ -1568,9 +1568,9 @@ class _FilterChip extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
           color: active ? AppColors.border : AppColors.surface,
-          border: Border(right: isLast ? BorderSide.none : const BorderSide(color: AppColors.border, width: 2)),
+          border: Border(right: isLast ? BorderSide.none : BorderSide(color: AppColors.outline, width: 2)),
         ),
-        child: Text(label.toUpperCase(), style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: active ? Colors.white : AppColors.text)),
+        child: Text(label.toUpperCase(), style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: active ? AppColors.onPrimary : AppColors.text)),
       ),
     );
   }
@@ -1588,33 +1588,33 @@ class _CriticalCard extends StatelessWidget {
     final isCritical = count > 0;
     return Container(
       padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(color: isCritical ? AppColors.error : AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(4, 4), blurRadius: 0)]),
+      decoration: BoxDecoration(color: isCritical ? AppColors.error : AppColors.surface, border: Border.all(color: AppColors.outline, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: [AppShadows.hard4]),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [Icon(Icons.warning_amber_rounded, color: isCritical ? Colors.white : AppColors.text, size: 18), const SizedBox(width: 6), Text('ESTADO CRÍTICO', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: isCritical ? Colors.white : AppColors.text))]),
+          Row(children: [Icon(Icons.warning_amber_rounded, color: isCritical ? AppColors.onPrimary : AppColors.text, size: 18), const SizedBox(width: 6), Text('ESTADO CRÍTICO', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: isCritical ? AppColors.onPrimary : AppColors.text))]),
           const SizedBox(height: 12),
-          Text('$count', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 44, color: isCritical ? Colors.white : AppColors.text, height: 1)),
+          Text('$count', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 44, color: isCritical ? AppColors.onPrimary : AppColors.text, height: 1)),
           const SizedBox(height: 6),
-          Text(count == 0 ? 'Sin cursos en riesgo' : count == 1 ? 'Curso en riesgo' : '$count cursos en riesgo', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: isCritical ? Colors.white : AppColors.text)),
+          Text(count == 0 ? 'Sin cursos en riesgo' : count == 1 ? 'Curso en riesgo' : '$count cursos en riesgo', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: isCritical ? AppColors.onPrimary : AppColors.text)),
           if (isCritical && criticalNames.isNotEmpty) ...[
             const SizedBox(height: 8),
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(color: Colors.white.withOpacity(0.15), border: Border.all(color: Colors.white.withOpacity(0.5), width: 1), borderRadius: BorderRadius.circular(4)),
+              decoration: BoxDecoration(color: AppColors.onPrimary.withOpacity(0.15), border: Border.all(color: AppColors.onPrimary.withOpacity(0.5), width: 1), borderRadius: BorderRadius.circular(4)),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: criticalNames.map((n) => Padding(padding: const EdgeInsets.only(bottom: 2), child: Text('• $n', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 11, color: Colors.white)))).toList(),
+                children: criticalNames.map((n) => Padding(padding: const EdgeInsets.only(bottom: 2), child: Text('• $n', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 11, color: AppColors.onPrimary)))).toList(),
               ),
             ),
             if (criticalNames.length == 1) ...[
               const SizedBox(height: 2),
-              Text('($subjectName)', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: Colors.white70)),
+              Text('($subjectName)', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: AppColors.onPrimaryMuted)),
             ],
           ] else if (count > 0) ...[
             const SizedBox(height: 2),
-            Text('($subjectName)', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: isCritical ? Colors.white : AppColors.text)),
+            Text('($subjectName)', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: isCritical ? AppColors.onPrimary : AppColors.text)),
           ],
           if (isCritical) ...[
             const SizedBox(height: 14),
@@ -1622,13 +1622,13 @@ class _CriticalCard extends StatelessWidget {
               width: double.infinity,
               child: ElevatedButton(
                 onPressed: onView,
-                style: ElevatedButton.styleFrom(backgroundColor: AppColors.border, foregroundColor: Colors.white, side: const BorderSide(color: Colors.white, width: 1.5), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)), elevation: 0, padding: const EdgeInsets.symmetric(vertical: 10)),
+                style: ElevatedButton.styleFrom(backgroundColor: AppColors.border, foregroundColor: AppColors.onPrimary, side: BorderSide(color: AppColors.surface, width: 1.5), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)), elevation: 0, padding: const EdgeInsets.symmetric(vertical: 10)),
                 child: const Text('VER DETALLES', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12)),
               ),
             ),
           ] else ...[
             const SizedBox(height: 6),
-            Text('Todos los ramos dentro del límite', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 11, color: isCritical ? Colors.white70 : AppColors.muted)),
+            Text('Todos los ramos dentro del límite', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 11, color: isCritical ? AppColors.onPrimaryMuted : AppColors.muted)),
           ],
         ],
       ),
@@ -1646,11 +1646,11 @@ class _SummaryCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.border, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: const [BoxShadow(color: AppColors.border, offset: Offset(4, 4), blurRadius: 0)]),
+      decoration: BoxDecoration(color: AppColors.surface, border: Border.all(color: AppColors.outline, width: AppDimens.borderWidth), borderRadius: BorderRadius.circular(AppDimens.radius), boxShadow: [AppShadows.hard4]),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('RESUMEN DEL PERIODO', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.muted)),
+          Text('RESUMEN DEL PERIODO', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppColors.muted)),
           const SizedBox(height: 14),
           _SummaryRow(label: 'Total Inasistencias', value: '$total', valueColor: AppColors.text),
           const SizedBox(height: 10),
@@ -1672,7 +1672,7 @@ class _SummaryRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-      Text(label, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppColors.text)),
+      Text(label, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: AppColors.text)),
       Text(value, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 22, color: valueColor)),
     ]);
   }
@@ -1696,7 +1696,7 @@ class _PageButton extends StatelessWidget {
         height: 30,
         alignment: Alignment.center,
         decoration: BoxDecoration(color: active ? AppColors.border : AppColors.surface, border: Border.all(color: enabled ? AppColors.border : AppColors.muted.withOpacity(0.4), width: 1.5), borderRadius: BorderRadius.circular(4)),
-        child: icon != null ? Icon(icon, size: 16, color: active ? Colors.white : (enabled ? AppColors.text : AppColors.muted)) : Text(label!, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: active ? Colors.white : AppColors.text)),
+        child: icon != null ? Icon(icon, size: 16, color: active ? AppColors.onPrimary : (enabled ? AppColors.text : AppColors.muted)) : Text(label!, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: active ? AppColors.onPrimary : AppColors.text)),
       ),
     );
   }

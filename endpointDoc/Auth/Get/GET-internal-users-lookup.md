@@ -1,4 +1,5 @@
-# GET /internal/users/lookup
+# `GET /internal/users/lookup`
+
 
 Permite consultar en lote (batch) la información pública de múltiples usuarios por sus IDs.
 

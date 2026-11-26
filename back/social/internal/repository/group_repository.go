@@ -2,10 +2,12 @@ package repository
 
 import (
 	"context"
-	"errors" // <--- Añade esta línea aquí
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/model"
 )
@@ -34,10 +36,10 @@ func (r *GroupRepository) CreateWithOwner(ctx context.Context, name string, desc
 	insertGroup := `
 		INSERT INTO social.groups (name, description, owner_user_id)
 		VALUES ($1, $2, $3)
-		RETURNING id, name, description, owner_user_id, notes_restricted_to_staff, invite_token, created_at
+		RETURNING id, name, description, photo_url, photo_thumb_url, owner_user_id, notes_restricted_to_staff, invite_token, created_at
 	`
 	err = tx.QueryRow(ctx, insertGroup, name, description, ownerUserID).Scan(
-		&g.ID, &g.Name, &g.Description, &g.OwnerUserID, &g.NotesRestrictedToStaff, &g.InviteToken, &g.CreatedAt,
+		&g.ID, &g.Name, &g.Description, &g.PhotoURL, &g.PhotoThumbURL, &g.OwnerUserID, &g.NotesRestrictedToStaff, &g.InviteToken, &g.CreatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert group: %w", err)
@@ -60,12 +62,12 @@ func (r *GroupRepository) CreateWithOwner(ctx context.Context, name string, desc
 func (r *GroupRepository) GetByID(ctx context.Context, id string) (*model.Group, error) {
 	var g model.Group
 	query := `
-		SELECT id, name, description, owner_user_id, notes_restricted_to_staff, invite_token, created_at 
+		SELECT id, name, description, photo_url, photo_thumb_url, owner_user_id, notes_restricted_to_staff, invite_token, created_at
 		FROM social.groups 
 		WHERE id = $1`
 
 	err := r.pool.QueryRow(ctx, query, id).Scan(
-		&g.ID, &g.Name, &g.Description, &g.OwnerUserID, &g.NotesRestrictedToStaff, &g.InviteToken, &g.CreatedAt,
+		&g.ID, &g.Name, &g.Description, &g.PhotoURL, &g.PhotoThumbURL, &g.OwnerUserID, &g.NotesRestrictedToStaff, &g.InviteToken, &g.CreatedAt,
 	)
 
 	if err != nil {
@@ -162,6 +164,26 @@ func (r *GroupRepository) JoinWithInviteToken(ctx context.Context, groupID strin
 	return tx.Commit(ctx)
 }
 
+// FindByInviteToken busca el grupo cuyo invite_token vigente coincide.
+// Devuelve (nil, nil) si no existe. No toma locks: JoinWithInviteToken vuelve
+// a validar el token con el grupo bloqueado antes de insertar la membresía.
+func (r *GroupRepository) FindByInviteToken(ctx context.Context, inviteToken string) (*model.Group, error) {
+	var g model.Group
+	err := r.pool.QueryRow(ctx, `
+		SELECT id, name, description, photo_url, photo_thumb_url, owner_user_id, notes_restricted_to_staff, invite_token, created_at
+		FROM social.groups
+		WHERE invite_token = $1`, inviteToken).Scan(
+		&g.ID, &g.Name, &g.Description, &g.PhotoURL, &g.PhotoThumbURL, &g.OwnerUserID, &g.NotesRestrictedToStaff, &g.InviteToken, &g.CreatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &g, nil
+}
+
 // RegenerateInviteToken valida que el usuario sea admin y genera un nuevo invite_token
 func (r *GroupRepository) RegenerateInviteToken(ctx context.Context, groupID string, userID string) (string, error) {
 	tx, err := r.pool.Begin(ctx)
@@ -209,6 +231,13 @@ func (r *GroupRepository) IsMember(ctx context.Context, groupID string, userID s
 
 // ListMembers retorna el listado de miembros de un grupo con sus roles
 func (r *GroupRepository) ListMembers(ctx context.Context, groupID string) ([]*model.GroupMembership, error) {
+	return r.ListMembersLimit(ctx, groupID, 0)
+}
+
+// ListMembersLimit lista como máximo limit miembros (limit <= 0 = todos).
+// La vista previa de grupos usa un tope chico para no leer ni enriquecer más
+// filas de las que se muestran.
+func (r *GroupRepository) ListMembersLimit(ctx context.Context, groupID string, limit int) ([]*model.GroupMembership, error) {
 	var exists bool
 	if err := r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM social.groups WHERE id = $1)`, groupID).Scan(&exists); err != nil {
 		return nil, err
@@ -217,12 +246,20 @@ func (r *GroupRepository) ListMembers(ctx context.Context, groupID string) ([]*m
 		return nil, errors.New("group_not_found")
 	}
 
-	rows, err := r.pool.Query(ctx, `
-		SELECT id, group_id, user_id, role, joined_at 
+	query := `
+		SELECT id, group_id, user_id, role, joined_at,
+		       can_share_notes, can_create_meetings, can_edit_kanban,
+		       deny_share_notes, deny_create_meetings, deny_edit_kanban
 		FROM social.group_memberships 
 		WHERE group_id = $1 
-		ORDER BY joined_at ASC
-	`, groupID)
+		ORDER BY joined_at ASC`
+	args := []any{groupID}
+	if limit > 0 {
+		query += " LIMIT $2"
+		args = append(args, limit)
+	}
+
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +268,9 @@ func (r *GroupRepository) ListMembers(ctx context.Context, groupID string) ([]*m
 	var members []*model.GroupMembership
 	for rows.Next() {
 		var m model.GroupMembership
-		if err := rows.Scan(&m.ID, &m.GroupID, &m.UserID, &m.Role, &m.JoinedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.GroupID, &m.UserID, &m.Role, &m.JoinedAt,
+			&m.CanShareNotes, &m.CanCreateMeetings, &m.CanEditKanban,
+			&m.DenyShareNotes, &m.DenyCreateMeetings, &m.DenyEditKanban); err != nil {
 			return nil, err
 		}
 		members = append(members, &m)
@@ -244,6 +283,17 @@ func (r *GroupRepository) ListMembers(ctx context.Context, groupID string) ([]*m
 		return []*model.GroupMembership{}, nil
 	}
 	return members, nil
+}
+
+// CountMembers cuenta integrantes sin traer sus filas. Se usa en la cabecera
+// del grupo para no pedir la lista completa solo para mostrar el total.
+func (r *GroupRepository) CountMembers(ctx context.Context, groupID string) (int, error) {
+	var count int
+	err := r.pool.QueryRow(ctx, `SELECT count(*) FROM social.group_memberships WHERE group_id = $1`, groupID).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 // requireAdminTx valida dentro de la transacción que userID sea admin del grupo.
@@ -432,6 +482,118 @@ func (r *GroupRepository) GetMemberRole(ctx context.Context, groupID, userID str
 	return role, nil
 }
 
+// SetMemberPermissions cambia los permisos delegados de un miembro común (solo
+// admin). Los admins ya lo pueden todo, así que no se les asignan permisos.
+// Cada campo no nulo es el permiso efectivo deseado: si se retira y el grupo lo
+// tiene habilitado para todos, se marca como denegado para este miembro.
+// Los campos nil del update no se modifican. Devuelve los permisos efectivos.
+func (r *GroupRepository) SetMemberPermissions(ctx context.Context, groupID, adminID, targetUserID string, upd model.MemberPermissionsUpdate) (model.MemberPermissions, error) {
+	var out model.MemberPermissions
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return out, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := requireAdminTx(ctx, tx, groupID, adminID); err != nil {
+		return out, err
+	}
+	if adminID == targetUserID {
+		return out, errors.New("cannot_modify_self")
+	}
+	if err := requireRemovableTargetTx(ctx, tx, groupID, targetUserID); err != nil {
+		return out, err
+	}
+	err = tx.QueryRow(ctx, `
+		UPDATE social.group_memberships m SET
+			can_share_notes      = COALESCE($3, m.can_share_notes),
+			deny_share_notes     = CASE WHEN $3::boolean IS NULL THEN m.deny_share_notes
+			                            ELSE NOT $3::boolean AND g.members_can_share_notes END,
+			can_create_meetings  = COALESCE($4, m.can_create_meetings),
+			deny_create_meetings = CASE WHEN $4::boolean IS NULL THEN m.deny_create_meetings
+			                            ELSE NOT $4::boolean AND g.members_can_create_meetings END,
+			can_edit_kanban      = COALESCE($5, m.can_edit_kanban),
+			deny_edit_kanban     = CASE WHEN $5::boolean IS NULL THEN m.deny_edit_kanban
+			                            ELSE NOT $5::boolean AND g.members_can_edit_kanban END
+		FROM social.groups g
+		WHERE m.group_id = $1 AND m.user_id = $2 AND g.id = m.group_id
+		RETURNING (m.can_share_notes OR g.members_can_share_notes) AND NOT m.deny_share_notes,
+		          (m.can_create_meetings OR g.members_can_create_meetings) AND NOT m.deny_create_meetings,
+		          (m.can_edit_kanban OR g.members_can_edit_kanban) AND NOT m.deny_edit_kanban`,
+		groupID, targetUserID, upd.CanShareNotes, upd.CanCreateMeetings, upd.CanEditKanban,
+	).Scan(&out.CanShareNotes, &out.CanCreateMeetings, &out.CanEditKanban)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return out, errors.New("target_not_found")
+		}
+		return out, err
+	}
+	return out, tx.Commit(ctx)
+}
+
+// GetMemberDefaults lee los permisos habilitados para todos los miembros del
+// grupo. Grupo inexistente => "group_not_found".
+func (r *GroupRepository) GetMemberDefaults(ctx context.Context, groupID string) (model.MemberPermissions, error) {
+	var p model.MemberPermissions
+	err := r.pool.QueryRow(ctx, `
+		SELECT members_can_share_notes, members_can_create_meetings, members_can_edit_kanban
+		FROM social.groups WHERE id = $1`, groupID,
+	).Scan(&p.CanShareNotes, &p.CanCreateMeetings, &p.CanEditKanban)
+	if err == pgx.ErrNoRows {
+		return p, errors.New("group_not_found")
+	}
+	return p, err
+}
+
+// SetMemberDefaults cambia los permisos de todo el grupo (solo admin). Los
+// campos nil del update no se modifican.
+func (r *GroupRepository) SetMemberDefaults(ctx context.Context, groupID, adminID string, upd model.MemberPermissionsUpdate) (model.MemberPermissions, error) {
+	var out model.MemberPermissions
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return out, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := requireAdminTx(ctx, tx, groupID, adminID); err != nil {
+		return out, err
+	}
+	err = tx.QueryRow(ctx, `
+		UPDATE social.groups SET
+			members_can_share_notes     = COALESCE($2, members_can_share_notes),
+			members_can_create_meetings = COALESCE($3, members_can_create_meetings),
+			members_can_edit_kanban     = COALESCE($4, members_can_edit_kanban)
+		WHERE id = $1
+		RETURNING members_can_share_notes, members_can_create_meetings, members_can_edit_kanban`,
+		groupID, upd.CanShareNotes, upd.CanCreateMeetings, upd.CanEditKanban,
+	).Scan(&out.CanShareNotes, &out.CanCreateMeetings, &out.CanEditKanban)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return out, errors.New("group_not_found")
+		}
+		return out, err
+	}
+	return out, tx.Commit(ctx)
+}
+
+// getMemberPermissions lee los permisos efectivos de un miembro (permiso propio
+// OR permiso habilitado para todo el grupo, salvo lo denegado a este miembro);
+// sin membresía devuelve pgx.ErrNoRows. Compartido por los repositorios de
+// reuniones y sprint.
+func getMemberPermissions(ctx context.Context, pool *pgxpool.Pool, groupID, userID pgtype.UUID) (model.MemberPermissions, error) {
+	var p model.MemberPermissions
+	err := pool.QueryRow(ctx, `
+		SELECT (m.can_share_notes     OR g.members_can_share_notes)     AND NOT m.deny_share_notes,
+		       (m.can_create_meetings OR g.members_can_create_meetings) AND NOT m.deny_create_meetings,
+		       (m.can_edit_kanban     OR g.members_can_edit_kanban)     AND NOT m.deny_edit_kanban
+		FROM social.group_memberships m
+		JOIN social.groups g ON g.id = m.group_id
+		WHERE m.group_id = $1 AND m.user_id = $2`,
+		groupID, userID,
+	).Scan(&p.CanShareNotes, &p.CanCreateMeetings, &p.CanEditKanban)
+	return p, err
+}
+
 // CountAdmins cuenta cuántos administradores activos tiene el grupo
 func (r *GroupRepository) CountAdmins(ctx context.Context, groupID string) (int, error) {
 	var count int
@@ -455,7 +617,7 @@ func (r *GroupRepository) RemoveMember(ctx context.Context, groupID, userID stri
 // fecha de ingreso y cantidad de miembros (vista principal, tarea 2_3_14).
 func (r *GroupRepository) ListMyGroupsDetailed(ctx context.Context, userID string) ([]*model.GroupCard, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT g.id, g.name, g.description, m.role, m.joined_at,
+		SELECT g.id, g.name, g.description, g.photo_thumb_url, m.role, m.joined_at,
 		       (SELECT count(*) FROM social.group_memberships x WHERE x.group_id = g.id) AS member_count
 		FROM social.groups g
 		JOIN social.group_memberships m ON m.group_id = g.id
@@ -469,7 +631,7 @@ func (r *GroupRepository) ListMyGroupsDetailed(ctx context.Context, userID strin
 	cards := []*model.GroupCard{}
 	for rows.Next() {
 		var c model.GroupCard
-		if err := rows.Scan(&c.GroupID, &c.Name, &c.Description, &c.Role, &c.JoinedAt, &c.MemberCount); err != nil {
+		if err := rows.Scan(&c.GroupID, &c.Name, &c.Description, &c.PhotoThumbURL, &c.Role, &c.JoinedAt, &c.MemberCount); err != nil {
 			return nil, err
 		}
 		cards = append(cards, &c)
@@ -488,6 +650,48 @@ func (r *GroupRepository) DeleteGroup(ctx context.Context, groupID string) error
 		return errors.New("group_not_found")
 	}
 	return nil
+}
+
+// UpdateGroup modifica nombre, descripción y foto del grupo. Solo admins.
+func (r *GroupRepository) UpdateGroup(ctx context.Context, groupID, userID string, update model.GroupUpdate) (*model.Group, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Solo admins pueden editar el grupo (requiereAdminTx hace FOR UPDATE
+	// y valida existencia del grupo y rol admin).
+	if err := requireAdminTx(ctx, tx, groupID, userID); err != nil {
+		return nil, err
+	}
+
+	if strings.TrimSpace(update.Name) == "" {
+		return nil, errors.New("invalid_name")
+	}
+
+	var g model.Group
+	err = tx.QueryRow(ctx, `
+		UPDATE social.groups 
+		SET name = $1, description = $2,
+		    photo_url = CASE WHEN $3 THEN $4 ELSE photo_url END,
+		    photo_thumb_url = CASE WHEN $5 THEN $6 ELSE photo_thumb_url END
+		WHERE id = $7
+		RETURNING id, name, description, photo_url, photo_thumb_url, owner_user_id, notes_restricted_to_staff, invite_token, created_at
+	`, update.Name, update.Description, update.UpdatePhotoURL, update.PhotoURL, update.UpdatePhotoThumb, update.PhotoThumbURL, groupID).Scan(
+		&g.ID, &g.Name, &g.Description, &g.PhotoURL, &g.PhotoThumbURL, &g.OwnerUserID, &g.NotesRestrictedToStaff, &g.InviteToken, &g.CreatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, errors.New("group_not_found")
+		}
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return &g, nil
 }
 
 // HandleAccountDeletion saca al usuario de todos sus grupos con sucesión

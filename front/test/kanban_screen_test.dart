@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:taller_integracion_front/core/widgets/neobrutalism.dart';
 import 'package:taller_integracion_front/features/workspace/kanban_screen.dart';
 
 void main() {
@@ -116,7 +117,7 @@ void main() {
     expect(find.text('NUEVA FICHA TÉCNICA'), findsOneWidget);
     expect(find.text('Código / curso'), findsOneWidget);
     expect(
-      find.byWidgetPredicate((widget) => widget is DropdownButtonFormField),
+      find.byWidgetPredicate((widget) => widget is NeobrutalistSelectField),
       findsNWidgets(2),
     );
     expect(tester.takeException(), isNull);

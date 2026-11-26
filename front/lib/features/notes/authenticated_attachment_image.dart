@@ -117,7 +117,7 @@ class _AuthenticatedAttachmentImageState
     child: Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Text(
+        Text(
           'Imagen no disponible',
           textAlign: TextAlign.center,
           style: TextStyle(
@@ -138,7 +138,7 @@ class _AuthenticatedAttachmentImageState
     future: _bytes,
     builder: (context, snapshot) {
       if (snapshot.connectionState != ConnectionState.done) {
-        return const Center(
+        return Center(
           child: SizedBox(
             width: 20,
             height: 20,

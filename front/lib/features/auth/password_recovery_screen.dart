@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../../core/common_widgets.dart';
 import '../../core/services/auth_service.dart';
 import '../../core/theme/app_theme.dart';
+import 'auth_form_layout.dart';
 
 class PasswordRecoveryScreen extends StatefulWidget {
   const PasswordRecoveryScreen({
@@ -95,8 +96,8 @@ class _PasswordRecoveryScreenState extends State<PasswordRecoveryScreen> {
     if (!mounted) return;
     if (result.success) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Contraseña actualizada. Ya puedes iniciar sesión.'),
+        authSuccessSnackBar(
+          'Contraseña actualizada. Ya puedes iniciar sesión.',
         ),
       );
       Navigator.of(context).pop();
@@ -111,182 +112,167 @@ class _PasswordRecoveryScreenState extends State<PasswordRecoveryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Recuperar contraseña')),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 440),
-            child: Form(
-              key: _form,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    _codeSent
-                        ? 'CREA UNA NUEVA CONTRASEÑA'
-                        : 'RECUPERA TU CUENTA',
-                    style: const TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Te enviaremos un código desde sigmaacademy.noreply@gmail.com.',
-                  ),
-                  const SizedBox(height: 24),
-                  TextFormField(
-                    controller: _email,
-                    readOnly: _codeSent || _busy,
-                    keyboardType: TextInputType.emailAddress,
-                    autofillHints: const [AutofillHints.email],
-                    decoration: appInputDecoration(
-                      'tu@correo.com',
-                    ).copyWith(labelText: 'Correo electrónico'),
-                    validator: (value) =>
-                        RegExp(
-                          r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$',
-                        ).hasMatch(value?.trim() ?? '')
-                        ? null
-                        : 'Ingresa un correo válido',
-                  ),
-                  if (_codeSent) ...[
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: _code,
-                      enabled: !_busy,
-                      keyboardType: TextInputType.number,
-                      autofillHints: const [AutofillHints.oneTimeCode],
-                      inputFormatters: [
-                        FilteringTextInputFormatter.digitsOnly,
-                        LengthLimitingTextInputFormatter(8),
-                      ],
-                      decoration: appInputDecoration(
-                        '00000000',
-                      ).copyWith(labelText: 'Código de 8 dígitos'),
-                      validator: (value) =>
-                          RegExp(r'^\d{8}$').hasMatch(value ?? '')
-                          ? null
-                          : 'Ingresa los 8 dígitos',
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: _password,
-                      enabled: !_busy,
-                      obscureText: _obscure,
-                      autocorrect: false,
-                      enableSuggestions: false,
-                      autofillHints: const [AutofillHints.newPassword],
-                      decoration: appInputDecoration('Nueva contraseña').copyWith(
-                        labelText: 'Nueva contraseña',
-                        helperText:
-                            'Mínimo 8 caracteres, una letra y un número, sin espacios.',
-                        helperMaxLines: 2,
-                        suffixIcon: IconButton(
-                          tooltip: _obscure
-                              ? 'Mostrar contraseña'
-                              : 'Ocultar contraseña',
-                          icon: Icon(
-                            _obscure
-                                ? Icons.visibility_outlined
-                                : Icons.visibility_off_outlined,
-                          ),
-                          onPressed: () => setState(() => _obscure = !_obscure),
-                        ),
-                      ),
-                      validator: (value) {
-                        final password = value ?? '';
-                        if (password.runes.length < 8 ||
-                            utf8.encode(password).length > 72 ||
-                            !RegExp(
-                              r'\p{L}',
-                              unicode: true,
-                            ).hasMatch(password) ||
-                            !RegExp(
-                              r'\p{Nd}',
-                              unicode: true,
-                            ).hasMatch(password) ||
-                            RegExp(r'\s').hasMatch(password)) {
-                          return 'Usa 8 o más caracteres, letras y números, sin espacios (máx. 72 bytes).';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: _confirmation,
-                      enabled: !_busy,
-                      obscureText: _obscure,
-                      autocorrect: false,
-                      enableSuggestions: false,
-                      decoration: appInputDecoration(
-                        'Repite la contraseña',
-                      ).copyWith(labelText: 'Confirmar contraseña'),
-                      validator: (value) => value == _password.text
-                          ? null
-                          : 'Las contraseñas no coinciden',
-                      onFieldSubmitted: (_) => _resetPassword(),
-                    ),
-                  ],
-                  if (_message != null) ...[
-                    const SizedBox(height: 20),
-                    Text(
-                      _message!,
-                      style: TextStyle(
-                        color: _error
-                            ? Theme.of(context).colorScheme.error
-                            : AppColors.text,
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 24),
-                  FilledButton(
-                    onPressed: _busy
-                        ? null
-                        : (_codeSent ? _resetPassword : () => _sendCode()),
-                    child: Text(
-                      _busy
-                          ? 'PROCESANDO...'
-                          : (_codeSent
-                                ? 'GUARDAR CONTRASEÑA'
-                                : 'ENVIAR CÓDIGO'),
-                    ),
-                  ),
-                  if (_codeSent) ...[
-                    TextButton(
-                      onPressed: _busy || _seconds > 0
-                          ? null
-                          : () => _sendCode(resend: true),
-                      child: Text(
-                        _seconds > 0
-                            ? 'Reenviar código en ${_seconds}s'
-                            : 'Reenviar código',
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: _busy
-                          ? null
-                          : () {
-                              _timer?.cancel();
-                              setState(() {
-                                _codeSent = false;
-                                _message = null;
-                                _seconds = 0;
-                                _code.clear();
-                                _password.clear();
-                                _confirmation.clear();
-                              });
-                            },
-                      child: const Text('Usar otro correo'),
-                    ),
-                  ],
-                ],
-              ),
+    return AuthFormScaffold(
+      title: 'Recuperar contraseña',
+      child: Form(
+        key: _form,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AuthFormHeading(
+              title: _codeSent
+                  ? 'Crea una nueva contraseña'
+                  : 'Recupera tu cuenta',
+              subtitle:
+                  'Te enviaremos un código desde sigmaacademy.noreply@gmail.com.',
             ),
-          ),
+            const SizedBox(height: AppDimens.spaceXl),
+            const AppFieldLabel('CORREO INSTITUCIONAL'),
+            const SizedBox(height: 6),
+            TextFormField(
+              controller: _email,
+              readOnly: _codeSent || _busy,
+              keyboardType: TextInputType.emailAddress,
+              autofillHints: const [AutofillHints.email],
+              style: authFieldTextStyle,
+              decoration: appInputDecoration('ejemplo@alu.uct.cl').copyWith(
+                fillColor: _codeSent ? AppColors.surfaceLow : AppColors.bg,
+              ),
+              validator: (value) =>
+                  RegExp(
+                    r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$',
+                  ).hasMatch(value?.trim() ?? '')
+                  ? null
+                  : 'Ingresa un correo válido',
+            ),
+            if (_codeSent) ...[
+              const SizedBox(height: 18),
+              const AppFieldLabel('CÓDIGO DE 8 DÍGITOS'),
+              const SizedBox(height: 6),
+              TextFormField(
+                controller: _code,
+                enabled: !_busy,
+                keyboardType: TextInputType.number,
+                autofillHints: const [AutofillHints.oneTimeCode],
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(8),
+                ],
+                style: authFieldTextStyle,
+                decoration: appInputDecoration('00000000'),
+                validator: (value) => RegExp(r'^\d{8}$').hasMatch(value ?? '')
+                    ? null
+                    : 'Ingresa los 8 dígitos',
+              ),
+              const SizedBox(height: 18),
+              const AppFieldLabel('NUEVA CONTRASEÑA'),
+              const SizedBox(height: 6),
+              TextFormField(
+                controller: _password,
+                enabled: !_busy,
+                obscureText: _obscure,
+                autocorrect: false,
+                enableSuggestions: false,
+                autofillHints: const [AutofillHints.newPassword],
+                style: authFieldTextStyle,
+                decoration: appInputDecoration('••••••••').copyWith(
+                  helperText:
+                      'Mínimo 8 caracteres, una letra y un número, sin espacios.',
+                  helperMaxLines: 2,
+                  helperStyle: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.mutedStrong,
+                  ),
+                  suffixIcon: IconButton(
+                    tooltip: _obscure
+                        ? 'Mostrar contraseña'
+                        : 'Ocultar contraseña',
+                    icon: Icon(
+                      _obscure
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined,
+                      color: AppColors.muted,
+                      size: 20,
+                    ),
+                    onPressed: () => setState(() => _obscure = !_obscure),
+                  ),
+                ),
+                validator: (value) {
+                  final password = value ?? '';
+                  if (password.runes.length < 8 ||
+                      utf8.encode(password).length > 72 ||
+                      !RegExp(r'\p{L}', unicode: true).hasMatch(password) ||
+                      !RegExp(r'\p{Nd}', unicode: true).hasMatch(password) ||
+                      RegExp(r'\s').hasMatch(password)) {
+                    return 'Usa 8 o más caracteres, letras y números, sin espacios (máx. 72 bytes).';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 18),
+              const AppFieldLabel('CONFIRMAR CONTRASEÑA'),
+              const SizedBox(height: 6),
+              TextFormField(
+                controller: _confirmation,
+                enabled: !_busy,
+                obscureText: _obscure,
+                autocorrect: false,
+                enableSuggestions: false,
+                style: authFieldTextStyle,
+                decoration: appInputDecoration('Repite la contraseña'),
+                validator: (value) => value == _password.text
+                    ? null
+                    : 'Las contraseñas no coinciden',
+                onFieldSubmitted: (_) => _resetPassword(),
+              ),
+            ],
+            if (_message != null) ...[
+              const SizedBox(height: AppDimens.spaceLg),
+              AuthStatusMessage(
+                message: _message!,
+                kind: _error ? AuthStatusKind.error : AuthStatusKind.success,
+              ),
+            ],
+            const SizedBox(height: AppDimens.spaceXl),
+            AuthPrimaryButton(
+              label: _busy
+                  ? 'PROCESANDO...'
+                  : (_codeSent ? 'GUARDAR CONTRASEÑA' : 'ENVIAR CÓDIGO'),
+              onPressed: _busy
+                  ? null
+                  : (_codeSent ? _resetPassword : () => _sendCode()),
+            ),
+            if (_codeSent) ...[
+              const SizedBox(height: AppDimens.spaceMd),
+              AuthSecondaryButton(
+                label: _seconds > 0
+                    ? 'Reenviar código en ${_seconds}s'
+                    : 'Reenviar código',
+                onPressed: _busy || _seconds > 0
+                    ? null
+                    : () => _sendCode(resend: true),
+              ),
+              const SizedBox(height: AppDimens.spaceSm),
+              AuthLink(
+                text: 'Usar otro correo',
+                onPressed: _busy
+                    ? null
+                    : () {
+                        _timer?.cancel();
+                        setState(() {
+                          _codeSent = false;
+                          _message = null;
+                          _seconds = 0;
+                          _code.clear();
+                          _password.clear();
+                          _confirmation.clear();
+                        });
+                      },
+              ),
+            ],
+          ],
         ),
       ),
     );

@@ -7,6 +7,7 @@ import "time"
 // StartTime y EndTime son time NOT NULL (hora del día); EndTime debe ser
 // estrictamente mayor que StartTime (end_time <= start_time: inválido).
 // Modality es varchar(50) nulable (NULL si no se informa).
+// Room es varchar(100) nulable: sala específica del bloque horario.
 type Schedule struct {
 	ID        string    `json:"id" db:"id"`
 	SubjectID string    `json:"subject_id" db:"subject_id"`
@@ -14,6 +15,7 @@ type Schedule struct {
 	StartTime time.Time `json:"start_time" db:"start_time"`
 	EndTime   time.Time `json:"end_time" db:"end_time"`
 	Modality  *string   `json:"modality" db:"modality"`
+	Room      *string   `json:"room" db:"room"`
 }
 
 // IsValidDayOfWeek reporta si d está en el rango 0..6.

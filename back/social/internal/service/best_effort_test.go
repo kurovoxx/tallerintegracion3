@@ -70,9 +70,11 @@ func (c *countingNotifier) OnMeetingCreated(ctx context.Context, meeting sqlc.So
 }
 
 func TestMultiMeetingNotifier_ParaleloNoBloquea(t *testing.T) {
-	old := bestEffortTimeout
-	bestEffortTimeout = 100 * time.Millisecond
-	defer func() { bestEffortTimeout = old }()
+	// Se acorta el presupuesto global de forma atómica: otras goroutines
+	// best-effort pueden estar leyéndolo al mismo tiempo.
+	old := bestEffortTimeout()
+	bestEffortTimeoutNanos.Store(int64(100 * time.Millisecond))
+	defer bestEffortTimeoutNanos.Store(int64(old))
 
 	var fastCalls, slowCalls int32
 	fast := &countingNotifier{calls: &fastCalls}

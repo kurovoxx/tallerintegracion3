@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show File, Platform, Process;
+import 'dart:math';
 
 import 'package:drift/drift.dart' show Value;
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
@@ -14,6 +16,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/database/app_database.dart';
 import '../../core/database/app_database_manager.dart';
 import '../../core/database/local_notes_repository.dart';
+import '../../core/services/ai_service.dart';
 import '../../core/services/api_config.dart';
 import '../../core/services/authed_client.dart';
 import '../../core/services/session_manager.dart';
@@ -21,18 +24,25 @@ import '../../core/theme/app_theme.dart';
 import '../../core/common_widgets.dart';
 import '../../core/widgets/neobrutalism.dart';
 import '../academic/academic_mappers.dart';
+import 'attachment_bytes_opener.dart';
+import 'attachment_content.dart';
 import 'attachment_resources.dart';
+import 'drive_connect_suggestion.dart';
+import 'note_copy_runner.dart';
 import 'note_file_picker.dart';
+import 'note_id_search_screen.dart';
+import 'notes_api.dart';
+import 'public_notes_screen.dart';
+import 'saved_notes_screen.dart';
 import 'authenticated_attachment_image.dart';
+import 'latex_support.dart';
+import 'note_live_editor.dart';
+import 'note_markdown_body.dart';
 
-/// Base URL del microservicio de notas. En el emulador Android `localhost` es
-/// el propio dispositivo, por eso se usa la alias 10.0.2.2 hacia el host.
-String get notesBaseUrl {
-  if (!kIsWeb && Platform.isAndroid) {
-    return 'http://10.0.2.2:8082';
-  }
-  return notesApiBaseUrl;
-}
+/// Base URL del microservicio de notas. Por defecto apunta a Pillán
+/// (`notesApiBaseUrl`); en el emulador Android reescribe `localhost`/`127.0.0.1`
+/// a `10.0.2.2` únicamente cuando se configuró un backend local por `--dart-define`.
+String get notesBaseUrl => notesApiBaseUrl;
 
 /// Cliente HTTP inyectable para pruebas de subida/vinculación de adjuntos.
 /// En producción se crea (y cierra) un cliente por petición.
@@ -102,6 +112,23 @@ Future<T> _withNotesClient<T>(
 /// de forma desproporcionada (skill 3.3, contenedor máximo de contenido).
 const double _noteEditorMaxWidth = 920;
 
+/// Por debajo de este ancho el editor de notas se trata como móvil y ocupa
+/// el 100 % de la pantalla.
+const double _noteEditorMobileBreakpoint = 600;
+
+/// Margen exterior del editor de notas (crear/editar): casi pantalla completa
+/// en escritorio (~95 %) y sin margen en móvil.
+EdgeInsets _noteEditorInset(BuildContext context) {
+  final width = MediaQuery.sizeOf(context).width;
+  return width < _noteEditorMobileBreakpoint
+      ? EdgeInsets.zero
+      : const EdgeInsets.all(AppDimens.spaceXl);
+}
+
+/// Alto mínimo útil para que el editor se estire con `Expanded`; con menos
+/// (teclado abierto, ventana muy baja) todo el formulario pasa a hacer scroll.
+const double _noteEditorExpandMinHeight = 520;
+
 class AllNotesScreen extends StatefulWidget {
   const AllNotesScreen({
     super.key,
@@ -111,6 +138,8 @@ class AllNotesScreen extends StatefulWidget {
     this.initialSubjectName,
     this.autoOpenCreate = false,
     this.showBackButton = false,
+    this.onOpenProfile,
+    this.driveStatusChecker,
   });
   final AppDatabase? database;
 
@@ -130,6 +159,14 @@ class AllNotesScreen extends StatefulWidget {
   /// Muestra back en el header (UX consolidar: volver a Materiales al
   /// navegar desde academic; en el shell va false).
   final bool showBackButton;
+
+  /// Lleva a la tarjeta «Google Drive» del perfil. Si se entrega (shell
+  /// principal), se muestra la sugerencia de conectar Drive cuando la cuenta
+  /// no lo tiene conectado; sin ella (p. ej. desde una materia) no se muestra.
+  final VoidCallback? onOpenProfile;
+
+  /// Consulta del estado de Drive inyectable (pruebas / shell).
+  final DriveStatusChecker? driveStatusChecker;
 
   @override
   State<AllNotesScreen> createState() => AllNotesScreenState();
@@ -165,6 +202,44 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   bool _showingLocalExample = false;
   int _hiddenDemoCount = 0;
   String _currentQuery = '';
+
+  // --- Conversión PDF → Markdown (microservicio IA externo) ---
+  late final AiService _aiService;
+  String? _convertedMarkdown;
+  String? _convertedFilename;
+  int? _convertedSizeBytes;
+  bool _convertingPdf = false;
+  String? _convertingWord;
+
+  /// Palabras mostradas en el botón mientras se convierte el PDF.
+  static const List<String> _kConvertingWords = <String>[
+    'Pensando',
+    'Convirtiendo',
+    'Ponderando',
+    'Cavilando',
+    'Meditando',
+    'Recapacitando',
+    'Rumiando',
+    'Discurriendo',
+    'Juzgando',
+    'Considerando',
+    'Reflexionando',
+    'ME PROYECTO',
+  ];
+
+  /// Historial de conversiones exitosas (últimas 24 h) para el rate limit
+  /// local de 5 conversiones por hora.
+  final List<DateTime> _conversionTimes = [];
+
+  /// Máximo de conversiones por hora (rate limit del servicio IA).
+  static const int _kMaxConversionsPerHour = 5;
+
+  /// Conversiones restantes en la hora actual.
+  int get _conversionsRemaining {
+    final cutoff = DateTime.now().subtract(const Duration(hours: 1));
+    final recent = _conversionTimes.where((t) => t.isAfter(cutoff)).length;
+    return (_kMaxConversionsPerHour - recent).clamp(0, _kMaxConversionsPerHour);
+  }
 
   /// Filtro de materia desde academic (UX-05): prefijo "[CODE] " en título.
   String? _subjectFilter;
@@ -295,6 +370,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     super.initState();
     _sessionOwnerId = SessionManager.currentUserId;
     _sessionRevision = SessionManager.revision.value;
+    _aiService = AiService();
     _subjectFilter = widget.initialSubjectCode?.trim().isNotEmpty == true
         ? widget.initialSubjectCode!.trim()
         : null;
@@ -302,6 +378,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         ? widget.initialSubjectId!.trim()
         : null;
     _notesFuture = AppDatabaseManager.instance.guard(_initAndLoad);
+    NoteCopyRunner.completed.addListener(_onNoteCopyCompleted);
     if (widget.autoOpenCreate) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
@@ -601,9 +678,32 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             final remoteId = n['id'] as String?;
             if (remoteId == null || remoteId.isEmpty) continue;
             remoteIds.add(remoteId);
+            // Copia de otro apunte que nunca llegó a Drive (p. ej. intentada
+            // sin Drive conectado): no se muestra como apunte copiado. Si ya
+            // estaba en la caché local se retira solo esa fila (sin tombstone
+            // ni cambios en el servidor), salvo que tenga ediciones locales.
+            if (isIncompleteNoteCopy(n)) {
+              final ghost = cached[remoteId];
+              if (ghost != null && !ghost.needsSync) {
+                await _repo!.deleteNote(remoteId);
+              }
+              _ownedNoteIds.remove(remoteId);
+              continue;
+            }
             // No resucitar una nota borrada localmente (tombstone §P3): el
             // backend puede seguir devolviéndola hasta confirmar el DELETE.
             if (await _isTombstoned(remoteId)) continue;
+            // Likes: el servidor es la única fuente (pueden llegar desde la
+            // pestaña de notas de un grupo, un perfil público u otro usuario).
+            // Se adoptan aunque el contenido local sea más nuevo; antes la
+            // lista quedaba en 0 hasta abrir la nota y leer /stats.
+            _likesCount[remoteId] =
+                (n['likes_count'] as num?)?.toInt() ??
+                _likesCount[remoteId] ??
+                0;
+            if (n.containsKey('is_liked')) {
+              _isLiked[remoteId] = n['is_liked'] == true;
+            }
             // El listado se pidió antes de resolver creaciones/ediciones. Una
             // respuesta antigua no puede rebajar una versión ya confirmada.
             final remoteVersion = (n['version'] as num?)?.toInt();
@@ -635,6 +735,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             );
           } catch (_) {}
         }
+        // Repintar con los likes recién adoptados del servidor.
+        if (mounted) setState(() {});
         // Convergencia de tombstones: si el servidor ya no devuelve una nota
         // cuyo DELETE se confirmó, el tombstone dejó de ser necesario. Solo
         // con el listado COMPLETO, y nunca para una nota temporal cuyo CREATE
@@ -820,8 +922,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         duration: const Duration(seconds: 3),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppDimens.radius),
-          side: const BorderSide(
-            color: AppColors.border,
+          side: BorderSide(
+            color: AppColors.outline,
             width: AppDimens.borderWidth,
           ),
         ),
@@ -836,7 +938,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             Expanded(
               child: Text(
                 message,
-                style: const TextStyle(
+                style: TextStyle(
                   color: AppColors.text,
                   fontWeight: FontWeight.w800,
                   fontSize: 12.5,
@@ -991,9 +1093,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     // Google Drive (1 request; el backend confirma cada ausencia).
     int removedNotes = 0;
     int removedAttachments = 0;
+    var driveNotConnected = false;
     final reconcile = await _reconcileDriveDeletions();
     if (reconcile == null) {
       failed++;
+    } else if (reconcile[_kDriveNotConnected] == true) {
+      driveNotConnected = true;
     } else {
       removedNotes = (reconcile['removed_notes'] as num?)?.toInt() ?? 0;
       removedAttachments =
@@ -1017,7 +1122,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         removedNotes == 0 &&
         removedAttachments == 0 &&
         tombstonesCleared == 0) {
-      _notifySnack('Tus notas están sincronizadas.');
+      _notifySnack(
+        driveNotConnected
+            ? 'Tus apuntes de este equipo están al día. Conecta Google Drive '
+                  'desde tu perfil para guardarlos en la nube.'
+            : 'Tus notas están sincronizadas.',
+      );
       return;
     }
     final parts = <String>[];
@@ -1067,6 +1177,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       if (res.statusCode == 200) {
         final data = jsonDecode(utf8.decode(res.bodyBytes));
         if (data is Map<String, dynamic>) return data;
+      }
+      // Sin Google Drive conectado no hay nada que reconciliar en Drive: no
+      // es un apunte con error (antes se contaba como «1 con error»).
+      final code = _parseBackendError(utf8.decode(res.bodyBytes))['code'];
+      if (res.statusCode == 403 && code == _kDriveNotConnected) {
+        return const <String, dynamic>{_kDriveNotConnected: true};
       }
     } catch (e) {
       debugPrint('[Notes] reconcile Drive falló: $e');
@@ -1675,11 +1791,15 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   }
 
   /// Edición sincronizada: PATCH /notes/:id con {title, content}.
+  /// [visibility] solo se envía cuando cambia: el backend recalcula los
+  /// permisos de Drive (anyone/reader) al recibirla, así que se evita hacerlo
+  /// en cada guardado de texto.
   Future<_RemoteResult> _patchNoteRemote(
     LocalNote note,
     String title,
-    String content,
-  ) async {
+    String content, {
+    String? visibility,
+  }) async {
     final url = '$notesBaseUrl/notes/${note.id}';
     var version = _versions[note.id] ?? note.version;
     if (version == null) {
@@ -1691,7 +1811,12 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       debugPrint('[Notes] PATCH blocked id=${note.id} code=missing_version');
       return const _RemoteResult(ok: false, status: 0, code: 'missing_version');
     }
-    final body = {'title': title, 'content': content, 'version': version};
+    final body = <String, Object>{
+      'title': title,
+      'content': content,
+      'version': version,
+      'visibility': ?visibility,
+    };
     final operationId =
         'note-${note.id}-${DateTime.now().microsecondsSinceEpoch}';
     debugPrint(
@@ -1910,28 +2035,52 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     await _applySearch(_currentQuery);
   }
 
+  /// Al crear, la etiqueta se deriva de la visibilidad ('General'/'Privado').
+  /// Si la nota cambia de visibilidad y conserva esa etiqueta automática, se
+  /// actualiza; una etiqueta distinta (p. ej. 'Desde PDF') no se toca.
+  void _syncAutoTag(String id, String visibility) {
+    final current = _noteTags[id];
+    if (current != null && current != 'General' && current != 'Privado') {
+      return;
+    }
+    _noteTags[id] = visibility == 'public' ? 'General' : 'Privado';
+    if (mounted) setState(() {});
+  }
+
   /// Guarda edición: solo con 200 actualiza local y reporta sincronizado.
   Future<_EditSaveOutcome> _saveEditFlow(
     LocalNote note,
     String title,
     String content,
+    String visibility,
   ) async {
     final remoteId = _remoteIds[note.id];
     if (remoteId != null) {
       note = _latestNotes[remoteId] ?? note.copyWith(id: remoteId);
     }
+    final visibilityChanged = visibility != note.visibility;
     if (!_isRemoteNote(note.id)) {
       await _applyLocalUpsert(
         note.copyWith(
           title: title,
           content: content,
+          visibility: visibility,
           updatedAt: DateTime.now(),
         ),
       );
+      if (visibilityChanged) _syncAutoTag(note.id, visibility);
       return _EditSaveOutcome.synced;
     }
-    final remote = await _patchNoteRemote(note, title, content);
+    final remote = await _patchNoteRemote(
+      note,
+      title,
+      content,
+      visibility: visibilityChanged ? visibility : null,
+    );
     if (remote.ok) {
+      // Se guarda la visibilidad que confirma el servidor (fuente de verdad).
+      final savedVisibility =
+          remote.data?['visibility'] as String? ?? visibility;
       await _applyLocalUpsert(
         LocalNote(
           needsSync: false,
@@ -1940,10 +2089,13 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           ownerUserId: note.ownerUserId,
           title: remote.data?['title'] as String? ?? title,
           content: content,
-          visibility: note.visibility,
+          visibility: savedVisibility,
           updatedAt: DateTime.now(),
         ),
       );
+      if (savedVisibility != note.visibility) {
+        _syncAutoTag(note.id, savedVisibility);
+      }
       // La nota volvió a quedar sincronizada: se retira el badge de error.
       _noteSyncState.remove(note.id);
       if (mounted) setState(() {});
@@ -1961,38 +2113,35 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     return _EditSaveOutcome.error;
   }
 
-  /// Clona una nota ajena: POST /notes/:id/copy. Con 201 registra el nuevo id
-  /// en _ownedNoteIds y refresca la lista local con la copia.
+  /// Clona una nota ajena (guardada o pública) a la BD y el Drive propios:
+  /// POST /notes/:id/copy vía [NotesApi.copyNote]. Con 201 registra el nuevo
+  /// id en _ownedNoteIds y refresca la lista local con la copia. Si el autor
+  /// borró el original, el backend responde 410 note_deleted.
   Future<_RemoteResult> _cloneFlow(LocalNote note) async {
-    final url = '$notesBaseUrl/notes/${note.id}/copy';
+    final realId = _remoteIds[note.id] ?? note.id;
     try {
-      final res = await AuthedHttp.run(
-        () => http
-            .post(Uri.parse(url), headers: _authHeaders())
-            .timeout(const Duration(seconds: 8)),
+      final copy = await _withNotesClient(
+        (client) => NoteCopyRunner.start(
+          NotesApi(client: client, baseUrl: notesBaseUrl),
+          realId,
+          idempotencyKey:
+              'copy-$realId-${DateTime.now().microsecondsSinceEpoch}',
+        ),
       );
-      if (res.statusCode == 201) {
-        try {
-          final data = jsonDecode(utf8.decode(res.bodyBytes));
-          final newId = data['note_id'] as String?;
-          if (newId != null && newId.isNotEmpty) {
-            _ownedNoteIds.add(newId);
-            _versions[newId] = (data['version'] as num?)?.toInt() ?? 1;
-          }
-        } catch (_) {}
-        if (!_useMemoryFallback && _repo != null) {
-          await _syncFromBackend();
-        }
-        await _applySearch(_currentQuery);
-        if (mounted) setState(() {});
-        return _RemoteResult(ok: true, status: res.statusCode);
+      _ownedNoteIds.add(copy.noteId);
+      _versions[copy.noteId] = copy.version;
+      if (!_useMemoryFallback && _repo != null) {
+        await _syncFromBackend();
       }
-      final parsed = _parseBackendError(utf8.decode(res.bodyBytes));
+      await _applySearch(_currentQuery);
+      if (mounted) setState(() {});
+      return const _RemoteResult(ok: true, status: 201);
+    } on NotesApiException catch (e) {
       return _RemoteResult(
         ok: false,
-        status: res.statusCode,
-        code: parsed['code'],
-        message: parsed['message'],
+        status: e.statusCode ?? -1,
+        code: e.code,
+        message: e.message,
       );
     } catch (e) {
       return _RemoteResult(ok: false, status: -1, message: e.toString());
@@ -2037,11 +2186,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       if (!mounted) return const _RemoteResult(ok: true, status: 404);
       setState(() {});
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          backgroundColor: Colors.black,
+        SnackBar(
+          backgroundColor: AppColors.border,
           content: Text(
             'La nota ya no existía en el servidor; se eliminó la copia local.',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+            style: TextStyle(color: AppColors.onPrimary, fontWeight: FontWeight.w800),
           ),
         ),
       );
@@ -2059,11 +2208,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       if (!mounted) return const _RemoteResult(ok: true, status: 202);
       setState(() {});
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          backgroundColor: Colors.black,
+        SnackBar(
+          backgroundColor: AppColors.border,
           content: Text(
             'La nota se eliminó de este equipo; se borrará del servidor al recuperar la conexión.',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+            style: TextStyle(color: AppColors.onPrimary, fontWeight: FontWeight.w800),
           ),
         ),
       );
@@ -2073,7 +2222,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   }
 
   void _onSearchChanged(String query) {
+    final hadId = extractNoteId(_currentQuery) != null;
     _currentQuery = query;
+    // El aviso "Buscar por ID" aparece/desaparece al instante al pegar un
+    // UUID o un enlace que lo contenga, sin esperar el debounce del FTS.
+    if (hadId != (extractNoteId(query) != null)) setState(() {});
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 300), () {
       _applySearch(query);
@@ -2155,38 +2308,321 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     await _notesFuture;
   }
 
-  void _toggleLike(LocalNote note) {
+  /// Abre un file picker para seleccionar un PDF y lo convierte a Markdown
+  /// usando el microservicio IA externo.
+  Future<void> _pickAndConvertPdf() async {
+    final XFile? file = await openFile(
+      acceptedTypeGroups: <XTypeGroup>[
+        XTypeGroup(
+          label: 'PDF',
+          extensions: <String>['pdf'],
+        ),
+      ],
+    );
+    if (file == null || !mounted) return;
     setState(() {
-      final liked = _isLiked[note.id] ?? false;
-      final count = _likesCount[note.id] ?? 0;
-      if (liked) {
-        _isLiked[note.id] = false;
-        _likesCount[note.id] = (count - 1).clamp(0, 9999);
-      } else {
-        _isLiked[note.id] = true;
-        _likesCount[note.id] = count + 1;
-      }
+      _convertingPdf = true;
+      _convertingWord = _kConvertingWords[Random().nextInt(_kConvertingWords.length)];
     });
+    try {
+      final bytes = await file.readAsBytes();
+      final result = await _aiService.convertPdfToMarkdown(bytes, file.name);
+      if (!mounted) return;
+      setState(() {
+        _convertedMarkdown = result.markdown;
+        _convertedFilename = result.filename;
+        _convertedSizeBytes = result.sizeBytes;
+        _convertingPdf = false;
+        _convertingWord = null;
+        // Registrar conversión para el rate limit local
+        _conversionTimes.add(DateTime.now());
+      });
+      _showMarkdownDialog();
+    } on AiApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _convertingPdf = false;
+        _convertingWord = null;
+      });
+      debugPrint('[IA] ApiException status=${e.statusCode} code=${e.code}: ${e.message}');
+      _notifySnack('Error IA (${e.statusCode ?? '?'})${e.code != null ? ' [${e.code}]' : ''}: ${e.message}', ok: false);
+    } catch (e, st) {
+      if (!mounted) return;
+      setState(() {
+        _convertingPdf = false;
+        _convertingWord = null;
+      });
+      debugPrint('[IA] Error inesperado: $e\n$st');
+      _notifySnack('Error al convertir PDF: $e', ok: false);
+    }
+  }
+
+  /// Abre un diálogo con el Markdown convertido y un botón para guardarlo
+  /// como una nota nueva. El diálogo tiene scroll propio para no desbordar
+  /// la pantalla cuando el texto es largo.
+  Future<void> _showMarkdownDialog() async {
+    if (_convertedMarkdown == null || !mounted) return;
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => NeobrutalistDialog(
+        title: 'PDF → Markdown',
+        cancelLabel: 'Descartar',
+        confirmLabel: 'Guardar como nota',
+        closeOnConfirm: false,
+        maxWidth: 760,
+        onConfirm: () async {
+          if (_convertedMarkdown == null || !mounted) return;
+          Navigator.of(context).pop(true);
+          await _saveConvertedNote();
+        },
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(AppDimens.spaceMd),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.picture_as_pdf_rounded,
+                    size: 18,
+                    color: AppColors.text,
+                  ),
+                  const SizedBox(width: AppDimens.spaceSm),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _convertedFilename ?? 'documento.pdf',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontWeight: FontWeight.w900,
+                            fontSize: 12,
+                            color: AppColors.text,
+                          ),
+                        ),
+                        Text(
+                          '${_convertedSizeBytes ?? 0} bytes',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: AppColors.mutedStrong,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Divider(
+              color: AppColors.border,
+              thickness: AppDimens.borderWidth,
+              height: 1,
+            ),
+            // Scroll propio para el texto largo
+            ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: 500),
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.all(AppDimens.spaceMd),
+                  child: SelectableText(
+                    _convertedMarkdown!,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.text,
+                      height: 1.5,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved == true && mounted) {
+      // El guardado ya se hizo dentro del onConfirm.
+    }
+  }
+
+  /// Crea una nota nueva con el Markdown convertido.
+  Future<void> _saveConvertedNote() async {
+    if (_convertedMarkdown == null || !mounted) return;
+    setState(() => _convertingPdf = true);
+    try {
+      final tempId = _newTempNoteId();
+      final note = LocalNote(
+        needsSync: false,
+        id: tempId,
+        title: _convertedFilename ?? 'Nota desde PDF',
+        content: _convertedMarkdown!,
+        visibility: 'private',
+        updatedAt: DateTime.now(),
+        ownerUserId: _ownerId(),
+      );
+      _noteTags[tempId] = 'Desde PDF';
+      if (_useMemoryFallback) {
+        setState(() {
+          _memoryFallback.insert(0, note);
+          _likesCount[tempId] = 0;
+          _isLiked[tempId] = false;
+          _isSaved[tempId] = false;
+        });
+        _applySearch(_currentQuery);
+      } else {
+        try {
+          await _db!.transaction(() async {
+            await _repo!.upsertNote(note);
+          });
+          _likesCount[tempId] = 0;
+          _isLiked[tempId] = false;
+          _isSaved[tempId] = false;
+          await _applySearch(_currentQuery);
+        } catch (e) {
+          setState(() {
+            _useMemoryFallback = true;
+            _memoryFallback = [note, ..._memoryFallback];
+            _likesCount[tempId] = 0;
+          });
+          _applySearch(_currentQuery);
+        }
+      }
+      _noteSyncState[tempId] = _NoteSyncState.syncing;
+      final syncFuture = AppDatabaseManager.instance.guard(
+        () => _completeRemoteCreation(
+          tempId: tempId,
+          note: note,
+          attachments: const [],
+          revision: SessionManager.revision.value,
+          subjectId: null,
+          attachmentsPersisted: false,
+        ),
+      );
+      _pendingNoteSyncs[tempId] = syncFuture;
+      unawaited(syncFuture);
+      _notifySnack('Nota creada desde PDF.');
+    } catch (_) {
+      if (!mounted) return;
+      _notifySnack('No se pudo guardar la nota.', ok: false);
+    } finally {
+      if (mounted) setState(() => _convertingPdf = false);
+    }
+  }
+
+  /// Id remoto (UUID) de una nota, o null si solo existe en este equipo.
+  String? _remoteIdOf(LocalNote note) {
+    final id = _remoteIds[note.id] ?? note.id;
+    return _isRemoteNote(id) ? id : null;
+  }
+
+  bool get _hasSession => (SessionManager.token ?? '').isNotEmpty;
+
+  /// Aplica en los mapas locales los contadores confirmados por el servidor.
+  void _applyInteractions(String localId, NoteInteractions s) {
+    _likesCount[localId] = s.likesCount;
+    _isLiked[localId] = s.isLiked;
+    _isSaved[localId] = s.isSaved;
+  }
+
+  /// Relee los contadores reales (GET /notes/:id/stats) antes de abrir el
+  /// detalle de una nota remota. Best-effort: sin red se usan los locales.
+  Future<void> _refreshInteractions(LocalNote note) async {
+    final rid = _remoteIdOf(note);
+    if (rid == null || !_hasSession) return;
+    try {
+      final s = await _withNotesClient(
+        (c) => NotesApi(
+          client: c,
+          baseUrl: notesBaseUrl,
+        ).stats(rid).timeout(const Duration(seconds: 3)),
+      );
+      if (mounted) setState(() => _applyInteractions(note.id, s));
+    } catch (_) {}
+  }
+
+  /// Like con persistencia en el backend para notas remotas: cambio
+  /// optimista, POST/DELETE /notes/:id/like y adopción del contador real; si
+  /// falla, se revierte. Las notas solo locales mantienen el estado en memoria.
+  void _toggleLike(LocalNote note) {
+    final wasLiked = _isLiked[note.id] ?? false;
+    final prevCount = _likesCount[note.id] ?? 0;
+    setState(() {
+      _isLiked[note.id] = !wasLiked;
+      _likesCount[note.id] = (prevCount + (wasLiked ? -1 : 1)).clamp(
+        0,
+        1 << 30,
+      );
+    });
+    final rid = _remoteIdOf(note);
+    if (rid == null || !_hasSession) return;
+    unawaited(() async {
+      try {
+        final s = await _withNotesClient(
+          (c) => NotesApi(
+            client: c,
+            baseUrl: notesBaseUrl,
+          ).setLiked(rid, !wasLiked),
+        );
+        if (mounted) setState(() => _applyInteractions(note.id, s));
+      } catch (e) {
+        if (!mounted) return;
+        setState(() {
+          _isLiked[note.id] = wasLiked;
+          _likesCount[note.id] = prevCount;
+        });
+        _notifySnack(
+          e is NotesApiException ? e.message : notesFriendlyMessage(-1, null),
+          ok: false,
+        );
+      }
+    }());
   }
 
   void _toggleSave(LocalNote note) {
+    final wasSaved = _isSaved[note.id] ?? false;
     setState(() {
-      final saved = _isSaved[note.id] ?? false;
-      _isSaved[note.id] = !saved;
+      _isSaved[note.id] = !wasSaved;
     });
+    final rid = _remoteIdOf(note);
+    if (rid != null && _hasSession) {
+      unawaited(() async {
+        try {
+          final s = await _withNotesClient(
+            (c) => NotesApi(
+              client: c,
+              baseUrl: notesBaseUrl,
+            ).setSaved(rid, !wasSaved),
+          );
+          if (s != null && mounted) {
+            setState(() => _applyInteractions(note.id, s));
+          }
+        } catch (e) {
+          if (!mounted) return;
+          setState(() => _isSaved[note.id] = wasSaved);
+          _notifySnack(
+            e is NotesApiException ? e.message : notesFriendlyMessage(-1, null),
+            ok: false,
+          );
+        }
+      }());
+    }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        backgroundColor: Colors.black,
+        backgroundColor: AppColors.border,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.zero,
-          side: const BorderSide(color: Colors.black, width: 2),
+          side: BorderSide(color: AppColors.outline, width: 2),
         ),
         content: Text(
           (_isSaved[note.id] ?? false)
-              ? 'Nota guardada localmente'
+              ? (rid != null ? 'Apunte guardado' : 'Nota guardada localmente')
               : 'Nota removida de guardados',
-          style: const TextStyle(
-            color: Colors.white,
+          style: TextStyle(
+            color: AppColors.surface,
             fontWeight: FontWeight.w800,
           ),
         ),
@@ -2203,11 +2639,11 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       backgroundColor: Colors.transparent,
       builder: (_) => Container(
         decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border.all(color: Colors.black, width: 2),
+          color: AppColors.surface,
+          border: Border.all(color: AppColors.outline, width: 2),
           borderRadius: const BorderRadius.vertical(top: Radius.circular(0)),
-          boxShadow: const [
-            BoxShadow(color: Colors.black, offset: Offset(4, 4)),
+          boxShadow: [
+            AppShadows.hard4,
           ],
         ),
         padding: const EdgeInsets.all(20),
@@ -2215,34 +2651,34 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Center(child: Container(width: 40, height: 4, color: Colors.black)),
+            Center(child: Container(width: 40, height: 4, color: AppColors.text)),
             const SizedBox(height: 16),
-            const Text(
+            Text(
               'COMPARTIR NOTA',
               style: TextStyle(
                 fontWeight: FontWeight.w900,
                 fontSize: 14,
-                color: Colors.black,
+                color: AppColors.text,
               ),
             ),
             const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: const Color(0xFFF5F0E8),
-                border: Border.all(color: Colors.black, width: 2),
+                color: AppColors.bg,
+                border: Border.all(color: AppColors.outline, width: 2),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.link_rounded, size: 18, color: Colors.black),
+                  Icon(Icons.link_rounded, size: 18, color: AppColors.text),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       link,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w700,
                         fontSize: 12,
-                        color: Colors.black,
+                        color: AppColors.text,
                       ),
                     ),
                   ),
@@ -2254,27 +2690,27 @@ class AllNotesScreenState extends State<AllNotesScreen> {
               width: double.infinity,
               child: ElevatedButton(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFFFCC00),
-                  foregroundColor: Colors.black,
+                  backgroundColor: AppColors.accentYellow,
+                  foregroundColor: AppColors.text,
                   shape: const RoundedRectangleBorder(
                     borderRadius: BorderRadius.zero,
                   ),
-                  side: const BorderSide(color: Colors.black, width: 2),
+                  side: BorderSide(color: AppColors.outline, width: 2),
                   padding: const EdgeInsets.symmetric(vertical: 12),
                 ),
                 onPressed: () {
                   Clipboard.setData(ClipboardData(text: link));
                   Navigator.pop(context);
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
+                    SnackBar(
                       content: Text(
                         'Enlace copiado al portapapeles',
                         style: TextStyle(
-                          color: Colors.white,
+                          color: AppColors.surface,
                           fontWeight: FontWeight.w800,
                         ),
                       ),
-                      backgroundColor: Colors.black,
+                      backgroundColor: AppColors.border,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.zero,
                       ),
@@ -2340,7 +2776,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
           decoration: BoxDecoration(
             color: AppColors.surface,
-            border: Border.all(color: AppColors.border, width: 2),
+            border: Border.all(color: AppColors.outline, width: 2),
             borderRadius: BorderRadius.circular(AppDimens.radius),
             boxShadow: AppShadows.dialog,
           ),
@@ -2403,16 +2839,22 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       debugPrint('[Notes] OPEN id=${note.id} waitSync=false');
     }
     if (!mounted) return;
+    await _refreshInteractions(target);
+    if (!mounted) return;
     final opened = target;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
-      // En desktop/web el modal por defecto se limita a 640px; lo acotamos a
-      // `_noteEditorMaxWidth` y Flutter lo centra horizontalmente para no
-      // estirar el editor al 100 % del ancho junto al sidebar.
-      constraints: const BoxConstraints(maxWidth: _noteEditorMaxWidth),
+      // En desktop/web el modal por defecto se limita a 640px. Lo abrimos a
+      // casi todo el ancho para que el modo edición (editor + vista previa)
+      // tenga espacio; la lectura se centra a `_noteEditorMaxWidth` dentro.
+      constraints: BoxConstraints(
+        maxWidth: _noteEditorInset(
+          context,
+        ).deflateSize(MediaQuery.sizeOf(context)).width,
+      ),
       builder: (_) => DraggableScrollableSheet(
         initialChildSize: 0.95,
         minChildSize: 0.5,
@@ -2431,7 +2873,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
           onToggleSave: () => _toggleSave(opened),
           onShare: () => _shareNote(opened),
           onFetchRemote: () => _fetchHybridContent(opened),
-          onSaveEdit: (title, content) => _saveEditFlow(opened, title, content),
+          onSaveEdit: (title, content, visibility) =>
+              _saveEditFlow(opened, title, content, visibility),
           onDelete: () => _deleteFlow(opened),
           onClone: () => _cloneFlow(opened),
           pendingSyncOf: _pendingSyncFor,
@@ -2445,10 +2888,20 @@ class AllNotesScreenState extends State<AllNotesScreen> {
     );
   }
 
+  /// Una copia terminó (quizá iniciada en otra pantalla): se trae a la lista.
+  void _onNoteCopyCompleted() {
+    if (!mounted || _useMemoryFallback || _repo == null) return;
+    _syncFromBackend().then((_) {
+      if (mounted) _applySearch(_currentQuery);
+    });
+  }
+
   @override
   void dispose() {
+    NoteCopyRunner.completed.removeListener(_onNoteCopyCompleted);
     _debounce?.cancel();
     _searchController.dispose();
+    _aiService.dispose();
     // La base es compartida y la posee AppDatabaseManager. Cerrarla aquí
     // mataba el isolate mientras una sincronización seguía en vuelo.
     if (_ownsDatabase) {
@@ -2488,14 +2941,14 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                   _buildSearchBar(),
                   if (_isSyncingBackend || _isReconciling) ...<Widget>[
                     const SizedBox(height: 8),
-                    const LinearProgressIndicator(
+                    LinearProgressIndicator(
                       color: AppColors.border,
                       backgroundColor: AppColors.bg,
                     ),
                   ],
                   if (_isReconciling) ...<Widget>[
                     const SizedBox(height: 4),
-                    const Text(
+                    Text(
                       'Reconciliando notas con Google Drive…',
                       style: TextStyle(
                         fontSize: 11.5,
@@ -2509,17 +2962,17 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFFDE8E8),
-                        border: Border.all(color: Colors.black, width: 2),
+                        color: AppColors.errorTintSoft,
+                        border: Border.all(color: AppColors.outline, width: 2),
                       ),
                       child: Text(
                         _hiddenDemoCount > 0
                             ? '${_backendError!} Se ocultaron $_hiddenDemoCount ejemplos locales; no se muestran como reales.'
                             : _backendError!,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 11.5,
                           fontWeight: FontWeight.w700,
-                          color: Colors.black,
+                          color: AppColors.text,
                         ),
                       ),
                     ),
@@ -2530,19 +2983,30 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFFFF3CD),
-                        border: Border.all(color: Colors.black, width: 2),
+                        color: AppColors.warningTint,
+                        border: Border.all(color: AppColors.outline, width: 2),
                       ),
-                      child: const Text(
+                      child: Text(
                         'Modo local sin sesión: se muestran datos de ejemplo. Inicia sesión para sincronizar tus notas.',
                         style: TextStyle(
                           fontSize: 11.5,
                           fontWeight: FontWeight.w700,
-                          color: Colors.black,
+                          color: AppColors.text,
                         ),
                       ),
                     ),
                   ],
+                  if (extractNoteId(_currentQuery) != null) ...<Widget>[
+                    const SizedBox(height: 8),
+                    _buildIdSearchHint(),
+                  ],
+                  const SizedBox(height: 12),
+                  if (widget.onOpenProfile != null)
+                    DriveConnectSuggestion(
+                      checkStatus: widget.driveStatusChecker,
+                      onOpenProfile: widget.onOpenProfile,
+                    ),
+                  _buildCommunityActions(),
                   const SizedBox(height: 12),
                   _buildFilterChips(),
                   const SizedBox(height: 16),
@@ -2579,6 +3043,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   void _showCreateDialog({String? initialTitle, String? subjectId}) {
     showNeobrutalistDialog<void>(
       context: context,
+      insetPadding: _noteEditorInset(context),
       dialog: _CreateNoteDialog(
         initialTitle: initialTitle ?? '',
         onCreate: (title, content, visibility, attachments) async {
@@ -2837,14 +3302,14 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                 style: TextStyle(
                   fontSize: isDesktop ? 26 : 22,
                   fontWeight: FontWeight.w900,
-                  color: AppColors.text,
+                  color: AppColors.title,
                   letterSpacing: -0.5,
                 ),
               ),
               const SizedBox(height: 4),
               Row(
                 children: <Widget>[
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       'Busca y organiza tus apuntes',
                       maxLines: 1,
@@ -2865,13 +3330,13 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                       ),
                       decoration: BoxDecoration(
                         color: AppColors.accentYellow,
-                        border: Border.all(color: AppColors.border, width: 1.5),
+                        border: Border.all(color: AppColors.outline, width: 1.5),
                         borderRadius: BorderRadius.circular(
                           AppDimens.radiusChip,
                         ),
                         boxShadow: AppShadows.badge,
                       ),
-                      child: const Text(
+                      child: Text(
                         'MODO OFFLINE',
                         style: TextStyle(
                           fontSize: 9,
@@ -2936,7 +3401,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
       decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -2949,18 +3414,18 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         decoration: InputDecoration(
           hintText:
               'Buscar por título o contenido... (ej: "calculo*", "joins")',
-          hintStyle: const TextStyle(
+          hintStyle: TextStyle(
             color: AppColors.muted,
             fontWeight: FontWeight.w600,
             fontSize: 13,
           ),
-          prefixIcon: const Icon(Icons.search_rounded, color: AppColors.border),
+          prefixIcon: Icon(Icons.search_rounded, color: AppColors.border),
           suffixIcon: ValueListenableBuilder<TextEditingValue>(
             valueListenable: _searchController,
             builder: (context, value, child) {
               if (value.text.isEmpty) return const SizedBox.shrink();
               return IconButton(
-                icon: const Icon(Icons.clear_rounded, color: AppColors.muted),
+                icon: Icon(Icons.clear_rounded, color: AppColors.muted),
                 onPressed: () {
                   _searchController.clear();
                   _onSearchChanged('');
@@ -2974,11 +3439,172 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             vertical: 14,
           ),
         ),
-        style: const TextStyle(
+        style: TextStyle(
           fontWeight: FontWeight.w700,
           fontSize: 14,
           color: AppColors.text,
         ),
+      ),
+    );
+  }
+
+  /// Abre el buscador de apuntes por ID exacto (propios, públicos o
+  /// compartidos). Tras copiar uno a los propios se refresca la lista.
+  Future<void> _openIdSearch({String? initialQuery}) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => NoteIdSearchScreen(
+          api: NotesApi(baseUrl: notesBaseUrl),
+          initialQuery: initialQuery,
+          onNoteCopied: () async {
+            if (!_useMemoryFallback && _repo != null) {
+              await _syncFromBackend();
+            }
+            await _applySearch(_currentQuery);
+          },
+        ),
+      ),
+    );
+  }
+
+  /// Acciones de comunidad sobre apuntes de otros usuarios.
+  Widget _buildCommunityActions() {
+    return Wrap(
+      spacing: AppDimens.spaceSm,
+      runSpacing: AppDimens.spaceSm,
+      children: <Widget>[
+        NeobrutalistButton(
+          key: const Key('notes-open-saved'),
+          label: 'Guardados',
+          icon: Icons.bookmarks_rounded,
+          variant: NeobrutalistButtonVariant.accent,
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppDimens.spaceMd,
+            vertical: AppDimens.spaceSm,
+          ),
+          onPressed: _openSavedNotes,
+        ),
+        NeobrutalistButton(
+          key: const Key('notes-open-id-search'),
+          label: 'Buscar por ID',
+          icon: Icons.tag_rounded,
+          variant: NeobrutalistButtonVariant.secondary,
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppDimens.spaceMd,
+            vertical: AppDimens.spaceSm,
+          ),
+          onPressed: () => _openIdSearch(),
+        ),
+        NeobrutalistButton(
+          key: const Key('notes-open-public'),
+          label: 'Explorar públicos',
+          icon: Icons.public_rounded,
+          variant: NeobrutalistButtonVariant.secondary,
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppDimens.spaceMd,
+            vertical: AppDimens.spaceSm,
+          ),
+          onPressed: _openPublicNotes,
+        ),
+        // Loading en el botón mientras se convierte el PDF.
+        NeobrutalistButton(
+          key: const Key('notes-pdf-to-markdown'),
+          label: _convertingPdf
+              ? (_convertingWord ?? 'Convirtiendo…')
+              : 'PDF → Markdown',
+          icon: _convertingPdf
+              ? Icons.hourglass_empty_rounded
+              : Icons.picture_as_pdf_rounded,
+          variant: NeobrutalistButtonVariant.accent,
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppDimens.spaceMd,
+            vertical: AppDimens.spaceSm,
+          ),
+          onPressed: _convertingPdf || _conversionsRemaining == 0
+              ? null
+              : _pickAndConvertPdf,
+        ),
+        // Contador de conversiones restantes (rate limit: 5 por hora).
+        if (_conversionsRemaining < _kMaxConversionsPerHour)
+          Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppDimens.spaceMd,
+              vertical: AppDimens.spaceSm,
+            ),
+            child: Text(
+              'Conversiones restantes: $_conversionsRemaining/$_kMaxConversionsPerHour',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                color: AppColors.mutedStrong,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// Sección "Apuntes guardados": marcadores propios y de otros, incluidos
+  /// los que su autor eliminó (se muestran como no disponibles).
+  Future<void> _openSavedNotes() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => SavedNotesScreen(
+          api: NotesApi(baseUrl: notesBaseUrl),
+          onNoteCopied: () async {
+            if (!_useMemoryFallback && _repo != null) {
+              await _syncFromBackend();
+            }
+            await _applySearch(_currentQuery);
+          },
+        ),
+      ),
+    );
+  }
+
+  /// Apuntes públicos de otros usuarios con like/guardar en cada tarjeta.
+  Future<void> _openPublicNotes() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PublicNotesScreen(
+          api: NotesApi(baseUrl: notesBaseUrl),
+          onNoteCopied: () async {
+            if (!_useMemoryFallback && _repo != null) {
+              await _syncFromBackend();
+            }
+            await _applySearch(_currentQuery);
+          },
+        ),
+      ),
+    );
+  }
+
+  /// Aviso cuando la búsqueda general contiene un ID de apunte: la búsqueda
+  /// de texto solo mira apuntes locales, así que se ofrece buscarlo por ID.
+  Widget _buildIdSearchHint() {
+    return NeobrutalistCard(
+      key: const Key('notes-id-search-hint'),
+      padding: const EdgeInsets.all(AppDimens.spaceMd),
+      shadow: AppShadows.hard2,
+      backgroundColor: AppColors.accentYellow,
+      // Se abre el buscador solo con el UUID extraído (no la URL completa).
+      onTap: () => _openIdSearch(initialQuery: extractNoteId(_currentQuery)),
+      child: Row(
+        children: <Widget>[
+          Icon(Icons.tag_rounded, color: AppColors.text, size: 18),
+          SizedBox(width: AppDimens.spaceSm),
+          Expanded(
+            child: Text(
+              'Eso parece el ID (o enlace) de un apunte. Toca aquí para buscarlo directamente.',
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w800,
+                color: AppColors.text,
+              ),
+            ),
+          ),
+          Icon(Icons.arrow_forward_rounded, color: AppColors.text, size: 18),
+        ],
       ),
     );
   }
@@ -3010,7 +3636,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                 decoration: BoxDecoration(
                   color: selected ? AppColors.accentYellow : AppColors.surface,
                   border: Border.all(
-                    color: AppColors.border,
+                    color: AppColors.outline,
                     width: AppDimens.borderWidth,
                   ),
                   borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -3018,7 +3644,7 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                 ),
                 child: Text(
                   c['label']!,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w900,
                     fontSize: 11,
                     color: AppColors.text,
@@ -3035,8 +3661,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
 
   Widget _buildBody(bool isDesktop) {
     if (_isLoading) {
-      return const Center(
-        child: CircularProgressIndicator(color: Colors.black),
+      return Center(
+        child: CircularProgressIndicator(color: AppColors.text),
       );
     }
     if (_error != null) {
@@ -3044,31 +3670,27 @@ class AllNotesScreenState extends State<AllNotesScreen> {
         child: Container(
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            color: Colors.white,
-            border: Border.all(color: Colors.black, width: 2),
-            boxShadow: const [
-              BoxShadow(
-                color: Colors.black,
-                offset: Offset(4, 4),
-                blurRadius: 0,
-              ),
+            color: AppColors.surface,
+            border: Border.all(color: AppColors.outline, width: 2),
+            boxShadow: [
+              AppShadows.hard4,
             ],
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
+              Icon(
                 Icons.error_outline_rounded,
                 size: 36,
-                color: Color(0xFFE63B2E),
+                color: AppColors.error,
               ),
               const SizedBox(height: 12),
               Text(
                 _error!,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w700,
-                  color: Colors.black,
+                  color: AppColors.text,
                   fontSize: 13,
                 ),
               ),
@@ -3077,8 +3699,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                 width: double.infinity,
                 child: ElevatedButton(
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.black,
-                    foregroundColor: Colors.white,
+                    backgroundColor: AppColors.border,
+                    foregroundColor: AppColors.onPrimary,
                     shape: const RoundedRectangleBorder(
                       borderRadius: BorderRadius.zero,
                     ),
@@ -3112,37 +3734,33 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                       Container(
                         padding: const EdgeInsets.all(18),
                         decoration: BoxDecoration(
-                          color: Colors.white,
-                          border: Border.all(color: Colors.black, width: 2),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Colors.black,
-                              offset: Offset(3, 3),
-                              blurRadius: 0,
-                            ),
+                          color: AppColors.surface,
+                          border: Border.all(color: AppColors.outline, width: 2),
+                          boxShadow: [
+                            AppShadows.hard3,
                           ],
                         ),
-                        child: const Icon(
+                        child: Icon(
                           Icons.search_off_rounded,
                           size: 36,
-                          color: Color(0xFF555555),
+                          color: AppColors.muted,
                         ),
                       ),
                       const SizedBox(height: 14),
-                      const Text(
+                      Text(
                         'SIN RESULTADOS',
                         style: TextStyle(
                           fontWeight: FontWeight.w900,
-                          color: Colors.black,
+                          color: AppColors.text,
                         ),
                       ),
                       const SizedBox(height: 6),
-                      const Text(
+                      Text(
                         'Prueba con otra palabra clave o prefijo (ej: prog*)',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           fontWeight: FontWeight.w600,
-                          color: Color(0xFF555555),
+                          color: AppColors.muted,
                           fontSize: 12,
                         ),
                       ),
@@ -3167,51 +3785,47 @@ class AllNotesScreenState extends State<AllNotesScreen> {
                     Container(
                       padding: const EdgeInsets.all(20),
                       decoration: BoxDecoration(
-                        color: Colors.white,
-                        border: Border.all(color: Colors.black, width: 2),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Colors.black,
-                            offset: Offset(3, 3),
-                            blurRadius: 0,
-                          ),
+                        color: AppColors.surface,
+                        border: Border.all(color: AppColors.outline, width: 2),
+                        boxShadow: [
+                          AppShadows.hard3,
                         ],
                       ),
-                      child: const Icon(
+                      child: Icon(
                         Icons.note_add_rounded,
                         size: 36,
-                        color: Colors.black,
+                        color: AppColors.text,
                       ),
                     ),
                     const SizedBox(height: 14),
-                    const Text(
+                    Text(
                       'NO TIENES NOTAS CREADAS TODAVÍA',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontWeight: FontWeight.w900,
-                        color: Colors.black,
+                        color: AppColors.text,
                         fontSize: 14,
                       ),
                     ),
                     const SizedBox(height: 6),
-                    const Text(
+                    Text(
                       'Crea tu primera nota y aparecerá aquí',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF555555),
+                        color: AppColors.muted,
                         fontSize: 12,
                       ),
                     ),
                     const SizedBox(height: 16),
                     ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.black,
-                        foregroundColor: Colors.white,
+                        backgroundColor: AppColors.border,
+                        foregroundColor: AppColors.onPrimary,
                         shape: const RoundedRectangleBorder(
                           borderRadius: BorderRadius.zero,
                         ),
-                        side: const BorderSide(color: Colors.black, width: 2),
+                        side: BorderSide(color: AppColors.outline, width: 2),
                         padding: const EdgeInsets.symmetric(
                           horizontal: 20,
                           vertical: 12,
@@ -3261,7 +3875,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
             syncLabel: _syncBadgeFor(note.id),
             onTap: () => _openNoteViewer(note),
             onLike: () => _toggleLike(note),
-            onSave: () => _toggleSave(note),
+            // El autor no puede guardar su propio apunte.
+            onSave: _isMine(note) ? null : () => _toggleSave(note),
             onShare: () => _shareNote(note),
           );
         },
@@ -3289,7 +3904,8 @@ class AllNotesScreenState extends State<AllNotesScreen> {
               syncLabel: _syncBadgeFor(note.id),
               onTap: () => _openNoteViewer(note),
               onLike: () => _toggleLike(note),
-              onSave: () => _toggleSave(note),
+              // El autor no puede guardar su propio apunte.
+              onSave: _isMine(note) ? null : () => _toggleSave(note),
               onShare: () => _shareNote(note),
             ),
           ),
@@ -3299,45 +3915,248 @@ class AllNotesScreenState extends State<AllNotesScreen> {
   }
 }
 
-class _VisibilityOption extends StatelessWidget {
-  final String label;
-  final bool active;
-  final VoidCallback onTap;
-  const _VisibilityOption({
-    required this.label,
-    required this.active,
-    required this.onTap,
+/// Selector PÚBLICO / PRIVADO compartido por «Nueva nota» y «Editar».
+/// [value] es 'public' o 'private'. Los colores coinciden con los badges de
+/// la nota (público = azul profundo, privado = amarillo) y salen de
+/// [AppColors], así que sigue a la paleta activa (Sigma o UCT).
+class _VisibilitySelector extends StatelessWidget {
+  const _VisibilitySelector({
+    required this.value,
+    required this.onChanged,
+    this.enabled = true,
   });
+
+  final String value;
+  final ValueChanged<String> onChanged;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        decoration: BoxDecoration(
-          color: active ? const Color(0xFF0055FF) : const Color(0xFFF5F0E8),
-          border: Border.all(color: Colors.black, width: 2),
-          boxShadow: active
-              ? const [
-                  BoxShadow(
-                    color: Colors.black,
-                    offset: Offset(2, 2),
-                    blurRadius: 0,
+    final public = _VisibilityOption(
+      key: const ValueKey('visibility-public'),
+      label: 'PÚBLICO',
+      icon: Icons.public_rounded,
+      active: value == 'public',
+      activeColor: AppColors.accentBlueDeep,
+      activeForeground: AppColors.surface,
+      enabled: enabled,
+      onTap: () => onChanged('public'),
+    );
+    final private = _VisibilityOption(
+      key: const ValueKey('visibility-private'),
+      label: 'PRIVADO',
+      icon: Icons.lock_rounded,
+      active: value == 'private',
+      activeColor: AppColors.accentYellow,
+      activeForeground: AppColors.text,
+      enabled: enabled,
+      onTap: () => onChanged('private'),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const AppFieldLabel('VISIBILIDAD'),
+        const SizedBox(height: AppDimens.spaceXs),
+        Semantics(
+          container: true,
+          label: 'Visibilidad de la nota',
+          // Muy angosto (móvil pequeño o texto al 200 %): se apilan para no
+          // recortar las etiquetas.
+          child: LayoutBuilder(
+            builder: (context, box) => box.maxWidth < 260
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      public,
+                      const SizedBox(height: AppDimens.spaceSm),
+                      private,
+                    ],
+                  )
+                : Row(
+                    children: [
+                      Expanded(child: public),
+                      const SizedBox(width: AppDimens.spaceSm),
+                      Expanded(child: private),
+                    ],
                   ),
-                ]
-              : null,
+          ),
         ),
-        child: Center(
-          child: Text(
-            label,
-            style: TextStyle(
-              fontWeight: FontWeight.w900,
-              fontSize: 11,
-              color: active ? Colors.white : Colors.black,
+      ],
+    );
+  }
+}
+
+/// Opción del selector: borde de tinta, sombra dura que se hunde al presionar
+/// o al quedar seleccionada, cursor de click, foco visible con teclado y
+/// área táctil ≥ 48 dp. El estado se lee por icono + check, no solo color.
+class _VisibilityOption extends StatefulWidget {
+  const _VisibilityOption({
+    super.key,
+    required this.label,
+    required this.icon,
+    required this.active,
+    required this.activeColor,
+    required this.activeForeground,
+    required this.onTap,
+    this.enabled = true,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool active;
+  final Color activeColor;
+  final Color activeForeground;
+  final VoidCallback onTap;
+  final bool enabled;
+
+  @override
+  State<_VisibilityOption> createState() => _VisibilityOptionState();
+}
+
+class _VisibilityOptionState extends State<_VisibilityOption> {
+  bool _pressed = false;
+  bool _focused = false;
+
+  void _setPressed(bool v) {
+    if (_pressed != v) setState(() => _pressed = v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.enabled;
+    final sunk = _pressed || widget.active;
+    final fg = widget.active ? widget.activeForeground : AppColors.text;
+    final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    return Semantics(
+      button: true,
+      selected: widget.active,
+      enabled: enabled,
+      label: widget.label,
+      excludeSemantics: true,
+      child: FocusableActionDetector(
+        enabled: enabled,
+        mouseCursor: enabled
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.forbidden,
+        onShowFocusHighlight: (v) => setState(() => _focused = v),
+        actions: {
+          ActivateIntent: CallbackAction<ActivateIntent>(
+            onInvoke: (_) {
+              widget.onTap();
+              return null;
+            },
+          ),
+        },
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: enabled ? (_) => _setPressed(true) : null,
+          onTapUp: enabled ? (_) => _setPressed(false) : null,
+          onTapCancel: enabled ? () => _setPressed(false) : null,
+          onTap: enabled ? widget.onTap : null,
+          child: AnimatedContainer(
+            duration: reduceMotion ? Duration.zero : AppMotion.press,
+            curve: AppMotion.standard,
+            constraints: const BoxConstraints(minHeight: 48),
+            transform: Matrix4.translationValues(
+              sunk ? AppShadows.offsetBadge.dx : 0,
+              sunk ? AppShadows.offsetBadge.dy : 0,
+              0,
+            ),
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppDimens.spaceMd,
+              vertical: AppDimens.spaceSm,
+            ),
+            decoration: BoxDecoration(
+              color: !enabled
+                  ? AppColors.surfaceLow
+                  : widget.active
+                  ? widget.activeColor
+                  : AppColors.surface,
+              border: Border.all(
+                // Foco de teclado: borde de tinta más grueso.
+                color: _focused ? AppColors.border : AppColors.outline,
+                width: _focused
+                    ? AppDimens.borderWidthThick
+                    : AppDimens.borderWidth,
+              ),
+              borderRadius: BorderRadius.circular(AppDimens.radius),
+              boxShadow: sunk || !enabled
+                  ? const <BoxShadow>[]
+                  : AppShadows.badge,
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(widget.icon, size: 18, color: fg),
+                const SizedBox(width: AppDimens.spaceSm),
+                Flexible(
+                  child: Text(
+                    widget.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.6,
+                      color: fg,
+                    ),
+                  ),
+                ),
+                if (widget.active) ...[
+                  const SizedBox(width: AppDimens.spaceXs),
+                  Icon(Icons.check_rounded, size: 16, color: fg),
+                ],
+              ],
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Aviso en Editar cuando la visibilidad elegida difiere de la guardada:
+/// explica el efecto antes de GUARDAR (nada cambia hasta entonces).
+class _VisibilityChangeNotice extends StatelessWidget {
+  const _VisibilityChangeNotice({required this.toPublic});
+
+  final bool toPublic;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const ValueKey('visibility-change-notice'),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppDimens.spaceSm,
+        vertical: 6,
+      ),
+      decoration: BoxDecoration(
+        color: toPublic ? AppColors.infoTint : AppColors.warningTint,
+        border: Border.all(color: AppColors.outline, width: 1.5),
+        borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            toPublic ? Icons.public_rounded : Icons.lock_rounded,
+            size: 14,
+            color: AppColors.text,
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              toPublic
+                  ? 'Al guardar, cualquier persona podrá verla en Apuntes públicos.'
+                  : 'Al guardar, dejará de aparecer en Apuntes públicos. Los grupos con los que ya la compartiste conservan su acceso.',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                color: AppColors.text,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -3354,7 +4173,7 @@ class _NoteCard extends StatefulWidget {
     this.syncLabel,
     required this.onTap,
     required this.onLike,
-    required this.onSave,
+    this.onSave,
     required this.onShare,
   });
 
@@ -3367,7 +4186,9 @@ class _NoteCard extends StatefulWidget {
   final String? syncLabel;
   final VoidCallback onTap;
   final VoidCallback onLike;
-  final VoidCallback onSave;
+
+  /// Null oculta «Guardar» (apuntes propios: el autor no puede guardarlos).
+  final VoidCallback? onSave;
   final VoidCallback onShare;
 
   @override
@@ -3416,7 +4237,7 @@ class _NoteCardState extends State<_NoteCard> {
           decoration: BoxDecoration(
             color: AppColors.surface,
             border: Border.all(
-              color: AppColors.border,
+              color: AppColors.outline,
               width: AppDimens.borderWidth,
             ),
             borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -3432,7 +4253,7 @@ class _NoteCardState extends State<_NoteCard> {
                       widget.note.title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w900,
                         fontSize: 13,
                         color: AppColors.text,
@@ -3445,7 +4266,7 @@ class _NoteCardState extends State<_NoteCard> {
                         widget.note.content,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 11,
                           color: AppColors.muted,
                           height: 1.3,
@@ -3466,7 +4287,7 @@ class _NoteCardState extends State<_NoteCard> {
                       widget.note.title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w900,
                         fontSize: 16,
                         color: AppColors.text,
@@ -3478,7 +4299,7 @@ class _NoteCardState extends State<_NoteCard> {
                       widget.note.content,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w500,
                         color: AppColors.muted,
@@ -3502,7 +4323,7 @@ class _NoteCardState extends State<_NoteCard> {
           padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
           decoration: BoxDecoration(
             color: isPublic ? AppColors.accentBlueDeep : AppColors.accentYellow,
-            border: Border.all(color: AppColors.border, width: 1.5),
+            border: Border.all(color: AppColors.outline, width: 1.5),
             borderRadius: BorderRadius.circular(AppDimens.radiusChip),
             boxShadow: AppShadows.badge,
           ),
@@ -3521,13 +4342,13 @@ class _NoteCardState extends State<_NoteCard> {
             padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
             decoration: BoxDecoration(
               color: AppColors.accentYellow,
-              border: Border.all(color: AppColors.border, width: 1.5),
+              border: Border.all(color: AppColors.outline, width: 1.5),
               borderRadius: BorderRadius.circular(AppDimens.radiusChip),
               boxShadow: AppShadows.badge,
             ),
             child: Text(
               widget.syncLabel!,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 9,
                 fontWeight: FontWeight.w900,
                 color: AppColors.text,
@@ -3540,7 +4361,7 @@ class _NoteCardState extends State<_NoteCard> {
           child: Text(
             _formatDate(widget.note.updatedAt),
             textAlign: TextAlign.end,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 9,
               fontWeight: FontWeight.w700,
               color: AppColors.muted,
@@ -3580,29 +4401,30 @@ class _NoteCardState extends State<_NoteCard> {
             ],
           ),
         ),
-        _CardAction(
-          onTap: widget.onSave,
-          background: widget.isSaved
-              ? AppColors.accentYellow
-              : AppColors.surface,
-          child: Icon(
-            widget.isSaved
-                ? Icons.bookmark_rounded
-                : Icons.bookmark_border_rounded,
-            size: 13,
-            color: AppColors.text,
+        if (widget.onSave != null)
+          _CardAction(
+            onTap: widget.onSave!,
+            background: widget.isSaved
+                ? AppColors.accentYellow
+                : AppColors.surface,
+            child: Icon(
+              widget.isSaved
+                  ? Icons.bookmark_rounded
+                  : Icons.bookmark_border_rounded,
+              size: 13,
+              color: AppColors.text,
+            ),
           ),
-        ),
         _CardAction(
           onTap: widget.onShare,
           background: AppColors.surface,
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              const Icon(Icons.share_rounded, size: 13, color: AppColors.text),
+              Icon(Icons.share_rounded, size: 13, color: AppColors.text),
               if (!isGrid) ...<Widget>[
                 const SizedBox(width: 4),
-                const Text(
+                Text(
                   'Compartir',
                   style: TextStyle(
                     fontSize: 11,
@@ -3669,7 +4491,7 @@ class _CardActionState extends State<_CardAction> {
           padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
           decoration: BoxDecoration(
             color: widget.background,
-            border: Border.all(color: AppColors.border, width: 1.5),
+            border: Border.all(color: AppColors.outline, width: 1.5),
             borderRadius: BorderRadius.circular(AppDimens.radiusChip),
             boxShadow: _pressed ? const <BoxShadow>[] : AppShadows.badge,
           ),
@@ -3684,22 +4506,22 @@ class _ActionButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final bool isActive;
-  final Color activeColor;
-  final Color activeForeground;
+  final Color? activeColor;
+  final Color? activeForeground;
   final VoidCallback onTap;
   const _ActionButton({
     required this.icon,
     required this.label,
     this.isActive = false,
-    this.activeColor = AppColors.accentYellow,
-    this.activeForeground = AppColors.text,
+    this.activeColor,
+    this.activeForeground,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final background = isActive ? activeColor : AppColors.surface;
-    final foreground = isActive ? activeForeground : AppColors.text;
+    final background = isActive ? (activeColor ?? AppColors.accentYellow) : AppColors.surface;
+    final foreground = isActive ? (activeForeground ?? AppColors.text) : AppColors.text;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       child: InkWell(
@@ -3709,7 +4531,7 @@ class _ActionButton extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(
             color: background,
-            border: Border.all(color: AppColors.border, width: 1.5),
+            border: Border.all(color: AppColors.outline, width: 1.5),
             borderRadius: BorderRadius.circular(AppDimens.radiusChip),
             boxShadow: AppShadows.badge,
           ),
@@ -3812,7 +4634,11 @@ class _NoteDetailSheet extends StatefulWidget {
   final VoidCallback onToggleSave;
   final VoidCallback onShare;
   final Future<_RemoteResult> Function() onFetchRemote;
-  final Future<_EditSaveOutcome> Function(String title, String content)
+  final Future<_EditSaveOutcome> Function(
+    String title,
+    String content,
+    String visibility,
+  )
   onSaveEdit;
   final Future<_RemoteResult> Function() onDelete;
   final Future<_RemoteResult> Function() onClone;
@@ -3860,6 +4686,10 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
   Set<String> _removedResourcesBackup = {};
   late String _title;
   late String _content;
+  // Visibilidad vigente (badge de cabecera) y la elegida en modo Editar;
+  // solo se confirma al GUARDAR con éxito, CANCELAR la descarta.
+  late String _visibility;
+  late String _editVisibility;
   late int _likes;
   late bool _liked;
   late bool _saved;
@@ -3880,6 +4710,8 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     super.initState();
     _title = widget.note.title;
     _content = widget.note.content;
+    _visibility = widget.note.visibility;
+    _editVisibility = _visibility;
     _likes = widget.likesCount;
     _liked = widget.isLiked;
     _saved = widget.isSaved;
@@ -3983,11 +4815,11 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     if (_driveWarning != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          backgroundColor: Colors.black,
+          backgroundColor: AppColors.border,
           content: Text(
             _driveWarning!,
-            style: const TextStyle(
-              color: Colors.white,
+            style: TextStyle(
+              color: AppColors.surface,
               fontWeight: FontWeight.w800,
             ),
           ),
@@ -4005,6 +4837,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     setState(() {
       _editing = true;
       _editError = null;
+      _editVisibility = _visibility;
       _pendingRemovedIds.clear();
       // Snapshot para que CANCELAR restaure el estado previo.
       _attachmentsBackup = List<Map<String, dynamic>>.from(_attachments);
@@ -4060,12 +4893,15 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
       );
       c = removeAttachmentReferences(c, resource);
     }
+    // LaTeX: neutraliza macros peligrosos dentro de las fórmulas antes de
+    // guardar (el resto del contenido no cambia).
+    c = sanitizeNoteMarkdown(c);
     setState(() {
       _saving = true;
       _editError = null;
     });
     // 2. PATCH contenido/versión.
-    final outcome = await widget.onSaveEdit(t, c);
+    final outcome = await widget.onSaveEdit(t, c, _editVisibility);
     if (!mounted) return;
     if (outcome != _EditSaveOutcome.synced) {
       setState(() => _saving = false);
@@ -4112,6 +4948,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
       _pendingRemovedIds.clear();
       _title = t;
       _content = c;
+      _visibility = _editVisibility;
       if (_contentCtrl != null) _contentCtrl!.text = _content;
       _editing = false;
       _releaseEditControllersAfterFrame();
@@ -4130,9 +4967,9 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
         confirmVariant: NeobrutalistButtonVariant.danger,
         closeOnConfirm: false,
         onConfirm: () => Navigator.of(context).pop(true),
-        content: const Text(
+        content: Text(
           '¿Eliminar esta nota? También se eliminarán sus archivos adjuntos.',
-          style: TextStyle(fontWeight: FontWeight.w600, color: Colors.black),
+          style: TextStyle(fontWeight: FontWeight.w600, color: AppColors.text),
         ),
       ),
     );
@@ -4146,13 +4983,13 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          backgroundColor: Colors.black,
+          backgroundColor: AppColors.border,
           content: Text(
             res.status == -1
                 ? 'Sin conexión: no se pudo eliminar.'
                 : 'No se pudo eliminar. Inténtalo más tarde.',
-            style: const TextStyle(
-              color: Colors.white,
+            style: TextStyle(
+              color: AppColors.surface,
               fontWeight: FontWeight.w800,
             ),
           ),
@@ -4166,7 +5003,11 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
 
   String _cloneErrorText(_RemoteResult res) {
     if (res.status == -1) return 'Sin conexión: no se pudo guardar la copia.';
-    return 'No se pudo guardar la copia. Inténtalo más tarde.';
+    return notesFriendlyMessage(
+      res.status,
+      res.code,
+      fallback: 'No se pudo guardar la copia. Inténtalo más tarde.',
+    );
   }
 
   Future<void> _confirmClone() async {
@@ -4176,13 +5017,13 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     setState(() => _cloning = false);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        backgroundColor: Colors.black,
+        backgroundColor: AppColors.border,
         content: Text(
           res.ok
               ? 'Copia guardada exitosamente en tu Drive'
               : _cloneErrorText(res),
-          style: const TextStyle(
-            color: Colors.white,
+          style: TextStyle(
+            color: AppColors.surface,
             fontWeight: FontWeight.w800,
           ),
         ),
@@ -4210,11 +5051,11 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        backgroundColor: Colors.black,
+        backgroundColor: AppColors.border,
         content: Text(
           message,
-          style: const TextStyle(
-            color: Colors.white,
+          style: TextStyle(
+            color: AppColors.surface,
             fontWeight: FontWeight.w800,
           ),
         ),
@@ -4415,7 +5256,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
         // sobrante de la miniatura se funde con la paleta neobrutalista.
         color: AppColors.bg,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -4428,9 +5269,9 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
         children: [
           child,
           Container(
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               border: Border(
-                top: BorderSide(color: AppColors.border, width: 2),
+                top: BorderSide(color: AppColors.outline, width: 2),
               ),
               color: AppColors.bg,
             ),
@@ -4439,7 +5280,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
               name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 10,
                 fontWeight: FontWeight.w800,
                 color: AppColors.text,
@@ -4462,7 +5303,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: AppColors.surfaceLow,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radius),
         boxShadow: AppShadows.badge,
       ),
@@ -4471,7 +5312,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
         children: [
           Text(
             'ARCHIVOS ADJUNTOS (${_attachments.length})',
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 10,
               fontWeight: FontWeight.w900,
               color: AppColors.text,
@@ -4494,7 +5335,7 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
             ],
           ),
           if (_pendingRemovedIds.isNotEmpty)
-            const Padding(
+            Padding(
               padding: EdgeInsets.only(top: 6),
               child: Text(
                 'Se quitarán al GUARDAR. CANCELAR los conserva.',
@@ -4520,13 +5361,13 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
     return <Widget>[
       if (images.isNotEmpty) ...[
         if (docs.isNotEmpty) ...[
-          const Text(
+          Text(
             'IMÁGENES',
             style: TextStyle(
               fontWeight: FontWeight.w900,
               fontSize: 10,
               letterSpacing: 0.5,
-              color: Color(0xFF555555),
+              color: AppColors.muted,
             ),
           ),
           const SizedBox(height: 8),
@@ -4550,13 +5391,13 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
         if (docs.isNotEmpty) const SizedBox(height: 14),
       ],
       if (docs.isNotEmpty) ...[
-        const Text(
+        Text(
           'DOCUMENTOS',
           style: TextStyle(
             fontWeight: FontWeight.w900,
             fontSize: 10,
             letterSpacing: 0.5,
-            color: Color(0xFF555555),
+            color: AppColors.muted,
           ),
         ),
         const SizedBox(height: 8),
@@ -4581,14 +5422,14 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      decoration: const BoxDecoration(
-        color: Colors.white,
+      decoration: BoxDecoration(
+        color: AppColors.surface,
         border: Border(
-          top: BorderSide(color: Colors.black, width: 2),
-          left: BorderSide(color: Colors.black, width: 2),
-          right: BorderSide(color: Colors.black, width: 2),
+          top: BorderSide(color: AppColors.outline, width: 2),
+          left: BorderSide(color: AppColors.outline, width: 2),
+          right: BorderSide(color: AppColors.outline, width: 2),
         ),
-        boxShadow: [BoxShadow(color: Colors.black, offset: Offset(6, 6))],
+        boxShadow: [AppShadows.hard6],
       ),
       child: Column(
         children: [
@@ -4597,370 +5438,416 @@ class _NoteDetailSheetState extends State<_NoteDetailSheet> {
             width: 40,
             height: 4,
             decoration: BoxDecoration(
-              color: Colors.black,
+              color: AppColors.text,
               borderRadius: BorderRadius.circular(0),
             ),
           ),
           Expanded(
-            child: ListView(
-              controller: widget.scrollController,
-              padding: const EdgeInsets.all(20),
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: widget.note.visibility == 'public'
-                            ? const Color(0xFF0055FF)
-                            : const Color(0xFFFFCC00),
-                        border: Border.all(color: Colors.black, width: 1.5),
-                      ),
-                      child: Text(
-                        widget.note.visibility.toUpperCase(),
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w900,
-                          color: widget.note.visibility == 'public'
-                              ? Colors.white
-                              : Colors.black,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF5F0E8),
-                            border: Border.all(color: Colors.black, width: 1.5),
-                          ),
-                          child: Text(
-                            widget.tag,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w800,
-                              color: Colors.black,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      _fmtDate(widget.note.updatedAt),
-                      style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF1A1A1A),
-                      ),
-                    ),
-                  ],
+            child: LayoutBuilder(builder: (context, box) => _buildBody(box)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBody(BoxConstraints box) {
+    // Lectura: columna centrada de ancho cómodo. Edición: todo el ancho.
+    final readingInset = _editing
+        ? 0.0
+        : ((box.maxWidth - _noteEditorMaxWidth) / 2).clamp(
+            0.0,
+            double.infinity,
+          );
+    // Editor alto (~60 % del sheet): deja visibles título, barra de adjuntos
+    // y botones GUARDAR/CANCELAR en una ventana de escritorio normal.
+    final editorHeight = (box.maxHeight * 0.6).clamp(320.0, double.infinity);
+    final padding = EdgeInsets.symmetric(
+      horizontal: 20 + readingInset,
+      vertical: 20,
+    );
+    final children = <Widget>[
+      Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            // Refleja la visibilidad guardada (cambia tras GUARDAR en Editar).
+            // Texto blanco sobre azul usa accentBlueDeep (AAA), como la tarjeta.
+            decoration: BoxDecoration(
+              color: _visibility == 'public'
+                  ? AppColors.accentBlueDeep
+                  : AppColors.accentYellow,
+              border: Border.all(color: AppColors.outline, width: 1.5),
+            ),
+            child: Text(
+              _visibility == 'public' ? 'PÚBLICO' : 'PRIVADO',
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 0.5,
+                color: _visibility == 'public'
+                    ? AppColors.surface
+                    : AppColors.text,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: AppColors.bg,
+                  border: Border.all(color: AppColors.outline, width: 1.5),
                 ),
-                if (_loadingRemote) ...[
-                  const SizedBox(height: 12),
-                  const LinearProgressIndicator(
-                    color: Colors.black,
-                    backgroundColor: Color(0xFFF5F0E8),
+                child: Text(
+                  widget.tag,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.text,
                   ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'Sincronizando con Drive…',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF555555),
-                    ),
-                  ),
-                ],
-                if (_driveWarning != null) ...[
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFF3C4),
-                      border: Border.all(color: Colors.black, width: 1.5),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(
-                          Icons.warning_amber_rounded,
-                          color: Colors.black,
-                          size: 18,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            _driveWarning!,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w800,
-                              color: Colors.black,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 16),
-                if (_editing) ...[
-                  const AppFieldLabel('TÍTULO'),
-                  const SizedBox(height: 4),
-                  TextField(
-                    controller: _titleCtrl,
-                    decoration: appInputDecoration('Título'),
-                  ),
-                  const SizedBox(height: 12),
-                  const AppFieldLabel('CONTENIDO MARKDOWN'),
-                  const SizedBox(height: 4),
-                  TextField(
-                    controller: _contentCtrl,
-                    maxLines: 6,
-                    decoration: appInputDecoration('Contenido Markdown'),
-                  ),
-                  const SizedBox(height: 8),
-                  if (_contentCtrl != null) ...[
-                    _AttachmentToolbar(
-                      controller: _contentCtrl!,
-                      onChanged: () => setState(() {}),
-                      onUploaded: _onAttachmentUploadedInEdit,
-                      onWarning: (message) {
-                        if (!mounted) return;
-                        setState(() {
-                          _attachNotice = message;
-                          _attachNoticeOk = false;
-                        });
-                      },
-                    ),
-                    if (_attachNotice != null) ...[
-                      const SizedBox(height: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: _attachNoticeOk
-                              ? AppColors.subjectMint
-                              : AppColors.accentYellow,
-                          border: Border.all(
-                            color: AppColors.border,
-                            width: 1.5,
-                          ),
-                          borderRadius: BorderRadius.circular(
-                            AppDimens.radiusChip,
-                          ),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              _attachNoticeOk
-                                  ? Icons.cloud_done_rounded
-                                  : Icons.info_outline_rounded,
-                              size: 14,
-                              color: AppColors.text,
-                            ),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: Text(
-                                _attachNotice!,
-                                style: const TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w800,
-                                  color: AppColors.text,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                    _DetectedAttachmentsPreview(
-                      content: _contentCtrl!.text,
-                      // Borrar solo el snippet NO elimina el attachment (queda
-                      // en ARCHIVOS ADJUNTOS hasta pulsar su X): semántica
-                      // validada E2E, distinto del borrado con X.
-                      onRemoveSnippet: (url) {
-                        final matches = _attachments.where(
-                          (a) => urlMatchesAttachment(a, url),
-                        );
-                        if (matches.isNotEmpty) {
-                          _togglePendingRemove(matches.first);
-                        } else {
-                          _removeAttachmentUrl(_contentCtrl!, url);
-                          setState(() {});
-                        }
-                      },
-                      onPreviewResource: _showResourceDialog,
-                    ),
-                    _buildEditAttachments(),
-                  ],
-                  if (_editError != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      _editError!,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFFE63B2E),
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextButton(
-                          onPressed: _saving ? null : _cancelEdit,
-                          child: const Text(
-                            'CANCELAR',
-                            style: TextStyle(
-                              color: Colors.black,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.black,
-                            foregroundColor: Colors.white,
-                            shape: const RoundedRectangleBorder(
-                              borderRadius: BorderRadius.zero,
-                            ),
-                          ),
-                          onPressed:
-                              _saving ||
-                                  _linkingAttachment ||
-                                  _removingAttachment
-                              ? null
-                              : _confirmEdit,
-                          child: Text(
-                            _saving ? 'GUARDANDO…' : 'GUARDAR',
-                            style: const TextStyle(fontWeight: FontWeight.w900),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ] else ...[
-                  Text(
-                    _title,
-                    style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w900,
-                      color: Colors.black,
-                      height: 1.2,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Container(height: 2, color: Colors.black),
-                  const SizedBox(height: 16),
-                  _NeobrutalistMarkdownBody(
-                    content: _content,
-                    resources: _mergedResources,
-                    onOpenResource: _showResourceDialog,
-                  ),
-                ],
-                if (_mergedResources.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  Container(height: 2, color: Colors.black),
-                  const SizedBox(height: 14),
-                  const Row(
-                    children: [
-                      Icon(
-                        Icons.folder_open_rounded,
-                        size: 16,
-                        color: Colors.black,
-                      ),
-                      SizedBox(width: 6),
-                      Text(
-                        'RECURSOS ADJUNTOS',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w900,
-                          fontSize: 13,
-                          letterSpacing: 0.5,
-                          color: Colors.black,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  ..._buildResourceItems(),
-                ],
-                const SizedBox(height: 24),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    _ActionButton(
-                      icon: Icons.favorite_rounded,
-                      label: '$_likes',
-                      isActive: _liked,
-                      activeColor: AppColors.errorDeep,
-                      activeForeground: AppColors.surface,
-                      onTap: () {
-                        setState(() {
-                          _liked = !_liked;
-                          _likes += _liked ? 1 : -1;
-                        });
-                        widget.onToggleLike();
-                      },
-                    ),
-                    _ActionButton(
-                      icon: Icons.bookmark_rounded,
-                      label: 'Guardar',
-                      isActive: _saved,
-                      activeColor: AppColors.accentYellow,
-                      onTap: () {
-                        setState(() => _saved = !_saved);
-                        widget.onToggleSave();
-                      },
-                    ),
-                    _ActionButton(
-                      icon: Icons.share_rounded,
-                      label: 'Compartir',
-                      onTap: widget.onShare,
-                    ),
-                    if (!widget.isMine) ...[
-                      _ActionButton(
-                        icon: Icons.copy_rounded,
-                        label: _cloning ? '…' : 'Guardar copia',
-                        onTap: _cloning ? () {} : _confirmClone,
-                      ),
-                    ],
-                    if (widget.isMine && !_editing) ...[
-                      _ActionButton(
-                        icon: Icons.edit_rounded,
-                        label: 'Editar',
-                        onTap: _onEditTap,
-                      ),
-                      _ActionButton(
-                        icon: Icons.delete_rounded,
-                        label: _deleting ? '…' : 'Eliminar',
-                        onTap: _deleting ? () {} : _confirmDelete,
-                      ),
-                    ],
-                  ],
                 ),
-              ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            _fmtDate(widget.note.updatedAt),
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: AppColors.text,
             ),
           ),
         ],
       ),
+      if (_loadingRemote) ...[
+        const SizedBox(height: 12),
+        LinearProgressIndicator(
+          color: AppColors.text,
+          backgroundColor: AppColors.bg,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Sincronizando con Drive…',
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            color: AppColors.muted,
+          ),
+        ),
+      ],
+      if (_driveWarning != null) ...[
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: AppColors.warningTint,
+            border: Border.all(color: AppColors.outline, width: 1.5),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.warning_amber_rounded,
+                color: AppColors.text,
+                size: 18,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _driveWarning!,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.text,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+      const SizedBox(height: 16),
+      if (_editing) ...[
+        const AppFieldLabel('TÍTULO'),
+        const SizedBox(height: 4),
+        TextField(
+          controller: _titleCtrl,
+          decoration: appInputDecoration('Título'),
+        ),
+        const SizedBox(height: 12),
+        _VisibilitySelector(
+          value: _editVisibility,
+          enabled: !_saving,
+          onChanged: (v) => setState(() => _editVisibility = v),
+        ),
+        if (_editVisibility != _visibility) ...[
+          const SizedBox(height: 6),
+          _VisibilityChangeNotice(toPublic: _editVisibility == 'public'),
+        ],
+        const SizedBox(height: 12),
+        const AppFieldLabel('CONTENIDO MARKDOWN / LATEX'),
+        const SizedBox(height: 4),
+        if (_contentCtrl != null)
+          SizedBox(
+            height: editorHeight,
+            child: MarkdownLiveEditor(
+              controller: _contentCtrl!,
+              expand: true,
+              editor: TextField(
+                controller: _contentCtrl,
+                expands: true,
+                minLines: null,
+                maxLines: null,
+                textAlignVertical: TextAlignVertical.top,
+                keyboardType: TextInputType.multiline,
+                style: const TextStyle(fontSize: 16, height: 1.45),
+                decoration: appInputDecoration('Contenido Markdown'),
+              ),
+              previewBuilder: (text) => NoteMarkdownBody(
+                content: text,
+                resources: _mergedResources,
+                onOpenResource: _showResourceDialog,
+                imageBuilder: _buildResourceImage,
+              ),
+            ),
+          ),
+        const SizedBox(height: 8),
+        if (_contentCtrl != null) ...[
+          _AttachmentToolbar(
+            controller: _contentCtrl!,
+            onChanged: () => setState(() {}),
+            onUploaded: _onAttachmentUploadedInEdit,
+            onWarning: (message) {
+              if (!mounted) return;
+              setState(() {
+                _attachNotice = message;
+                _attachNoticeOk = false;
+              });
+            },
+          ),
+          if (_attachNotice != null) ...[
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              decoration: BoxDecoration(
+                color: _attachNoticeOk
+                    ? AppColors.subjectMint
+                    : AppColors.accentYellow,
+                border: Border.all(color: AppColors.outline, width: 1.5),
+                borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _attachNoticeOk
+                        ? Icons.cloud_done_rounded
+                        : Icons.info_outline_rounded,
+                    size: 14,
+                    color: AppColors.text,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      _attachNotice!,
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.text,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          _DetectedAttachmentsPreview(
+            content: _contentCtrl!.text,
+            // Borrar solo el snippet NO elimina el attachment (queda
+            // en ARCHIVOS ADJUNTOS hasta pulsar su X): semántica
+            // validada E2E, distinto del borrado con X.
+            onRemoveSnippet: (url) {
+              final matches = _attachments.where(
+                (a) => urlMatchesAttachment(a, url),
+              );
+              if (matches.isNotEmpty) {
+                _togglePendingRemove(matches.first);
+              } else {
+                _removeAttachmentUrl(_contentCtrl!, url);
+                setState(() {});
+              }
+            },
+            onPreviewResource: _showResourceDialog,
+          ),
+          _buildEditAttachments(),
+        ],
+        if (_editError != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            _editError!,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: AppColors.error,
+            ),
+          ),
+        ],
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: TextButton(
+                onPressed: _saving ? null : _cancelEdit,
+                child: Text(
+                  'CANCELAR',
+                  style: TextStyle(
+                    color: AppColors.text,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.border,
+                  foregroundColor: AppColors.onPrimary,
+                  shape: const RoundedRectangleBorder(
+                    borderRadius: BorderRadius.zero,
+                  ),
+                ),
+                onPressed: _saving || _linkingAttachment || _removingAttachment
+                    ? null
+                    : _confirmEdit,
+                child: Text(
+                  _saving ? 'GUARDANDO…' : 'GUARDAR',
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ] else ...[
+        Text(
+          _title,
+          style: TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.w900,
+            color: AppColors.text,
+            height: 1.2,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Container(height: 2, color: AppColors.outline),
+        const SizedBox(height: 16),
+        NoteMarkdownBody(
+          content: _content,
+          resources: _mergedResources,
+          onOpenResource: _showResourceDialog,
+          imageBuilder: _buildResourceImage,
+        ),
+      ],
+      if (_mergedResources.isNotEmpty) ...[
+        const SizedBox(height: 16),
+        Container(height: 2, color: AppColors.outline),
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            Icon(Icons.folder_open_rounded, size: 16, color: AppColors.text),
+            SizedBox(width: 6),
+            Text(
+              'RECURSOS ADJUNTOS',
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                fontSize: 13,
+                letterSpacing: 0.5,
+                color: AppColors.text,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        ..._buildResourceItems(),
+      ],
+      const SizedBox(height: 24),
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          _ActionButton(
+            icon: Icons.favorite_rounded,
+            label: '$_likes',
+            isActive: _liked,
+            activeColor: AppColors.errorDeep,
+            activeForeground: AppColors.surface,
+            onTap: () {
+              setState(() {
+                _liked = !_liked;
+                _likes += _liked ? 1 : -1;
+              });
+              widget.onToggleLike();
+            },
+          ),
+          // El autor no puede guardar su propio apunte (el backend también
+          // lo rechaza con cannot_save_own_note).
+          if (!widget.isMine)
+            _ActionButton(
+              icon: Icons.bookmark_rounded,
+              label: 'Guardar',
+              isActive: _saved,
+              activeColor: AppColors.accentYellow,
+              onTap: () {
+                setState(() => _saved = !_saved);
+                widget.onToggleSave();
+              },
+            ),
+          _ActionButton(
+            icon: Icons.share_rounded,
+            label: 'Compartir',
+            onTap: widget.onShare,
+          ),
+          if (!widget.isMine) ...[
+            _ActionButton(
+              icon: Icons.copy_rounded,
+              label: _cloning ? '…' : 'Copiar a mis apuntes',
+              onTap: _cloning ? () {} : _confirmClone,
+            ),
+          ],
+          if (widget.isMine && !_editing) ...[
+            _ActionButton(
+              icon: Icons.edit_rounded,
+              label: 'Editar',
+              onTap: _onEditTap,
+            ),
+            _ActionButton(
+              icon: Icons.delete_rounded,
+              label: _deleting ? '…' : 'Eliminar',
+              onTap: _deleting ? () {} : _confirmDelete,
+            ),
+          ],
+        ],
+      ),
+    ];
+    if (_editing) {
+      // Edición: scroll no perezoso para que adjuntos y botones bajo el editor
+      // alto estén siempre construidos (y accesibles a lectores/tests).
+      return SingleChildScrollView(
+        controller: widget.scrollController,
+        padding: padding,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: children,
+        ),
+      );
+    }
+    return ListView(
+      controller: widget.scrollController,
+      padding: padding,
+      children: children,
     );
   }
 }
@@ -5041,7 +5928,7 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
     try {
       await widget.onCreate(
         _titleCtrl.text.trim(),
-        _contentCtrl.text.trim(),
+        sanitizeNoteMarkdown(_contentCtrl.text.trim()),
         _visibility,
         List.unmodifiable(_pendingAttachments),
       );
@@ -5078,114 +5965,156 @@ class _CreateNoteDialogState extends State<_CreateNoteDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return NeobrutalistDialog(
-      title: 'NUEVA NOTA',
-      cancelLabel: 'CANCELAR',
-      confirmLabel: _submitting ? 'GUARDANDO…' : 'GUARDAR',
-      closeOnConfirm: false,
-      onConfirm: _submitting ? null : _submit,
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const AppFieldLabel('TÍTULO'),
-          const SizedBox(height: 4),
-          TextField(
-            controller: _titleCtrl,
-            focusNode: _titleFocus,
-            decoration: appInputDecoration('Título').copyWith(
-              errorText: _titleError,
-              errorStyle: const TextStyle(
-                color: AppColors.error,
-                fontWeight: FontWeight.w800,
-                fontSize: 12,
-              ),
+    final editor = MarkdownLiveEditor(
+      controller: _contentCtrl,
+      expand: true,
+      editor: TextField(
+        controller: _contentCtrl,
+        expands: true,
+        minLines: null,
+        maxLines: null,
+        textAlignVertical: TextAlignVertical.top,
+        keyboardType: TextInputType.multiline,
+        style: const TextStyle(fontSize: 16, height: 1.45),
+        decoration: appInputDecoration('Contenido Markdown'),
+      ),
+      previewBuilder: (text) => NoteMarkdownBody(
+        content: text,
+        onOpenResource: _showResource,
+        imageBuilder: _buildResourceImage,
+      ),
+    );
+    final header = <Widget>[
+      const AppFieldLabel('TÍTULO'),
+      const SizedBox(height: 4),
+      TextField(
+        controller: _titleCtrl,
+        focusNode: _titleFocus,
+        decoration: appInputDecoration('Título').copyWith(
+          errorText: _titleError,
+          errorStyle: TextStyle(
+            color: AppColors.error,
+            fontWeight: FontWeight.w800,
+            fontSize: 12,
+          ),
+        ),
+      ),
+      const SizedBox(height: 12),
+      const AppFieldLabel('CONTENIDO MARKDOWN / LATEX'),
+      const SizedBox(height: 4),
+    ];
+    final footer = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _AttachmentToolbar(
+          queueUntilCreated: true,
+          controller: _contentCtrl,
+          onChanged: () => setState(() {}),
+          onUploaded: _onAttachmentUploaded,
+          onWarning: _onAttachmentWarning,
+        ),
+        if (_attachNotice != null) ...[
+          const SizedBox(height: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            decoration: BoxDecoration(
+              color: _attachNoticeOk
+                  ? AppColors.subjectMint
+                  : AppColors.accentYellow,
+              border: Border.all(color: AppColors.outline, width: 1.5),
+              borderRadius: BorderRadius.circular(AppDimens.radiusChip),
             ),
-          ),
-          const SizedBox(height: 12),
-          const AppFieldLabel('CONTENIDO MARKDOWN'),
-          const SizedBox(height: 4),
-          TextField(
-            controller: _contentCtrl,
-            maxLines: 4,
-            decoration: appInputDecoration('Contenido Markdown'),
-          ),
-          const SizedBox(height: 8),
-          _AttachmentToolbar(
-            queueUntilCreated: true,
-            controller: _contentCtrl,
-            onChanged: () => setState(() {}),
-            onUploaded: _onAttachmentUploaded,
-            onWarning: _onAttachmentWarning,
-          ),
-          if (_attachNotice != null) ...[
-            const SizedBox(height: 6),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              decoration: BoxDecoration(
-                color: _attachNoticeOk
-                    ? AppColors.subjectMint
-                    : AppColors.accentYellow,
-                border: Border.all(color: AppColors.border, width: 1.5),
-                borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    _attachNoticeOk
-                        ? Icons.cloud_done_rounded
-                        : Icons.info_outline_rounded,
-                    size: 14,
-                    color: AppColors.text,
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      _attachNotice!,
-                      style: const TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.text,
-                      ),
+            child: Row(
+              children: [
+                Icon(
+                  _attachNoticeOk
+                      ? Icons.cloud_done_rounded
+                      : Icons.info_outline_rounded,
+                  size: 14,
+                  color: AppColors.text,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    _attachNotice!,
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.text,
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
-          _DetectedAttachmentsPreview(
-            content: _contentCtrl.text,
-            onRemoveSnippet: (url) {
-              _removeAttachmentUrl(_contentCtrl, url);
-              _pendingAttachments.removeWhere((a) => a.fileUrl == url);
-              _pendingAttachmentFiles.remove(url);
-              setState(() {});
-            },
-            onPreviewResource: _showResource,
-          ),
-          const SizedBox(height: 12),
-          const AppFieldLabel('VISIBILIDAD'),
-          const SizedBox(height: 4),
-          Row(
-            children: [
-              Expanded(
-                child: _VisibilityOption(
-                  label: 'PÚBLICO',
-                  active: _visibility == 'public',
-                  onTap: () => setState(() => _visibility = 'public'),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _VisibilityOption(
-                  label: 'PRIVADO',
-                  active: _visibility == 'private',
-                  onTap: () => setState(() => _visibility = 'private'),
-                ),
-              ),
-            ],
           ),
         ],
+        _DetectedAttachmentsPreview(
+          content: _contentCtrl.text,
+          onRemoveSnippet: (url) {
+            _removeAttachmentUrl(_contentCtrl, url);
+            _pendingAttachments.removeWhere((a) => a.fileUrl == url);
+            _pendingAttachmentFiles.remove(url);
+            setState(() {});
+          },
+          onPreviewResource: _showResource,
+        ),
+        const SizedBox(height: 12),
+        _VisibilitySelector(
+          value: _visibility,
+          enabled: !_submitting,
+          onChanged: (v) => setState(() => _visibility = v),
+        ),
+      ],
+    );
+    // SafeArea: en móvil el diálogo no tiene margen y no debe quedar bajo la
+    // barra de estado o el notch.
+    return SafeArea(
+      child: NeobrutalistDialog(
+        title: 'NUEVA NOTA',
+        // Casi pantalla completa: el ancho lo acota solo el insetPadding.
+        maxWidth: double.infinity,
+        expandContent: true,
+        cancelLabel: 'CANCELAR',
+        confirmLabel: _submitting ? 'GUARDANDO…' : 'GUARDAR',
+        closeOnConfirm: false,
+        onConfirm: _submitting ? null : _submit,
+        content: LayoutBuilder(
+          builder: (context, constraints) {
+            if (constraints.maxHeight < _noteEditorExpandMinHeight) {
+              // Poco alto (teclado abierto, ventana baja): todo hace scroll y
+              // el editor conserva un alto cómodo fijo.
+              return SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ...header,
+                    SizedBox(height: 320, child: editor),
+                    const SizedBox(height: 8),
+                    footer,
+                  ],
+                ),
+              );
+            }
+            // El editor (Expanded) se queda con todo el alto sobrante; el pie
+            // (adjuntos, visibilidad) se acota y hace scroll si crece mucho.
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                ...header,
+                Expanded(child: editor),
+                const SizedBox(height: 8),
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: constraints.maxHeight * 0.4,
+                  ),
+                  child: SingleChildScrollView(child: footer),
+                ),
+              ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -5245,6 +6174,10 @@ void _removeAttachmentUrl(TextEditingController controller, String url) {
 }
 
 /// Extrae {code, message} del envelope de error del backend: {"error": {...}}.
+/// Marca en el resultado de [_reconcileDriveDeletions]: la cuenta no tiene
+/// Google Drive conectado (403 drive_not_connected), no hubo error.
+const String _kDriveNotConnected = 'drive_not_connected';
+
 Map<String, String?> _parseBackendError(String body) {
   try {
     final decoded = jsonDecode(body);
@@ -5576,18 +6509,31 @@ class _AttachmentToolbar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Barra de adjuntos + barra de ayuda LaTeX (ambos editores la usan).
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _buildAttachmentBar(context),
+        const SizedBox(height: 6),
+        LatexToolbar(controller: controller, onChanged: onChanged),
+      ],
+    );
+  }
+
+  Widget _buildAttachmentBar(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         color: AppColors.surfaceLow,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radius),
       ),
       child: Row(
         children: [
-          const Icon(Icons.attachment_rounded, size: 16, color: AppColors.text),
+          Icon(Icons.attachment_rounded, size: 16, color: AppColors.text),
           const SizedBox(width: 6),
-          const Text(
+          Text(
             'ADJUNTAR:',
             style: TextStyle(
               fontSize: 10,
@@ -5662,7 +6608,7 @@ class _AttachmentToolbarBtn extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(
             color: fill,
-            border: Border.all(color: AppColors.border, width: 1.5),
+            border: Border.all(color: AppColors.outline, width: 1.5),
             borderRadius: BorderRadius.circular(AppDimens.radiusChip),
             boxShadow: AppShadows.badge,
           ),
@@ -5673,7 +6619,7 @@ class _AttachmentToolbarBtn extends StatelessWidget {
               const SizedBox(width: 4),
               Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w900,
                   color: AppColors.text,
@@ -5967,7 +6913,7 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
                         child: Text(
                           '${file.name} · ${file.sizeLabel}',
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w700,
                             color: AppColors.text,
@@ -5979,7 +6925,7 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
                           cursor: SystemMouseCursors.click,
                           child: GestureDetector(
                             onTap: () => setState(() => _selected.remove(file)),
-                            child: const Padding(
+                            child: Padding(
                               padding: EdgeInsets.symmetric(
                                 horizontal: 4,
                                 vertical: 2,
@@ -6006,7 +6952,7 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
                   : () => setState(() => _manual = !_manual),
               child: Text(
                 _manual ? 'Usar selector de archivos' : 'Usar enlace manual',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w800,
                   color: AppColors.text,
@@ -6017,7 +6963,7 @@ class _AddAttachmentDialogState extends State<_AddAttachmentDialog> {
           ),
           const SizedBox(height: 8),
           if (_error != null)
-            Text(_error!, style: const TextStyle(color: AppColors.error)),
+            Text(_error!, style: TextStyle(color: AppColors.error)),
           const AppFieldLabel('NOMBRE'),
           const SizedBox(height: 4),
           TextField(
@@ -6065,7 +7011,7 @@ class _DetectedAttachmentsPreview extends StatelessWidget {
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: AppColors.surfaceLow,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radius),
         boxShadow: AppShadows.badge,
       ),
@@ -6074,7 +7020,7 @@ class _DetectedAttachmentsPreview extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(
+              Icon(
                 Icons.attach_file_rounded,
                 size: 14,
                 color: AppColors.text,
@@ -6083,7 +7029,7 @@ class _DetectedAttachmentsPreview extends StatelessWidget {
               Expanded(
                 child: Text(
                   'REFERENCIAS EN EL TEXTO (${attachments.length})',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.w900,
                     color: AppColors.text,
@@ -6093,7 +7039,7 @@ class _DetectedAttachmentsPreview extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 6),
-              const Text(
+              Text(
                 'Toca / (x)',
                 style: TextStyle(
                   fontSize: 9,
@@ -6139,7 +7085,7 @@ class _DetectedAttachmentChip extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: isImage ? AppColors.subjectMint : AppColors.accentYellow,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radiusChip),
         boxShadow: AppShadows.badge,
       ),
@@ -6170,7 +7116,7 @@ class _DetectedAttachmentChip extends StatelessWidget {
                       child: Text(
                         resource['name'] as String,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.w900,
                           color: AppColors.text,
@@ -6187,7 +7133,7 @@ class _DetectedAttachmentChip extends StatelessWidget {
             cursor: SystemMouseCursors.click,
             child: GestureDetector(
               onTap: onRemove,
-              child: const Padding(
+              child: Padding(
                 padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                 child: Icon(
                   Icons.close_rounded,
@@ -6228,7 +7174,7 @@ class _EditAttachmentChip extends StatelessWidget {
           color: pending
               ? AppColors.accentYellow
               : (isImage ? AppColors.subjectMint : AppColors.accentYellow),
-          border: Border.all(color: AppColors.border, width: 1.5),
+          border: Border.all(color: AppColors.outline, width: 1.5),
           borderRadius: BorderRadius.circular(AppDimens.radiusChip),
           boxShadow: AppShadows.badge,
         ),
@@ -6255,7 +7201,7 @@ class _EditAttachmentChip extends StatelessWidget {
                     child: Text(
                       resource['name'] as String,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 10,
                         fontWeight: FontWeight.w900,
                         color: AppColors.text,
@@ -6264,7 +7210,7 @@ class _EditAttachmentChip extends StatelessWidget {
                   ),
                   if (pending) ...[
                     const SizedBox(width: 4),
-                    const Text(
+                    Text(
                       'SE QUITARÁ',
                       style: TextStyle(
                         fontSize: 8,
@@ -6540,7 +7486,7 @@ class _ResourceImageThumb extends StatelessWidget {
       return Container(
         color: AppColors.surfaceLow,
         alignment: Alignment.center,
-        child: const Column(
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -6569,7 +7515,7 @@ class _ResourceImageThumb extends StatelessWidget {
           decoration: BoxDecoration(
             color: AppColors.border,
             border: Border.all(
-              color: AppColors.border,
+              color: AppColors.outline,
               width: AppDimens.borderWidth,
             ),
             borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -6587,7 +7533,7 @@ class _ResourceImageThumb extends StatelessWidget {
                   fallback: fallback,
                   loadingBuilder: (context, child, progress) {
                     if (progress == null) return child;
-                    return const Center(
+                    return Center(
                       child: SizedBox(
                         width: 18,
                         height: 18,
@@ -6669,7 +7615,7 @@ class _ResourceRemoveButtonState extends State<_ResourceRemoveButton> {
                 ),
                 decoration: BoxDecoration(
                   color: _focused ? AppColors.surface : AppColors.errorDeep,
-                  border: Border.all(color: AppColors.border, width: 1.5),
+                  border: Border.all(color: AppColors.outline, width: 1.5),
                   borderRadius: BorderRadius.circular(AppDimens.radius),
                   boxShadow: _pressed ? const [] : AppShadows.badge,
                 ),
@@ -6713,7 +7659,7 @@ class _ResourceDocTile extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -6727,7 +7673,7 @@ class _ResourceDocTile extends StatelessWidget {
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: isPdf ? AppColors.errorDeep : AppColors.accentBlueDeep,
-              border: Border.all(color: AppColors.border, width: 2),
+              border: Border.all(color: AppColors.outline, width: 2),
               borderRadius: BorderRadius.circular(AppDimens.radius),
             ),
             child: Icon(
@@ -6745,7 +7691,7 @@ class _ResourceDocTile extends StatelessWidget {
                   resource['name'] as String,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w800,
                     fontSize: 12.5,
                     color: AppColors.text,
@@ -6756,7 +7702,7 @@ class _ResourceDocTile extends StatelessWidget {
                 Text(
                   '${isPdf ? 'PDF' : 'DOC'} · $sizeLabel'
                   '${info.exists ? ' · DOCUMENTO LISTO' : ''}',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w700,
                     fontSize: 11,
                     color: AppColors.muted,
@@ -6793,13 +7739,13 @@ class _ResourceDocTile extends StatelessWidget {
 class _DocAction extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
-  final Color fill;
-  final Color foreground;
+  final Color? fill;
+  final Color? foreground;
   const _DocAction({
     required this.label,
     required this.onTap,
-    this.fill = AppColors.surface,
-    this.foreground = AppColors.text,
+    this.fill,
+    this.foreground,
   });
 
   @override
@@ -6811,8 +7757,8 @@ class _DocAction extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
           decoration: BoxDecoration(
-            color: fill,
-            border: Border.all(color: AppColors.border, width: 1.5),
+            color: (fill ?? AppColors.surface),
+            border: Border.all(color: AppColors.outline, width: 1.5),
             borderRadius: BorderRadius.circular(AppDimens.radiusChip),
             boxShadow: AppShadows.badge,
           ),
@@ -6821,7 +7767,7 @@ class _DocAction extends StatelessWidget {
             style: TextStyle(
               fontWeight: FontWeight.w900,
               fontSize: 9,
-              color: foreground,
+              color: (foreground ?? AppColors.text),
             ),
           ),
         ),
@@ -6841,7 +7787,7 @@ Widget _resourceInfoRow(String label, String value, {bool mono = false}) {
           width: 76,
           child: Text(
             label,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 9,
               fontWeight: FontWeight.w900,
               letterSpacing: 0.5,
@@ -6865,28 +7811,156 @@ Widget _resourceInfoRow(String label, String value, {bool mono = false}) {
   );
 }
 
+/// Abre el visor de recursos (imagen ampliada o documento/PDF servido por el
+/// endpoint autenticado de adjuntos) fuera de [AllNotesScreen], por ejemplo
+/// desde la vista previa de un apunte de otro perfil.
+Future<void> showNoteResourceViewer(
+  BuildContext context,
+  Map<String, dynamic> resource,
+) => showNeobrutalistDialog<void>(
+  context: context,
+  dialog: _ResourceViewerDialog(resource: resource),
+);
+
 /// Visor de recurso: imagen grande (con fallback neobrutalista) o ficha técnica
 /// del documento con apertura real en el visor del sistema y copia a descargas.
-class _ResourceViewerDialog extends StatelessWidget {
+class _ResourceViewerDialog extends StatefulWidget {
   final Map<String, dynamic> resource;
-  const _ResourceViewerDialog({required this.resource});
 
+  /// Inyectables para pruebas: evitan abrir visores reales y permiten capturar
+  /// los bytes servidos por el endpoint autenticado.
+  final http.Client? client;
+  final Future<bool> Function(Uint8List, String, String)? openAttachment;
+  final Future<String?> Function(Uint8List, String, String)? saveAttachment;
+
+  const _ResourceViewerDialog({
+    required this.resource,
+    this.client,
+    this.openAttachment,
+    this.saveAttachment,
+  });
+
+  @override
+  State<_ResourceViewerDialog> createState() => _ResourceViewerDialogState();
+}
+
+class _ResourceViewerDialogState extends State<_ResourceViewerDialog> {
+  bool _busy = false;
+  AttachmentContent? _content;
+
+  Map<String, dynamic> get resource => widget.resource;
   bool get _isWindows => !kIsWeb && Platform.isWindows;
-
   String get _url => (resource['url'] ?? '') as String;
+
+  String? get _noteId {
+    final value = resource['note_id'];
+    return value is String && value.trim().isNotEmpty ? value.trim() : null;
+  }
+
+  String? get _attachmentId {
+    final value = resource['attachment_id'];
+    return value is String && value.trim().isNotEmpty ? value.trim() : null;
+  }
+
+  /// Un adjunto real siempre se sirve por el endpoint autenticado, aunque su
+  /// `file_url` sea un enlace de Drive (mock o real). Así el visor no depende
+  /// de que el archivo del autor siga compartido ni de que Drive exista.
+  bool get _hasAttachment => _noteId != null && _attachmentId != null;
+
+  Future<AttachmentContent> _loadContent() async {
+    final cached = _content;
+    if (cached != null) return cached;
+    final content = await fetchAttachmentContent(
+      baseUrl: notesBaseUrl,
+      noteId: _noteId!,
+      attachmentId: _attachmentId!,
+      fileName: (resource['name'] as String?) ?? 'adjunto',
+      client: widget.client,
+    );
+    if (mounted) setState(() => _content = content);
+    return content;
+  }
+
+  void _snack(BuildContext context, String message) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: AppColors.border,
+        content: Text(
+          message,
+          style: TextStyle(
+            color: AppColors.surface,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openAttachment(BuildContext context) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final content = await _loadContent();
+      final opener = widget.openAttachment ?? openAttachmentBytes;
+      final ok = await opener(
+        content.bytes,
+        content.fileName,
+        content.mimeType,
+      );
+      if (!context.mounted) return;
+      _snack(
+        context,
+        ok
+            ? 'Abriendo ${content.fileName}…'
+            : 'No se pudo abrir el documento. Usa DESCARGAR.',
+      );
+    } on AttachmentContentException catch (e) {
+      if (!context.mounted) return;
+      _snack(context, e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _saveAttachment(BuildContext context) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final content = await _loadContent();
+      final saver = widget.saveAttachment ?? saveAttachmentBytes;
+      final dest = await saver(
+        content.bytes,
+        content.fileName,
+        content.mimeType,
+      );
+      if (!context.mounted) return;
+      _snack(
+        context,
+        dest != null
+            ? 'Documento guardado en: $dest'
+            : 'No se pudo guardar el documento.',
+      );
+    } on AttachmentContentException catch (e) {
+      if (!context.mounted) return;
+      _snack(context, e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   Future<void> _openInSystemViewer(BuildContext context, String url) async {
     final ok = await _openResourceExternally(url);
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        backgroundColor: Colors.black,
+        backgroundColor: AppColors.border,
         content: Text(
           ok
               ? 'Abriendo ${resource['name']} en el visor del sistema…'
               : 'No se pudo abrir el archivo. Comprueba tu acceso e inténtalo de nuevo.',
-          style: const TextStyle(
-            color: Colors.white,
+          style: TextStyle(
+            color: AppColors.surface,
             fontWeight: FontWeight.w800,
           ),
         ),
@@ -6895,6 +7969,10 @@ class _ResourceViewerDialog extends StatelessWidget {
   }
 
   Future<void> _download(BuildContext context, _ResourceFileInfo info) async {
+    if (_hasAttachment) {
+      await _saveAttachment(context);
+      return;
+    }
     String message;
     if (info.localFile != null) {
       final dest = await _copyLocalResourceToDownloads(info.localFile!);
@@ -6912,11 +7990,11 @@ class _ResourceViewerDialog extends StatelessWidget {
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        backgroundColor: Colors.black,
+        backgroundColor: AppColors.border,
         content: Text(
           message,
-          style: const TextStyle(
-            color: Colors.white,
+          style: TextStyle(
+            color: AppColors.surface,
             fontWeight: FontWeight.w800,
           ),
         ),
@@ -6925,6 +8003,13 @@ class _ResourceViewerDialog extends StatelessWidget {
   }
 
   String get _primaryLabel {
+    if (_hasAttachment) {
+      if (resource['type'] == 'image') {
+        return _busy ? 'GUARDANDO…' : 'DESCARGAR';
+      }
+      if (_busy) return 'ABRIENDO…';
+      return resource['type'] == 'pdf' ? 'ABRIR PDF' : 'ABRIR DOCUMENTO';
+    }
     final info = _ResourceFileInfo.resolve(_url);
     return info.isRemote
         ? (isDriveViewerUrl(_url) ? 'ABRIR EN DRIVE' : 'ABRIR')
@@ -6936,6 +8021,14 @@ class _ResourceViewerDialog extends StatelessWidget {
   }
 
   void _onPrimary(BuildContext context) {
+    if (_hasAttachment) {
+      if (resource['type'] == 'image') {
+        _download(context, _ResourceFileInfo.resolve(_url));
+      } else {
+        _openAttachment(context);
+      }
+      return;
+    }
     final info = _ResourceFileInfo.resolve(_url);
     final isImage = resource['type'] == 'image';
     if (isImage && info.localFile != null) {
@@ -6958,7 +8051,7 @@ class _ResourceViewerDialog extends StatelessWidget {
           ? NeobrutalistButtonVariant.accent
           : NeobrutalistButtonVariant.info,
       closeOnConfirm: false,
-      onConfirm: () => _onPrimary(context),
+      onConfirm: _busy ? null : () => _onPrimary(context),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -6972,7 +8065,7 @@ class _ResourceViewerDialog extends StatelessWidget {
               decoration: BoxDecoration(
                 color: AppColors.surfaceLow,
                 border: Border.all(
-                  color: AppColors.border,
+                  color: AppColors.outline,
                   width: AppDimens.borderWidth,
                 ),
                 borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -6988,7 +8081,7 @@ class _ResourceViewerDialog extends StatelessWidget {
                   fallback: () => Container(
                     color: AppColors.surfaceLow,
                     alignment: Alignment.center,
-                    child: const Column(
+                    child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(
@@ -7013,7 +8106,7 @@ class _ResourceViewerDialog extends StatelessWidget {
                     return Container(
                       color: AppColors.bg,
                       alignment: Alignment.center,
-                      child: const CircularProgressIndicator(
+                      child: CircularProgressIndicator(
                         color: AppColors.border,
                       ),
                     );
@@ -7023,12 +8116,12 @@ class _ResourceViewerDialog extends StatelessWidget {
             )
           else
             _buildDocInfo(info),
-          if (!isImage && info.localFile != null) ...[
+          if (!isImage && (_hasAttachment || info.localFile != null)) ...[
             const SizedBox(height: 12),
             NeobrutalistButton(
-              label: 'DESCARGAR',
+              label: _busy ? 'GUARDANDO…' : 'DESCARGAR',
               variant: NeobrutalistButtonVariant.secondary,
-              onPressed: () => _download(context, info),
+              onPressed: _busy ? null : () => _download(context, info),
             ),
           ],
         ],
@@ -7040,30 +8133,37 @@ class _ResourceViewerDialog extends StatelessWidget {
   /// de disponibilidad, más el tipo de acceso (local verificado o remoto).
   Widget _buildDocInfo(_ResourceFileInfo info) {
     final isPdf = resource['type'] == 'pdf';
-    final sizeLabel = info.sizeBytes != null
+    final downloaded = _content;
+    final sizeLabel = downloaded != null
+        ? _formatFileSize(downloaded.bytes.length)
+        : info.sizeBytes != null
         ? _formatFileSize(info.sizeBytes!)
-        : info.isRemote
+        : (_hasAttachment || info.isRemote)
         ? 'Remoto'
         : '${resource['size'] ?? '—'}';
     final pathLabel =
         info.absolutePath ??
-        (info.isRemote ? _url : 'No se encontró el archivo en disco');
-    final badgeLabel = info.exists
+        (_hasAttachment
+            ? 'notes/$_noteId/attachments/$_attachmentId/content'
+            : (info.isRemote ? _url : 'No se encontró el archivo en disco'));
+    final badgeLabel = info.exists || downloaded != null
         ? 'DOCUMENTO LISTO'
+        : _hasAttachment
+        ? 'DOCUMENTO ADJUNTO'
         : info.isRemote
         ? 'DOCUMENTO REMOTO'
         : 'ARCHIVO NO ENCONTRADO';
-    final badgeColor = info.exists
+    final badgeColor = info.exists || downloaded != null
         ? AppColors.subjectMint
-        : info.isRemote
+        : (_hasAttachment || info.isRemote)
         ? AppColors.accentYellow
-        : const Color(0xFFFFD6D2);
+        : AppColors.errorTint;
 
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: AppColors.bg,
-        border: Border.all(color: AppColors.border, width: 2),
+        border: Border.all(color: AppColors.outline, width: 2),
         borderRadius: BorderRadius.circular(AppDimens.radius),
       ),
       child: Column(
@@ -7078,7 +8178,7 @@ class _ResourceViewerDialog extends StatelessWidget {
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: isPdf ? AppColors.errorDeep : AppColors.accentBlueDeep,
-                  border: Border.all(color: AppColors.border, width: 2),
+                  border: Border.all(color: AppColors.outline, width: 2),
                   borderRadius: BorderRadius.circular(AppDimens.radius),
                 ),
                 child: Icon(
@@ -7095,7 +8195,7 @@ class _ResourceViewerDialog extends StatelessWidget {
                   resource['name'] as String,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w900,
                     fontSize: 13,
                     color: AppColors.text,
@@ -7111,6 +8211,8 @@ class _ResourceViewerDialog extends StatelessWidget {
             'ORIGEN',
             info.exists
                 ? 'Archivo local verificado en disco'
+                : _hasAttachment
+                ? 'Adjunto de la nota vía endpoint autenticado'
                 : info.isRemote
                 ? 'URL remota (visor/descarga externa)'
                 : 'Sin archivo asociado en disco',
@@ -7120,13 +8222,13 @@ class _ResourceViewerDialog extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
               color: badgeColor,
-              border: Border.all(color: AppColors.border, width: 1.5),
+              border: Border.all(color: AppColors.outline, width: 1.5),
               borderRadius: BorderRadius.circular(AppDimens.radiusChip),
               boxShadow: AppShadows.badge,
             ),
             child: Text(
               badgeLabel,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 9,
                 fontWeight: FontWeight.w900,
                 letterSpacing: 0.5,
@@ -7140,807 +8242,21 @@ class _ResourceViewerDialog extends StatelessWidget {
   }
 }
 
-/// Cuerpo de nota renderizado como Markdown visual neobrutalista: encabezados,
-/// negrita/cursiva, listas con bullets sólidos, bloques de código, blockquotes,
-/// imágenes embebidas (archivo local o URL remota) y chips de PDF.
-class _NeobrutalistMarkdownBody extends StatelessWidget {
-  final String content;
-  final List<Map<String, dynamic>> resources;
-  final ValueChanged<Map<String, dynamic>> onOpenResource;
-  const _NeobrutalistMarkdownBody({
-    required this.content,
-    required this.onOpenResource,
-    this.resources = const [],
-  });
+@visibleForTesting
+Widget debugBuildNoteMarkdown(String content) =>
+    NoteMarkdownBody(content: content, onOpenResource: (_) {});
 
-  Map<String, dynamic>? _attachmentFor(String url) {
-    // Secuencia correcta: crear nota → UUID nota → subir → UUID REAL
-    // attachment → insertar `attachment:<uuid>` → PATCH → renderer resuelve
-    // UUID → endpoint autenticado content → Image.memory.
-    // Nunca usar ID temporal, timestamp, external_file_id, filename ni URL Drive.
-    final inlineId = attachmentIdFromUrl(url);
-    if (inlineId.isNotEmpty) {
-      for (final r in resources) {
-        if ((r['attachment_id'] as String?) == inlineId) return r;
-      }
-      return null;
-    }
-    final identity = resourceIdentity(url);
-    final matches = resources.where(
-      (r) =>
-          resourceIdentity(r['url'] as String? ?? '') == identity ||
-          urlMatchesAttachment(r, identity),
-    );
-    return matches.isEmpty ? null : matches.first;
-  }
-
-  static const TextStyle _paragraphStyle = TextStyle(
-    fontSize: 14,
-    height: 1.5,
-    color: AppColors.text,
-  );
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: _buildBlocks(content),
-    );
-  }
-
-  List<Widget> _buildBlocks(String content) {
-    final lines = content.split('\n');
-    final widgets = <Widget>[];
-    final paragraph = <String>[];
-
-    void flushParagraph() {
-      if (paragraph.isNotEmpty) {
-        widgets.add(_paragraph(paragraph.join(' ')));
-        paragraph.clear();
-      }
-    }
-
-    var i = 0;
-    while (i < lines.length) {
-      final raw = lines[i];
-      final line = raw.trim();
-
-      // Bloque de código delimitado por triple backtick.
-      if (line.startsWith('```')) {
-        flushParagraph();
-        final buf = <String>[];
-        i++;
-        while (i < lines.length && !lines[i].trimLeft().startsWith('```')) {
-          buf.add(lines[i]);
-          i++;
-        }
-        i++;
-        widgets.add(_codeBlock(buf.join('\n')));
-        continue;
-      }
-
-      // Encabezados # / ## / ### / #### (H1-H6; H4+ se muestran como
-      // subtítulo técnico compacto sin las almohadillas).
-      final heading = RegExp(r'^(#{1,6})\s+(.+)$').firstMatch(line);
-      if (heading != null) {
-        flushParagraph();
-        widgets.add(_heading(heading.group(1)!.length, heading.group(2)!));
-        i++;
-        continue;
-      }
-
-      // Cita / blockquote '> '.
-      if (line.startsWith('> ')) {
-        flushParagraph();
-        widgets.add(_blockquote(line.substring(2)));
-        i++;
-        continue;
-      }
-
-      // Imagen standalone ![alt](url).
-      final standaloneImg = RegExp(r'^!\[(.*?)\]\((.*?)\)$').firstMatch(line);
-      if (standaloneImg != null) {
-        flushParagraph();
-        widgets.add(
-          _blockImage(standaloneImg.group(1) ?? '', standaloneImg.group(2)!),
-        );
-        i++;
-        continue;
-      }
-
-      // Documento standalone [label](url.pdf).
-      final standaloneDoc = RegExp(
-        r'^\[(.*?)\]\((.*?)\)$',
-        caseSensitive: false,
-      ).firstMatch(line);
-      if (standaloneDoc != null && resourcesFromMarkdown(line).isNotEmpty) {
-        flushParagraph();
-        widgets.add(
-          _blockDoc(standaloneDoc.group(1) ?? '', standaloneDoc.group(2)!),
-        );
-        i++;
-        continue;
-      }
-
-      // Item de lista '- ', '* ' o '1. '.
-      final listItem = RegExp(r'^([-*]|\d+\.)\s+(.+)$').firstMatch(line);
-      if (listItem != null) {
-        flushParagraph();
-        final isOrdered = RegExp(r'^\d+\.$').hasMatch(listItem.group(1)!);
-        widgets.add(_listItem(listItem.group(2)!, isOrdered));
-        i++;
-        continue;
-      }
-
-      if (line.isEmpty) {
-        flushParagraph();
-        i++;
-        continue;
-      }
-
-      paragraph.add(line);
-      i++;
-    }
-    flushParagraph();
-    return widgets;
-  }
-
-  Widget _paragraph(String text) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Text.rich(
-        TextSpan(style: _paragraphStyle, children: _parseInlineSpans(text)),
-      ),
-    );
-  }
-
-  Widget _heading(int level, String text) {
-    // H4-H6: subtítulo técnico compacto con barra de acento y tipografía
-    // monoespaciada neobrutalista (sin mostrar '####').
-    if (level >= 4) {
-      return Padding(
-        padding: const EdgeInsets.only(top: 8, bottom: 6),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 4,
-              height: 14,
-              margin: const EdgeInsets.only(top: 2, right: 8),
-              color: level == 4 ? AppColors.accentBlueDeep : AppColors.muted,
-            ),
-            Expanded(
-              child: Text.rich(
-                TextSpan(
-                  style: const TextStyle(
-                    fontSize: 12.5,
-                    height: 1.3,
-                    fontWeight: FontWeight.w900,
-                    fontFamily: 'monospace',
-                    letterSpacing: 0.3,
-                    color: AppColors.text,
-                  ),
-                  children: _parseInlineSpans(text),
-                ),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-    final fontSize = level == 1
-        ? 20.0
-        : level == 2
-        ? 17.0
-        : 15.0;
-    final weight = level <= 2 ? FontWeight.w900 : FontWeight.w800;
-    return Padding(
-      padding: const EdgeInsets.only(top: 6, bottom: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text.rich(
-            TextSpan(
-              style: TextStyle(
-                fontSize: fontSize,
-                fontWeight: weight,
-                color: AppColors.text,
-              ),
-              children: _parseInlineSpans(text),
-            ),
-          ),
-          if (level == 1) ...[
-            const SizedBox(height: 4),
-            Container(height: 3, width: 48, color: AppColors.border),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _listItem(String text, bool ordered) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 10, bottom: 5),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 9,
-            height: 9,
-            margin: const EdgeInsets.only(top: 6, right: 9),
-            decoration: BoxDecoration(
-              color: ordered ? AppColors.border : AppColors.text,
-              borderRadius: BorderRadius.circular(ordered ? 5 : 2),
-            ),
-          ),
-          Expanded(
-            child: Text.rich(
-              TextSpan(
-                style: _paragraphStyle,
-                children: _parseInlineSpans(text),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _blockquote(String text) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: const BoxDecoration(
-        color: Color(0xFFF5F0E8),
-        border: Border(
-          left: BorderSide(color: AppColors.border, width: 3),
-          top: BorderSide(color: AppColors.border, width: 1),
-          right: BorderSide(color: AppColors.border, width: 1),
-          bottom: BorderSide(color: AppColors.border, width: 1),
-        ),
-      ),
-      child: Text.rich(
-        TextSpan(
-          style: _paragraphStyle.copyWith(fontStyle: FontStyle.italic),
-          children: _parseInlineSpans(text),
-        ),
-      ),
-    );
-  }
-
-  Widget _blockImage(String alt, String url) {
-    final resolved = _attachmentFor(url);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Align(
-        alignment: Alignment.center,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(
-            minHeight: 250,
-            maxHeight: 520,
-            maxWidth: 850,
-          ),
-          child: MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: GestureDetector(
-              onTap: () => onOpenResource({
-                'type': 'image',
-                'name': alt.isEmpty ? url : alt,
-                'url': url,
-                'size': 'Adjunto',
-              }),
-              child: Container(
-                clipBehavior: Clip.hardEdge,
-                decoration: BoxDecoration(
-                  color: AppColors.surfaceLow,
-                  border: Border.all(color: AppColors.border, width: 2),
-                  borderRadius: BorderRadius.circular(AppDimens.radius),
-                  boxShadow: AppShadows.badge,
-                ),
-                child: Stack(
-                  children: [
-                    _buildResourceImage(
-                      url: url,
-                      resource: resolved,
-                      fit: BoxFit.contain,
-                      debugLabel: 'INLINE',
-                      fallback: () => Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        color: AppColors.surfaceLow,
-                        alignment: Alignment.center,
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.broken_image_rounded,
-                              size: 16,
-                              color: AppColors.muted,
-                            ),
-                            SizedBox(width: 6),
-                            Text(
-                              'IMAGEN NO DISPONIBLE',
-                              style: TextStyle(
-                                fontSize: 9,
-                                fontWeight: FontWeight.w900,
-                                color: AppColors.muted,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      loadingBuilder: (context, child, progress) {
-                        if (progress == null) return child;
-                        return Container(
-                          width: 200,
-                          height: 64,
-                          color: AppColors.surfaceLow,
-                          alignment: Alignment.center,
-                          child: const SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2.5,
-                              color: AppColors.border,
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                    Positioned(
-                      bottom: 6,
-                      right: 6,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 7,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: AppColors.accentYellow,
-                          border: Border.all(
-                            color: AppColors.border,
-                            width: 1.5,
-                          ),
-                          borderRadius: BorderRadius.circular(
-                            AppDimens.radiusChip,
-                          ),
-                          boxShadow: AppShadows.badge,
-                        ),
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.zoom_in_rounded,
-                              size: 13,
-                              color: AppColors.text,
-                            ),
-                            SizedBox(width: 4),
-                            Text(
-                              'AMPLIAR',
-                              style: TextStyle(
-                                fontSize: 9,
-                                fontWeight: FontWeight.w900,
-                                color: AppColors.text,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    if (alt.isNotEmpty)
-                      Positioned(
-                        top: 6,
-                        left: 6,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 7,
-                            vertical: 3,
-                          ),
-                          decoration: BoxDecoration(
-                            color: AppColors.surface,
-                            border: Border.all(
-                              color: AppColors.border,
-                              width: 1.5,
-                            ),
-                            borderRadius: BorderRadius.circular(
-                              AppDimens.radiusChip,
-                            ),
-                          ),
-                          child: Text(
-                            alt,
-                            style: const TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.w900,
-                              color: AppColors.text,
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _blockDoc(String label, String url) {
-    final resource = resourcesFromMarkdown('[$label]($url)').single;
-    final name = resource['name'] as String;
-    final isPdf = resource['type'] == 'pdf';
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: GestureDetector(
-          onTap: () => onOpenResource(resource),
-          child: Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: AppColors.surface,
-              border: Border.all(color: AppColors.border, width: 2),
-              borderRadius: BorderRadius.circular(AppDimens.radius),
-              boxShadow: AppShadows.badge,
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: AppColors.errorDeep,
-                    border: Border.all(color: AppColors.border, width: 1.5),
-                    borderRadius: BorderRadius.circular(AppDimens.radius),
-                  ),
-                  child: Icon(
-                    isPdf
-                        ? Icons.picture_as_pdf_rounded
-                        : Icons.description_rounded,
-                    size: 18,
-                    color: Colors.white,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w900,
-                          color: AppColors.text,
-                        ),
-                      ),
-                      const Text(
-                        'Documento adjunto · Toca para abrir',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.muted,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 5,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppColors.accentYellow,
-                    border: Border.all(color: AppColors.border, width: 1.5),
-                    borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-                    boxShadow: AppShadows.badge,
-                  ),
-                  child: const Text(
-                    'VER',
-                    style: TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.w900,
-                      color: AppColors.text,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _codeBlock(String code) {
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 8),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF4F4F0),
-        border: Border.all(color: AppColors.border, width: 2),
-        borderRadius: BorderRadius.circular(AppDimens.radius),
-        boxShadow: AppShadows.badge,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: const BoxDecoration(
-              color: AppColors.surfaceLow,
-              border: Border(
-                bottom: BorderSide(color: AppColors.border, width: 1.5),
-              ),
-            ),
-            child: Row(
-              children: [
-                const Icon(
-                  Icons.terminal_rounded,
-                  size: 14,
-                  color: AppColors.text,
-                ),
-                const SizedBox(width: 6),
-                const Text(
-                  'CÓDIGO',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.text,
-                    letterSpacing: 0.5,
-                  ),
-                ),
-                const Spacer(),
-                Builder(
-                  builder: (ctx) => InkWell(
-                    onTap: () {
-                      Clipboard.setData(ClipboardData(text: code));
-                      ScaffoldMessenger.of(ctx).showSnackBar(
-                        const SnackBar(
-                          backgroundColor: Colors.black,
-                          duration: Duration(seconds: 1),
-                          content: Text(
-                            'Código copiado al portapapeles',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.copy_rounded,
-                          size: 12,
-                          color: AppColors.text,
-                        ),
-                        SizedBox(width: 4),
-                        Text(
-                          'COPIAR',
-                          style: TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.w900,
-                            color: AppColors.text,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(10),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: SelectableText(
-                code,
-                style: const TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 12,
-                  height: 1.4,
-                  color: AppColors.text,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Divide una línea en spans con estilos inline: **negrita**, *cursiva*,
-  /// `código`, imágenes `![alt](ruta)` y chips de enlace `[label](archivo.pdf)`.
-  List<InlineSpan> _parseInlineSpans(String text) {
-    final spans = <InlineSpan>[];
-    final re = RegExp(
-      r'(\*\*.+?\*\*|\*[^*\n]+?\*|!\[[^\]]*\]\([^)\s]+\)|\[[^\]]+\]\([^)\s]+\)|`[^`\n]+`)',
-      caseSensitive: false,
-    );
-    var last = 0;
-    for (final m in re.allMatches(text)) {
-      if (m.start > last) {
-        spans.add(TextSpan(text: text.substring(last, m.start)));
-      }
-      final token = m.group(0)!;
-      if (token.startsWith('**')) {
-        spans.add(
-          TextSpan(
-            text: token.substring(2, token.length - 2),
-            style: const TextStyle(
-              fontWeight: FontWeight.w900,
-              color: AppColors.text,
-            ),
-          ),
-        );
-      } else if (token.startsWith('*')) {
-        spans.add(
-          TextSpan(
-            text: token.substring(1, token.length - 1),
-            style: const TextStyle(
-              fontStyle: FontStyle.italic,
-              color: AppColors.text,
-            ),
-          ),
-        );
-      } else if (token.startsWith('`')) {
-        spans.add(
-          TextSpan(
-            text: token.substring(1, token.length - 1),
-            style: const TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 12,
-              backgroundColor: Color(0xFFF4F4F0),
-              color: AppColors.text,
-            ),
-          ),
-        );
-      } else if (token.startsWith('![')) {
-        final img = RegExp(r'!\[([^\]]*)\]\(([^)\s]+)\)').firstMatch(token);
-        if (img != null) {
-          spans.add(
-            WidgetSpan(
-              alignment: PlaceholderAlignment.middle,
-              child: _inlineImage(img.group(1) ?? '', img.group(2)!),
-            ),
-          );
-        }
-      } else if (token.startsWith('[')) {
-        final link = RegExp(r'\[([^\]]+)\]\(([^)\s]+)\)').firstMatch(token);
-        if (link != null && resourcesFromMarkdown(token).isNotEmpty) {
-          spans.add(
-            WidgetSpan(
-              alignment: PlaceholderAlignment.middle,
-              child: _pdfChip(link.group(1)!, link.group(2)!),
-            ),
-          );
-        } else {
-          spans.add(TextSpan(text: token));
-        }
-      }
-      last = m.end;
-    }
-    if (last < text.length) {
-      spans.add(TextSpan(text: text.substring(last)));
-    }
-    return spans;
-  }
-
-  Widget _inlineImage(String alt, String url) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: () => onOpenResource({
-          'type': 'image',
-          'name': alt.isEmpty ? url : alt,
-          'url': url,
-          'size': 'Adjunto',
-        }),
-        child: Container(
-          width: 200,
-          height: 132,
-          margin: const EdgeInsets.symmetric(vertical: 4),
-          clipBehavior: Clip.hardEdge,
-          decoration: BoxDecoration(
-            color: AppColors.surfaceLow,
-            border: Border.all(
-              color: AppColors.border,
-              width: AppDimens.borderWidth,
-            ),
-            borderRadius: BorderRadius.circular(AppDimens.radius),
-            boxShadow: AppShadows.badge,
-          ),
-          child: _buildResourceImage(
-            url: url,
-            resource: _attachmentFor(url),
-            fit: BoxFit.contain,
-            debugLabel: 'INLINE',
-            fallback: () => const Center(
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.broken_image_rounded,
-                    size: 16,
-                    color: AppColors.muted,
-                  ),
-                  SizedBox(width: 4),
-                  Text(
-                    'IMAGEN NO DISPONIBLE',
-                    style: TextStyle(
-                      fontSize: 8,
-                      fontWeight: FontWeight.w900,
-                      color: AppColors.muted,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _pdfChip(String label, String url) {
-    final resource = resourcesFromMarkdown('[$label]($url)').single;
-    final name = resource['name'] as String;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: () => onOpenResource(resource),
-        child: Container(
-          margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-          decoration: BoxDecoration(
-            color: AppColors.accentYellow,
-            border: Border.all(color: AppColors.border, width: 1.5),
-            borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-            boxShadow: AppShadows.badge,
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                resource['type'] == 'pdf'
-                    ? Icons.picture_as_pdf_rounded
-                    : Icons.description_rounded,
-                size: 14,
-                color: AppColors.text,
-              ),
-              const SizedBox(width: 5),
-              Flexible(
-                child: Text(
-                  name,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.text,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 4),
-              const Icon(
-                Icons.open_in_new_rounded,
-                size: 12,
-                color: AppColors.text,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
+/// Visor de recursos para pruebas: permite inyectar el cliente HTTP del
+/// endpoint autenticado y capturar los bytes entregados al abridor/descarga.
+@visibleForTesting
+Widget debugBuildResourceViewer(
+  Map<String, dynamic> resource, {
+  http.Client? client,
+  Future<bool> Function(Uint8List, String, String)? openAttachment,
+  Future<String?> Function(Uint8List, String, String)? saveAttachment,
+}) => _ResourceViewerDialog(
+  resource: resource,
+  client: client,
+  openAttachment: openAttachment,
+  saveAttachment: saveAttachment,
+);

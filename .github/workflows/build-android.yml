@@ -1,0 +1,82 @@
+name: build-android
+
+# Compila el front Flutter para Android (.apk). Los defaults de
+# lib/core/services/api_config.dart apuntan al cluster Pillán; para otro
+# backend usar el input `api_origin` (dart-define).
+# Artefacto: SigmaAcademy-<ver>.apk.
+# Con un tag `v*` adjunta el APK a la Release de GitHub.
+on:
+  push:
+    branches: [Development]
+    paths: ["front/**", ".github/workflows/build-android.yml"]
+    tags: ["v*"]
+  pull_request:
+    paths: ["front/android/**", ".github/workflows/build-android.yml"]
+  workflow_dispatch:
+    inputs:
+      api_origin:
+        description: "Origen del backend (ej: https://ti3-brojas.dev.censei.cl). Vacío = defaults del front."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: front
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.4"
+          channel: stable
+          cache: true
+
+      - name: Versión de la app
+        id: ver
+        run: |
+          v=$(grep -E '^version:\s*[0-9]+\.[0-9]+\.[0-9]+' pubspec.yaml | sed -E 's/^version:\s*([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - run: flutter pub get
+      - run: flutter analyze --no-fatal-infos --no-fatal-warnings
+      - run: flutter test
+
+      - name: Build Android APK (release)
+        run: |
+          defs=()
+          if [ -n "${{ inputs.api_origin }}" ]; then
+            o="${{ inputs.api_origin }}"
+            o="${o%/}"
+            defs+=(
+              "--dart-define=API_BASE_URL=$o/api-auth"
+              "--dart-define=NOTES_BASE_URL=$o/api-notes"
+              "--dart-define=SOCIAL_BASE_URL=$o/api-social"
+              "--dart-define=ACADEMIC_BASE_URL=$o/api-academic"
+            )
+          fi
+          flutter build apk --release --android-skip-build-dependency-validation "${defs[@]}"
+          cp build/app/outputs/flutter-apk/app-release.apk "SigmaAcademy-${{ steps.ver.outputs.version }}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: front/SigmaAcademy-*.apk
+          if-no-files-found: error
+
+      - name: Adjuntar a la Release (tags v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: front/SigmaAcademy-*.apk

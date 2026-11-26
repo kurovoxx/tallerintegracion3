@@ -23,6 +23,7 @@ type scheduleRequest struct {
 	StartTime string  `json:"start_time"`
 	EndTime   string  `json:"end_time"`
 	Modality  *string `json:"modality"`
+	Room      *string `json:"room"`
 }
 
 // Create maneja POST /subjects/:id/schedules → 201 {id}.
@@ -44,7 +45,7 @@ func (h *SchedulesHandler) Create(c *gin.Context) {
 		logAcademicOp(c, "CreateSchedule", http.StatusBadRequest, userID, started, "code="+utils.ErrInvalidDayOfWeek)
 		return
 	}
-	s, err := h.svc.Create(c.Request.Context(), userID, c.Param("id"), *req.DayOfWeek, req.StartTime, req.EndTime, req.Modality)
+	s, err := h.svc.Create(c.Request.Context(), userID, c.Param("id"), *req.DayOfWeek, req.StartTime, req.EndTime, req.Modality, req.Room)
 	if err != nil {
 		respondServiceError(c, "CreateSchedule", userID, started, err)
 		return

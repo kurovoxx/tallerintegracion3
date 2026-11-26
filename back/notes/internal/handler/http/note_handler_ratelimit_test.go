@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -52,16 +53,21 @@ func TestHandlerCopyRateLimitReturns429(t *testing.T) {
 	copier := uuid.NewString()
 	at := genToken(author, "student")
 	ct := genToken(copier, "student")
-	noteID := createPublicNoteForRateLimit(t, r, at, "RateLimit")
 
+	// Cada copia usa un apunte origen distinto: el mismo par (usuario, origen)
+	// solo se puede copiar una vez (409 already_copied), y aquí lo que se mide
+	// es el rate limit, no la deduplicación.
 	for i := 0; i < copyRateLimitMax; i++ {
+		noteID := createPublicNoteForRateLimit(t, r, at, fmt.Sprintf("RateLimit-%d", i))
 		w := copyOnce(r, noteID, ct)
 		if w.Code != http.StatusCreated {
 			t.Fatalf("copy %d/%d esperaba 201 got %d body %s", i+1, copyRateLimitMax, w.Code, w.Body.String())
 		}
 	}
 
-	w := copyOnce(r, noteID, ct)
+	// La petición 11 usa un origen aún no copiado: el único motivo de rechazo
+	// posible es el límite por usuario.
+	w := copyOnce(r, createPublicNoteForRateLimit(t, r, at, "RateLimit-extra"), ct)
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("petición %d esperaba 429 got %d body %s", copyRateLimitMax+1, w.Code, w.Body.String())
 	}
@@ -83,7 +89,7 @@ func TestHandlerCopyRateLimitReturns429(t *testing.T) {
 
 	// El límite es por usuario: otro usuario puede clonar sin problema.
 	otherTok := genToken(uuid.NewString(), "student")
-	w2 := copyOnce(r, noteID, otherTok)
+	w2 := copyOnce(r, createPublicNoteForRateLimit(t, r, at, "RateLimit-other"), otherTok)
 	if w2.Code != http.StatusCreated {
 		t.Fatalf("otro usuario no debe estar limitado, got %d body %s", w2.Code, w2.Body.String())
 	}

@@ -24,6 +24,83 @@ type MemoryNoteStore struct {
 	// idempotencyKeys replica notes.idempotency_keys para tests sin PG:
 	// clave userID:operation:idempotencyKey.
 	idempotencyKeys map[string]*model.IdempotencyKey
+	// tombstones replica notes.note_tombstones (trigger AFTER DELETE en PG).
+	tombstones map[string]*model.NoteTombstone
+}
+
+// recordTombstoneLocked replica el trigger trg_notes_record_tombstone. Debe
+// llamarse con m.mu tomado y antes de borrar la nota del mapa.
+func (m *MemoryNoteStore) recordTombstoneLocked(n *model.Note) {
+	if n == nil {
+		return
+	}
+	if m.tombstones == nil {
+		m.tombstones = make(map[string]*model.NoteTombstone)
+	}
+	m.tombstones[n.ID] = &model.NoteTombstone{
+		NoteID: n.ID, OwnerUserID: n.UserID, Title: n.Title, SubjectID: n.SubjectID,
+		Visibility: n.Visibility, DeletedAt: time.Now().UTC(),
+	}
+}
+
+// ListPublic replica NoteRepository.ListPublic: públicos de otros usuarios
+// con archivo en Drive, más recientes primero, búsqueda literal en el título
+// (sin distinguir mayúsculas) y filtro opcional por materia.
+func (m *MemoryNoteStore) ListPublic(ctx context.Context, excludeUserID, query, subjectID, cursor string, limit int) ([]*model.Note, string, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	q := strings.ToLower(strings.TrimSpace(query))
+	m.mu.RLock()
+	out := make([]*model.Note, 0)
+	for _, n := range m.notes {
+		if n.Visibility != "public" || n.UserID == excludeUserID || n.ExternalFileID == nil {
+			continue
+		}
+		if q != "" && !strings.Contains(strings.ToLower(n.Title), q) {
+			continue
+		}
+		if subjectID != "" && (n.SubjectID == nil || *n.SubjectID != subjectID) {
+			continue
+		}
+		cop := *n
+		out = append(out, &cop)
+	}
+	m.mu.RUnlock()
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if cursor != "" {
+		start := len(out)
+		for i, n := range out {
+			if n.ID == cursor {
+				start = i + 1
+				break
+			}
+		}
+		out = out[start:]
+	}
+	next := ""
+	if len(out) > limit {
+		out = out[:limit]
+		next = out[limit-1].ID
+	}
+	return out, next, nil
+}
+
+// GetTombstone devuelve la lápida de un apunte borrado (nil si no hay).
+func (m *MemoryNoteStore) GetTombstone(ctx context.Context, noteID string) (*model.NoteTombstone, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	t, ok := m.tombstones[noteID]
+	if !ok {
+		return nil, nil
+	}
+	cop := *t
+	return &cop, nil
 }
 
 func NewMemoryNoteStore() *MemoryNoteStore {
@@ -45,6 +122,13 @@ func (m *MemoryNoteStore) Create(ctx context.Context, noteID string, userID stri
 	if _, exists := m.notes[noteID]; exists {
 		return nil, fmt.Errorf("create note: duplicate_note_id: %s", noteID)
 	}
+	if forkedFrom != nil && strings.TrimSpace(*forkedFrom) != "" {
+		for _, existing := range m.notes {
+			if existing.UserID == userID && existing.ForkedFromNoteID != nil && *existing.ForkedFromNoteID == *forkedFrom {
+				return nil, repository.ErrAlreadyCopied
+			}
+		}
+	}
 	n := &model.Note{
 		ID: noteID, UserID: userID, SubjectID: subjectID, Title: title,
 		ExternalFileID: externalFileID, Visibility: visibility, LikesCount: 0,
@@ -64,6 +148,20 @@ func (m *MemoryNoteStore) GetByID(ctx context.Context, id string) (*model.Note, 
 	}
 	cop := *n
 	return &cop, nil
+}
+
+// GetByUserAndForkedFrom replica el índice único parcial
+// uq_notes_user_forked_from: como máximo un clon vivo por usuario y origen.
+func (m *MemoryNoteStore) GetByUserAndForkedFrom(ctx context.Context, userID, forkedFromNoteID string) (*model.Note, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, n := range m.notes {
+		if n.UserID == userID && n.ForkedFromNoteID != nil && *n.ForkedFromNoteID == forkedFromNoteID {
+			cop := *n
+			return &cop, nil
+		}
+	}
+	return nil, nil
 }
 func (m *MemoryNoteStore) ListByUser(ctx context.Context, userID, cursor string, limit int) ([]*model.Note, string, error) {
 	m.mu.RLock()
@@ -106,6 +204,62 @@ func (m *MemoryNoteStore) ListByUser(ctx context.Context, userID, cursor string,
 	return list, next, nil
 }
 
+// ListPublicByUser replica la semántica de la consulta PG: solo notas
+// visibility='public' del autor, con external_file_id no nulo, orden
+// created_at DESC, id DESC y cursor keyset que debe pertenecer a una nota
+// pública con archivo del mismo autor. Un cursor inexistente, privado, sin
+// archivo o de otro autor devuelve lista vacía (fail-closed) en lugar de
+// reiniciar la paginación desde el principio.
+func (m *MemoryNoteStore) ListPublicByUser(ctx context.Context, userID, cursor string, limit int) ([]*model.PublicNote, string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	list := make([]*model.PublicNote, 0)
+	for _, n := range m.notes {
+		if n.UserID != userID || n.Visibility != "public" || n.ExternalFileID == nil {
+			continue
+		}
+		list = append(list, &model.PublicNote{
+			ID:         n.ID,
+			UserID:     n.UserID,
+			SubjectID:  n.SubjectID,
+			Title:      n.Title,
+			Visibility: n.Visibility,
+			LikesCount: n.LikesCount,
+			Version:    n.Version,
+			CreatedAt:  n.CreatedAt,
+			UpdatedAt:  n.UpdatedAt,
+		})
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].CreatedAt.Equal(list[j].CreatedAt) {
+			return list[i].ID > list[j].ID
+		}
+		return list[i].CreatedAt.After(list[j].CreatedAt)
+	})
+	if cursor != "" {
+		idx := -1
+		for i, n := range list {
+			if n.ID == cursor {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return []*model.PublicNote{}, "", nil
+		}
+		list = list[idx+1:]
+	}
+	var next string
+	if len(list) > limit {
+		next = list[limit-1].ID
+		list = list[:limit]
+	}
+	return list, next, nil
+}
+
 // Update replica el versionado optimista de PG: si la versión esperada no
 // coincide con la actual devuelve repository.ErrConflict (la nota existe y otro
 // writer ganó); si la nota no existe devuelve (nil, nil). En caso de éxito
@@ -134,9 +288,11 @@ func (m *MemoryNoteStore) Update(ctx context.Context, id string, title *string, 
 func (m *MemoryNoteStore) Delete(ctx context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.notes[id]; !ok {
+	n, ok := m.notes[id]
+	if !ok {
 		return fmt.Errorf("not_found")
 	}
+	m.recordTombstoneLocked(n)
 	delete(m.notes, id)
 	return nil
 }
@@ -346,6 +502,42 @@ func (m *MemoryAttachmentStore) GetByID(ctx context.Context, id string) (*model.
 	cop := *a
 	return &cop, nil
 }
+
+// CreateCopy replica la idempotencia de uq_note_attachments_copy_source: un
+// reintento con el mismo par (noteID, sourceAttachmentID) devuelve la fila ya
+// creada en lugar de duplicarla.
+func (m *MemoryAttachmentStore) CreateCopy(ctx context.Context, noteID, externalFileID, fileURL, fileType string, fileName *string, fileSize *int, isInline bool, copiedFromAttachmentID string) (*model.Attachment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, existing := range m.atts {
+		if existing.NoteID == noteID && existing.CopiedFromAttachmentID != nil && *existing.CopiedFromAttachmentID == copiedFromAttachmentID {
+			cop := *existing
+			return &cop, nil
+		}
+	}
+	id := uuid.NewString()
+	source := copiedFromAttachmentID
+	a := &model.Attachment{
+		ID: id, NoteID: noteID, ExternalFileID: externalFileID, FileURL: fileURL, FileType: fileType,
+		FileName: fileName, FileSizeBytes: fileSize, IsInline: isInline,
+		CopiedFromAttachmentID: &source, CreatedAt: time.Now().UTC(),
+	}
+	m.atts[id] = a
+	cop := *a
+	return &cop, nil
+}
+
+func (m *MemoryAttachmentStore) GetByNoteAndSource(ctx context.Context, noteID, sourceAttachmentID string) (*model.Attachment, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, a := range m.atts {
+		if a.NoteID == noteID && a.CopiedFromAttachmentID != nil && *a.CopiedFromAttachmentID == sourceAttachmentID {
+			cop := *a
+			return &cop, nil
+		}
+	}
+	return nil, nil
+}
 func (m *MemoryAttachmentStore) ListByNote(ctx context.Context, noteID string) ([]*model.Attachment, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -411,6 +603,67 @@ func (m *MemorySavedStore) Delete(ctx context.Context, userID, noteID string) er
 	return nil
 }
 
+// ListByUser devuelve los guardados del usuario, más recientes primero.
+func (m *MemorySavedStore) ListByUser(ctx context.Context, userID string) ([]*model.SavedNote, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]*model.SavedNote, 0)
+	for _, s := range m.saved {
+		if s.UserID == userID {
+			cop := *s
+			out = append(out, &cop)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].SavedAt.Equal(out[j].SavedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].SavedAt.After(out[j].SavedAt)
+	})
+	return out, nil
+}
+
+// CountByNote devuelve cuántos usuarios guardaron el apunte.
+func (m *MemorySavedStore) CountByNote(ctx context.Context, noteID string) (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	n := 0
+	for _, s := range m.saved {
+		if s.NoteID == noteID {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// CountByNotes replica la consulta batch de PG en memoria.
+func (m *MemorySavedStore) CountByNotes(ctx context.Context, noteIDs []string) (map[string]int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	wanted := make(map[string]bool, len(noteIDs))
+	for _, id := range noteIDs {
+		wanted[id] = true
+	}
+	out := make(map[string]int, len(noteIDs))
+	for _, s := range m.saved {
+		if wanted[s.NoteID] {
+			out[s.NoteID]++
+		}
+	}
+	return out, nil
+}
+
+// ExistsByNotes replica la consulta batch de PG en memoria.
+func (m *MemorySavedStore) ExistsByNotes(ctx context.Context, userID string, noteIDs []string) (map[string]bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make(map[string]bool, len(noteIDs))
+	for _, id := range noteIDs {
+		_, out[id] = m.saved[keySaved(userID, id)]
+	}
+	return out, nil
+}
+
 // Like memory
 type MemoryLikeStore struct {
 	mu    sync.Mutex
@@ -462,6 +715,17 @@ func (m *MemoryLikeStore) Exists(ctx context.Context, noteID, userID string) (bo
 	defer m.mu.Unlock()
 	_, ok := m.likes[keyLike(noteID, userID)]
 	return ok, nil
+}
+
+// ExistsByNotes replica la consulta batch de PG en memoria.
+func (m *MemoryLikeStore) ExistsByNotes(ctx context.Context, userID string, noteIDs []string) (map[string]bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]bool, len(noteIDs))
+	for _, id := range noteIDs {
+		_, out[id] = m.likes[keyLike(id, userID)]
+	}
+	return out, nil
 }
 
 // LikeAtomic inserta like y incrementa likes_count de forma atómica en memoria (mutex exclusivo).
@@ -573,6 +837,12 @@ func cloneManagedPermission(p *model.DriveManagedPermission) *model.DriveManaged
 func (m *MemorySharedStore) Create(ctx context.Context, noteID, groupID string, isAdminNote bool, accessMode string, followersSnapshot int) (*model.SharedNote, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Replica UNIQUE (note_id, group_id) de notes.shared_notes.
+	for _, existing := range m.shared {
+		if existing.NoteID == noteID && existing.GroupID == groupID {
+			return nil, repository.ErrAlreadyShared
+		}
+	}
 	id := uuid.NewString()
 	s := &model.SharedNote{
 		ID: id, NoteID: noteID, GroupID: groupID, IsAdminNote: isAdminNote,
@@ -871,6 +1141,7 @@ type MemorySocialResolver struct {
 	mu        sync.RWMutex
 	members   map[string]bool // key userID:groupID
 	admins    map[string]bool
+	sharers   map[string]bool // miembros con can_share_notes delegado
 	followers map[string]int
 }
 
@@ -878,6 +1149,7 @@ func NewMemorySocialResolver() *MemorySocialResolver {
 	return &MemorySocialResolver{
 		members:   make(map[string]bool),
 		admins:    make(map[string]bool),
+		sharers:   make(map[string]bool),
 		followers: make(map[string]int),
 	}
 }
@@ -891,6 +1163,17 @@ func (r *MemorySocialResolver) AddAdmin(userID, groupID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.admins[userID+":"+groupID] = true
+}
+func (r *MemorySocialResolver) AddSharer(userID, groupID string) {
+	r.AddMember(userID, groupID)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sharers[userID+":"+groupID] = true
+}
+func (r *MemorySocialResolver) CanShareNotes(ctx context.Context, userID, groupID string) (bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.sharers[userID+":"+groupID], nil
 }
 func (r *MemorySocialResolver) SetFollowers(userID string, cnt int) {
 	r.mu.Lock()
@@ -1110,6 +1393,7 @@ func (m *MemoryNoteStore) DeleteWithDriveCleanup(ctx context.Context, noteID, re
 			delete(m.attachments.atts, att.ID)
 		}
 	}
+	m.recordTombstoneLocked(note)
 	delete(m.notes, noteID)
 	return result, nil
 }

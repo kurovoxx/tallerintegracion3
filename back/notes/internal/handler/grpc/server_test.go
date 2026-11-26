@@ -344,7 +344,9 @@ func TestDeleteNoteByStrangerIsNotFound(t *testing.T) {
 
 func TestShareNoteLinkAndRestrictedThenUnshare(t *testing.T) {
 	h := newHarness(t)
-	owner, group := uuid.NewString(), uuid.NewString()
+	// Un vínculo por (nota, grupo): link y restricted van a grupos distintos.
+	owner, linkGroup, group := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	h.social.AddAdmin(owner, linkGroup)
 	h.social.AddAdmin(owner, group)
 	h.md.SetEmails(group, []string{"ana@example.com", "ben@example.com"})
 	ctx := h.userCtx(t, owner)
@@ -355,7 +357,7 @@ func TestShareNoteLinkAndRestrictedThenUnshare(t *testing.T) {
 		t.Fatal(err)
 	}
 	link, err := h.client.ShareNote(ctx, &notesv1.ShareNoteRequest{
-		NoteId: created.GetNoteId(), GroupId: group, AccessMode: "link",
+		NoteId: created.GetNoteId(), GroupId: linkGroup, AccessMode: "link",
 	})
 	if err != nil || link.GetSharedNoteId() == "" {
 		t.Fatalf("share link: %v %v", link, err)
@@ -366,6 +368,11 @@ func TestShareNoteLinkAndRestrictedThenUnshare(t *testing.T) {
 	if err != nil || restricted.GetSharedNoteId() == "" {
 		t.Fatalf("share restricted: %v %v", restricted, err)
 	}
+	// Repetir el share en el mismo grupo es AlreadyExists (409 en HTTP).
+	_, err = h.client.ShareNote(ctx, &notesv1.ShareNoteRequest{
+		NoteId: created.GetNoteId(), GroupId: group, AccessMode: "link",
+	})
+	wantCode(t, err, codes.AlreadyExists)
 	if len(h.drive.GrantCalls) != 2 {
 		t.Fatalf("restricted debe otorgar a los miembros: %v", h.drive.GrantCalls)
 	}

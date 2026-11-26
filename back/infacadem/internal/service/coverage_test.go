@@ -19,11 +19,12 @@ var errBoom = errors.New("boom")
 
 type errCurricula struct {
 	*fakeCurricula
-	listErr   error
-	getErr    error
-	updateErr error
-	deleteErr error
-	createErr error
+	listErr                error
+	getErr                 error
+	updateErr              error
+	updateSemesterCountErr error
+	deleteErr              error
+	createErr              error
 }
 
 func (f *errCurricula) ListByUser(ctx context.Context, userID string) ([]model.Curriculum, error) {
@@ -45,6 +46,13 @@ func (f *errCurricula) UpdateName(ctx context.Context, id, userID, name string) 
 		return nil, f.updateErr
 	}
 	return f.fakeCurricula.UpdateName(ctx, id, userID, name)
+}
+
+func (f *errCurricula) UpdateSemesterCount(ctx context.Context, id, userID string, count int) (*model.Curriculum, error) {
+	if f.updateSemesterCountErr != nil {
+		return nil, f.updateSemesterCountErr
+	}
+	return f.fakeCurricula.UpdateSemesterCount(ctx, id, userID, count)
 }
 
 func (f *errCurricula) Delete(ctx context.Context, id, userID string) (bool, error) {
@@ -120,11 +128,11 @@ func (f *errSchedules) Delete(ctx context.Context, id, u string) (bool, error) {
 	return f.fakeSchedules.Delete(ctx, id, u)
 }
 
-func (f *errSchedules) Create(ctx context.Context, u, s string, d int, st, en time.Time, mod *string) (*model.Schedule, error) {
+func (f *errSchedules) Create(ctx context.Context, u, s string, d int, st, en time.Time, mod, room *string) (*model.Schedule, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	return f.fakeSchedules.Create(ctx, u, s, d, st, en, mod)
+	return f.fakeSchedules.Create(ctx, u, s, d, st, en, mod, room)
 }
 
 type errGrades struct {
@@ -424,12 +432,12 @@ func TestCoverage_Schedule_Errores(t *testing.T) {
 	} else {
 		mustCode(t, err, "invalid_uuid")
 	}
-	if _, err := svcOK.Create(ctx, "", mat.ID, 1, "08:00", "09:00", nil); err == nil {
+	if _, err := svcOK.Create(ctx, "", mat.ID, 1, "08:00", "09:00", nil, nil); err == nil {
 		t.Fatal("sin user")
 	} else {
 		mustCode(t, err, "unauthorized")
 	}
-	if _, err := svcOK.Create(ctx, userA, "x", 1, "08:00", "09:00", nil); err == nil {
+	if _, err := svcOK.Create(ctx, userA, "x", 1, "08:00", "09:00", nil, nil); err == nil {
 		t.Fatal("uuid")
 	} else {
 		mustCode(t, err, "invalid_uuid")

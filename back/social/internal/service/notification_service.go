@@ -13,6 +13,7 @@ import (
 type NotificationRepo interface {
 	ListNotificationsByUser(ctx context.Context, userID string) ([]model.MeetingNotificationItem, error)
 	MarkNotificationRead(ctx context.Context, id, userID string) (bool, error)
+	DeleteNotification(ctx context.Context, id, userID string) (bool, error)
 }
 
 type NotificationService struct {
@@ -49,6 +50,26 @@ func (s *NotificationService) MarkRead(ctx context.Context, userID, id string) e
 		return ErrMeetingNotFound
 	}
 	ok, err := s.repo.MarkNotificationRead(ctx, id, strings.TrimSpace(userID))
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrMeetingNotFound
+	}
+	return nil
+}
+
+// Delete borra una notificación del usuario. Solo la propia:
+// ajena o inexistente → ErrMeetingNotFound (404, sin filtrar).
+func (s *NotificationService) Delete(ctx context.Context, userID, id string) error {
+	if _, err := parseMeetingUserUUID(userID); err != nil {
+		return err
+	}
+	id = strings.TrimSpace(id)
+	if _, err := uuid.Parse(id); err != nil {
+		return ErrMeetingNotFound
+	}
+	ok, err := s.repo.DeleteNotification(ctx, id, strings.TrimSpace(userID))
 	if err != nil {
 		return err
 	}

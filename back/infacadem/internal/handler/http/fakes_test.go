@@ -50,7 +50,7 @@ func newFakeCurricula() *fakeCurricula { return &fakeCurricula{items: map[string
 func (f *fakeCurricula) Create(_ context.Context, userID, name string) (*model.Curriculum, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	c := &model.Curriculum{ID: uuid.NewString(), UserID: userID, Name: name, CreatedAt: time.Now()}
+	c := &model.Curriculum{ID: uuid.NewString(), UserID: userID, Name: name, SemesterCount: 8, CreatedAt: time.Now()}
 	f.items[c.ID] = c
 	cp := *c
 	return &cp, nil
@@ -83,6 +83,17 @@ func (f *fakeCurricula) UpdateName(_ context.Context, id, userID, name string) (
 	defer f.mu.Unlock()
 	if c, ok := f.items[id]; ok && c.UserID == userID {
 		c.Name = name
+		cp := *c
+		return &cp, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeCurricula) UpdateSemesterCount(_ context.Context, id, userID string, count int) (*model.Curriculum, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if c, ok := f.items[id]; ok && c.UserID == userID {
+		c.SemesterCount = count
 		cp := *c
 		return &cp, nil
 	}
@@ -242,7 +253,7 @@ func (f *fakeSchedules) ownedSubjectLocked(subjectID, userID string) bool {
 	return ok && c.UserID == userID
 }
 
-func (f *fakeSchedules) Create(_ context.Context, userID, subjectID string, day int, start, end time.Time, modality *string) (*model.Schedule, error) {
+func (f *fakeSchedules) Create(_ context.Context, userID, subjectID string, day int, start, end time.Time, modality, room *string) (*model.Schedule, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sub.mu.Lock()
@@ -250,7 +261,7 @@ func (f *fakeSchedules) Create(_ context.Context, userID, subjectID string, day 
 	if !f.ownedSubjectLocked(subjectID, userID) {
 		return nil, nil
 	}
-	s := &model.Schedule{ID: uuid.NewString(), SubjectID: subjectID, DayOfWeek: day, StartTime: start, EndTime: end, Modality: modality}
+	s := &model.Schedule{ID: uuid.NewString(), SubjectID: subjectID, DayOfWeek: day, StartTime: start, EndTime: end, Modality: modality, Room: room}
 	f.items[s.ID] = s
 	cp := *s
 	return &cp, nil

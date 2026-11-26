@@ -32,13 +32,62 @@ fi
 # export SOCIAL_BASE_URL=/api-social
 # export ACADEMIC_BASE_URL=/api-academic
 
+# Activa el gate de confirmación de correo cuando hay SMTP configurado.
+# Si se fuerza por entorno, se respeta ese valor.
+SMTP_PASSWORD_LOCAL="$(sed -n 's/^[[:space:]]*SMTP_PASSWORD=//p' .env | tail -n1)"
+SMTP_PASSWORD_LOCAL="${SMTP_PASSWORD_LOCAL%\"}"; SMTP_PASSWORD_LOCAL="${SMTP_PASSWORD_LOCAL#\"}"
+SMTP_PASSWORD_LOCAL="${SMTP_PASSWORD_LOCAL%\'}"; SMTP_PASSWORD_LOCAL="${SMTP_PASSWORD_LOCAL#\'}"
+if [ -n "${EMAIL_VERIFICATION_REQUIRED:-}" ]; then
+  export EMAIL_VERIFICATION_REQUIRED
+elif [ -n "$SMTP_PASSWORD_LOCAL" ]; then
+  export EMAIL_VERIFICATION_REQUIRED=true
+else
+  export EMAIL_VERIFICATION_REQUIRED=false
+  echo "AVISO: SMTP_PASSWORD vacío en .env; confirmación de correo desactivada."
+fi
+echo ">> Confirmación de correo: EMAIL_VERIFICATION_REQUIRED=$EMAIL_VERIFICATION_REQUIRED"
+
 echo ">> Build front local (http://localhost:8085)..."
 $COMPOSE build --no-cache front
 
-echo ">> Rebuild backends (incluye las correcciones de Notes)..."
-$COMPOSE build notes auth social infacadem
+echo ">> Rebuild backends (incluye las correcciones de Notes y AI)..."
+$COMPOSE build notes auth social infacadem ai
 
-echo ">> Levanta postgres + auth + notes + social + infacadem + front..."
+echo ">> Prepara Postgres para migraciones locales..."
+$COMPOSE up -d postgres
+for _ in $(seq 1 60); do
+  if $DOCKER exec ti3-postgres pg_isready -U postgres >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+$DOCKER exec ti3-postgres pg_isready -U postgres >/dev/null
+
+# Volúmenes locales creados antes del PR de confirmación no tienen 007/008.
+# Son idempotentes: en una base nueva init.sql ya las incluye.
+echo ">> Aplicando migraciones de confirmación de correo (007/008)..."
+for migration in 007_email_verification.sql 008_email_verification_backfill.sql; do
+  echo "   $migration"
+  $COMPOSE exec -T postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -q \
+    -f - < "$PROJECT_ROOT/back/auth/db/migrations/$migration"
+done
+
+# Seguimiento e invitaciones a grupos (Auth 009 / Social 009).
+echo ">> Aplicando migraciones de seguidos e invitaciones..."
+$COMPOSE exec -T postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -q \
+  -f - < "$PROJECT_ROOT/back/auth/db/migrations/009_user_follows.sql"
+$COMPOSE exec -T postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -q \
+  -f - < "$PROJECT_ROOT/back/social/db/migrations/009_group_invitations.sql"
+
+# Permisos delegados y switch "para todo el grupo" (Social). Idempotentes.
+echo ">> Aplicando migraciones de permisos de grupos (Social 006/007/008)..."
+for migration in 006_member_permissions.sql 007_group_member_defaults.sql 008_member_permission_denials.sql; do
+  echo "   $migration"
+  $COMPOSE exec -T postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -q \
+    -f - < "$PROJECT_ROOT/back/social/db/migrations/$migration"
+done
+
+echo ">> Levanta postgres + auth + notes + social + infacadem + ai + front..."
 $COMPOSE up -d
 
 echo ""
@@ -51,9 +100,11 @@ echo "Notes: http://localhost:8082/health"
 echo "Social:http://localhost:8083/health"
 echo "Academic directo: http://localhost:8087/health  (host 8087->8081, 8081 reservado)"
 echo "Academic vía nginx: http://localhost:8086/api-academic/health  (-> academic:8081)"
+echo "AI directo: http://localhost:8084/health"
 echo ""
 echo "Test:"
 echo "  curl -v http://localhost:8085/health"
 echo "  curl -v http://localhost:8086/api-auth/health"
 echo "  curl -v http://localhost:8087/health"
 echo "  curl -v http://localhost:8086/api-academic/health"
+echo "  curl -v http://localhost:8084/health"

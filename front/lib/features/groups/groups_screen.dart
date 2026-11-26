@@ -16,6 +16,7 @@ import '../../core/models/social_models.dart';
 import '../../core/services/social_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/neobrutalism.dart';
+import '../../core/widgets/user_avatar.dart';
 import 'cleanup_shared_notes_checkbox.dart';
 import 'group_detail_screen.dart';
 import 'notifications_bell.dart';
@@ -33,30 +34,15 @@ class GroupsScreen extends StatefulWidget {
   State<GroupsScreen> createState() => _GroupsScreenState();
 }
 
-String _initialsFor(String display) {
-  final t = display.trim();
-  if (t.isEmpty) return '?';
-  // "Agustín Vega" -> "AV". Si es email, usa las 2 primeras letras.
-  // Nunca muestra UUID: el llamador ya resolvió displayLabel.
-  final parts = t.split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
-  if (parts.length >= 2) {
-    return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
-  }
-  final clean = parts.first.replaceAll(RegExp(r'[^A-Za-zÁÉÍÓÚÑáéíóúñ0-9]'), '');
-  if (clean.length >= 2) return clean.substring(0, 2).toUpperCase();
-  if (clean.isNotEmpty) return clean[0].toUpperCase();
-  return t.substring(0, t.length >= 2 ? 2 : 1).toUpperCase();
-}
-
 class _GroupsScreenState extends State<GroupsScreen> {
   late final SocialService _service;
   bool _isLoading = true;
   bool _isCreating = false;
   String? _error;
   Overview? _overview;
-  // Iniciales reales por grupo (display_name/email). Best-effort: si falla,
-  // la card muestra solo el conteo "N integrantes" sin avatar falso.
-  Map<String, List<String>> _initialsByGroup = const {};
+  // Miembros visibles por grupo (máximo 3) con miniatura/nombre. Best-effort:
+  // si falla, la card muestra solo el conteo "N integrantes" sin avatar falso.
+  Map<String, List<GroupMember>> _previewMembersByGroup = const {};
 
   @override
   void initState() {
@@ -84,8 +70,8 @@ class _GroupsScreenState extends State<GroupsScreen> {
         _overview = ov;
         _isLoading = false;
       });
-      // Iniciales reales (best-effort, no bloquea la lista).
-      _loadInitials(ov.groups);
+      // Avatares visibles (best-effort, no bloquea la lista).
+      _loadPreviewMembers(ov.groups);
     } on SocialApiException catch (_) {
       if (!mounted) return;
       setState(() {
@@ -101,23 +87,20 @@ class _GroupsScreenState extends State<GroupsScreen> {
     }
   }
 
-  Future<void> _loadInitials(List<GroupCard> groups) async {
-    final out = <String, List<String>>{};
+  Future<void> _loadPreviewMembers(List<GroupCard> groups) async {
+    final out = <String, List<GroupMember>>{};
     for (final g in groups) {
       try {
-        final members = await _service.listMembers(g.groupId);
-        final initials = <String>[];
-        for (final m in members.take(4)) {
-          // displayLabel nunca es UUID desnudo (display_name/email o corto).
-          initials.add(_initialsFor(m.displayLabel));
-        }
-        out[g.groupId] = initials;
+        // Solo los 3 avatares que muestra la tarjeta. El resto se carga al
+        // abrir la pestaña MIEMBROS, sin traer miniaturas de más.
+        final members = await _service.listMembers(g.groupId, limit: 3);
+        out[g.groupId] = members.take(3).toList();
       } catch (_) {
         // Sin miembros legibles: la card muestra solo el conteo.
       }
     }
     if (!mounted) return;
-    setState(() => _initialsByGroup = out);
+    setState(() => _previewMembersByGroup = out);
   }
 
   Future<void> _openCreateSheet() async {
@@ -139,7 +122,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Grupo creado.'),
           backgroundColor: AppColors.border,
         ),
@@ -148,7 +131,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
     } on SocialApiException catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo crear el grupo.'),
           backgroundColor: AppColors.error,
         ),
@@ -177,7 +160,6 @@ class _GroupsScreenState extends State<GroupsScreen> {
   bool _isJoining = false;
 
   Future<void> _openJoinDialog() async {
-    final idCtrl = TextEditingController();
     final codeCtrl = TextEditingController();
     final ok = await showNeobrutalistDialog<bool>(
       context: context,
@@ -192,36 +174,47 @@ class _GroupsScreenState extends State<GroupsScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text(
-              'Pide al administrador el identificador del grupo y el código de invitación.',
+              'Pega el código de invitación que te compartió un administrador '
+              'del grupo.',
               style: TextStyle(fontSize: 12),
             ),
             const SizedBox(height: 12),
-            const AppFieldLabel('IDENTIFICADOR DEL GRUPO'),
-            const SizedBox(height: 4),
-            TextField(
-              controller: idCtrl,
-              decoration: appInputDecoration('Identificador del grupo'),
-            ),
-            const SizedBox(height: 8),
             const AppFieldLabel('CÓDIGO DE INVITACIÓN'),
             const SizedBox(height: 4),
             TextField(
+              key: const ValueKey('join-invite-code'),
               controller: codeCtrl,
-              decoration: appInputDecoration('Código de invitación'),
+              autofocus: true,
+              decoration: appInputDecoration(
+                'Ej.: 3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f',
+              ),
+              onSubmitted: (_) => Navigator.of(context).pop(true),
             ),
           ],
         ),
       ),
     );
-    final groupId = idCtrl.text.trim();
-    final code = codeCtrl.text.trim();
+    final raw = codeCtrl.text;
     // Sin dispose manual: el diálogo aún anima su salida y sus TextField
     // pueden reconstruirse un frame más (dispose rompería el pump).
     if (ok != true || !mounted) return;
-    if (groupId.isEmpty || code.isEmpty) {
+    if (raw.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Completa el identificador y el código.'),
+        SnackBar(
+          content: Text('Pega el código de invitación.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+    final code = extractInviteCode(raw);
+    if (code == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Ese texto no contiene un código de invitación válido. '
+            'Cópialo de nuevo desde «Invitar».',
+          ),
           backgroundColor: AppColors.error,
         ),
       );
@@ -229,12 +222,16 @@ class _GroupsScreenState extends State<GroupsScreen> {
     }
     setState(() => _isJoining = true);
     try {
-      // POST /groups/:id/join real. Refresca lista + sidebar vía notifier.
-      await _service.joinGroup(groupId: groupId, inviteToken: code);
+      // POST /groups/join real. Refresca lista + sidebar vía notifier.
+      final result = await _service.joinGroupByCode(code);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Te uniste al grupo.'),
+        SnackBar(
+          content: Text(
+            result.alreadyMember
+                ? 'Ya eres integrante de «${result.name}».'
+                : 'Te uniste a «${result.name}».',
+          ),
           backgroundColor: AppColors.border,
         ),
       );
@@ -243,12 +240,13 @@ class _GroupsScreenState extends State<GroupsScreen> {
       if (!mounted) return;
       final s = e.statusCode;
       final msg = s == 404
-          ? 'No se encontró el grupo o el código es inválido.'
+          ? 'El código no es válido o fue reemplazado por uno nuevo. '
+                'Pide al administrador el código actual.'
           : s == 403
-          ? 'No tienes permiso para unirte a este grupo.'
+          ? 'No puedes unirte a este grupo.'
           : s == 401
           ? 'Tu sesión venció. Vuelve a iniciar sesión.'
-          : 'No se pudo unir al grupo. Revisa los datos.';
+          : 'No se pudo unir al grupo. Inténtalo de nuevo.';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(msg), backgroundColor: AppColors.error),
       );
@@ -295,7 +293,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
   Widget _buildContent(AppBreakpoint breakpoint, bool compact) {
     if (_isLoading) {
-      return const Center(
+      return Center(
         child: CircularProgressIndicator(color: AppColors.text),
       );
     }
@@ -306,7 +304,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
           decoration: BoxDecoration(
             color: AppColors.surface,
             border: Border.all(
-              color: AppColors.border,
+              color: AppColors.outline,
               width: AppDimens.borderWidth,
             ),
             borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -315,13 +313,13 @@ class _GroupsScreenState extends State<GroupsScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
+              Icon(
                 Icons.error_outline_rounded,
                 size: 36,
                 color: AppColors.text,
               ),
               const SizedBox(height: 12),
-              const Text(
+              Text(
                 'NO SE PUDO CARGAR TUS GRUPOS',
                 style: TextStyle(
                   fontWeight: FontWeight.w900,
@@ -333,7 +331,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
               Text(
                 _error!,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w600,
                   fontSize: 12,
                   color: AppColors.mutedStrong,
@@ -357,13 +355,13 @@ class _GroupsScreenState extends State<GroupsScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(
+            Icon(
               Icons.groups_rounded,
               size: 40,
               color: AppColors.mutedStrong,
             ),
             const SizedBox(height: 12),
-            const Text(
+            Text(
               'NO TIENES GRUPOS TODAVÍA',
               style: TextStyle(
                 fontWeight: FontWeight.w900,
@@ -372,7 +370,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
               ),
             ),
             const SizedBox(height: 6),
-            const Text(
+            Text(
               'Crea tu primer grupo y aparecerá aquí',
               style: TextStyle(
                 fontWeight: FontWeight.w600,
@@ -417,7 +415,8 @@ class _GroupsScreenState extends State<GroupsScreen> {
                   width: cardWidth,
                   child: _GroupCard(
                     group: group,
-                    initials: _initialsByGroup[group.groupId] ?? const [],
+                    previewMembers:
+                        _previewMembersByGroup[group.groupId] ?? const [],
                     onInvite: () => _showInvite(group),
                     onInfo: () => _showGroupInfo(group),
                   ),
@@ -448,14 +447,14 @@ class _GroupsScreenState extends State<GroupsScreen> {
           style: TextStyle(
             fontSize: compact ? 22 : 26,
             fontWeight: FontWeight.w900,
-            color: AppColors.text,
+            color: AppColors.title,
             letterSpacing: -0.5,
           ),
         ),
         const SizedBox(height: AppDimens.spaceSm),
         Text(
           stats,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 12.5,
             fontWeight: FontWeight.w700,
             color: AppColors.mutedStrong,
@@ -607,7 +606,7 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
       if (!mounted) return;
       Navigator.of(context).pop(true);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Abandonaste el grupo.'),
           backgroundColor: AppColors.border,
         ),
@@ -659,7 +658,7 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
 
           // Descripción.
           if (description.isEmpty)
-            const Text(
+            Text(
               'Este grupo no tiene descripción.',
               style: TextStyle(
                 fontSize: 12,
@@ -690,7 +689,7 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
           else if (_error != null)
             Text(
               _error!,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
                 color: AppColors.error,
@@ -702,7 +701,7 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
               decoration: BoxDecoration(
                 color: AppColors.surfaceLow,
                 border: Border.all(
-                  color: AppColors.border,
+                  color: AppColors.outline,
                   width: AppDimens.borderWidth,
                 ),
                 borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -727,7 +726,7 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
             ),
 
           const SizedBox(height: AppDimens.spaceLg),
-          const Divider(
+          Divider(
             color: AppColors.border,
             thickness: AppDimens.borderWidth,
             height: 1,
@@ -735,7 +734,7 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
           const SizedBox(height: AppDimens.spaceSm),
 
           // Zona sensible: abandonar grupo.
-          const Text(
+          Text(
             'ZONA DE RIESGO',
             style: TextStyle(
               fontSize: 11,
@@ -761,7 +760,7 @@ class _GroupInfoDialogState extends State<_GroupInfoDialog> {
 }
 
 // ---------------------------------------------------------------------------
-// Diálogo INVITAR (solo admin): ver código, regenerar y compartir.
+// Diálogo INVITAR (solo admin): un único código para compartir y regenerar.
 // El token solo lo entrega GET /groups/:id a admins.
 // ---------------------------------------------------------------------------
 
@@ -817,7 +816,7 @@ class _InviteDialogState extends State<_InviteDialog> {
       if (!mounted) return;
       setState(() => _inviteToken = token);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('Invitación actualizada.'),
           backgroundColor: AppColors.border,
         ),
@@ -825,7 +824,7 @@ class _InviteDialogState extends State<_InviteDialog> {
     } on SocialApiException catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('No se pudo actualizar la invitación.'),
           backgroundColor: AppColors.error,
         ),
@@ -848,11 +847,9 @@ class _InviteDialogState extends State<_InviteDialog> {
     );
   }
 
-  Future<void> _copyAll() {
-    final id = widget.group.groupId;
-    final token = _inviteToken?.trim() ?? '';
-    return _copy('Datos de invitación', '$id $token');
-  }
+  // Solo el código: el backend identifica el grupo con él (POST /groups/join).
+  Future<void> _copyCode() =>
+      _copy('Código de invitación', _inviteToken?.trim() ?? '');
 
   Widget _copyableField({required String label, required String value}) {
     return Column(
@@ -860,7 +857,7 @@ class _InviteDialogState extends State<_InviteDialog> {
       children: [
         Text(
           label.toUpperCase(),
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 11,
             fontWeight: FontWeight.w900,
             letterSpacing: 0.4,
@@ -878,7 +875,7 @@ class _InviteDialogState extends State<_InviteDialog> {
           decoration: BoxDecoration(
             color: AppColors.surfaceLow,
             border: Border.all(
-              color: AppColors.border,
+              color: AppColors.outline,
               width: AppDimens.borderWidth,
             ),
             borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -888,7 +885,7 @@ class _InviteDialogState extends State<_InviteDialog> {
               Expanded(
                 child: SelectableText(
                   value,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w800,
                     color: AppColors.text,
@@ -921,18 +918,14 @@ class _InviteDialogState extends State<_InviteDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text(
-              'Comparte estos datos con la persona que quieras invitar.',
+            Text(
+              'Comparte este código con la persona que quieras invitar. '
+              'Debe abrir «Unirse a grupo» y pegarlo.',
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
                 color: AppColors.mutedStrong,
               ),
-            ),
-            const SizedBox(height: AppDimens.spaceMd),
-            _copyableField(
-              label: 'Identificador del grupo',
-              value: widget.group.groupId,
             ),
             const SizedBox(height: AppDimens.spaceMd),
             if (_loading)
@@ -949,7 +942,7 @@ class _InviteDialogState extends State<_InviteDialog> {
             else if (_error != null)
               Text(
                 _error!,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
                   color: AppColors.error,
@@ -963,27 +956,28 @@ class _InviteDialogState extends State<_InviteDialog> {
                 ),
               const SizedBox(height: AppDimens.spaceMd),
               NeobrutalistButton(
+                label: 'Copiar código',
+                icon: Icons.copy_rounded,
+                variant: NeobrutalistButtonVariant.accent,
+                expand: true,
+                onPressed: hasToken ? _copyCode : null,
+              ),
+              const SizedBox(height: AppDimens.spaceLg),
+              NeobrutalistButton(
                 label: _regenerating ? 'Actualizando…' : 'Generar nuevo código',
                 icon: Icons.autorenew_rounded,
                 variant: NeobrutalistButtonVariant.secondary,
                 onPressed: _regenerating ? null : _regenerate,
               ),
               const SizedBox(height: AppDimens.spaceXs),
-              const Text(
-                'El código anterior dejará de funcionar.',
+              Text(
+                'El código no vence. Si generas uno nuevo, el anterior deja '
+                'de funcionar (útil si se compartió por error).',
                 style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w700,
                   color: AppColors.mutedStrong,
                 ),
-              ),
-              const SizedBox(height: AppDimens.spaceMd),
-              NeobrutalistButton(
-                label: 'Copiar datos de invitación',
-                icon: Icons.copy_all_rounded,
-                variant: NeobrutalistButtonVariant.accent,
-                expand: true,
-                onPressed: hasToken ? _copyAll : null,
               ),
             ],
           ],
@@ -1002,19 +996,19 @@ class _GroupCard extends StatelessWidget {
     required this.group,
     required this.onInvite,
     required this.onInfo,
-    this.initials = const [],
+    this.previewMembers = const [],
   });
 
   final GroupCard group;
   final VoidCallback onInvite;
   final VoidCallback onInfo;
-  // Iniciales reales desde display_name/email (máx 3 visibles).
-  final List<String> initials;
+  // Integrantes visibles (máx 3) con miniatura/nombre.
+  final List<GroupMember> previewMembers;
 
   Color _colorFor(String id) {
     if (id.isEmpty) return AppColors.accentYellow;
     final h = id.hashCode;
-    const options = [
+    final options = [
       AppColors.accentYellow,
       AppColors.subjectBlue,
       AppColors.subjectMint,
@@ -1035,7 +1029,7 @@ class _GroupCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -1055,25 +1049,35 @@ class _GroupCard extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: 52,
-                  height: 52,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: color,
-                    border: Border.all(
-                      color: AppColors.border,
-                      width: AppDimens.borderWidth,
-                    ),
-                    borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+                if (group.photoThumbUrl != null)
+                  UserAvatar(
+                    name: group.name,
+                    size: 52,
+                    photoUrl: group.photoThumbUrl,
+                    backgroundColor: color,
                     boxShadow: AppShadows.badge,
+                    fontSize: 18,
+                  )
+                else
+                  Container(
+                    width: 52,
+                    height: 52,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: color,
+                      border: Border.all(
+                        color: AppColors.outline,
+                        width: AppDimens.borderWidth,
+                      ),
+                      borderRadius: BorderRadius.circular(AppDimens.radiusChip),
+                      boxShadow: AppShadows.badge,
+                    ),
+                    child: Icon(
+                      Icons.groups_rounded,
+                      size: 26,
+                      color: AppColors.text,
+                    ),
                   ),
-                  child: const Icon(
-                    Icons.groups_rounded,
-                    size: 26,
-                    color: AppColors.text,
-                  ),
-                ),
                 const SizedBox(width: AppDimens.spaceMd),
                 Expanded(
                   child: Column(
@@ -1083,7 +1087,7 @@ class _GroupCard extends StatelessWidget {
                         group.name,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontWeight: FontWeight.w900,
                           fontSize: 14.5,
                           height: 1.15,
@@ -1095,7 +1099,7 @@ class _GroupCard extends StatelessWidget {
                       const SizedBox(height: 4),
                       Text(
                         'Rol: ${group.role}',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w800,
                           color: AppColors.mutedStrong,
@@ -1107,7 +1111,7 @@ class _GroupCard extends StatelessWidget {
               ],
             ),
           ),
-          const Divider(
+          Divider(
             color: AppColors.border,
             thickness: AppDimens.borderWidth,
             height: AppDimens.borderWidth,
@@ -1119,16 +1123,18 @@ class _GroupCard extends StatelessWidget {
             ),
             child: Row(
               children: [
-                // Estilo vistas: iniciales reales apiladas. Sin miembros
+                // Estilo vistas: avatares reales apilados. Sin miembros
                 // legibles no se muestra "+N" como botón: solo el conteo.
-                if (initials.isNotEmpty) ...[
+                if (previewMembers.isNotEmpty) ...[
                   _AvatarStack(
-                    initials: initials.take(3).toList(),
-                    extra: members - initials.take(3).length,
+                    members: previewMembers.take(3).toList(),
+                    extra: members > previewMembers.take(3).length
+                        ? members - previewMembers.take(3).length
+                        : 0,
                   ),
                   const SizedBox(width: AppDimens.spaceMd),
                 ] else ...[
-                  const Icon(
+                  Icon(
                     Icons.groups_rounded,
                     size: 18,
                     color: AppColors.mutedStrong,
@@ -1140,7 +1146,7 @@ class _GroupCard extends StatelessWidget {
                     '$members ${members == 1 ? 'integrante' : 'integrantes'}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 11.5,
                       fontWeight: FontWeight.w800,
                       color: AppColors.mutedStrong,
@@ -1150,7 +1156,7 @@ class _GroupCard extends StatelessWidget {
               ],
             ),
           ),
-          const Divider(
+          Divider(
             color: AppColors.border,
             thickness: AppDimens.borderWidth,
             height: AppDimens.borderWidth,
@@ -1236,7 +1242,7 @@ class _CodeChip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
       decoration: BoxDecoration(
         color: AppColors.bg,
-        border: Border.all(color: AppColors.border, width: 1.5),
+        border: Border.all(color: AppColors.outline, width: 1.5),
         borderRadius: BorderRadius.circular(AppDimens.radiusChip),
         boxShadow: AppShadows.badge,
       ),
@@ -1244,7 +1250,7 @@ class _CodeChip extends StatelessWidget {
         label.toUpperCase(),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: const TextStyle(
+        style: TextStyle(
           fontFamily: 'monospace',
           fontSize: 10,
           fontWeight: FontWeight.w900,
@@ -1257,9 +1263,9 @@ class _CodeChip extends StatelessWidget {
 }
 
 class _AvatarStack extends StatelessWidget {
-  const _AvatarStack({required this.initials, required this.extra});
+  const _AvatarStack({required this.members, required this.extra});
 
-  final List<String> initials;
+  final List<GroupMember> members;
   final int extra;
 
   static const double _size = 30;
@@ -1268,13 +1274,18 @@ class _AvatarStack extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hasExtra = extra > 0;
-    if (initials.isEmpty && !hasExtra) return const SizedBox.shrink();
+    if (members.isEmpty && !hasExtra) return const SizedBox.shrink();
 
     return Wrap(
       spacing: _gap,
       runSpacing: _gap,
       children: [
-        for (final initial in initials) _AvatarBox(label: initial),
+        for (final member in members)
+          UserAvatar(
+            name: member.displayLabel,
+            photoUrl: member.photoThumbUrl,
+            size: _size,
+          ),
         if (hasExtra) _AvatarBox(label: '+$extra', inverted: true),
       ],
     );
@@ -1296,7 +1307,7 @@ class _AvatarBox extends StatelessWidget {
       decoration: BoxDecoration(
         color: inverted ? AppColors.border : AppColors.accentYellow,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radiusChip),
@@ -1322,39 +1333,35 @@ class _FolderStamp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Transform.rotate(
-      angle: -0.02,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          border: Border.all(
-            color: AppColors.border,
-            width: AppDimens.borderWidth,
-          ),
-          borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-          boxShadow: AppShadows.badge,
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceLow,
+        border: Border.all(
+          color: AppColors.outline,
+          width: AppDimens.borderWidth,
         ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 12, color: AppColors.text),
-            const SizedBox(width: AppDimens.spaceXs),
-            Flexible(
-              child: Text(
-                label.toUpperCase(),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 9.5,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.8,
-                  color: AppColors.text,
-                ),
+        borderRadius: BorderRadius.circular(AppDimens.radius),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: AppColors.text),
+          const SizedBox(width: AppDimens.spaceSm),
+          Flexible(
+            child: Text(
+              label.toUpperCase(),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 0.7,
+                color: AppColors.text,
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -1405,11 +1412,11 @@ class _NewGroupSheetState extends State<_NewGroupSheet> {
           bottom: MediaQuery.viewInsetsOf(context).bottom,
         ),
         child: Container(
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             color: AppColors.surface,
             border: Border(
               top: BorderSide(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidthThick,
               ),
             ),
@@ -1425,17 +1432,6 @@ class _NewGroupSheetState extends State<_NewGroupSheet> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Center(
-                  child: Container(
-                    width: 44,
-                    height: 5,
-                    decoration: BoxDecoration(
-                      color: AppColors.border,
-                      borderRadius: BorderRadius.circular(AppDimens.radiusChip),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: AppDimens.spaceLg),
                 Row(
                   children: [
                     const Expanded(
@@ -1447,13 +1443,13 @@ class _NewGroupSheetState extends State<_NewGroupSheet> {
                     NeobrutalistIconButton(
                       icon: Icons.close_rounded,
                       tooltip: 'Cerrar',
-                      size: 32,
+                      size: 36,
                       onPressed: () => Navigator.of(context).pop(),
                     ),
                   ],
                 ),
                 const SizedBox(height: AppDimens.spaceMd),
-                const Text(
+                Text(
                   'CREAR GRUPO',
                   style: TextStyle(
                     fontWeight: FontWeight.w900,
@@ -1463,7 +1459,7 @@ class _NewGroupSheetState extends State<_NewGroupSheet> {
                   ),
                 ),
                 const SizedBox(height: 4),
-                const Text(
+                Text(
                   'Crea un espacio para organizar a tu equipo.',
                   style: TextStyle(
                     fontSize: 11,
@@ -1477,7 +1473,7 @@ class _NewGroupSheetState extends State<_NewGroupSheet> {
                 TextField(
                   controller: _nameController,
                   textInputAction: TextInputAction.next,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w800,
                     fontSize: 13.5,
                     color: AppColors.text,
@@ -1490,7 +1486,7 @@ class _NewGroupSheetState extends State<_NewGroupSheet> {
                 TextField(
                   controller: _descController,
                   textInputAction: TextInputAction.done,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w800,
                     fontSize: 13,
                     color: AppColors.text,

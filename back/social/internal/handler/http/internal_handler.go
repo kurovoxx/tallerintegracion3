@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/kurovoxx/tallerintegracion3/back/social/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/service"
 )
 
@@ -47,16 +48,24 @@ func (h *InternalHandler) Members(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
+	// Permiso habilitado para todo el grupo: se suma al delegado por miembro.
+	defaults, err := h.groups.GetMemberDefaultsInternal(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
 	type member struct {
-		UserID string `json:"user_id"`
-		Role   string `json:"role"`
+		UserID        string `json:"user_id"`
+		Role          string `json:"role"`
+		CanShareNotes bool   `json:"can_share_notes"`
 	}
 	out := make([]member, 0, len(members))
 	for _, m := range members {
 		if m == nil {
 			continue
 		}
-		out = append(out, member{UserID: m.UserID, Role: m.Role})
+		canShare := model.EffectiveMemberPermissions(m.Role, m.MemberPermissions, defaults, m.MemberPermissionDenials).CanShareNotes
+		out = append(out, member{UserID: m.UserID, Role: m.Role, CanShareNotes: canShare})
 	}
 	c.JSON(http.StatusOK, out)
 }

@@ -45,7 +45,7 @@ func TestMeetingAttendeesFlow_PersisteYEnvia(t *testing.T) {
 	svc := NewMeetingService(store, NewCalendarMeetingNotifier(&StubCalendarGateway{Token: "tok"}, cli, store))
 	waitNotification := observeMeetingNotification(t, svc)
 
-	m, err := svc.CreateMeeting(context.Background(), gid, admin, "Con invitados", nil, "2026-09-25T15:00:00Z", nil,
+	m, err := svc.CreateMeeting(context.Background(), gid, admin, "Con invitados", nil, nil, "2026-09-25T15:00:00Z", nil,
 		[]string{"Sofia@x.cl", "ana@x.cl", "sofia@X.cl"})
 	if err != nil {
 		t.Fatalf("crear no debe fallar: %v", err)
@@ -73,7 +73,7 @@ func TestMeetingAttendeesFlow_Invalido400(t *testing.T) {
 	store.AddGroup(gid, admin, member)
 	svc := NewMeetingService(store, NoopMeetingCreatedNotifier{})
 
-	if _, err := svc.CreateMeeting(context.Background(), gid, admin, "Mala", nil, "2026-09-25T15:00:00Z", nil,
+	if _, err := svc.CreateMeeting(context.Background(), gid, admin, "Mala", nil, nil, "2026-09-25T15:00:00Z", nil,
 		[]string{"no-email"}); err != ErrInvalidAttendeeEmail {
 		t.Fatalf("se esperaba ErrInvalidAttendeeEmail, got %v", err)
 	}

@@ -64,7 +64,38 @@ func (r *NoteRepository) Create(ctx context.Context, db DBTX, noteID string, use
 		&n.ID, &n.UserID, &n.SubjectID, &n.Title, &n.ExternalFileID, &n.Visibility, &n.LikesCount, &n.ForkedFromNoteID, &n.SyncStatus, &n.Version, &n.CreatedAt, &n.UpdatedAt,
 	)
 	if err != nil {
+		// uq_notes_user_forked_from (migración 006): dos copias concurrentes
+		// del mismo apunte origen para el mismo usuario. El llamador traduce
+		// esto a 409 already_copied en lugar de 500.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "uq_notes_user_forked_from" {
+			return nil, ErrAlreadyCopied
+		}
 		return nil, fmt.Errorf("create note: %w", err)
+	}
+	return &n, nil
+}
+
+// GetByUserAndForkedFrom devuelve el clon vivo que el usuario ya tiene de un
+// apunte origen. nil, nil si aún no existe. Se usa para rechazar la segunda
+// copia con 409 already_copied y para reutilizar un clon failed_sync.
+func (r *NoteRepository) GetByUserAndForkedFrom(ctx context.Context, db DBTX, userID, forkedFromNoteID string) (*model.Note, error) {
+	if db == nil {
+		db = r.pool
+	}
+	var n model.Note
+	err := db.QueryRow(ctx, `
+		SELECT id, user_id, subject_id, title, external_file_id, visibility, likes_count, forked_from_note_id, sync_status, version, created_at, updated_at
+		FROM notes.notes
+		WHERE user_id = $1 AND forked_from_note_id = $2::uuid
+		LIMIT 1`, userID, forkedFromNoteID).Scan(
+		&n.ID, &n.UserID, &n.SubjectID, &n.Title, &n.ExternalFileID, &n.Visibility, &n.LikesCount, &n.ForkedFromNoteID, &n.SyncStatus, &n.Version, &n.CreatedAt, &n.UpdatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get note by user and forked_from: %w", err)
 	}
 	return &n, nil
 }
@@ -83,6 +114,79 @@ func (r *NoteRepository) GetByID(ctx context.Context, db DBTX, id string) (*mode
 		return nil, fmt.Errorf("get note: %w", err)
 	}
 	return &n, nil
+}
+
+// GetTombstone devuelve la lápida de un apunte borrado (nil si no hay).
+func (r *NoteRepository) GetTombstone(ctx context.Context, db DBTX, noteID string) (*model.NoteTombstone, error) {
+	if db == nil {
+		db = r.pool
+	}
+	var t model.NoteTombstone
+	err := db.QueryRow(ctx, `SELECT note_id, owner_user_id, title, subject_id, visibility, deleted_at FROM notes.note_tombstones WHERE note_id = $1`, noteID).
+		Scan(&t.NoteID, &t.OwnerUserID, &t.Title, &t.SubjectID, &t.Visibility, &t.DeletedAt)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get tombstone: %w", err)
+	}
+	return &t, nil
+}
+
+// likeEscaper escapa los comodines de ILIKE para buscar el texto literal.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// ListPublic lista apuntes públicos de otros usuarios (excluye a
+// excludeUserID), más recientes primero, con búsqueda literal en el título y
+// filtro opcional por materia. cursor = id del último apunte de la página
+// anterior (keyset sobre created_at, id).
+func (r *NoteRepository) ListPublic(ctx context.Context, db DBTX, excludeUserID, query, subjectID, cursor string, limit int) ([]*model.Note, string, error) {
+	if db == nil {
+		db = r.pool
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	pattern := ""
+	if q := strings.TrimSpace(query); q != "" {
+		pattern = "%" + likeEscaper.Replace(q) + "%"
+	}
+	sql := `
+		SELECT id, user_id, subject_id, title, external_file_id, visibility, likes_count, forked_from_note_id, sync_status, version, created_at, updated_at
+		FROM notes.notes
+		WHERE visibility = 'public' AND user_id <> $1::uuid
+		  AND external_file_id IS NOT NULL
+		  AND ($2::text = '' OR title ILIKE $2::text ESCAPE '\')
+		  AND ($3::text = '' OR subject_id = NULLIF($3::text, '')::uuid)`
+	args := []any{excludeUserID, pattern, subjectID}
+	if cursor != "" {
+		sql += ` AND (created_at, id) < ((SELECT created_at FROM notes.notes WHERE id = $4::uuid), $4::uuid)`
+		args = append(args, cursor)
+	}
+	args = append(args, limit+1)
+	sql += fmt.Sprintf(" ORDER BY created_at DESC, id DESC LIMIT $%d", len(args))
+	rows, err := db.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, "", fmt.Errorf("list public notes: %w", err)
+	}
+	defer rows.Close()
+	var notes []*model.Note
+	for rows.Next() {
+		var n model.Note
+		if err := rows.Scan(&n.ID, &n.UserID, &n.SubjectID, &n.Title, &n.ExternalFileID, &n.Visibility, &n.LikesCount, &n.ForkedFromNoteID, &n.SyncStatus, &n.Version, &n.CreatedAt, &n.UpdatedAt); err != nil {
+			return nil, "", fmt.Errorf("scan public note: %w", err)
+		}
+		notes = append(notes, &n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	next := ""
+	if len(notes) > limit {
+		notes = notes[:limit]
+		next = notes[limit-1].ID
+	}
+	return notes, next, nil
 }
 
 func (r *NoteRepository) ListByUser(ctx context.Context, db DBTX, userID string, cursor string, limit int) ([]*model.Note, string, error) {
@@ -114,6 +218,71 @@ func (r *NoteRepository) ListByUser(ctx context.Context, db DBTX, userID string,
 		var n model.Note
 		if err := rows.Scan(&n.ID, &n.UserID, &n.SubjectID, &n.Title, &n.ExternalFileID, &n.Visibility, &n.LikesCount, &n.ForkedFromNoteID, &n.SyncStatus, &n.Version, &n.CreatedAt, &n.UpdatedAt); err != nil {
 			return nil, "", fmt.Errorf("scan note: %w", err)
+		}
+		notes = append(notes, &n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	var nextCursor string
+	if len(notes) > limit {
+		nextCursor = notes[limit-1].ID
+		notes = notes[:limit]
+	}
+	return notes, nextCursor, nil
+}
+
+// ListPublicByUser lista únicamente apuntes visibility='public' del autor
+// indicado que además tengan archivo Drive asociado (external_file_id no nulo),
+// con paginación keyset estable por (created_at DESC, id DESC). Devuelve solo
+// las columnas del DTO público. El cursor debe pertenecer al mismo autor, ser
+// público y tener archivo: la subconsulta exige user_id, visibility y
+// external_file_id dentro de sí misma, de modo que un cursor inexistente,
+// privado, sin archivo o de otro autor produce NULL y la comparación de tuplas
+// no devuelve filas (fail-closed, sin filtrar notas privadas ni saltarse los
+// filtros).
+func (r *NoteRepository) ListPublicByUser(ctx context.Context, db DBTX, userID string, cursor string, limit int) ([]*model.PublicNote, string, error) {
+	if db == nil {
+		db = r.pool
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	const publicColumns = `id, user_id, subject_id, title, visibility, likes_count, version, created_at, updated_at`
+	var rows pgx.Rows
+	var err error
+	if cursor == "" {
+		rows, err = db.Query(ctx, `
+			SELECT `+publicColumns+`
+			FROM notes.notes
+			WHERE user_id = $1 AND visibility = 'public' AND external_file_id IS NOT NULL
+			ORDER BY created_at DESC, id DESC LIMIT $2`, userID, limit+1)
+	} else {
+		// La subconsulta DEBE devolver las dos columnas (created_at, id): una
+		// tupla de dos columnas no puede compararse con una subconsulta de una.
+		rows, err = db.Query(ctx, `
+			SELECT `+publicColumns+`
+			FROM notes.notes
+			WHERE user_id = $1 AND visibility = 'public' AND external_file_id IS NOT NULL
+			  AND (created_at, id) < (
+			      SELECT created_at, id
+			      FROM notes.notes
+			      WHERE id = $2
+			        AND user_id = $1
+			        AND visibility = 'public'
+			        AND external_file_id IS NOT NULL
+			  )
+			ORDER BY created_at DESC, id DESC LIMIT $3`, userID, cursor, limit+1)
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("list public notes: %w", err)
+	}
+	defer rows.Close()
+	var notes []*model.PublicNote
+	for rows.Next() {
+		var n model.PublicNote
+		if err := rows.Scan(&n.ID, &n.UserID, &n.SubjectID, &n.Title, &n.Visibility, &n.LikesCount, &n.Version, &n.CreatedAt, &n.UpdatedAt); err != nil {
+			return nil, "", fmt.Errorf("scan public note: %w", err)
 		}
 		notes = append(notes, &n)
 	}
@@ -399,6 +568,14 @@ var ErrForbidden = errors.New("forbidden")
 // existe pero su version no coincide con la versión esperada por el writer.
 var ErrConflict = errors.New("conflict")
 
+// ErrAlreadyShared: la nota ya tiene un vínculo con ese grupo
+// (UNIQUE (note_id, group_id) de notes.shared_notes, migración 005).
+var ErrAlreadyShared = errors.New("already_shared")
+
+// ErrAlreadyCopied: el usuario ya tiene un clon vivo de ese apunte origen
+// (uq_notes_user_forked_from, migración 006). Se traduce a 409 already_copied.
+var ErrAlreadyCopied = errors.New("already_copied")
+
 // EnqueueDriveOperation accepts a transaction so the outbox and local mutation
 // commit together. Empty logical references are stored as NULL.
 func (r *NoteRepository) EnqueueDriveOperation(ctx context.Context, db DBTX, op, noteID, attID, fileID, ownerUserID string, payload map[string]any) error {
@@ -543,7 +720,8 @@ func (r *NoteRepository) DeleteWithDriveCleanup(ctx context.Context, noteID, req
 	// existe; la metadata ya fue capturada arriba para el cleanup de Drive).
 	for _, query := range []string{
 		`DELETE FROM notes.note_attachments WHERE note_id = $1`,
-		`DELETE FROM notes.saved_notes WHERE note_id = $1`,
+		// notes.saved_notes NO se limpia: el guardado sobrevive y se lista
+		// como "no disponible" (migración 004, lápida en note_tombstones).
 		`DELETE FROM notes.note_likes WHERE note_id = $1`,
 		`DELETE FROM notes.shared_notes WHERE note_id = $1`,
 	} {

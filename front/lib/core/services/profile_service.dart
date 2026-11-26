@@ -108,6 +108,33 @@ class ProfileService {
     return profile;
   }
 
+  /// GET /profile/public/:public_id -> 200 nombre e institución del perfil.
+  /// 404 = perfil inexistente o privado ajeno; 503 = Identity no disponible.
+  Future<PublicProfile> getPublicProfile(String rawPublicId) async {
+    final publicId = normalizePublicId(rawPublicId);
+    if (publicId == null) {
+      throw ProfileApiException(
+        'El ID de perfil no es válido.',
+        statusCode: 400,
+        code: 'invalid_public_id',
+      );
+    }
+    final revision = SessionManager.revision.value;
+    final res = await AuthedHttp.run(() {
+      _checkSession(revision);
+      return _client
+          .get(
+            Uri.parse('$baseUrl/profile/public/$publicId'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10));
+    });
+    _checkSession(revision);
+    if (res.statusCode != 200) throw _toError(res);
+    final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    return PublicProfile.fromJson(body);
+  }
+
   // PATCH /profile/me (parcial) -> 200 perfil actualizado.
   // Body vacío -> 400. user_id prohibido -> 400.
   Future<UserProfile> patchProfile(Map<String, dynamic> patch) async {
@@ -133,5 +160,99 @@ class ProfileService {
 
   void dispose() {
     _client.close();
+  }
+
+  // ==================== Seguir / dejar de seguir usuarios ====================
+
+  /// POST /profile/follow/:public_id -> 200 {public_id, following: true, message}
+  /// Sigue al usuario con el código público dado.
+  Future<FollowStatus> followUser(String publicId) async {
+    final pid = publicId.trim();
+    if (pid.isEmpty) {
+      throw ProfileApiException('public_id vacío.', code: 'invalid_public_id');
+    }
+    final revision = SessionManager.revision.value;
+    final res = await AuthedHttp.run(
+      () => _client
+          .post(
+            Uri.parse('$baseUrl/profile/follow/$pid'),
+            headers: _headers(json: true),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    _checkSession(revision);
+    if (res.statusCode != 200) throw _toError(res);
+    return FollowStatus(publicId: pid, following: true);
+  }
+
+  /// DELETE /profile/follow/:public_id -> 200 {public_id, following: false, message}
+  /// Deja de seguir al usuario con el código público dado.
+  Future<FollowStatus> unfollowUser(String publicId) async {
+    final pid = publicId.trim();
+    if (pid.isEmpty) {
+      throw ProfileApiException('public_id vacío.', code: 'invalid_public_id');
+    }
+    final revision = SessionManager.revision.value;
+    final res = await AuthedHttp.run(
+      () => _client
+          .delete(
+            Uri.parse('$baseUrl/profile/follow/$pid'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    _checkSession(revision);
+    if (res.statusCode != 200) throw _toError(res);
+    return FollowStatus(publicId: pid, following: false);
+  }
+
+  /// GET /profile/follow-status/:public_id -> 200 {public_id, following, message}
+  /// Devuelve si el usuario autenticado sigue al perfil con public_id.
+  Future<FollowStatus> getFollowStatus(String publicId) async {
+    final pid = publicId.trim();
+    if (pid.isEmpty) {
+      throw ProfileApiException('public_id vacío.', code: 'invalid_public_id');
+    }
+    final revision = SessionManager.revision.value;
+    final res = await AuthedHttp.run(
+      () => _client
+          .get(
+            Uri.parse('$baseUrl/profile/follow-status/$pid'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    _checkSession(revision);
+    if (res.statusCode != 200) throw _toError(res);
+    final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    final following = (body['following'] as bool?) ?? false;
+    return FollowStatus(publicId: pid, following: following);
+  }
+
+  /// GET /profile/following/:public_id -> 200 {data: [FollowedUser, ...]}
+  /// Devuelve a quién sigue el usuario con ese código público.
+  Future<List<FollowedUser>> listFollowing(String publicId) async {
+    final pid = publicId.trim();
+    if (pid.isEmpty) {
+      throw ProfileApiException('public_id vacío.', code: 'invalid_public_id');
+    }
+    final revision = SessionManager.revision.value;
+    final res = await AuthedHttp.run(
+      () => _client
+          .get(
+            Uri.parse('$baseUrl/profile/following/$pid'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 10)),
+    );
+    _checkSession(revision);
+    if (res.statusCode != 200) throw _toError(res);
+    final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    final raw = body['data'];
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map<String, dynamic>>()
+        .map((e) => FollowedUser.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
   }
 }

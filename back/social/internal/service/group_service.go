@@ -7,9 +7,11 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/model"
 	"github.com/kurovoxx/tallerintegracion3/back/social/internal/utils"
 )
@@ -48,17 +50,31 @@ type GroupStore interface {
 	ListMyGroups(ctx context.Context, userID string) ([]*model.MyGroup, error)
 	ListMyGroupsDetailed(ctx context.Context, userID string) ([]*model.GroupCard, error)
 	JoinWithInviteToken(ctx context.Context, groupID string, inviteToken string, userID string) error
+	// FindByInviteToken devuelve el grupo cuyo invite_token vigente es el
+	// indicado, o nil si ninguno lo tiene (invite_token es UNIQUE).
+	FindByInviteToken(ctx context.Context, inviteToken string) (*model.Group, error)
 	RegenerateInviteToken(ctx context.Context, groupID string, userID string) (string, error)
 	IsMember(ctx context.Context, groupID string, userID string) (bool, error)
 	ListMembers(ctx context.Context, groupID string) ([]*model.GroupMembership, error)
+	// ListMembersLimit lista como máximo limit miembros (limit <= 0 = todos).
+	ListMembersLimit(ctx context.Context, groupID string, limit int) ([]*model.GroupMembership, error)
+	CountMembers(ctx context.Context, groupID string) (int, error)
 	KickMember(ctx context.Context, groupID, adminID, targetUserID string) error
 	BanMember(ctx context.Context, groupID, adminID, targetUserID string) error
 	ChangeMemberRole(ctx context.Context, groupID, adminID, targetUserID, newRole string) error
 	TransferAdmin(ctx context.Context, groupID, currentAdminID, newAdminID string) error
 	GetMemberRole(ctx context.Context, groupID, userID string) (string, error)
+	// SetMemberPermissions delega permisos a un miembro común. Solo admins.
+	SetMemberPermissions(ctx context.Context, groupID, adminID, targetUserID string, upd model.MemberPermissionsUpdate) (model.MemberPermissions, error)
+	// GetMemberDefaults / SetMemberDefaults manejan los permisos habilitados
+	// para todos los miembros del grupo (set: solo admins).
+	GetMemberDefaults(ctx context.Context, groupID string) (model.MemberPermissions, error)
+	SetMemberDefaults(ctx context.Context, groupID, adminID string, upd model.MemberPermissionsUpdate) (model.MemberPermissions, error)
 	CountAdmins(ctx context.Context, groupID string) (int, error)
 	RemoveMember(ctx context.Context, groupID, userID string) error
 	DeleteGroup(ctx context.Context, groupID string) error
+	// UpdateGroup modifica nombre, descripción y foto. Solo admins.
+	UpdateGroup(ctx context.Context, groupID, userID string, update model.GroupUpdate) (*model.Group, error)
 	// HandleAccountDeletion saca al usuario de todos sus grupos aplicando la
 	// sucesión automática de admin. Es idempotente.
 	HandleAccountDeletion(ctx context.Context, userID string) ([]model.SuccessionResult, error)
@@ -98,6 +114,32 @@ type NoopGroupCreatedNotifier struct{}
 func (NoopGroupCreatedNotifier) OnGroupCreated(ctx context.Context, groupID string) {}
 
 const defaultNotesBaseURL = "http://localhost:8082"
+
+const (
+	maxGroupPhotoURLLength        = 500
+	maxGroupPhotoDataURLLen       = 2_000_000
+	maxGroupPhotoThumbDataURLLen  = 120_000
+	groupPhotoDataURLPrefix       = "data:image/"
+	groupPhotoDataURLBase64Marker = ";base64,"
+)
+
+// validGroupPhotoURL acepta URLs http(s) cortas o data URLs de imagen
+// recortadas por el cliente. El límite se ajusta para foto completa o miniatura.
+func validGroupPhotoURL(v string, maxDataURLLen int) bool {
+	if v == "" {
+		return true
+	}
+	if strings.HasPrefix(v, "data:") {
+		return strings.HasPrefix(v, groupPhotoDataURLPrefix) &&
+			strings.Contains(v, groupPhotoDataURLBase64Marker) &&
+			len(v) <= maxDataURLLen
+	}
+	if len(v) > maxGroupPhotoURLLength {
+		return false
+	}
+	u, err := url.Parse(v)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
 
 type GroupService struct {
 	groups       GroupStore
@@ -257,15 +299,22 @@ func (s *GroupService) GetGroup(ctx context.Context, groupID, userID string) (*m
 	if err != nil {
 		return nil, mapStoreErr(err)
 	}
+	memberCount, err := s.groups.CountMembers(ctx, groupID)
+	if err != nil {
+		return nil, mapStoreErr(err)
+	}
 
 	view := &model.GroupView{
 		ID:                     group.ID,
 		Name:                   group.Name,
 		Description:            group.Description,
+		PhotoURL:               group.PhotoURL,
+		PhotoThumbURL:          group.PhotoThumbURL,
 		OwnerUserID:            group.OwnerUserID,
 		NotesRestrictedToStaff: group.NotesRestrictedToStaff,
 		CreatedAt:              group.CreatedAt,
 		Role:                   role,
+		MemberCount:            memberCount,
 	}
 	if role == model.RoleAdmin {
 		view.InviteToken = group.InviteToken
@@ -360,7 +409,48 @@ func (s *GroupService) JoinGroup(ctx context.Context, groupID string, inviteToke
 	return mapStoreErr(s.groups.JoinWithInviteToken(ctx, groupID, inviteToken, userID))
 }
 
+// JoinByInviteCode une al usuario a un grupo usando solo el código de
+// invitación. El invite_token es un UUID aleatorio y UNIQUE en social.groups,
+// así que identifica al grupo sin pedir además su id. Tras resolver el grupo
+// se delega en JoinWithInviteToken, que vuelve a validar el token bajo el lock
+// del grupo (rotación concurrente) y aplica el baneo: las reglas son las
+// mismas que las de POST /groups/:id/join.
+func (s *GroupService) JoinByInviteCode(ctx context.Context, code string, userID string) (*model.JoinResult, error) {
+	if userID == "" {
+		return nil, ErrUnauthorized
+	}
+	parsed, err := uuid.Parse(strings.TrimSpace(code))
+	if err != nil {
+		return nil, ErrInvalidInviteToken
+	}
+	token := parsed.String() // forma canónica en minúsculas
+	group, err := s.groups.FindByInviteToken(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	if group == nil {
+		return nil, ErrInvalidInviteToken
+	}
+	// Solo informativo (mensaje en la app); la inserción sigue siendo
+	// idempotente aunque otra petición se adelante.
+	wasMember, err := s.groups.IsMember(ctx, group.ID, userID)
+	if err != nil {
+		return nil, mapStoreErr(err)
+	}
+	if err := s.groups.JoinWithInviteToken(ctx, group.ID, token, userID); err != nil {
+		return nil, mapStoreErr(err)
+	}
+	return &model.JoinResult{GroupID: group.ID, Name: group.Name, AlreadyMember: wasMember}, nil
+}
+
 func (s *GroupService) ListMembers(ctx context.Context, groupID string, userID string) ([]*model.GroupMembership, error) {
+	return s.ListMembersLimit(ctx, groupID, userID, 0)
+}
+
+// ListMembersLimit es ListMembers con un tope opcional para la vista previa
+// de grupos. limit <= 0 devuelve todos; el tope se aplica antes de enriquecer
+// con Identity para no resolver ni serializar fotos que no se van a mostrar.
+func (s *GroupService) ListMembersLimit(ctx context.Context, groupID string, userID string, limit int) ([]*model.GroupMembership, error) {
 	if userID == "" {
 		return nil, ErrUnauthorized
 	}
@@ -376,7 +466,7 @@ func (s *GroupService) ListMembers(ctx context.Context, groupID string, userID s
 		return nil, ErrForbidden
 	}
 
-	members, err := s.groups.ListMembers(ctx, groupID)
+	members, err := s.groups.ListMembersLimit(ctx, groupID, limit)
 	if err != nil {
 		return nil, mapStoreErr(err)
 	}
@@ -425,7 +515,14 @@ func (s *GroupService) ListMemberEmailsInternal(ctx context.Context, groupID str
 // Best-effort: si el directorio falla, devuelve miembros sin nombres
 // (campos omitidos por omitempty, backward-compatible).
 func (s *GroupService) ListMembersEnriched(ctx context.Context, groupID string, userID string) ([]model.MemberView, error) {
-	members, err := s.ListMembers(ctx, groupID, userID)
+	return s.ListMembersEnrichedLimit(ctx, groupID, userID, 0)
+}
+
+// ListMembersEnrichedLimit aplica el tope antes del lookup a Identity. Se usa
+// en la vista previa de grupos (p. ej. limit=3) para no traer miniaturas de
+// todos los integrantes hasta que se abra la pestaña MIEMBROS.
+func (s *GroupService) ListMembersEnrichedLimit(ctx context.Context, groupID string, userID string, limit int) ([]model.MemberView, error) {
+	members, err := s.ListMembersLimit(ctx, groupID, userID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -487,14 +584,20 @@ func (s *GroupService) enrichMembers(ctx context.Context, members []*model.Group
 			continue
 		}
 		v := model.MemberView{
-			ID:       m.ID,
-			GroupID:  m.GroupID,
-			UserID:   m.UserID,
-			Role:     m.Role,
-			JoinedAt: m.JoinedAt,
+			ID:                      m.ID,
+			GroupID:                 m.GroupID,
+			UserID:                  m.UserID,
+			Role:                    m.Role,
+			JoinedAt:                m.JoinedAt,
+			MemberPermissions:       m.MemberPermissions,
+			MemberPermissionDenials: m.MemberPermissionDenials,
 		}
 		if p, ok := names[m.UserID]; ok {
 			v.DisplayName = p.DisplayName
+			v.PhotoThumbURL = p.PhotoThumbURL
+			if p.PublicID != nil && strings.TrimSpace(*p.PublicID) != "" {
+				v.PublicID = p.PublicID
+			}
 			if strings.TrimSpace(p.Email) != "" {
 				v.Email = &p.Email
 			}
@@ -565,6 +668,68 @@ func (s *GroupService) ChangeRole(ctx context.Context, groupID, adminID, targetU
 	})
 }
 
+// SetMemberPermissions delega (o retira) permisos a un miembro común: compartir
+// apuntes, agendar reuniones y editar el kanban. Solo admins; no aplica a
+// admins (ya pueden todo) ni a uno mismo.
+func (s *GroupService) SetMemberPermissions(ctx context.Context, groupID, adminID, targetUserID string, upd model.MemberPermissionsUpdate) (model.MemberPermissions, error) {
+	if err := checkAdminAction(groupID, adminID, targetUserID); err != nil {
+		return model.MemberPermissions{}, err
+	}
+	if upd.CanShareNotes == nil && upd.CanCreateMeetings == nil && upd.CanEditKanban == nil {
+		return model.MemberPermissions{}, newServiceError(utils.ErrInvalidPermissions)
+	}
+	var out model.MemberPermissions
+	err := s.withTargetAccount(ctx, targetUserID, func() error {
+		perms, err := s.groups.SetMemberPermissions(ctx, groupID, adminID, targetUserID, upd)
+		out = perms
+		return mapStoreErr(err)
+	})
+	return out, err
+}
+
+// GetMemberDefaults devuelve los permisos habilitados para todos los miembros.
+// Lo puede consultar cualquier miembro del grupo.
+func (s *GroupService) GetMemberDefaults(ctx context.Context, groupID, userID string) (model.MemberPermissions, error) {
+	if userID == "" {
+		return model.MemberPermissions{}, ErrUnauthorized
+	}
+	if !utils.ValidateUUID(groupID) {
+		return model.MemberPermissions{}, ErrNotFound
+	}
+	if _, err := s.groups.GetMemberRole(ctx, groupID, userID); err != nil {
+		return model.MemberPermissions{}, mapStoreErr(err)
+	}
+	perms, err := s.groups.GetMemberDefaults(ctx, groupID)
+	return perms, mapStoreErr(err)
+}
+
+// GetMemberDefaultsInternal es la versión servicio-a-servicio (sin membresía
+// del solicitante): la usa el endpoint interno que consume Notes.
+func (s *GroupService) GetMemberDefaultsInternal(ctx context.Context, groupID string) (model.MemberPermissions, error) {
+	if !utils.ValidateUUID(groupID) {
+		return model.MemberPermissions{}, ErrNotFound
+	}
+	perms, err := s.groups.GetMemberDefaults(ctx, groupID)
+	return perms, mapStoreErr(err)
+}
+
+// SetMemberDefaults habilita o retira, para TODOS los miembros del grupo, los
+// permisos de compartir apuntes, agendar reuniones y editar el kanban. Solo
+// admins. Los campos nil no se modifican.
+func (s *GroupService) SetMemberDefaults(ctx context.Context, groupID, adminID string, upd model.MemberPermissionsUpdate) (model.MemberPermissions, error) {
+	if adminID == "" {
+		return model.MemberPermissions{}, ErrUnauthorized
+	}
+	if !utils.ValidateUUID(groupID) {
+		return model.MemberPermissions{}, ErrNotFound
+	}
+	if upd.CanShareNotes == nil && upd.CanCreateMeetings == nil && upd.CanEditKanban == nil {
+		return model.MemberPermissions{}, newServiceError(utils.ErrInvalidPermissions)
+	}
+	perms, err := s.groups.SetMemberDefaults(ctx, groupID, adminID, upd)
+	return perms, mapStoreErr(err)
+}
+
 func (s *GroupService) TransferAdmin(ctx context.Context, groupID, currentAdminID, newAdminID string) error {
 	if err := checkAdminAction(groupID, currentAdminID, newAdminID); err != nil {
 		return err
@@ -572,6 +737,69 @@ func (s *GroupService) TransferAdmin(ctx context.Context, groupID, currentAdminI
 	return s.withTargetAccount(ctx, newAdminID, func() error {
 		return mapStoreErr(s.groups.TransferAdmin(ctx, groupID, currentAdminID, newAdminID))
 	})
+}
+
+// UpdateGroup modifica nombre, descripción y foto del grupo. Solo admins.
+func (s *GroupService) UpdateGroup(ctx context.Context, groupID, userID string, update model.GroupUpdate) (*model.Group, error) {
+	if userID == "" {
+		return nil, ErrUnauthorized
+	}
+	if !utils.ValidateUUID(groupID) {
+		return nil, ErrNotFound
+	}
+
+	update.Name = utils.NormalizeName(update.Name)
+	if err := validateName(update.Name); err != nil {
+		return nil, err
+	}
+
+	if update.Description != nil {
+		trimmed := strings.TrimSpace(*update.Description)
+		if trimmed == "" {
+			update.Description = nil
+		} else {
+			update.Description = &trimmed
+		}
+	}
+
+	// photo_url: "" borra la foto; si cambia sin mandar miniatura, se borra
+	// la miniatura anterior para no dejar un recorte viejo.
+	if update.UpdatePhotoURL {
+		v := ""
+		if update.PhotoURL != nil {
+			v = strings.TrimSpace(*update.PhotoURL)
+		}
+		if !validGroupPhotoURL(v, maxGroupPhotoDataURLLen) {
+			return nil, newServiceError(utils.ErrInvalidPhotoURL)
+		}
+		update.PhotoURL = nil
+		if v != "" {
+			update.PhotoURL = &v
+		}
+		if !update.UpdatePhotoThumb {
+			update.UpdatePhotoThumb = true
+			update.PhotoThumbURL = nil
+		}
+	}
+	if update.UpdatePhotoThumb {
+		v := ""
+		if update.PhotoThumbURL != nil {
+			v = strings.TrimSpace(*update.PhotoThumbURL)
+		}
+		if !validGroupPhotoURL(v, maxGroupPhotoThumbDataURLLen) {
+			return nil, newServiceError(utils.ErrInvalidPhotoThumbURL)
+		}
+		update.PhotoThumbURL = nil
+		if v != "" {
+			update.PhotoThumbURL = &v
+		}
+	}
+
+	group, err := s.groups.UpdateGroup(ctx, groupID, userID, update)
+	if err != nil {
+		return nil, mapStoreErr(err)
+	}
+	return group, nil
 }
 
 // LeaveGroup realiza la salida y sucesión atómicas antes del cleanup best-effort.

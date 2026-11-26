@@ -9,6 +9,7 @@ import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taller_integracion_front/core/services/session_manager.dart';
 import 'package:taller_integracion_front/core/services/social_service.dart';
+import 'package:taller_integracion_front/core/widgets/neobrutalism.dart';
 import 'package:taller_integracion_front/features/workspace/sprint_sheet_screen.dart';
 
 const _gid = '11111111-1111-1111-1111-111111111111';
@@ -79,7 +80,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // Abrir el selector de responsable y elegir miembro.
-    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.tap(find.byType(NeobrutalistSelectField<String?>));
     await tester.pumpAndSettle();
     await tester.tap(find.textContaining('admin').last);
     await tester.pumpAndSettle();

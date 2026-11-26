@@ -1,4 +1,5 @@
-# GET /auth/google-drive/status
+# `GET /auth/google-drive/status`
+
 
 Verifica si el usuario tiene una conexión activa y válida con Google Drive.
 

@@ -110,8 +110,8 @@ class GradeCalculatorScreen extends StatefulWidget {
     this.onSaved,
   });
 
-  /// Curso preseleccionado (UX materiales: materia de la ventana).
-  /// Si no está en la lista, se antepone.
+  /// Materia de la ventana que se usa para hidratar las notas.
+  /// Vacío = simulador local sin curso asociado.
   final String? initialCourse;
 
   /// Embebida en otra ventana (sin Scaffold/scroll/header propios:
@@ -127,16 +127,7 @@ class GradeCalculatorScreen extends StatefulWidget {
 }
 
 class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
-  static const List<String> _baseCourses = [
-    'Cálculo III',
-    'Estructuras de Datos',
-    'Física General II',
-    'Ingeniería de Software',
-  ];
-
-  late final List<String> _courses;
-
-  late String _selectedCourse;
+  late final String _selectedCourse;
   final TextEditingController _targetController = TextEditingController(
     text: '4.0',
   );
@@ -173,22 +164,11 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
   String? _backendError;
   bool _isSavingBackend = false;
   bool _isReloading = false;
-  bool _loadedFromBackend = false;
 
   @override
   void initState() {
     super.initState();
-    final initial = widget.initialCourse?.trim();
-    if (initial != null &&
-        initial.isNotEmpty &&
-        !_baseCourses.contains(initial)) {
-      _courses = [initial, ..._baseCourses];
-    } else {
-      _courses = List<String>.of(_baseCourses);
-    }
-    _selectedCourse = (initial != null && initial.isNotEmpty)
-        ? initial
-        : _courses.first;
+    _selectedCourse = widget.initialCourse?.trim() ?? '';
     _initializeNormalGrades();
     _loadFromBackend();
   }
@@ -254,7 +234,6 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
   void _resetCalculator() {
     setState(() {
       _resetResult();
-      _loadedFromBackend = false;
 
       if (_finalExamMode) {
         _finalGrade?.dispose();
@@ -317,6 +296,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
   /// [reloadEmptyMessage] sin tocar lo local. Error (sin sesión/red) →
   /// error visible + SnackBar (el botón reintenta, patrón existente).
   Future<void> _loadFromBackend({bool manual = false}) async {
+    if (_selectedCourse.isEmpty) return;
     if (manual) {
       if (_isReloading) return;
       setState(() {
@@ -334,7 +314,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         if (!mounted) return;
         if (manual) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
+            SnackBar(
               content: Text(reloadEmptyMessage),
               backgroundColor: AppColors.border,
             ),
@@ -391,7 +371,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     if (manual) {
       if (!hasSavedNotes(nodes)) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             content: Text(reloadEmptyMessage),
             backgroundColor: AppColors.border,
           ),
@@ -416,7 +396,6 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         _backendAverage = average?.average;
         _backendAverageStatus = average?.status;
         _backendError = null;
-        _loadedFromBackend = true;
       });
       // Mismo path post-guardado: recarga lista + promedio en el padre para
       // no desincronizar (recarga fresca, sin duplicados ni IDs viejos).
@@ -424,7 +403,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       if (cb != null) cb();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(reloadSuccessMessage),
           backgroundColor: AppColors.border,
         ),
@@ -568,32 +547,6 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     }
   }
 
-  /// Recordatorio compacto: todo lo de esta sección es simulación local.
-  Widget _buildSimulatorNotice() {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const NeobrutalistBadge(
-          label: 'Simulación',
-          tone: NeobrutalistTone.info,
-          compact: true,
-        ),
-        const SizedBox(width: AppDimens.spaceSm),
-        const Expanded(
-          child: Text(
-            'Prueba escenarios aquí. Nada se guarda como nota oficial hasta que uses Guardar.',
-            style: TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 11.5,
-              color: AppColors.mutedStrong,
-              height: 1.3,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
   /// Estado de la fuente oficial. En la versión embebida el promedio oficial
   /// ya lo muestra el encabezado de la pestaña, así que aquí solo se muestran
   /// errores (evita duplicar el mismo valor).
@@ -603,7 +556,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         padding: const EdgeInsets.only(bottom: AppDimens.spaceMd),
         child: Text(
           'No se pudieron cargar tus notas oficiales: $_backendError',
-          style: const TextStyle(
+          style: TextStyle(
             fontWeight: FontWeight.w700,
             fontSize: 11.5,
             color: AppColors.errorDeep,
@@ -615,7 +568,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     final value = _backendAverage;
     if (value == null) {
       if (!_backendMode) return const SizedBox.shrink();
-      return const Padding(
+      return Padding(
         padding: EdgeInsets.only(bottom: AppDimens.spaceMd),
         child: Text(
           'SIN NOTAS OFICIALES REGISTRADAS',
@@ -661,46 +614,12 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     };
   }
 
-  /// Aviso al cargar notas oficiales: son copias editables para simular.
-  Widget _buildEditableCopyNotice() {
-    return Container(
-      margin: const EdgeInsets.only(bottom: AppDimens.spaceMd),
-      padding: const EdgeInsets.all(AppDimens.spaceMd),
-      decoration: BoxDecoration(
-        color: AppColors.accentYellow,
-        border: Border.all(
-          color: AppColors.border,
-          width: AppDimens.borderWidth,
-        ),
-        borderRadius: BorderRadius.circular(AppDimens.radius),
-      ),
-      child: const Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.content_copy_rounded, size: 18, color: AppColors.text),
-          SizedBox(width: AppDimens.spaceSm),
-          Expanded(
-            child: Text(
-              'Copias editables: estas notas se cargaron desde tus evaluaciones oficiales. Editarlas aquí solo afecta la simulación; no se guardan hasta que uses Guardar.',
-              style: TextStyle(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w700,
-                color: AppColors.text,
-                height: 1.35,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   /// Sección de resultado: visible de inmediato, con pista cuando aún no hay.
   Widget _buildResultSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text(
+        Text(
           'RESULTADO DE LA SIMULACIÓN',
           style: TextStyle(
             fontWeight: FontWeight.w900,
@@ -716,12 +635,12 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
             decoration: BoxDecoration(
               color: AppColors.surfaceLow,
               border: Border.all(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidth,
               ),
               borderRadius: BorderRadius.circular(AppDimens.radius),
             ),
-            child: const Text(
+            child: Text(
               'Completa tus notas y presiona Calcular para ver el resultado aquí.',
               style: TextStyle(
                 fontWeight: FontWeight.w700,
@@ -783,7 +702,49 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         .toDouble();
   }
 
-  /// Dos componentes complementarios: final 70/examen 30, o viceversa.
+  /// La última nota del grupo es la única que se recalcula cuando se edita
+  /// el peso de otra. Se resuelve con `.last` para que agregar/eliminar
+  /// notas mueva el rol dinámicamente.
+  _GradeItem? get _lastNormalGrade =>
+      _normalGrades.isEmpty ? null : _normalGrades.last;
+
+  _GradeItem? _lastChildOf(_GradeItem parent) =>
+      parent.children.isEmpty ? null : parent.children.last;
+
+  void _setWeightText(_GradeItem item, double value) {
+    final text = _formatWeight(value);
+    item.weightController.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+  }
+
+  /// Deja fijo el peso de una nota y asigna al resto del grupo únicamente
+  /// el peso residual de la última nota.
+  double _residualForLast(
+    List<_GradeItem> items,
+    _GradeItem changed,
+    _GradeItem last,
+  ) {
+    final fixed = items
+        .where((item) => item != changed && item != last)
+        .fold<double>(0, (sum, item) => sum + _readWeight(item));
+    return (100 - _readWeight(changed) - fixed).clamp(0.0, 100.0).toDouble();
+  }
+
+  /// Recalcula solo la última nota del grupo a partir del resto.
+  void _applyResidualWeight(List<_GradeItem> items) {
+    if (items.isEmpty) return;
+    final last = items.last;
+    final fixed = items
+        .where((item) => item != last)
+        .fold<double>(0, (sum, item) => sum + _readWeight(item));
+    _setWeightText(last, (100 - fixed).clamp(0.0, 100.0).toDouble());
+  }
+
+  /// Nota final + examen: el examen es la última nota, así que absorbe el
+  /// cambio cuando se edita la nota final. Editar el examen no reescribe la
+  /// nota final, de modo que se pueden fijar ambos porcentajes libremente.
   void _changeFinalWeight() {
     final finalItem = _finalGrade;
     final examItem = _exam;
@@ -793,16 +754,8 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       _isRedistributing = true;
       try {
         final finalWeight = _readWeight(finalItem);
-        final textF = _formatWeight(finalWeight);
-        final textE = _formatWeight(100 - finalWeight);
-        finalItem.weightController.value = TextEditingValue(
-          text: textF,
-          selection: TextSelection.collapsed(offset: textF.length),
-        );
-        examItem.weightController.value = TextEditingValue(
-          text: textE,
-          selection: TextSelection.collapsed(offset: textE.length),
-        );
+        _setWeightText(finalItem, finalWeight);
+        _setWeightText(examItem, 100 - finalWeight);
       } finally {
         _isRedistributing = false;
       }
@@ -811,24 +764,13 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
   }
 
   void _changeExamWeight() {
-    final finalItem = _finalGrade;
     final examItem = _exam;
-    if (_isRedistributing || finalItem == null || examItem == null) return;
+    if (_isRedistributing || examItem == null) return;
 
     setState(() {
       _isRedistributing = true;
       try {
-        final examWeight = _readWeight(examItem);
-        final textE = _formatWeight(examWeight);
-        final textF = _formatWeight(100 - examWeight);
-        examItem.weightController.value = TextEditingValue(
-          text: textE,
-          selection: TextSelection.collapsed(offset: textE.length),
-        );
-        finalItem.weightController.value = TextEditingValue(
-          text: textF,
-          selection: TextSelection.collapsed(offset: textF.length),
-        );
+        _setWeightText(examItem, _readWeight(examItem));
       } finally {
         _isRedistributing = false;
       }
@@ -836,109 +778,41 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     });
   }
 
-  /// Peso normal: el elemento editado queda fijo y el restante se reparte
-  /// entre los demás. Ejemplo: 20% -> el resto pasa a sumar 80%.
+  /// El elemento editado queda fijo; solo la última nota normal se recalcula.
   void _changeNormalWeight(_GradeItem changed) {
     if (_isRedistributing) return;
-
-    setState(() {
-      _redistributeNormalWeights(changed);
-      _resetResult();
-    });
-  }
-
-  void _redistributeNormalWeights(_GradeItem changed) {
-    if (_normalGrades.isEmpty) return;
-
-    _isRedistributing = true;
-    try {
-      final changedWeight = _readWeight(changed);
-      final tChanged = _formatWeight(changedWeight);
-      changed.weightController.value = TextEditingValue(
-        text: tChanged,
-        selection: TextSelection.collapsed(offset: tChanged.length),
-      );
-
-      final otherGrades = _normalGrades
-          .where((item) => item != changed)
-          .toList();
-      if (otherGrades.isEmpty) return;
-
-      final remaining = 100 - changedWeight;
-      final previousTotal = otherGrades.fold<double>(
-        0,
-        (sum, item) => sum + _readWeight(item),
-      );
-
-      if (previousTotal == 0) {
-        final equalWeight = remaining / otherGrades.length;
-        for (final item in otherGrades) {
-          final t = _formatWeight(equalWeight);
-          item.weightController.value = TextEditingValue(
-            text: t,
-            selection: TextSelection.collapsed(offset: t.length),
-          );
-        }
-      } else {
-        for (final item in otherGrades) {
-          final proportionalWeight =
-              remaining * _readWeight(item) / previousTotal;
-          final t = _formatWeight(proportionalWeight);
-          item.weightController.value = TextEditingValue(
-            text: t,
-            selection: TextSelection.collapsed(offset: t.length),
-          );
-        }
-      }
-    } finally {
-      _isRedistributing = false;
-    }
-  }
-
-  /// Pesos dentro de una nota subdividida suman 100% relativo al padre.
-  void _changeChildWeight(_GradeItem parent, _GradeItem changed) {
-    if (_isRedistributing || parent.children.isEmpty) return;
+    final last = _lastNormalGrade;
+    if (last == null) return;
 
     setState(() {
       _isRedistributing = true;
       try {
-        final changedWeight = _readWeight(changed);
-        final tChanged = _formatWeight(changedWeight);
-        changed.weightController.value = TextEditingValue(
-          text: tChanged,
-          selection: TextSelection.collapsed(offset: tChanged.length),
-        );
+        _setWeightText(changed, _readWeight(changed));
+        if (!identical(changed, last)) {
+          _setWeightText(last, _residualForLast(_normalGrades, changed, last));
+        }
+      } finally {
+        _isRedistributing = false;
+      }
+      _resetResult();
+    });
+  }
 
-        final others = parent.children
-            .where((item) => item != changed)
-            .toList();
-        if (others.isEmpty) return;
+  /// Pesos dentro de una nota subdividida: la última subnota es la residual.
+  void _changeChildWeight(_GradeItem parent, _GradeItem changed) {
+    if (_isRedistributing || parent.children.isEmpty) return;
+    final last = _lastChildOf(parent);
+    if (last == null) return;
 
-        final remaining = 100 - changedWeight;
-        final previousTotal = others.fold<double>(
-          0,
-          (sum, item) => sum + _readWeight(item),
-        );
-
-        if (previousTotal == 0) {
-          final equalWeight = remaining / others.length;
-          for (final item in others) {
-            final t = _formatWeight(equalWeight);
-            item.weightController.value = TextEditingValue(
-              text: t,
-              selection: TextSelection.collapsed(offset: t.length),
-            );
-          }
-        } else {
-          for (final item in others) {
-            final t = _formatWeight(
-              remaining * _readWeight(item) / previousTotal,
-            );
-            item.weightController.value = TextEditingValue(
-              text: t,
-              selection: TextSelection.collapsed(offset: t.length),
-            );
-          }
+    setState(() {
+      _isRedistributing = true;
+      try {
+        _setWeightText(changed, _readWeight(changed));
+        if (!identical(changed, last)) {
+          _setWeightText(
+            last,
+            _residualForLast(parent.children, changed, last),
+          );
         }
       } finally {
         _isRedistributing = false;
@@ -959,12 +833,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         'normal-${DateTime.now().microsecondsSinceEpoch}',
       );
       _normalGrades.add(newItem);
-
-      final equalWeight = 100 / _normalGrades.length;
-      for (final item in _normalGrades) {
-        item.weightController.text = _formatWeight(equalWeight);
-      }
-
+      _applyResidualWeight(_normalGrades);
       _resetResult();
     });
   }
@@ -974,12 +843,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
 
     setState(() {
       _normalGrades.removeLast().dispose();
-
-      final equalWeight = 100 / _normalGrades.length;
-      for (final item in _normalGrades) {
-        item.weightController.text = _formatWeight(equalWeight);
-      }
-
+      _applyResidualWeight(_normalGrades);
       _resetResult();
     });
   }
@@ -1003,12 +867,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       parent.children.add(
         _newItem('${parent.id}-child-${DateTime.now().microsecondsSinceEpoch}'),
       );
-
-      final equalWeight = 100 / parent.children.length;
-      for (final child in parent.children) {
-        child.weightController.text = _formatWeight(equalWeight);
-      }
-
+      _applyResidualWeight(parent.children);
       _resetResult();
     });
   }
@@ -1026,10 +885,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         survivor.dispose();
         parent.children = [];
       } else {
-        final equalWeight = 100 / parent.children.length;
-        for (final child in parent.children) {
-          child.weightController.text = _formatWeight(equalWeight);
-        }
+        _applyResidualWeight(parent.children);
       }
 
       _resetResult();
@@ -1280,14 +1136,12 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
       children: [
         if (!widget.embedded) _buildHeader(),
         if (!widget.embedded) const SizedBox(height: AppDimens.spaceXl),
-        _buildSimulatorNotice(),
-        const SizedBox(height: AppDimens.spaceMd),
-        if (widget.embedded)
+        if (widget.embedded && _selectedCourse.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(bottom: AppDimens.spaceSm),
             child: Text(
               _selectedCourse.toUpperCase(),
-              style: const TextStyle(
+              style: TextStyle(
                 fontWeight: FontWeight.w800,
                 fontSize: 11,
                 letterSpacing: 0.5,
@@ -1299,7 +1153,6 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
         const SizedBox(height: AppDimens.spaceLg),
         _buildSourceStatus(),
         _buildReloadAction(),
-        if (_loadedFromBackend) _buildEditableCopyNotice(),
         _finalExamMode ? _buildFinalExamMode() : _buildNormalMode(isDesktop),
         const SizedBox(height: AppDimens.spaceLg),
         _buildWeightSummary(),
@@ -1349,25 +1202,13 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
+              Text(
                 'CALCULADORA DE NOTAS',
                 style: TextStyle(
-                  color: AppColors.text,
+                  color: AppColors.title,
                   fontWeight: FontWeight.w900,
                   fontSize: 24,
                 ),
-              ),
-              const SizedBox(height: 4),
-              _CourseDropdown(
-                courses: _courses,
-                selected: _selectedCourse,
-                onChanged: (course) {
-                  setState(() {
-                    _selectedCourse = course;
-                    _resetResult();
-                  });
-                  _loadFromBackend();
-                },
               ),
             ],
           ),
@@ -1438,6 +1279,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
           onWeightChanged: _changeFinalWeight,
           onConfidenceChanged: (v) => _changeConfidence(finalItem, v),
           scoreColor: _scoreColor(finalItem.id),
+          weightFieldKey: const ValueKey('weight-final'),
         ),
         const SizedBox(height: 12),
         _ExamCard(
@@ -1446,6 +1288,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
           onWeightChanged: _changeExamWeight,
           onConfidenceChanged: (v) => _changeConfidence(examItem, v),
           scoreColor: _scoreColor(examItem.id),
+          weightFieldKey: const ValueKey('weight-exam'),
         ),
       ],
     );
@@ -1457,7 +1300,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
 
     final header = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: const [
+      children: [
         Text(
           'NOTAS DEL SIMULADOR',
           style: TextStyle(
@@ -1525,6 +1368,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
                   child: _NormalGradeCard(
                     key: ValueKey(item.id),
                     item: item,
+                    weightFieldKey: ValueKey('weight-${item.id}'),
                     label: gradeRowLabel(item.backendName, 'NOTA ${index + 1}'),
                     onScoreChanged: () => setState(_resetResult),
                     onWeightChanged: () => _changeNormalWeight(item),
@@ -1573,7 +1417,7 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text(
+        Text(
           'ACCIONES',
           style: TextStyle(
             fontWeight: FontWeight.w900,
@@ -1620,27 +1464,11 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
     if (!widget.embedded) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(bottom: AppDimens.spaceLg),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          NeobrutalistButton(
-            label: _isReloading ? 'Cargando…' : 'Cargar notas',
-            icon: Icons.cloud_download_rounded,
-            variant: NeobrutalistButtonVariant.secondary,
-            onPressed: _isReloading
-                ? null
-                : () => _loadFromBackend(manual: true),
-          ),
-          const SizedBox(height: AppDimens.spaceXs),
-          const Text(
-            'Descarga tus notas oficiales como copias editables para simular.',
-            style: TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 11,
-              color: AppColors.mutedStrong,
-            ),
-          ),
-        ],
+      child: NeobrutalistButton(
+        label: _isReloading ? 'Cargando…' : 'Cargar notas',
+        icon: Icons.cloud_download_rounded,
+        variant: NeobrutalistButtonVariant.secondary,
+        onPressed: _isReloading ? null : () => _loadFromBackend(manual: true),
       ),
     );
   }
@@ -1746,53 +1574,6 @@ class _GradeCalculatorScreenState extends State<GradeCalculatorScreen> {
 // WIDGETS PEQUEÑOS Y REUTILIZABLES
 // -------------------------------------------------------------------------
 
-class _CourseDropdown extends StatelessWidget {
-  const _CourseDropdown({
-    required this.courses,
-    required this.selected,
-    required this.onChanged,
-  });
-
-  final List<String> courses;
-  final String selected;
-  final ValueChanged<String> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        border: Border.all(color: AppColors.border, width: 2),
-        borderRadius: BorderRadius.circular(AppDimens.radius),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<String>(
-          value: selected,
-          isDense: true,
-          icon: const Icon(Icons.expand_more_rounded),
-          style: const TextStyle(
-            fontWeight: FontWeight.w800,
-            fontSize: 13,
-            color: AppColors.text,
-          ),
-          items: courses
-              .map(
-                (course) => DropdownMenuItem<String>(
-                  value: course,
-                  child: Text(course.toUpperCase()),
-                ),
-              )
-              .toList(),
-          onChanged: (value) {
-            if (value != null) onChanged(value);
-          },
-        ),
-      ),
-    );
-  }
-}
-
 class _TargetCard extends StatelessWidget {
   const _TargetCard({required this.controller, required this.onChanged});
 
@@ -1811,7 +1592,7 @@ class _TargetCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Text(
+          Text(
             'NOTA OBJETIVO',
             style: TextStyle(
               fontWeight: FontWeight.w900,
@@ -1823,7 +1604,7 @@ class _TargetCard extends StatelessWidget {
           const SizedBox(height: AppDimens.spaceSm),
           Row(
             children: [
-              const Expanded(
+              Expanded(
                 child: Text(
                   'Quiero un',
                   style: TextStyle(
@@ -1844,7 +1625,7 @@ class _TargetCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: AppDimens.spaceXs),
-          const Text(
+          Text(
             'Escala 1.0 – 7.0',
             style: TextStyle(
               fontWeight: FontWeight.w700,
@@ -1876,7 +1657,7 @@ class _ModeSwitchCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Text(
+          Text(
             'MODO DE CÁLCULO',
             style: TextStyle(
               fontWeight: FontWeight.w900,
@@ -1888,7 +1669,7 @@ class _ModeSwitchCard extends StatelessWidget {
           const SizedBox(height: AppDimens.spaceSm),
           Row(
             children: [
-              const Expanded(
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -1934,6 +1715,7 @@ class _FinalGradeCard extends StatelessWidget {
     required this.onWeightChanged,
     required this.onConfidenceChanged,
     required this.scoreColor,
+    this.weightFieldKey,
   });
 
   final _GradeItem item;
@@ -1941,6 +1723,7 @@ class _FinalGradeCard extends StatelessWidget {
   final VoidCallback onWeightChanged;
   final ValueChanged<int> onConfidenceChanged;
   final Color scoreColor;
+  final Key? weightFieldKey;
 
   @override
   Widget build(BuildContext context) {
@@ -1967,6 +1750,7 @@ class _FinalGradeCard extends StatelessWidget {
             confidence: item.confidence,
             onConfidenceChanged: onConfidenceChanged,
             scoreColor: scoreColor,
+            weightFieldKey: weightFieldKey,
           ),
         ],
       ),
@@ -1981,6 +1765,7 @@ class _ExamCard extends StatelessWidget {
     required this.onWeightChanged,
     required this.onConfidenceChanged,
     required this.scoreColor,
+    this.weightFieldKey,
   });
 
   final _GradeItem item;
@@ -1988,6 +1773,7 @@ class _ExamCard extends StatelessWidget {
   final VoidCallback onWeightChanged;
   final ValueChanged<int> onConfidenceChanged;
   final Color scoreColor;
+  final Key? weightFieldKey;
 
   @override
   Widget build(BuildContext context) {
@@ -2014,6 +1800,7 @@ class _ExamCard extends StatelessWidget {
             confidence: item.confidence,
             onConfidenceChanged: onConfidenceChanged,
             scoreColor: scoreColor,
+            weightFieldKey: weightFieldKey,
           ),
         ],
       ),
@@ -2037,6 +1824,7 @@ class _NormalGradeCard extends StatelessWidget {
     required this.scoreColor,
     required this.onChildConfidenceChanged,
     required this.childScoreColor,
+    this.weightFieldKey,
   });
 
   final _GradeItem item;
@@ -2052,6 +1840,7 @@ class _NormalGradeCard extends StatelessWidget {
   final Color scoreColor;
   final void Function(_GradeItem child, int value) onChildConfidenceChanged;
   final Color Function(_GradeItem child) childScoreColor;
+  final Key? weightFieldKey;
 
   @override
   Widget build(BuildContext context) {
@@ -2071,7 +1860,7 @@ class _NormalGradeCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   label,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 11.5,
                     fontWeight: FontWeight.w900,
                     color: AppColors.text,
@@ -2097,6 +1886,7 @@ class _NormalGradeCard extends StatelessWidget {
               confidence: item.confidence,
               onConfidenceChanged: onConfidenceChanged,
               scoreColor: scoreColor,
+              weightFieldKey: weightFieldKey,
             ),
             const SizedBox(height: 8),
             Align(
@@ -2110,7 +1900,7 @@ class _NormalGradeCard extends StatelessWidget {
           ] else ...[
             Row(
               children: [
-                const Expanded(
+                Expanded(
                   child: Text('PESO EN EL RAMO', style: _fieldLabelStyle),
                 ),
                 SizedBox(
@@ -2120,6 +1910,7 @@ class _NormalGradeCard extends StatelessWidget {
                     hint: '%',
                     integer: true,
                     onChanged: onWeightChanged,
+                    fieldKey: weightFieldKey,
                   ),
                 ),
               ],
@@ -2127,14 +1918,14 @@ class _NormalGradeCard extends StatelessWidget {
             const SizedBox(height: 6),
             Row(
               children: [
-                const Expanded(
+                Expanded(
                   child: Text('NOTA PADRE (AUTO)', style: _fieldLabelStyle),
                 ),
                 Text(
                   parentNote == null
                       ? '—'
                       : roundHalfUp(parentNote, 1).toStringAsFixed(1),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w900,
                     color: AppColors.accentBlue,
@@ -2152,6 +1943,7 @@ class _NormalGradeCard extends StatelessWidget {
                   'SUBNOTA ${index + 1}',
                 ),
                 item: item.children[index],
+                weightFieldKey: ValueKey('weight-${item.children[index].id}'),
                 onScoreChanged: onChildScoreChanged,
                 onWeightChanged: () {
                   onChildWeightChanged(item.children[index]);
@@ -2208,7 +2000,7 @@ class _ConfidenceSwitch extends StatelessWidget {
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 color: selected ? AppColors.text : AppColors.surface,
-                border: Border.all(color: AppColors.border, width: 1.5),
+                border: Border.all(color: AppColors.outline, width: 1.5),
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
@@ -2236,6 +2028,7 @@ class _ChildGradeRow extends StatelessWidget {
     required this.onWeightChanged,
     required this.onConfidenceChanged,
     required this.scoreColor,
+    this.weightFieldKey,
   });
 
   final String label;
@@ -2244,6 +2037,7 @@ class _ChildGradeRow extends StatelessWidget {
   final VoidCallback onWeightChanged;
   final ValueChanged<int> onConfidenceChanged;
   final Color scoreColor;
+  final Key? weightFieldKey;
 
   @override
   Widget build(BuildContext context) {
@@ -2276,7 +2070,7 @@ class _ChildGradeRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('NOTA', style: _fieldLabelStyle),
+                  Text('NOTA', style: _fieldLabelStyle),
                   const SizedBox(height: AppDimens.spaceXs),
                   _NumericInput(
                     controller: item.scoreController,
@@ -2293,13 +2087,14 @@ class _ChildGradeRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('PESO %', style: _fieldLabelStyle),
+                  Text('PESO %', style: _fieldLabelStyle),
                   const SizedBox(height: AppDimens.spaceXs),
                   _NumericInput(
                     controller: item.weightController,
                     hint: '%',
                     integer: true,
                     onChanged: onWeightChanged,
+                    fieldKey: weightFieldKey,
                   ),
                 ],
               ),
@@ -2321,6 +2116,7 @@ class _ScoreAndWeightRow extends StatelessWidget {
     required this.confidence,
     required this.onConfidenceChanged,
     required this.scoreColor,
+    this.weightFieldKey,
   });
 
   final TextEditingController scoreController;
@@ -2331,10 +2127,11 @@ class _ScoreAndWeightRow extends StatelessWidget {
   final int confidence;
   final ValueChanged<int> onConfidenceChanged;
   final Color scoreColor;
+  final Key? weightFieldKey;
 
   @override
   Widget build(BuildContext context) {
-    const labelStyle = TextStyle(
+    final labelStyle = TextStyle(
       fontSize: 9.5,
       fontWeight: FontWeight.w900,
       letterSpacing: 0.4,
@@ -2351,7 +2148,7 @@ class _ScoreAndWeightRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('NOTA', style: labelStyle),
+                  Text('NOTA', style: labelStyle),
                   const SizedBox(height: AppDimens.spaceXs),
                   _NumericInput(
                     controller: scoreController,
@@ -2368,13 +2165,14 @@ class _ScoreAndWeightRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('PONDERACIÓN (%)', style: labelStyle),
+                  Text('PONDERACIÓN (%)', style: labelStyle),
                   const SizedBox(height: AppDimens.spaceXs),
                   _NumericInput(
                     controller: weightController,
                     hint: '%',
                     integer: true,
                     onChanged: onWeightChanged,
+                    fieldKey: weightFieldKey,
                   ),
                 ],
               ),
@@ -2384,7 +2182,7 @@ class _ScoreAndWeightRow extends StatelessWidget {
         const SizedBox(height: AppDimens.spaceSm),
         Row(
           children: [
-            const Expanded(child: Text('CONFIANZA', style: labelStyle)),
+            Expanded(child: Text('CONFIANZA', style: labelStyle)),
             _ConfidenceSwitch(
               value: confidence,
               onChanged: onConfidenceChanged,
@@ -2402,18 +2200,21 @@ class _NumericInput extends StatelessWidget {
     required this.hint,
     required this.onChanged,
     this.integer = false,
-    this.textColor = AppColors.text,
+    this.textColor,
+    this.fieldKey,
   });
 
   final TextEditingController controller;
   final String hint;
   final VoidCallback onChanged;
   final bool integer;
-  final Color textColor;
+  final Color? textColor;
+  final Key? fieldKey;
 
   @override
   Widget build(BuildContext context) {
     return TextField(
+      key: fieldKey,
       controller: controller,
       keyboardType: integer
           ? TextInputType.number
@@ -2422,7 +2223,7 @@ class _NumericInput extends StatelessWidget {
       style: TextStyle(
         fontWeight: FontWeight.w800,
         fontSize: 13,
-        color: textColor,
+        color: (textColor ?? AppColors.text),
       ),
       decoration: appInputDecoration(hint).copyWith(
         isDense: true,
@@ -2430,7 +2231,7 @@ class _NumericInput extends StatelessWidget {
           horizontal: AppDimens.spaceMd,
           vertical: AppDimens.spaceSm + AppDimens.borderWidth,
         ),
-        hintStyle: const TextStyle(
+        hintStyle: TextStyle(
           color: AppColors.muted,
           fontWeight: FontWeight.w700,
           fontSize: 12,
@@ -2522,7 +2323,7 @@ class _MiniActionButton extends StatelessWidget {
           ),
           decoration: BoxDecoration(
             color: AppColors.bg,
-            border: Border.all(color: AppColors.border, width: 1.5),
+            border: Border.all(color: AppColors.outline, width: 1.5),
             borderRadius: BorderRadius.circular(AppDimens.radiusChip),
             boxShadow: AppShadows.badge,
           ),
@@ -2533,7 +2334,7 @@ class _MiniActionButton extends StatelessWidget {
               const SizedBox(width: AppDimens.spaceXs),
               Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 9.5,
                   fontWeight: FontWeight.w900,
                   color: AppColors.text,
@@ -2547,7 +2348,7 @@ class _MiniActionButton extends StatelessWidget {
   }
 }
 
-const TextStyle _fieldLabelStyle = TextStyle(
+TextStyle get _fieldLabelStyle => TextStyle(
   fontSize: 9.5,
   fontWeight: FontWeight.w900,
   letterSpacing: 0.4,
@@ -2589,7 +2390,7 @@ class _ResultCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: background,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidthThick,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
@@ -2661,7 +2462,7 @@ class _ResultStat extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surface,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radiusChip),
@@ -2671,7 +2472,7 @@ class _ResultStat extends StatelessWidget {
         children: [
           Text(
             '$label ',
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 10,
               fontWeight: FontWeight.w900,
               letterSpacing: 0.4,
@@ -2680,7 +2481,7 @@ class _ResultStat extends StatelessWidget {
           ),
           Text(
             value,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w900,
               color: AppColors.text,
@@ -2728,10 +2529,10 @@ class _SquareIconButton extends StatelessWidget {
 BoxDecoration _cardDecoration({required Color color, required Offset shadow}) {
   return BoxDecoration(
     color: color,
-    border: Border.all(color: AppColors.border, width: AppDimens.borderWidth),
+    border: Border.all(color: AppColors.outline, width: AppDimens.borderWidth),
     borderRadius: BorderRadius.circular(AppDimens.radius),
     boxShadow: [
-      BoxShadow(color: AppColors.border, offset: shadow, blurRadius: 0),
+      BoxShadow(color: AppColors.shadow, offset: shadow, blurRadius: 0),
     ],
   );
 }

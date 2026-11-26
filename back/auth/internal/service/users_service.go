@@ -26,7 +26,8 @@ func NewUsersService(repo UserDirectory) *UsersService {
 const maxLookupIDs = 200
 
 // Lookup valida y resuelve. Sin ids → lista vacía (200, no 400).
-// Nunca expone hashes ni tokens: solo user_id/email/display_name.
+// Nunca expone hashes ni tokens: solo user_id/email/display_name/photo_thumb_url
+// y el código público (public_id).
 func (s *UsersService) Lookup(ctx context.Context, rawIDs []string) ([]model.PublicUser, error) {
 	ids := make([]string, 0, len(rawIDs))
 	for _, id := range rawIDs {

@@ -1,0 +1,369 @@
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+
+import '../../core/services/session_manager.dart';
+import '../../core/theme/app_theme.dart';
+import '../../core/widgets/neobrutalism.dart';
+import 'all_notes_screen.dart' show showNoteResourceViewer;
+import 'note_content_view.dart';
+import 'note_copy_runner.dart';
+import 'note_interaction_bar.dart';
+import 'notes_api.dart';
+
+export 'note_content_view.dart' show NoteResourceOpener;
+
+/// Vista previa de un apunte de otro perfil («Ver apunte»).
+///
+/// Es una pantalla distinta de la lista: carga el apunte completo con
+/// `GET /notes/{id}` (el backend aplica los permisos), renderiza el Markdown
+/// con `NoteContentView` (`NoteMarkdownBody`) —imágenes por el endpoint autenticado de adjuntos—,
+/// lista los PDF y documentos adjuntos para verlos en el visor y permite
+/// copiar el apunte a «Mis apuntes» con sus adjuntos.
+class PublicNotePreviewScreen extends StatefulWidget {
+  const PublicNotePreviewScreen({
+    super.key,
+    required this.noteId,
+    this.initialTitle,
+    this.api,
+    this.imageClient,
+    this.openResource,
+    this.onNoteCopied,
+    this.onInteractionsChanged,
+  });
+
+  final String noteId;
+
+  /// Título conocido por la lista, mostrado mientras carga el apunte.
+  final String? initialTitle;
+
+  /// Cliente inyectable (tests / base URL de Android). Por defecto NotesApi().
+  final NotesApi? api;
+
+  /// Cliente HTTP inyectable para las imágenes autenticadas en pruebas.
+  final http.Client? imageClient;
+
+  /// Abridor de recursos inyectable; por defecto [showNoteResourceViewer].
+  final NoteResourceOpener? openResource;
+
+  /// Se llama tras copiar con éxito (p. ej. para refrescar «Mis apuntes»).
+  final VoidCallback? onNoteCopied;
+
+  /// Se llama con cada estado de like/guardado CONFIRMADO por el servidor,
+  /// para que la lista de origen lo refleje al volver sin recargar.
+  final ValueChanged<NoteInteractions>? onInteractionsChanged;
+
+  @override
+  State<PublicNotePreviewScreen> createState() =>
+      _PublicNotePreviewScreenState();
+}
+
+class _PublicNotePreviewScreenState extends State<PublicNotePreviewScreen> {
+  late final NotesApi _api = widget.api ?? NotesApi();
+
+  /// Una clave por apertura de la vista previa: si la primera petición se
+  /// pierde por red, el reintento devuelve el mismo clon en vez de otro.
+  late final String _copyKey =
+      'copy-${widget.noteId}-${DateTime.now().microsecondsSinceEpoch}';
+
+  bool _loading = true;
+  NoteDetail? _note;
+  NotesApiException? _error;
+  bool _copying = false;
+  bool _copied = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    SessionManager.revision.addListener(_onSessionChanged);
+    // Si una copia de este apunte de ESTA sesión sigue en curso (p. ej. se
+    // volvió atrás y se abrió de nuevo), se muestra su progreso en vez de
+    // permitir otra. Las copias de otra sesión no se ven aquí.
+    final running = NoteCopyRunner.pending(widget.noteId);
+    if (running != null) {
+      _copying = true;
+      NoteCopyRunner.attach(widget.noteId);
+      _awaitCopy(running, NoteCopyRunner.sessionKey());
+    }
+  }
+
+  /// Cerrar sesión o cambiar de cuenta invalida el estado visual de la copia
+  /// de la sesión anterior (la petición sigue en segundo plano).
+  void _onSessionChanged() {
+    if (!mounted || (!_copying && !_copied)) return;
+    setState(() {
+      _copying = false;
+      _copied = false;
+    });
+  }
+
+  @override
+  void dispose() {
+    SessionManager.revision.removeListener(_onSessionChanged);
+    // Volver atrás NO cancela la copia: sigue en curso y su resultado real se
+    // informa con el aviso global. NotesApi difiere su cierre hasta terminar.
+    if (_copying) NoteCopyRunner.detach(widget.noteId);
+    if (widget.api == null) _api.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final note = await _api.getNote(widget.noteId);
+      if (!mounted) return;
+      setState(() {
+        _note = note;
+        _loading = false;
+      });
+    } on NotesApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _error = NotesApiException(notesFriendlyMessage(-1, null));
+        _loading = false;
+      });
+    }
+  }
+
+  List<Map<String, dynamic>> get _resources {
+    final note = _note;
+    if (note == null) return const [];
+    return noteDetailResources(note);
+  }
+
+  Future<void> _open(Map<String, dynamic> resource) {
+    final opener = widget.openResource ?? showNoteResourceViewer;
+    return opener(context, resolveNoteResource(_resources, resource));
+  }
+
+  void _snack(String message, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: error ? AppColors.errorDeep : AppColors.border,
+        content: Text(
+          message,
+          style: TextStyle(
+            color: AppColors.surface,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _copy(NoteDetail note) async {
+    if (_copying || _copied) return;
+    setState(() => _copying = true);
+    final session = NoteCopyRunner.sessionKey();
+    await _awaitCopy(
+      NoteCopyRunner.start(_api, note.id, idempotencyKey: _copyKey),
+      session,
+    );
+  }
+
+  /// Espera la copia (propia o ya en curso) e informa su resultado real, solo
+  /// si la sesión que la inició sigue siendo la actual.
+  Future<void> _awaitCopy(Future<NoteCopyResult> copy, String? session) async {
+    bool sameSession() => mounted && NoteCopyRunner.isCurrentSession(session);
+    try {
+      await copy;
+      if (!sameSession()) return;
+      setState(() => _copied = true);
+      widget.onNoteCopied?.call();
+      _snack('Copia guardada en tus apuntes y en tu Drive.');
+    } on NotesApiException catch (e) {
+      if (!sameSession()) return;
+      // Solo una copia terminada cuenta como copiada; una en curso no.
+      if (e.code == 'already_copied') setState(() => _copied = true);
+      _snack(
+        e.message,
+        error: e.code != 'already_copied' && e.code != 'copy_in_progress',
+      );
+    } catch (_) {
+      if (!sameSession()) return;
+      _snack(notesFriendlyMessage(-1, null), error: true);
+    } finally {
+      if (sameSession()) setState(() => _copying = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final title = _note?.title ?? widget.initialTitle ?? 'Apunte';
+    return Scaffold(
+      backgroundColor: AppColors.bg,
+      body: SafeArea(
+        child: MaxWidthContainer(
+          maxWidth: 860,
+          padding: EdgeInsets.zero,
+          child: ListView(
+            padding: const EdgeInsets.all(AppDimens.gutter),
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  NeobrutalistIconButton(
+                    icon: Icons.arrow_back_rounded,
+                    tooltip: 'Volver',
+                    onPressed: () => Navigator.of(context).maybePop(),
+                  ),
+                  const SizedBox(width: AppDimens.spaceMd),
+                  Expanded(
+                    child: Text(
+                      title,
+                      key: const Key('note-preview-title'),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w900,
+                        color: AppColors.text,
+                        letterSpacing: -0.5,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppDimens.spaceLg),
+              _buildBody(),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBody() {
+    if (_loading) {
+      return Padding(
+        padding: EdgeInsets.all(AppDimens.spaceXl),
+        child: Center(child: CircularProgressIndicator(color: AppColors.text)),
+      );
+    }
+    final error = _error;
+    if (error != null) return _buildError(error);
+    final note = _note!;
+    final documents = noteDocumentResources(_resources);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        NeobrutalistCard(
+          key: const Key('note-preview-content'),
+          child: NoteContentView(
+            note: note,
+            imageBaseUrl: _api.baseUrl,
+            imageClient: widget.imageClient,
+            onOpenResource: _open,
+          ),
+        ),
+        if (documents.isNotEmpty) ...<Widget>[
+          const SizedBox(height: AppDimens.spaceLg),
+          NeobrutalistCard(
+            title: 'Adjuntos',
+            child: NoteDocumentList(documents: documents, onOpen: _open),
+          ),
+        ],
+        const SizedBox(height: AppDimens.spaceLg),
+        Wrap(
+          spacing: AppDimens.spaceMd,
+          runSpacing: AppDimens.spaceMd,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: <Widget>[
+            NoteLikeSaveBar(
+              api: _api,
+              initial: NoteInteractions(
+                noteId: note.id,
+                likesCount: note.likesCount,
+                savesCount: note.savesCount,
+                isLiked: note.isLiked,
+                isSaved: note.isSaved,
+              ),
+              // El autor no puede guardar su propio apunte (el backend
+              // también lo rechaza).
+              showSave: !note.isOwn,
+              onChanged: (s) {
+                setState(
+                  () => _note = note.copyWith(
+                    likesCount: s.likesCount,
+                    savesCount: s.savesCount,
+                    isLiked: s.isLiked,
+                    isSaved: s.isSaved,
+                  ),
+                );
+                widget.onInteractionsChanged?.call(s);
+              },
+            ),
+            if (!note.isOwn)
+              NeobrutalistButton(
+                key: const Key('note-preview-copy'),
+                label: _copied
+                    ? 'Copiado en tus apuntes'
+                    : (_copying ? 'Copiando…' : 'Copiar a mis apuntes'),
+                icon: _copied
+                    ? Icons.check_rounded
+                    : Icons.content_copy_rounded,
+                variant: NeobrutalistButtonVariant.accent,
+                onPressed: (_copying || _copied) ? null : () => _copy(note),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildError(NotesApiException e) {
+    final deleted = e.statusCode == 410 || e.code == 'note_deleted';
+    final notFound = e.statusCode == 404 && e.code != 'note_unavailable';
+    final title = deleted
+        ? 'Apunte eliminado'
+        : (notFound ? 'Apunte no disponible' : 'No se pudo abrir el apunte');
+    final message = deleted
+        ? e.message
+        : (notFound
+              ? 'Este apunte ya no es público o no tienes permiso para verlo.'
+              : e.message);
+    return NeobrutalistCard(
+      key: const Key('note-preview-error'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w900,
+              color: AppColors.text,
+            ),
+          ),
+          const SizedBox(height: AppDimens.spaceSm),
+          Text(
+            message,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: AppColors.muted,
+            ),
+          ),
+          if (!deleted && !notFound) ...<Widget>[
+            const SizedBox(height: AppDimens.spaceMd),
+            NeobrutalistButton(
+              label: 'Reintentar',
+              icon: Icons.refresh_rounded,
+              variant: NeobrutalistButtonVariant.secondary,
+              onPressed: _load,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}

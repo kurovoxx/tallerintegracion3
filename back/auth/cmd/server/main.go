@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kurovoxx/tallerintegracion3/back/auth/internal/config"
 	identityv1 "github.com/kurovoxx/tallerintegracion3/back/auth/internal/gen/identityv1"
 	grpchandler "github.com/kurovoxx/tallerintegracion3/back/auth/internal/handler/grpc"
@@ -24,24 +25,50 @@ func main() {
 	cfg := config.Load()
 	log.Printf("config: DATABASE_URL set=%v JWT_SECRET set=%v", cfg.DatabaseURL != "", cfg.JWTSecret != "")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	pool, err := repository.NewPool(ctx, cfg.DatabaseURL)
+	// Espera a que Postgres acepte conexiones (retry con backoff lineal).
+	// Al desplegar en k8s el contenedor puede arrancar antes que Postgres;
+	// sin esto el servicio muere con log.Fatalf al primer intento.
+	var pool *pgxpool.Pool
+	var err error
+	const maxDBIntents = 30
+	for i := 0; i < maxDBIntents; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		pool, err = repository.NewPool(ctx, cfg.DatabaseURL)
+		if err == nil {
+			err = pool.Ping(ctx)
+		}
+		cancel()
+		if err == nil {
+			break
+		}
+		if pool != nil {
+			pool.Close()
+		}
+		log.Printf("auth: esperando a Postgres (intento %d/%d): %v", i+1, maxDBIntents, err)
+		time.Sleep(time.Duration(i+1) * time.Second)
+	}
 	if err != nil {
-		log.Fatalf("No se pudo conectar a Postgres (DATABASE_URL): %v", err)
+		log.Fatalf("auth: no se pudo conectar a Postgres tras %d intentos: %v", maxDBIntents, err)
 	}
 	defer pool.Close()
 	log.Println("PostgreSQL conectado OK (pgxpool Ping)")
 
 	// Verificación rápida de schemas críticos Sprint 1
 	var cnt int
-	if err := pool.QueryRow(ctx, "select count(*) from identity.users").Scan(&cnt); err != nil {
+	if err := pool.QueryRow(context.Background(), "select count(*) from identity.users").Scan(&cnt); err != nil {
 		log.Fatalf("query identity.users: %v", err)
 	}
 	log.Printf("DB check: identity.users count=%d", cnt)
-	if err := repository.VerifyAccountDeletionSchema(ctx, pool); err != nil {
+	if err := repository.VerifyAccountDeletionSchema(context.Background(), pool); err != nil {
 		log.Fatalf("%v", err)
+	}
+	verificationSchemaReady, err := repository.EmailVerificationSchemaReady(context.Background(), pool)
+	if err != nil || !verificationSchemaReady {
+		verificationSchemaReady = false
+		log.Printf("auth: ADVERTENCIA confirmación de correo sin esquema (aplica back/auth/db/migrations/007_email_verification.sql); el registro sigue funcionando sin enviar la confirmación")
+	}
+	if cfg.EmailVerificationRequiredErr != nil {
+		log.Fatalf("config email verification: %v", cfg.EmailVerificationRequiredErr)
 	}
 
 	// Wire Handler → Service → Repository (masterprompt 2) + JWT standalone integrado (3.1)
@@ -58,11 +85,53 @@ func main() {
 	}
 	authSvc := service.NewAuthService(userRepo, refreshRepo, jwtSvc, cfg.AccessExpiresIn, cfg.RefreshExpiresIn)
 	authH := httpHandler.NewAuthHandler(authSvc)
-	resetMailer := &service.ResetMailer{Host: cfg.SMTPHost, Port: cfg.SMTPPort, Username: cfg.SMTPUsername, Password: cfg.SMTPPassword}
-	if !resetMailer.Ready() {
-		log.Print("password recovery disabled: configure SMTP_PASSWORD")
+	// Un solo mailer SMTP para recuperación de contraseña y confirmación de
+	// correo. Sin SMTP_PASSWORD ambos quedan deshabilitados (503
+	// mail_unavailable) y el registro sigue funcionando sin enviar correo; una
+	// configuración presente pero mal formada detiene el arranque.
+	mailer := &service.SMTPMailer{
+		Host: cfg.SMTPHost, Port: cfg.SMTPPort, Username: cfg.SMTPUsername, Password: cfg.SMTPPassword,
+		From: cfg.SMTPFrom, FromName: cfg.SMTPFromName, TLSMode: cfg.SMTPTLSMode,
 	}
-	resetH := httpHandler.NewPasswordResetHandler(service.NewPasswordResetService(userRepo, repository.NewPasswordResetRepository(pool), resetMailer))
+	if cfg.SMTPPassword == "" {
+		log.Print("password recovery and email verification disabled: configure SMTP_PASSWORD")
+	} else if err := mailer.Validate(); err != nil {
+		log.Fatalf("config SMTP: %v", err)
+	}
+	resetRepo := repository.NewPasswordResetRepository(pool)
+	if verificationSchemaReady {
+		// Un restablecimiento exitoso también confirma el correo (requiere 007).
+		resetRepo.EnableEmailVerification()
+	}
+	resetH := httpHandler.NewPasswordResetHandler(service.NewPasswordResetService(userRepo, resetRepo, mailer))
+	verificationRepo := repository.NewEmailVerificationRepository(pool)
+	verificationSvc, err := service.NewEmailVerificationService(userRepo, verificationRepo, mailer, service.EmailVerificationConfig{
+		LinkBaseURL: cfg.EmailVerificationURL,
+		TTL:         cfg.EmailVerificationTTL,
+	})
+	if err != nil {
+		log.Fatalf("config email verification: %v", err)
+	}
+	log.Printf("email verification: enabled=%v link_configured=%v ttl=%s", verificationSvc.Ready(), cfg.EmailVerificationURL != "", verificationSvc.TTL())
+	authSvc.SetEmailVerifier(verificationSvc)
+	verificationH := httpHandler.NewEmailVerificationHandler(verificationSvc)
+	// Gate de login/refresh (EMAIL_VERIFICATION_REQUIRED, apagado por defecto).
+	// Encendido exige 007 + backfill 008 (sin él se bloquearía a las cuentas
+	// antiguas) y SMTP operativo (sin correo nadie podría confirmar).
+	if cfg.EmailVerificationRequired {
+		gateReady, err := repository.EmailVerificationGateSchemaReady(context.Background(), pool)
+		if err != nil || !gateReady {
+			log.Fatalf("config email verification: EMAIL_VERIFICATION_REQUIRED=true requiere las migraciones 007_email_verification.sql y 008_email_verification_backfill.sql aplicadas")
+		}
+		if !verificationSvc.Ready() {
+			log.Fatalf("config email verification: EMAIL_VERIFICATION_REQUIRED=true requiere SMTP configurado (SMTP_PASSWORD)")
+		}
+		authSvc.SetEmailVerificationGate(verificationRepo)
+	}
+	// Las sesiones previas a la activación no se renuevan (Refresh también
+	// aplica el gate); su access token sigue valiendo hasta expirar.
+	log.Printf("email verification gate: required=%v reset_marks_verified=%v residual_access_max=%s",
+		cfg.EmailVerificationRequired, verificationSchemaReady, time.Duration(cfg.AccessExpiresIn)*time.Second)
 	deletionRepo := repository.NewAccountDeletionRepository(pool)
 	defer deletionRepo.Close()
 	authSvc.SetAccountAccessGate(deletionRepo)
@@ -105,11 +174,16 @@ func main() {
 	internalUsersH := httpHandler.NewInternalUsersHandler(usersSvc)
 	internalAuthH := httpHandler.NewInternalAuthHandler(jwtSvc)
 
+	// Follow (seguir/dejar de seguir usuarios) — Sprint 4_5_11
+	followRepo := repository.NewFollowRepository(pool)
+	followSvc := service.NewFollowService(followRepo)
+	followH := httpHandler.NewFollowHandler(followSvc)
+
 	// Estado del gRPC para /health/db: si Serve muere, HTTP no debe verse
 	// saludable sin señal (ver serveGRPC).
 	grpcStatus := &grpcHealth{}
 	// gRPC Identity en goroutine; HTTP bloquea abajo (igual que social).
-	startGRPC(usersSvc, jwtSvc, driveSvc, calendarSvc, oauthRepo, cfg, grpcStatus)
+	startGRPC(usersSvc, jwtSvc, driveSvc, calendarSvc, oauthRepo, userRepo, cfg, grpcStatus)
 
 	r := gin.Default()
 
@@ -120,6 +194,8 @@ func main() {
 	r.POST("/auth/logout", authH.Logout)
 	r.POST("/auth/forgot-password", resetH.Forgot)
 	r.POST("/auth/reset-password", resetH.Reset)
+	r.POST("/auth/send-verification-email", verificationH.Send)
+	r.POST("/auth/verify-email", verificationH.Verify)
 	r.DELETE("/auth/account", authMw.RequireIdentity(), deletionH.Delete)
 	r.GET("/auth/account-deletion", authMw.RequireIdentity(), deletionH.Status)
 	r.POST("/auth/google-drive/connect", authMw.RequireAuth(), driveH.Connect)
@@ -139,6 +215,12 @@ func main() {
 		internal.POST("/auth/verify", internalAuthH.Verify)
 	}
 
+	// Perfil público por public_id (sin UUID ni datos personales). El
+	// solicitante siempre sale del JWT. PrivateNoStore se ejecuta antes de
+	// RequireAuth para que también los 401/423/503 emitidos por el middleware
+	// lleven Cache-Control: private, no-store. No se aplica al resto de rutas.
+	r.GET("/profile/public/:public_id", middleware.PrivateNoStore(), authMw.RequireAuth(), profileH.GetPublicProfileByPublicID)
+
 	// Protegido: middleware valida firma+expiración, inyecta solo user_id (sin role global)
 	// 401 token inválido/expirado
 	protected := r.Group("")
@@ -150,6 +232,7 @@ func main() {
 		})
 		protected.GET("/profile/me", profileH.GetProfile)
 		protected.PATCH("/profile/me", profileH.PatchProfile)
+		followH.RegisterRoutes(protected)
 	}
 
 	r.GET("/health", func(c *gin.Context) {
@@ -237,7 +320,7 @@ func (h *grpcHealth) snapshot() (bool, string) {
 
 // startGRPC sirve IdentityService (usuarios, verify y OAuth) para Social y
 // Notes. Logging va afuera para auditar también los rechazos de clave.
-func startGRPC(usersSvc *service.UsersService, jwtSvc *service.JWTService, driveSvc *service.DriveOAuthService, calendarSvc *service.CalendarOAuthService, oauthRepo *repository.OAuthRepository, cfg *config.Config, health *grpcHealth) {
+func startGRPC(usersSvc *service.UsersService, jwtSvc *service.JWTService, driveSvc *service.DriveOAuthService, calendarSvc *service.CalendarOAuthService, oauthRepo *repository.OAuthRepository, userRepo *repository.UserRepository, cfg *config.Config, health *grpcHealth) {
 	if cfg.InternalAPIKey == "" {
 		log.Printf("gRPC identity: INTERNAL_API_KEY vacía, todas las llamadas fallarán (fail-closed)")
 	}
@@ -249,7 +332,7 @@ func startGRPC(usersSvc *service.UsersService, jwtSvc *service.JWTService, drive
 		interceptor.NewLogging(log.Default()),
 		interceptor.NewInternalAuth(cfg.InternalAPIKey),
 	))
-	identityv1.RegisterIdentityServiceServer(s, grpchandler.NewIdentityServer(usersSvc, jwtSvc, driveSvc, calendarSvc, oauthRepo))
+	identityv1.RegisterIdentityServiceServer(s, grpchandler.NewIdentityServerWithPublicProfiles(usersSvc, jwtSvc, driveSvc, calendarSvc, oauthRepo, userRepo))
 	go func() {
 		log.Printf("Servidor gRPC de Identity en :%s", cfg.GRPCPort)
 		serveGRPC(s, lis, cfg.GRPCPort, health)

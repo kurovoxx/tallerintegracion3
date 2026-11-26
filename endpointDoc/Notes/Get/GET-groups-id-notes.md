@@ -22,7 +22,7 @@ Ejemplo de respuesta (IDs y fechas ilustrativos, campos del contrato real):
 
 ## Flujo
 
-`ListGroupNotes` → `ListGroupNotes → ListGroupNotePairs`. Devuelve metadata: id, user_id, title, visibility, likes_count, version, created_at y updated_at. No incluye shared_note_id, access_mode, content ni adjuntos; gRPC sí expone NoteWithShare. Se pagina el store con keyset sobre el orden total `(is_admin_note DESC, shared_at DESC, id DESC)` y cada página se reordena por admin, likes y fecha; no promete un ranking global entre páginas. Antes el cursor comparaba solo `shared_at`: omitía comparticiones con el mismo instante e ignoraba `is_admin_note` (2 de 6 alcanzables en la prueba PG).
+`ListGroupNotes` → `ListGroupNotes → ListGroupNotePairs`. Devuelve metadata: id, user_id, title, visibility, likes_count, is_liked, version, created_at y updated_at. `is_liked` indica si el solicitante ya dio like; se resuelve en lote para toda la página (`InteractionsForNotes` → una consulta, no una por nota) y permite dar/quitar like desde la pestaña de notas del grupo con `POST/DELETE /notes/{id}/like` (un miembro del grupo tiene acceso de lectura aunque la nota sea privada y `restricted`). No incluye shared_note_id, access_mode, content ni adjuntos; gRPC sí expone NoteWithShare. Se pagina el store con keyset sobre el orden total `(is_admin_note DESC, shared_at DESC, id DESC)` y cada página se reordena por admin, likes y fecha; no promete un ranking global entre páginas. Antes el cursor comparaba solo `shared_at`: omitía comparticiones con el mismo instante e ignoraba `is_admin_note` (2 de 6 alcanzables en la prueba PG).
 
 Fuentes: `back/notes/cmd/server/main.go`, `internal/handler/http/` y `internal/service/` dentro de `back/notes`.
 

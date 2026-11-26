@@ -15,7 +15,7 @@ func TestSprintSheetsLifecycleAndIsolation(t *testing.T) {
 	if _, err := svc.CreateSprintSheet(ctx, gid, stranger, patch); err != ErrForbidden {
 		t.Fatal(err)
 	}
-	a, err := svc.CreateSprintSheet(ctx, gid, member, patch)
+	a, err := svc.CreateSprintSheet(ctx, gid, admin, patch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestDeleteSprintSheet(t *testing.T) {
 		t.Fatalf("otro grupo debe ser not_found, got %v", err)
 	}
 	patch.Name = strptr("Sprint 2")
-	second, err := svc.CreateSprintSheet(ctx, gid, member, patch)
+	second, err := svc.CreateSprintSheet(ctx, gid, admin, patch)
 	if err != nil {
 		t.Fatal(err)
 	}

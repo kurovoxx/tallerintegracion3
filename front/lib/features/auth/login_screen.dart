@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -7,10 +9,15 @@ import '../../core/services/auth_service.dart';
 import '../../core/services/session_manager.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/main_shell.dart';
+import 'email_not_verified_dialog.dart';
+import 'email_verification_screen.dart';
 import 'password_recovery_screen.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  const LoginScreen({super.key, this.authService});
+
+  /// Inyectable para pruebas; por defecto se crea uno propio.
+  final AuthService? authService;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -20,8 +27,12 @@ class _LoginScreenState extends State<LoginScreen> {
   static const String _rememberedEmailKey = SessionManager.rememberedEmailKey;
 
   bool isLoginTab = true;
-  final _authService = AuthService();
+  late final AuthService _authService = widget.authService ?? AuthService();
   bool _isSubmittingLogin = false;
+
+  /// Evita abrir dos veces la confirmación de correo (diálogo del 403 o
+  /// pantalla) desde este login, p. ej. con un doble toque.
+  bool _verificationOpen = false;
 
   final _loginFormKey = GlobalKey<FormState>();
   final TextEditingController _loginEmailController = TextEditingController();
@@ -78,7 +89,7 @@ class _LoginScreenState extends State<LoginScreen> {
     _regEmailController.dispose();
     _regInstitutionController.dispose();
     _regPasswordController.dispose();
-    _authService.dispose();
+    if (widget.authService == null) _authService.dispose();
     super.dispose();
   }
 
@@ -114,12 +125,12 @@ class _LoginScreenState extends State<LoginScreen> {
         await _persistRememberedEmail(_loginEmailController.text.trim());
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             content: Text(
               'INGRESO CORRECTO',
               style: TextStyle(
                 fontWeight: FontWeight.w800,
-                color: Colors.white,
+                color: AppColors.surface,
               ),
             ),
             backgroundColor: AppColors.border,
@@ -137,13 +148,22 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
 
+      // 403 email_not_verified (gate activo): diálogo con reenvío y código.
+      // Cualquier otro error conserva el aviso de siempre.
+      if (result.errorCode == AuthService.emailNotVerifiedCode) {
+        // Sin await: el botón de ingreso no debe quedar «INGRESANDO...»
+        // mientras el diálogo o la pantalla de confirmación están abiertos.
+        unawaited(_handleEmailNotVerified(_loginEmailController.text.trim()));
+        return;
+      }
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
             result.message ?? 'Ocurrió un error al iniciar sesión.',
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w700,
-              color: Colors.white,
+              color: AppColors.surface,
             ),
           ),
           backgroundColor: AppColors.error,
@@ -151,6 +171,51 @@ class _LoginScreenState extends State<LoginScreen> {
       );
     } finally {
       if (mounted) setState(() => _isSubmittingLogin = false);
+    }
+  }
+
+  /// Login 403 `email_not_verified`: diálogo y, según la opción, una sola
+  /// pantalla de confirmación. El reenvío ocurre dentro del diálogo.
+  Future<void> _handleEmailNotVerified(String email) async {
+    if (_verificationOpen) return;
+    _verificationOpen = true;
+    try {
+      final action = await showEmailNotVerifiedDialog(
+        context,
+        onResend: () => _authService.sendVerificationEmail(email),
+      );
+      if (action == null || !mounted) return;
+      final resent = action == EmailNotVerifiedAction.resent;
+      await openEmailVerification(
+        context,
+        email: email,
+        authService: _authService,
+        initialCooldownSeconds: resent ? emailVerificationResendCooldown : 0,
+        initialMessage: resent ? emailVerificationResentMessage : null,
+      );
+    } finally {
+      _verificationOpen = false;
+    }
+  }
+
+  /// Abre la pantalla de confirmación salvo que ya esté abierta.
+  Future<void> _openVerification(
+    String email, {
+    int cooldownSeconds = 0,
+    String? message,
+  }) async {
+    if (_verificationOpen) return;
+    _verificationOpen = true;
+    try {
+      await openEmailVerification(
+        context,
+        email: email,
+        authService: _authService,
+        initialCooldownSeconds: cooldownSeconds,
+        initialMessage: message,
+      );
+    } finally {
+      _verificationOpen = false;
     }
   }
 
@@ -172,13 +237,14 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
 
       if (result.success) {
+        final email = _regEmailController.text.trim();
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             content: Text(
-              'CUENTA CREADA - YA PUEDES INICIAR SESIÓN',
+              'CUENTA CREADA - CONFIRMA TU CORREO',
               style: TextStyle(
                 fontWeight: FontWeight.w800,
-                color: Colors.white,
+                color: AppColors.surface,
               ),
             ),
             backgroundColor: AppColors.border,
@@ -187,7 +253,18 @@ class _LoginScreenState extends State<LoginScreen> {
         setState(() {
           isLoginTab = true;
           _regPasswordController.clear();
+          _loginEmailController.text = email;
         });
+        // El registro ya envió el correo: la cuenta atrás evita un reenvío
+        // inmediato que el backend descartaría en silencio.
+        unawaited(
+          _openVerification(
+            email,
+            cooldownSeconds: emailVerificationResendCooldown,
+            message:
+                'Tu cuenta fue creada. Te enviamos un código para confirmar tu correo.',
+          ),
+        );
         return;
       }
 
@@ -195,9 +272,9 @@ class _LoginScreenState extends State<LoginScreen> {
         SnackBar(
           content: Text(
             result.message ?? 'Error al crear cuenta',
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w700,
-              color: Colors.white,
+              color: AppColors.surface,
             ),
           ),
           backgroundColor: AppColors.error,
@@ -224,21 +301,15 @@ class _LoginScreenState extends State<LoginScreen> {
                     SizedBox(
                       width: 500,
                       child: Container(
-                        decoration: const BoxDecoration(
+                        decoration: BoxDecoration(
                           color: AppColors.surface,
                           border: Border(
                             right: BorderSide(
-                              color: AppColors.border,
+                              color: AppColors.outline,
                               width: AppDimens.borderWidth,
                             ),
                           ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: AppColors.border,
-                              offset: Offset(4, 0),
-                              blurRadius: 0,
-                            ),
-                          ],
+                          boxShadow: [AppShadows.hardRight],
                         ),
                         child: _buildLeftPanelContent(isDesktop: true),
                       ),
@@ -297,19 +368,15 @@ class _LoginScreenState extends State<LoginScreen> {
           decoration: BoxDecoration(
             color: AppColors.accentYellow,
             border: Border.all(
-              color: AppColors.border,
+              color: AppColors.outline,
               width: AppDimens.borderWidth,
             ),
             borderRadius: BorderRadius.circular(AppDimens.radius),
-            boxShadow: const [
-              BoxShadow(
-                color: AppColors.border,
-                offset: Offset(3, 3),
-                blurRadius: 0,
-              ),
+            boxShadow: [
+              AppShadows.hard3,
             ],
           ),
-          child: const Center(
+          child: Center(
             child: Text(
               'S',
               style: TextStyle(
@@ -321,7 +388,7 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         ),
         const SizedBox(width: 16),
-        const Expanded(
+        Expanded(
           child: Text(
             'SIGMA ACADEMY',
             style: TextStyle(
@@ -343,16 +410,12 @@ class _LoginScreenState extends State<LoginScreen> {
       decoration: BoxDecoration(
         color: AppColors.accentYellow,
         border: Border.all(
-          color: AppColors.border,
+          color: AppColors.outline,
           width: AppDimens.borderWidth,
         ),
         borderRadius: BorderRadius.circular(AppDimens.radius),
-        boxShadow: const [
-          BoxShadow(
-            color: AppColors.border,
-            offset: Offset(3, 3),
-            blurRadius: 0,
-          ),
+        boxShadow: [
+          AppShadows.hard3,
         ],
       ),
       child: Row(
@@ -363,26 +426,22 @@ class _LoginScreenState extends State<LoginScreen> {
             decoration: BoxDecoration(
               color: AppColors.surface,
               border: Border.all(
-                color: AppColors.border,
+                color: AppColors.outline,
                 width: AppDimens.borderWidth,
               ),
               borderRadius: BorderRadius.circular(AppDimens.radius),
-              boxShadow: const [
-                BoxShadow(
-                  color: AppColors.border,
-                  offset: Offset(2, 2),
-                  blurRadius: 0,
-                ),
+              boxShadow: [
+                AppShadows.hard2,
               ],
             ),
-            child: const Icon(
+            child: Icon(
               Icons.rocket_launch_rounded,
               color: AppColors.text,
               size: 20,
             ),
           ),
           const SizedBox(width: 14),
-          const Expanded(
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -428,16 +487,12 @@ class _LoginScreenState extends State<LoginScreen> {
               decoration: BoxDecoration(
                 color: AppColors.bg,
                 border: Border.all(
-                  color: AppColors.border,
+                  color: AppColors.outline,
                   width: AppDimens.borderWidth,
                 ),
                 borderRadius: BorderRadius.circular(AppDimens.radius),
-                boxShadow: const [
-                  BoxShadow(
-                    color: AppColors.border,
-                    offset: Offset(2, 2),
-                    blurRadius: 0,
-                  ),
+                boxShadow: [
+                  AppShadows.hard2,
                 ],
               ),
               child: Column(
@@ -447,7 +502,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   Text(
                     items[i].$2,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.w900,
                       color: AppColors.text,
@@ -464,10 +519,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Widget _buildAuthTabs() {
     return Container(
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         border: Border(
           bottom: BorderSide(
-            color: AppColors.border,
+            color: AppColors.outline,
             width: AppDimens.borderWidth,
           ),
         ),
@@ -502,7 +557,7 @@ class _LoginScreenState extends State<LoginScreen> {
         decoration: BoxDecoration(
           color: active ? AppColors.accentYellow : AppColors.bg,
           border: Border.all(
-            color: AppColors.border,
+            color: AppColors.outline,
             width: AppDimens.borderWidth,
           ),
           borderRadius: const BorderRadius.only(
@@ -510,9 +565,9 @@ class _LoginScreenState extends State<LoginScreen> {
             topRight: Radius.circular(AppDimens.radius),
           ),
           boxShadow: active
-              ? const [
+              ? [
                   BoxShadow(
-                    color: AppColors.border,
+                    color: AppColors.shadow,
                     offset: Offset(2, -2),
                     blurRadius: 0,
                   ),
@@ -522,7 +577,7 @@ class _LoginScreenState extends State<LoginScreen> {
         child: Text(
           label,
           textAlign: TextAlign.center,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 13,
             fontWeight: FontWeight.w900,
             letterSpacing: 0.5,
@@ -550,7 +605,7 @@ class _LoginScreenState extends State<LoginScreen> {
               FilteringTextInputFormatter.deny(RegExp(r'\s')),
               LengthLimitingTextInputFormatter(120),
             ],
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w700,
               fontSize: 14,
               color: AppColors.text,
@@ -575,7 +630,7 @@ class _LoginScreenState extends State<LoginScreen> {
             // FIX: ya no se bloquean espacios. bcrypt soporta passphrases
             // con espacios hasta 72 bytes; solo se limita el largo máximo.
             inputFormatters: [LengthLimitingTextInputFormatter(72)],
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w700,
               fontSize: 14,
               color: AppColors.text,
@@ -618,13 +673,13 @@ class _LoginScreenState extends State<LoginScreen> {
                       value: _rememberMe,
                       activeColor: AppColors.accentYellow,
                       checkColor: AppColors.text,
-                      side: const BorderSide(color: AppColors.border, width: 2),
+                      side: BorderSide(color: AppColors.outline, width: 2),
                       onChanged: (val) =>
                           setState(() => _rememberMe = val ?? false),
                     ),
                   ),
                   const SizedBox(width: 8),
-                  const Text(
+                  Text(
                     'RECORDARME',
                     style: TextStyle(
                       fontSize: 12,
@@ -642,7 +697,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   ),
                 ),
-                child: const Text(
+                child: Text(
                   '¿Olvidaste tu clave?',
                   style: TextStyle(
                     fontSize: 12,
@@ -653,6 +708,22 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerRight,
+            child: InkWell(
+              onTap: () => _openVerification(_loginEmailController.text.trim()),
+              child: Text(
+                '¿Tienes un código de confirmación?',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.accentBlue,
+                  decoration: TextDecoration.underline,
+                ),
+              ),
+            ),
           ),
           const SizedBox(height: 28),
           SubmitButton(
@@ -678,7 +749,7 @@ class _LoginScreenState extends State<LoginScreen> {
             textInputAction: TextInputAction.next,
             autofillHints: const [AutofillHints.name],
             inputFormatters: [LengthLimitingTextInputFormatter(100)],
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w700,
               fontSize: 14,
               color: AppColors.text,
@@ -704,7 +775,7 @@ class _LoginScreenState extends State<LoginScreen> {
               FilteringTextInputFormatter.deny(RegExp(r'\s')),
               LengthLimitingTextInputFormatter(120),
             ],
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w700,
               fontSize: 14,
               color: AppColors.text,
@@ -728,7 +799,7 @@ class _LoginScreenState extends State<LoginScreen> {
             controller: _regInstitutionController,
             textInputAction: TextInputAction.next,
             inputFormatters: [LengthLimitingTextInputFormatter(200)],
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w700,
               fontSize: 14,
               color: AppColors.text,
@@ -755,7 +826,7 @@ class _LoginScreenState extends State<LoginScreen> {
             autofillHints: const [AutofillHints.newPassword],
             // FIX: ya no se bloquean espacios (passphrases seguras válidas).
             inputFormatters: [LengthLimitingTextInputFormatter(72)],
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.w700,
               fontSize: 14,
               color: AppColors.text,
@@ -804,7 +875,7 @@ class _LoginScreenState extends State<LoginScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Text(
+          Text(
             'ORGANIZA',
             style: TextStyle(
               fontSize: 36,
@@ -816,7 +887,7 @@ class _LoginScreenState extends State<LoginScreen> {
           const SizedBox(height: 12),
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 580),
-            child: const Text(
+            child: Text(
               'Gestiona tus asignaturas, controla asistencias y calcula notas para asegurar tu semestre universitario.',
               style: TextStyle(
                 fontSize: 16,
