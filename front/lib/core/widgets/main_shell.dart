@@ -351,7 +351,7 @@ class _MainShellState extends State<MainShell> {
             ),
             child: Center(
               child: Image.asset(
-                '../LogoDentro.png',
+                'assets/LogoDentro.png',
                 width: 28,
                 height: 28,
                 fit: BoxFit.cover,
