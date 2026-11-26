@@ -350,12 +350,11 @@ class _MainShellState extends State<MainShell> {
               borderRadius: BorderRadius.circular(AppDimens.radiusSoft),
             ),
             child: Center(
-              child: Text(
-                'S',
-                style: TextStyle(
-                  fontWeight: FontWeight.w900,
-                  color: AppColors.onAccent,
-                ),
+              child: Image.asset(
+                '../LogoDentro.png',
+                width: 28,
+                height: 28,
+                fit: BoxFit.cover,
               ),
             ),
           ),
