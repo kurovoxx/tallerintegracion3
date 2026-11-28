@@ -50,6 +50,10 @@ void main() {
             ],
           });
         }
+        if (r.method == 'GET' &&
+            r.url.servicePath.endsWith('/group-invitations/pending')) {
+          return json({'data': []});
+        }
         if (r.method == 'POST' && r.url.servicePath.endsWith('/read')) {
           final id = r.url.pathSegments[r.url.pathSegments.length - 2];
           readIds.add(id);

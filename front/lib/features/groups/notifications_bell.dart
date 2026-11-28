@@ -60,13 +60,21 @@ class _NotificationsBellState extends State<NotificationsBell> {
 
   Future<void> _refresh() async {
     final seq = ++_refreshSeq;
+    var unreadMeetings = 0;
     try {
       final items = await _service.myNotifications();
+      if (!mounted || seq != _refreshSeq) return;
+      unreadMeetings = _countUnread(items);
+      _unread.value = unreadMeetings;
+    } catch (_) {
+      // Un fallo en reuniones no debe ocultar invitaciones pendientes.
+    }
+    try {
       final invitations = await _service.listPendingInvitations();
       if (!mounted || seq != _refreshSeq) return;
-      _unread.value = _countUnread(items) + invitations.length;
+      _unread.value = unreadMeetings + invitations.length;
     } catch (_) {
-      // Silencioso: sin sesión o backend caído, la campana no estorba.
+      // Un fallo de invitaciones no debe ocultar los recordatorios cargados.
     }
   }
 
